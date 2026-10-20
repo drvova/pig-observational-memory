@@ -30,6 +30,14 @@ The first build compiles the extension and the SDK; later runs reuse the build.
 
 ## What differs
 
+The port also clears several issues reported against the TypeScript version upstream; the TypeScript side is unchanged.
+
+* **The dropper gates on the whole active pool** (upstream #102). The over-target check and the pool figures in its prompt measure every active observation, not only the slice that fits `workerMemoryMaxTokens`, so a pool that drifted above `observationsPoolTargetTokens` is pruned even when `workerMemoryMaxTokens / 2` is at or below the target. The dropper can still only drop observations it was shown.
+* **Thinking blocks never reach the workers** (upstream #97). The observer sees the assistant's text, tool calls and tool results; a model's private reasoning is left out, which also avoids provider refusals under anti-distillation terms when the observer runs on the same frontier model as the session. `recall` still shows thinking in source evidence.
+* **`model` and `fallbackModel` accept an id alone** (upstream #31). Without a `provider`, the id resolves against the session model's provider, so workers follow a provider-internal model switch without a restart. The id stays required.
+* **`customInstructions` passed to `compact()` reach the summary** (upstream #55). When another extension or the user compacts with instructions, they are appended to the rendered memory after a `---` separator and count toward the summary budget.
+* **Memory work stops when the session ends** (upstream #22). `session_before_switch`, `session_before_fork` and `session_shutdown` abort an in-flight consolidation quietly, so no "reflector failed" warning fires against a stale context. Coverage is appended only on success, so only that run's results are lost.
+* **The proactive compaction step re-polls idleness** (upstream #41). Before deferring with "agent became busy", it asks the host up to ten times, 100 ms apart, so another extension's slow settled handler no longer defers every compaction.
 * **Model calls** go through PiG's model registry. Credentials follow Pi's acceptance rule (an API key or a non-empty auth header, or a provider PiG reports as configured for request-time signing such as Bedrock and Vertex), including the bounded, rate-limited availability re-check.
 * **Aborting a worker** (`consolidateWhenIdle`) cancels the run's context. PiG exposes no per-stream cancel, so the port stops consuming the stream and discards its result; coverage is appended only on success, exactly as before.
 * **Clipboard copy** for `/om:view` shells out to the platform command (`pbcopy`, `wl-copy`/`xclip`/`xsel`, `clip`) with a two-second timeout.

@@ -15,6 +15,9 @@ import (
 
 const testTimeout = 10 * time.Second
 
+// The idle re-poll waits between attempts in production; tests do not.
+func init() { IdleRecheckDelay = 0 }
+
 func waitDone(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	if done == nil {

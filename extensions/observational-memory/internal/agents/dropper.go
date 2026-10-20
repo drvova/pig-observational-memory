@@ -15,9 +15,17 @@ import (
 // DropperArgs are one dropper run's inputs.
 type DropperArgs struct {
 	WorkerArgs
-	Reflections  []ledger.Reflection
+	Reflections []ledger.Reflection
+	// Observations are the active observations the dropper may propose to
+	// drop: the slice that fits the worker memory budget.
 	Observations []ledger.Observation
-	TargetTokens int
+	// ActiveObservations is the whole active pool. The over-target gate and
+	// the pool figures in the prompt measure it, not the bounded slice, so a
+	// pool that drifted above target is still pruned when the slice alone
+	// looks under target (upstream issue #102). nil means Observations is the
+	// whole pool.
+	ActiveObservations []ledger.Observation
+	TargetTokens       int
 }
 
 // RelevanceDropRank orders drop candidates: low relevance first.
@@ -131,20 +139,27 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 	if len(args.Observations) == 0 {
 		return nil, nil
 	}
-	metrics := ObservationPoolMetrics(args.Observations, args.TargetTokens)
+	pool := args.ActiveObservations
+	if pool == nil {
+		pool = args.Observations
+	}
+	metrics := ObservationPoolMetrics(pool, args.TargetTokens)
+	// The dropper can only drop what it sees.
+	maxDrops := min(metrics.MaxDropsAllowed, len(args.Observations))
 	coverage := ReflectionCoverageMap(args.Observations, args.Reflections)
 	debuglog.Log(ctx, "dropper.agent_start", map[string]any{
-		"activeObservationCount":     len(args.Observations),
+		"activeObservationCount":     len(pool),
+		"visibleObservationCount":    len(args.Observations),
 		"reflectionCount":            len(args.Reflections),
 		"observationTokens":          metrics.ObservationTokens,
 		"targetTokens":               args.TargetTokens,
 		"tokensOverTarget":           metrics.TokensOverTarget,
 		"fullness":                   metrics.Fullness,
-		"maxDropsAllowed":            metrics.MaxDropsAllowed,
+		"maxDropsAllowed":            maxDrops,
 		"relevanceCounts":            relevanceCounts(args.Observations),
 		"coverageSummaryByRelevance": SummarizeCoverageByRelevance(args.Observations, coverage),
 	})
-	if metrics.MaxDropsAllowed <= 0 {
+	if maxDrops <= 0 {
 		debuglog.Log(ctx, "dropper.result", map[string]any{
 			"reason":                             "not_over_target",
 			"toolCallCount":                      0,
@@ -153,7 +168,7 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 			"selectedDropsCount":                 0,
 			"selectedDropTokens":                 0,
 			"selectedCoverageSummaryByRelevance": SummarizeCoverageByRelevanceForIDs(nil, args.Observations, coverage),
-			"maxDropsAllowed":                    metrics.MaxDropsAllowed,
+			"maxDropsAllowed":                    maxDrops,
 		})
 		return nil, nil
 	}
@@ -210,10 +225,10 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 				"duplicateInRequestCount":   reqDup,
 				"duplicateInRunCount":       reqDupRun,
 				"totalCandidates":           len(proposedIDs),
-				"maxDropsAllowed":           metrics.MaxDropsAllowed,
+				"maxDropsAllowed":           maxDrops,
 			})
-			text := fmt.Sprintf("Queued %d drop %s. Candidates this run: %d. Maximum drops allowed: %d.", added, jsfmt.Plural(added, "candidate"), len(proposedIDs), metrics.MaxDropsAllowed)
-			return ToolResult{Text: text, Details: map[string]any{"added": added, "totalCandidates": len(proposedIDs), "maxDropsAllowed": metrics.MaxDropsAllowed}}, nil
+			text := fmt.Sprintf("Queued %d drop %s. Candidates this run: %d. Maximum drops allowed: %d.", added, jsfmt.Plural(added, "candidate"), len(proposedIDs), maxDrops)
+			return ToolResult{Text: text, Details: map[string]any{"added": added, "totalCandidates": len(proposedIDs), "maxDropsAllowed": maxDrops}}, nil
 		},
 	}
 
@@ -228,14 +243,14 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 	fullnessPercent := int(math.Round(metrics.Fullness * 100))
 	userText := "CURRENT REFLECTIONS:\n" + joinOrEmpty(reflectionLines) + "\n\nCURRENT OBSERVATIONS:\n" + joinOrEmpty(observationLines) +
 		fmt.Sprintf("\n\nActive observation pool: ~%s tokens; target: ~%s tokens; fullness against target: ~%s%%; over target by ~%s tokens.\n", jsfmt.Locale(metrics.ObservationTokens), jsfmt.Locale(args.TargetTokens), jsfmt.Locale(fullnessPercent), jsfmt.Locale(metrics.TokensOverTarget)) +
-		fmt.Sprintf("Maximum drops allowed this run: %s %s. This maximum is sized to move the active pool toward the target if every proposed drop is clearly safe.\n", jsfmt.Locale(metrics.MaxDropsAllowed), jsfmt.Plural(metrics.MaxDropsAllowed, "observation")) +
+		fmt.Sprintf("Maximum drops allowed this run: %s %s. This maximum is sized to move the active pool toward the target if every proposed drop is clearly safe.\n", jsfmt.Locale(maxDrops), jsfmt.Plural(maxDrops, "observation")) +
 		"This maximum is a hard upper bound, not a target. Drop fewer or none if fewer observations are clearly safe."
 
 	result, err := RunLoop(ctx, args.Stream, args.loopConfig("dropper"), DropperSystem, userText, []Tool{dropObservations})
 	if err != nil {
 		return nil, err
 	}
-	dropped := SelectDropCandidates(proposedIDs, args.Observations, metrics.MaxDropsAllowed, args.Reflections)
+	dropped := SelectDropCandidates(proposedIDs, args.Observations, maxDrops, args.Reflections)
 	if len(dropped) == 0 && result.StreamError != nil {
 		return nil, result.StreamError
 	}
@@ -265,7 +280,7 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 		"selectedDropsCount":                 len(dropped),
 		"selectedDropTokens":                 selectedTokens,
 		"selectedCoverageSummaryByRelevance": SummarizeCoverageByRelevanceForIDs(dropped, args.Observations, coverage),
-		"maxDropsAllowed":                    metrics.MaxDropsAllowed,
+		"maxDropsAllowed":                    maxDrops,
 	})
 	if len(dropped) == 0 {
 		return nil, nil

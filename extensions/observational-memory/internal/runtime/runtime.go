@@ -264,6 +264,27 @@ func (r *Runtime) SetLastError(phase Phase, message string) {
 	}
 }
 
+// EffectiveProvider is the provider a configured model resolves against: its
+// own, or the session model's when the setting names only an id.
+func EffectiveProvider(configured *config.ConfiguredModel, sessionModel host.Model) string {
+	if configured == nil {
+		return ""
+	}
+	if configured.Provider != "" {
+		return configured.Provider
+	}
+	return host.ModelProvider(sessionModel)
+}
+
+// modelLabel names a model in messages: provider/id, or the id alone when no
+// provider is known.
+func modelLabel(provider, id string) string {
+	if provider == "" {
+		return id
+	}
+	return provider + "/" + id
+}
+
 // ResolveModel resolves the model memory workers should use: config.model
 // (falling back to the session model when it is absent from Pi's registry),
 // then config.fallbackModel when the primary resolution fails. With no
@@ -286,7 +307,7 @@ func (r *Runtime) ResolveModel(ctx context.Context, rc ResolveCtx) ResolveResult
 	id := host.ModelID(fallback.Model)
 	if cfg.FallbackModel != nil {
 		if provider == "" {
-			provider = cfg.FallbackModel.Provider
+			provider = EffectiveProvider(cfg.FallbackModel, rc.Model)
 		}
 		if id == "" {
 			id = cfg.FallbackModel.ID
@@ -310,10 +331,11 @@ func (r *Runtime) resolvePrimaryModel(ctx context.Context, rc ResolveCtx) Resolv
 	cfg := r.Config()
 	model := rc.Model
 	if cfg.Model != nil {
-		if configured := rc.Models.Find(cfg.Model.Provider, cfg.Model.ID); configured != nil {
+		provider := EffectiveProvider(cfg.Model, rc.Model)
+		if configured := rc.Models.Find(provider, cfg.Model.ID); configured != nil {
 			model = configured
 		} else {
-			rc.notify(fmt.Sprintf("Observational memory: configured model %s/%s not found, using session model", cfg.Model.Provider, cfg.Model.ID), "warning")
+			rc.notify(fmt.Sprintf("Observational memory: configured model %s not found, using session model", modelLabel(provider, cfg.Model.ID)), "warning")
 		}
 	}
 	if model == nil {
@@ -331,19 +353,20 @@ func (r *Runtime) ResolveFallbackModel(ctx context.Context, rc ResolveCtx) Resol
 	if target == nil {
 		return ResolveResult{Reason: "no fallback model configured"}
 	}
+	targetProvider := EffectiveProvider(target, rc.Model)
 	var effectivePrimary host.Model
 	if cfg.Model != nil {
-		effectivePrimary = rc.Models.Find(cfg.Model.Provider, cfg.Model.ID)
+		effectivePrimary = rc.Models.Find(EffectiveProvider(cfg.Model, rc.Model), cfg.Model.ID)
 	}
 	if effectivePrimary == nil {
 		effectivePrimary = rc.Model
 	}
-	if effectivePrimary != nil && host.ModelProvider(effectivePrimary) == target.Provider && host.ModelID(effectivePrimary) == target.ID {
-		return ResolveResult{Reason: fmt.Sprintf("fallback model %s/%s is identical to the effective primary model", target.Provider, target.ID)}
+	if effectivePrimary != nil && host.ModelProvider(effectivePrimary) == targetProvider && host.ModelID(effectivePrimary) == target.ID {
+		return ResolveResult{Reason: fmt.Sprintf("fallback model %s is identical to the effective primary model", modelLabel(targetProvider, target.ID))}
 	}
-	model := rc.Models.Find(target.Provider, target.ID)
+	model := rc.Models.Find(targetProvider, target.ID)
 	if model == nil {
-		return ResolveResult{Reason: fmt.Sprintf("fallback model %s/%s not found", target.Provider, target.ID)}
+		return ResolveResult{Reason: fmt.Sprintf("fallback model %s not found", modelLabel(targetProvider, target.ID))}
 	}
 	return r.resolveCandidate(ctx, rc, model)
 }

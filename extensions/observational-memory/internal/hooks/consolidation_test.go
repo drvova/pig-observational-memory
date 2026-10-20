@@ -1189,3 +1189,31 @@ func TestBoundedWorkerMemorySendsNewestPriorMemoryThatFits(t *testing.T) {
 		t.Fatalf("prior observations %v", prior)
 	}
 }
+
+// A session that ends mid-run abandons the run quietly (upstream issue #22).
+func TestSessionEndAbortsInFlightRunQuietly(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), reflectAfterTokens: 999})
+	entered := fx.abortingObserver()
+
+	done := fx.launch()
+	if done == nil {
+		t.Fatal("consolidation did not launch")
+	}
+	waitDone(t, entered)
+	OnSessionEnd(fx.rt, "session_shutdown")
+	waitDone(t, done)
+
+	fx.expectNoAppends()
+	// The routine "observer running" notice preceded the abort; no failure or
+	// pause notice follows it.
+	if fx.rt.Snapshot().LastObserverError != "" || fx.rt.ConsolidationInFlight() || hasNotificationContaining(fx.h, "failed", "") || hasNotificationContaining(fx.h, "paused", "") {
+		t.Fatalf("state %+v notifications %+v", fx.rt.Snapshot(), fx.h.Notifications)
+	}
+	before := len(fx.h.Notifications)
+
+	// Nothing in flight: a no-op.
+	OnSessionEnd(fx.rt, "session_before_switch")
+	if len(fx.h.Notifications) != before {
+		t.Fatalf("notifications %+v", fx.h.Notifications)
+	}
+}

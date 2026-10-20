@@ -17,7 +17,9 @@ type ThinkingLevel string
 // ThinkingLevelValues are Pi's thinking levels.
 var ThinkingLevelValues = []ThinkingLevel{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
-// ConfiguredModel names a memory-worker model.
+// ConfiguredModel names a memory-worker model. An empty Provider means the
+// session model's provider (upstream issue #31): workers then follow model
+// switches within that provider without a restart.
 type ConfiguredModel struct {
 	Provider string        `json:"provider"`
 	ID       string        `json:"id"`
@@ -239,9 +241,11 @@ func normalizeModel(v any) *ConfiguredModel {
 	if !ok {
 		return nil
 	}
+	// provider is optional: an id alone names a model on the session's
+	// provider. id is required.
 	provider, _ := m["provider"].(string)
 	id, _ := m["id"].(string)
-	if provider == "" || id == "" {
+	if id == "" {
 		return nil
 	}
 	model := &ConfiguredModel{Provider: provider, ID: id}

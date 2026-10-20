@@ -192,7 +192,7 @@ func observerChunkContextWindow(cfg config.Config, h host.Host, resolved runtime
 		return primary
 	}
 	fallbackWindow := 0
-	if fallbackModel := h.Models().Find(cfg.FallbackModel.Provider, cfg.FallbackModel.ID); fallbackModel != nil {
+	if fallbackModel := h.Models().Find(runtime.EffectiveProvider(cfg.FallbackModel, h.SessionModel()), cfg.FallbackModel.ID); fallbackModel != nil {
 		fallbackWindow = host.ModelContextWindow(fallbackModel)
 	}
 	switch {
@@ -296,6 +296,18 @@ func OnAgentStart(rt *runtime.Runtime, h host.Host) {
 	if rt.AbortConsolidation() {
 		debuglog.Log(context.Background(), "consolidation.aborted", map[string]any{"reason": "agent_start"})
 		notifyWorker(rt.Config(), h, "Observational memory: memory workers paused while the agent runs (consolidateWhenIdle)")
+	}
+}
+
+// OnSessionEnd handles session_shutdown, session_before_switch and
+// session_before_fork. The host replaces the session (under PiG the extension
+// process too), so an in-flight run is abandoned quietly instead of failing
+// later against a stale context (upstream issue #22). Coverage is appended
+// only on success, so only the abandoned run's results are lost; the next due
+// turn starts it over.
+func OnSessionEnd(rt *runtime.Runtime, reason string) {
+	if rt.AbortConsolidation() {
+		debuglog.Log(context.Background(), "consolidation.aborted", map[string]any{"reason": reason})
 	}
 }
 
@@ -648,7 +660,7 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	droppedIDs, err := runStageWithFallback(ctx, h, runtime.PhaseDropper, *resolved, resolver, func(worker runtime.ResolveResult) ([]string, error) {
 		// The dropper prunes old observations, so it sees the oldest ones that fit.
 		memory := ledger.BoundWorkerMemory(reflectionsForDropper, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), true)
-		return runDropper(ctx, agents.DropperArgs{WorkerArgs: workerArgs(cfg, h, worker), Reflections: memory.Reflections, Observations: memory.Observations, TargetTokens: cfg.ObservationsPoolTargetTokens})
+		return runDropper(ctx, agents.DropperArgs{WorkerArgs: workerArgs(cfg, h, worker), Reflections: memory.Reflections, Observations: memory.Observations, ActiveObservations: folded.ActiveObservations, TargetTokens: cfg.ObservationsPoolTargetTokens})
 	})
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {

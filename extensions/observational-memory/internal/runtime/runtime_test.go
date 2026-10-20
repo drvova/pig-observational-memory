@@ -443,3 +443,52 @@ func TestResolveFallbackModelAppliesSameAuthRules(t *testing.T) {
 		t.Fatalf("result %+v", result)
 	}
 }
+
+// An id-only model setting resolves against the session model's provider
+// (upstream issue #31).
+func TestIDOnlyConfiguredModelUsesSessionProvider(t *testing.T) {
+	rt := withConfig(func(cfg *config.Config) { cfg.Model = &config.ConfiguredModel{ID: "memory"} })
+	models := testfix.NewFakeModels()
+	models.Add(testfix.Model("anthropic", "memory"), testfix.KeyAuth("key"))
+
+	result := rt.ResolveModel(context.Background(), resolveCtx(host.Model{"provider": "anthropic", "id": "big"}, models, nil))
+
+	if !result.OK || host.ModelProvider(result.Model) != "anthropic" || host.ModelID(result.Model) != "memory" || !reflect.DeepEqual(models.FindCalls, []string{"anthropic/memory"}) {
+		t.Fatalf("result %+v finds %v", result, models.FindCalls)
+	}
+
+	// The same id on another session provider follows the switch.
+	models.Add(testfix.Model("openai", "memory"), testfix.KeyAuth("key"))
+	result = rt.ResolveModel(context.Background(), resolveCtx(host.Model{"provider": "openai", "id": "big"}, models, nil))
+	if !result.OK || host.ModelProvider(result.Model) != "openai" {
+		t.Fatalf("result %+v", result)
+	}
+
+	// Not found on the session provider: the notice names the id alone when no provider is known.
+	n := &notifier{}
+	rt.ResolveModel(context.Background(), resolveCtx(host.Model{"provider": "xai", "id": "big"}, models, n))
+	if !n.has("Observational memory: configured model xai/memory not found, using session model", "warning") {
+		t.Fatalf("notifications %+v", n.calls)
+	}
+}
+
+func TestIDOnlyFallbackModelIdentityCheck(t *testing.T) {
+	rt := withConfig(func(cfg *config.Config) { cfg.FallbackModel = &config.ConfiguredModel{ID: "haiku"} })
+	models := testfix.NewFakeModels()
+	models.Add(testfix.Model("anthropic", "haiku"), testfix.KeyAuth("k"))
+
+	result := rt.ResolveFallbackModel(context.Background(), resolveCtx(host.Model{"provider": "anthropic", "id": "haiku"}, models, nil))
+	if result.OK || result.Reason != "fallback model anthropic/haiku is identical to the effective primary model" {
+		t.Fatalf("result %+v", result)
+	}
+
+	result = rt.ResolveFallbackModel(context.Background(), resolveCtx(host.Model{"provider": "anthropic", "id": "sonnet"}, models, nil))
+	if !result.OK || host.ModelID(result.Model) != "haiku" {
+		t.Fatalf("result %+v", result)
+	}
+
+	result = rt.ResolveFallbackModel(context.Background(), resolveCtx(nil, models, nil))
+	if result.OK || result.Reason != "fallback model haiku not found" {
+		t.Fatalf("result %+v", result)
+	}
+}

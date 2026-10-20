@@ -109,9 +109,10 @@ func TestFallbackModel(t *testing.T) {
 	if got := f.load(env{}); got.FallbackModel == nil || got.FallbackModel.Thinking != "" || got.FallbackModel.ID != "deepseek-v4.1-flash" {
 		t.Fatalf("invalid thinking %+v", got.FallbackModel)
 	}
+	// An id without a provider names a model on the session's provider.
 	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"fallbackModel": map[string]any{"provider": "", "id": "deepseek-v4.1-flash"}}})
-	if got := f.load(env{}); !reflect.DeepEqual(got, config.Defaults) {
-		t.Fatal("empty provider should be ignored")
+	if got := f.load(env{}); got.FallbackModel == nil || *got.FallbackModel != (config.ConfiguredModel{ID: "deepseek-v4.1-flash"}) {
+		t.Fatalf("id-only fallback %+v", got.FallbackModel)
 	}
 }
 

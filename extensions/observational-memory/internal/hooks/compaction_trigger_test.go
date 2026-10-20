@@ -382,3 +382,32 @@ func TestTriggerRatioModeUsesSameThresholdOnDeferredRecheck(t *testing.T) {
 		t.Fatalf("compact calls %d in flight %v", h.CompactCalls, rt.CompactInFlight())
 	}
 }
+
+// The deferred step re-polls idleness before deferring: another extension's
+// settled handler may still be running when it first looks (upstream issue #41).
+func TestTriggerRepollsIdleBeforeDeferring(t *testing.T) {
+	rt, h := triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
+	polls := 0
+	h.IdleFn = func() (bool, error) {
+		polls++
+		return polls >= 3, nil
+	}
+	fireTrigger(t, rt, h)
+	if h.CompactCalls != 1 || polls != 3 {
+		t.Fatalf("compact calls %d polls %d", h.CompactCalls, polls)
+	}
+	if hasNotificationContaining(h, "deferred", "info") {
+		t.Fatalf("notifications %+v", h.Notifications)
+	}
+}
+
+func TestTriggerDefersAfterBoundedRepolls(t *testing.T) {
+	rt, h := triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
+	polls := 0
+	h.IdleFn = func() (bool, error) { polls++; return false, nil }
+	fireTrigger(t, rt, h)
+	if h.CompactCalls != 0 || polls != IdleRecheckAttempts || rt.CompactInFlight() {
+		t.Fatalf("compact calls %d polls %d in flight %v", h.CompactCalls, polls, rt.CompactInFlight())
+	}
+	expectNotification(t, h, "Observational memory: compaction deferred — agent became busy before compaction", "info")
+}

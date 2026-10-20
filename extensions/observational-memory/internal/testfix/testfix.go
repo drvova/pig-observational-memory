@@ -410,6 +410,8 @@ type FakeHost struct {
 	UsageErr      error
 	Idle          bool
 	IdleErr       error
+	// IdleFn, when set, answers IsIdle instead of Idle/IdleErr.
+	IdleFn        func() (bool, error)
 	CompactCalls  int
 	CompactFn     func(callbacks host.CompactCallbacks)
 	ID            string
@@ -489,7 +491,12 @@ func (h *FakeHost) Messages() []string {
 	return out
 }
 
-func (h *FakeHost) IsIdle() (bool, error) { return h.Idle, h.IdleErr }
+func (h *FakeHost) IsIdle() (bool, error) {
+	if h.IdleFn != nil {
+		return h.IdleFn()
+	}
+	return h.Idle, h.IdleErr
+}
 
 func (h *FakeHost) Compact(callbacks host.CompactCallbacks) {
 	h.mu.Lock()

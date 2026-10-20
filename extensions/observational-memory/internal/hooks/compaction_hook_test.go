@@ -390,3 +390,33 @@ func TestHookDelegatesInsteadOfInstructionsOnlySummary(t *testing.T) {
 
 	expectNotification(t, h, "Observational memory: no memory record fits the ~500-token summary budget; delegating to Pi's native summarizer", "warning")
 }
+
+// customInstructions attached to the compaction ride along after the memory
+// (upstream issue #55).
+func TestHookAppendsCustomInstructions(t *testing.T) {
+	obs1 := testfix.Observation("aaaaaaaaaaaa", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"raw-1"}; o.TokenCount = 10 })
+	entries := []ledger.Entry{
+		text("raw-1", "aaaa"),
+		testfix.ObservationsRecordedEntry("om-aaaaaaaaaaaa", []ledger.Observation{obs1}, "raw-1"),
+	}
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100})
+	event := BeforeCompactEvent{FirstKeptEntryID: "raw-1", TokensBefore: 123, BranchEntries: entries, CustomInstructions: "  Keep the deploy checklist.  "}
+
+	result := compactionOf(t, HandleBeforeCompact(context.Background(), rt, h, event))
+
+	if !strings.HasSuffix(result.Summary, "\n\n---\n\nKeep the deploy checklist.") || !strings.Contains(result.Summary, "## Observations") {
+		t.Fatalf("summary %q", result.Summary)
+	}
+
+	plain := compactionOf(t, runHook(rt, h, entries, "raw-1", ""))
+	if strings.Contains(plain.Summary, "---") {
+		t.Fatalf("summary without instructions %q", plain.Summary)
+	}
+}
+
+func TestHookDecodesCustomInstructionsFromWire(t *testing.T) {
+	event := BeforeCompactEvent{}
+	if event.CustomInstructions != "" {
+		t.Fatal("zero value")
+	}
+}

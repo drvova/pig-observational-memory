@@ -155,10 +155,12 @@ func textAndPlaceholders(content any, options placeholderOptions) string {
 				continue
 			}
 		case "thinking":
-			if options.omitRedactedThinking && block["redacted"] == true {
+			// Thinking is rendered only where the caller asked for it; left
+			// out, it leaves no placeholder behind.
+			if !options.includeThinking || (options.omitRedactedThinking && block["redacted"] == true) {
 				continue
 			}
-			if thinking, ok := block["thinking"].(string); ok && options.includeThinking {
+			if thinking, ok := block["thinking"].(string); ok {
 				parts = append(parts, "[thinking: "+thinking+"]")
 				continue
 			}
@@ -222,7 +224,11 @@ func jsString(v any) string {
 }
 
 // SerializeConversation renders Pi messages for the observer: user text, the
-// assistant's text, thinking and tool calls, and tool results.
+// assistant's text and tool calls, and tool results. Thinking blocks are left
+// out: they are the model's private reasoning, and feeding them to a prompt
+// that condenses the conversation has drawn provider refusals under
+// anti-distillation terms (upstream issue #97). Recall keeps them, since it
+// shows evidence to the same session rather than to a worker.
 func SerializeConversation(messages []map[string]any) string {
 	blocks := []string{}
 	for _, msg := range messages {
@@ -234,7 +240,7 @@ func SerializeConversation(messages []map[string]any) string {
 		case "user":
 			blocks = append(blocks, "[User @ "+timestamp+"]: "+textOnly(msg["content"]))
 		case "assistant":
-			body := nonEmptyLines(textAndPlaceholders(msg["content"], placeholderOptions{includeThinking: true, omitRedactedThinking: true}))
+			body := nonEmptyLines(textAndPlaceholders(msg["content"], placeholderOptions{}))
 			if body == "" {
 				continue
 			}

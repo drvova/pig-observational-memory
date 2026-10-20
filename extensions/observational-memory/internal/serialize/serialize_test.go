@@ -87,7 +87,8 @@ func TestSerializeConversation(t *testing.T) {
 		tf.ToJSONValue(map[string]any{"role": "toolResult", "toolName": "bash", "content": []any{map[string]any{"type": "text", "text": "out"}}, "timestamp": ts.UnixMilli()}).(map[string]any),
 	}
 	got := serialize.SerializeConversation(messages)
-	want := "[User @ 2026-01-15 14:30]: hello\n\n[Assistant @ 2026-01-15 14:30]: [thinking: plan]\nhi\n[bash({\"command\":\"ls\"})]\n\n[Tool result for bash @ 2026-01-15 14:30]: out"
+	// Thinking blocks never reach the workers (upstream issue #97).
+	want := "[User @ 2026-01-15 14:30]: hello\n\n[Assistant @ 2026-01-15 14:30]: hi\n[bash({\"command\":\"ls\"})]\n\n[Tool result for bash @ 2026-01-15 14:30]: out"
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}

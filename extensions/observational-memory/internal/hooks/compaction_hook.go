@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
@@ -122,6 +123,10 @@ type BeforeCompactEvent struct {
 	TokensBefore     int
 	BranchEntries    []ledger.Entry
 	Reason           string
+	// CustomInstructions is what the caller of compact({customInstructions})
+	// asked the summary to carry; appended to the rendered memory (upstream
+	// issue #55).
+	CustomInstructions string
 }
 
 // CompactionResult is the extension-provided compaction.
@@ -224,6 +229,12 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			debuglog.Log(ctx, "compaction.summary_budget_empty", map[string]any{"summaryMaxTokens": summaryMaxTokens, "reflections": len(projection.Reflections), "observations": len(projection.Observations)})
 			notifyUI(h, fmt.Sprintf("Observational memory: no memory record fits the ~%s-token summary budget; delegating to Pi's native summarizer", jsfmt.Locale(summaryMaxTokens)), "warning")
 			summary = ""
+		}
+		// Instructions another extension or the user attached to this compaction
+		// ride along after the memory, so they reach the next context the way
+		// they would in Pi's native summary. They count toward the budget below.
+		if instructions := strings.TrimSpace(event.CustomInstructions); summary != "" && instructions != "" {
+			summary += "\n\n---\n\n" + instructions
 		}
 		// A moved cut keeps the unobserved tail AND adds the rendered memory on
 		// top of it. Both must fit the budget, or Pi's threshold fires again

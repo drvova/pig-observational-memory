@@ -49,6 +49,15 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 		hooks.MaybeTriggerCompaction(rt, h)
 		return nil, nil
 	})
+	// The session is being replaced (and under PiG this process with it):
+	// abandon in-flight memory work instead of failing against a stale context.
+	for _, event := range []string{sdk.EventSessionBeforeSwitch, sdk.EventSessionBeforeFork, sdk.EventSessionShutdown} {
+		reason := event
+		ext.OnEvent(reason, func(sdk.Context, map[string]any) (any, error) {
+			hooks.OnSessionEnd(rt, reason)
+			return nil, nil
+		})
+	}
 	ext.OnEvent(sdk.EventSessionBeforeCompact, func(ctx sdk.Context, data map[string]any) (any, error) {
 		event := decodeBeforeCompact(data)
 		outcome := hooks.HandleBeforeCompact(ctx.Signal(), rt, sdkhost.New(ctx), event)
@@ -127,5 +136,6 @@ func decodeBeforeCompact(data map[string]any) hooks.BeforeCompactEvent {
 	}
 	event.BranchEntries = session.FromAny(data["branchEntries"])
 	event.Reason, _ = data["reason"].(string)
+	event.CustomInstructions, _ = data["customInstructions"].(string)
 	return event
 }

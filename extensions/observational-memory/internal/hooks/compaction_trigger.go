@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
@@ -26,6 +27,33 @@ func ProgressLabel(cfg config.Config) string {
 		return "estimated"
 	}
 	return "observed"
+}
+
+// IdleRecheckAttempts and IdleRecheckDelay bound how long the deferred step
+// waits for the host to report idle before giving up: another extension's
+// settled handler may still be running when the step fires, and sampling once
+// deferred every compaction (upstream issue #41).
+var (
+	IdleRecheckAttempts = 10
+	IdleRecheckDelay    = 100 * time.Millisecond
+)
+
+// waitForIdle polls the host until it reports idle, within the bounds above.
+func waitForIdle(h host.Host) bool {
+	attempts := max(1, IdleRecheckAttempts)
+	for attempt := 0; attempt < attempts; attempt++ {
+		idle, err := h.IsIdle()
+		if err != nil {
+			return false
+		}
+		if idle {
+			return true
+		}
+		if attempt+1 < attempts {
+			time.Sleep(IdleRecheckDelay)
+		}
+	}
+	return false
 }
 
 // MaybeTriggerCompaction triggers proactive compaction when the observed-source
@@ -57,8 +85,7 @@ func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 				notifyUI(h, fmt.Sprintf("Observational memory: compact threw: %v", recovered), "error")
 			}
 		}()
-		idle, err := h.IsIdle()
-		if err != nil || !idle {
+		if !waitForIdle(h) {
 			rt.SetCompactInFlight(false)
 			notifyUI(h, "Observational memory: compaction deferred — agent became busy before compaction", "info")
 			return

@@ -217,3 +217,62 @@ func TestStreamErrorLogged(t *testing.T) {
 		t.Fatalf("log %v", lines)
 	}
 }
+
+func dropperUserText(t *testing.T, rec *tf.StreamRecorder) string {
+	t.Helper()
+	if rec.Calls() == 0 {
+		t.Fatal("model was not called")
+	}
+	messages, _ := rec.Requests[0]["messages"].([]any)
+	if len(messages) == 0 {
+		t.Fatalf("request without messages: %v", rec.Requests[0])
+	}
+	first, _ := messages[0].(map[string]any)
+	content, _ := first["content"].([]any)
+	if len(content) == 0 {
+		t.Fatalf("user message without content: %v", first)
+	}
+	block, _ := content[0].(map[string]any)
+	text, _ := block["text"].(string)
+	return text
+}
+
+// The over-target gate measures the whole active pool, not the memory-capped
+// slice the dropper is shown (upstream issue #102).
+func TestDropperGatesOnWholePool(t *testing.T) {
+	rec := &tf.StreamRecorder{Replies: []map[string]any{dropCall("aaaaaaaaaaaa"), tf.AssistantText("done")}}
+	args := dropperArgs(rec, tf.Model("p", "m"))
+	args.Observations = []ledger.Observation{tf.Observation("aaaaaaaaaaaa", relevance("low"))}
+	args.ActiveObservations = append([]ledger.Observation{}, args.Observations...)
+	for i := 0; i < 8; i++ {
+		args.ActiveObservations = append(args.ActiveObservations, tf.Observation(fmt.Sprintf("%012d", i), relevance("medium")))
+	}
+	args.TargetTokens = 40
+	if agents.ObservationTokenSum(args.Observations) >= args.TargetTokens {
+		t.Fatal("the visible slice must sit under target for this test")
+	}
+
+	got, err := agents.RunDropper(context.Background(), args)
+
+	if err != nil || !reflect.DeepEqual(got, []string{"aaaaaaaaaaaa"}) {
+		t.Fatalf("drops %v err %v", got, err)
+	}
+	text := dropperUserText(t, rec)
+	poolTokens := agents.ObservationTokenSum(args.ActiveObservations)
+	if !strings.Contains(text, fmt.Sprintf("Active observation pool: ~%d tokens; target: ~40 tokens", poolTokens)) {
+		t.Fatalf("prompt does not measure the whole pool:\n%s", text)
+	}
+	// The allowance is sized by the pool but capped at what the dropper sees.
+	if !strings.Contains(text, "Maximum drops allowed this run: 1 observation.") {
+		t.Fatalf("prompt allowance:\n%s", text)
+	}
+
+	// With no separate pool the slice is the pool, as before.
+	rec = &tf.StreamRecorder{}
+	args = dropperArgs(rec, tf.Model("p", "m"))
+	args.Observations = []ledger.Observation{tf.Observation("aaaaaaaaaaaa", relevance("low"))}
+	args.TargetTokens = 40
+	if got, err := agents.RunDropper(context.Background(), args); err != nil || got != nil || rec.Calls() != 0 {
+		t.Fatal("model called while the pool sits under target")
+	}
+}
