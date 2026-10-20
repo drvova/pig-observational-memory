@@ -1,0 +1,391 @@
+// Package ledger folds the V3 memory ledger recorded on a session branch.
+package ledger
+
+import (
+	"math"
+	"regexp"
+	"strings"
+
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+)
+
+// The V3 custom entry types.
+const (
+	OMObservationsRecorded = "om.observations.recorded"
+	OMReflectionsRecorded  = "om.reflections.recorded"
+	OMObservationsDropped  = "om.observations.dropped"
+	OMFolded               = "om.folded"
+)
+
+// Entry is a session entry.
+type Entry = session.Entry
+
+// Relevance rates an observation.
+type Relevance string
+
+// RelevanceValues are the valid relevance levels, in rank order.
+var RelevanceValues = []Relevance{"low", "medium", "high", "critical"}
+
+// MemoryIDPattern matches a memory record id.
+var MemoryIDPattern = regexp.MustCompile(`^[a-f0-9]{12}$`)
+
+// Observation is a timestamped event distilled from the conversation.
+type Observation struct {
+	ID             string    `json:"id"`
+	Content        string    `json:"content"`
+	Timestamp      string    `json:"timestamp"`
+	Relevance      Relevance `json:"relevance"`
+	SourceEntryIDs []string  `json:"sourceEntryIds"`
+	TokenCount     int       `json:"tokenCount"`
+}
+
+// Reflection is a durable conclusion distilled from observations.
+type Reflection struct {
+	ID                       string   `json:"id"`
+	Content                  string   `json:"content"`
+	SupportingObservationIDs []string `json:"supportingObservationIds"`
+	TokenCount               int      `json:"tokenCount"`
+}
+
+// ObservationsRecordedData is an om.observations.recorded payload.
+type ObservationsRecordedData struct {
+	Observations []Observation `json:"observations"`
+	CoversUpToID string        `json:"coversUpToId"`
+}
+
+// ReflectionsRecordedData is an om.reflections.recorded payload.
+type ReflectionsRecordedData struct {
+	Reflections  []Reflection `json:"reflections"`
+	CoversUpToID string       `json:"coversUpToId"`
+}
+
+// ObservationsDroppedData is an om.observations.dropped payload.
+type ObservationsDroppedData struct {
+	ObservationIDs []string `json:"observationIds"`
+	CoversUpToID   string   `json:"coversUpToId"`
+}
+
+// MemoryDetails is the details of a compaction entry this extension wrote.
+type MemoryDetails struct {
+	Type         string        `json:"type"`
+	Version      int           `json:"version"`
+	FullFold     bool          `json:"fullFold"`
+	Observations []Observation `json:"observations"`
+	Reflections  []Reflection  `json:"reflections"`
+	// FoldThroughEntryID is the entry through which this summary folded the
+	// ledger. It differs from the compaction's firstKeptEntryId when the hook
+	// moved the cut to retain unobserved source.
+	FoldThroughEntryID string `json:"foldThroughEntryId,omitempty"`
+}
+
+// IsRelevance reports whether v is a relevance level.
+func IsRelevance(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	for _, r := range RelevanceValues {
+		if string(r) == s {
+			return true
+		}
+	}
+	return false
+}
+
+// IsNonEmptyString reports a non-empty string value.
+func IsNonEmptyString(v any) bool {
+	s, ok := v.(string)
+	return ok && s != ""
+}
+
+// IsNonEmptyStringArray reports a non-empty array of non-empty strings.
+func IsNonEmptyStringArray(v any) bool {
+	_, ok := nonEmptyStrings(v)
+	return ok
+}
+
+func nonEmptyStrings(v any) ([]string, bool) {
+	switch list := v.(type) {
+	case []string:
+		if len(list) == 0 {
+			return nil, false
+		}
+		for _, s := range list {
+			if s == "" {
+				return nil, false
+			}
+		}
+		return append([]string(nil), list...), true
+	case []any:
+		if len(list) == 0 {
+			return nil, false
+		}
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			s, ok := item.(string)
+			if !ok || s == "" {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// IsMemoryID reports a valid memory record id.
+func IsMemoryID(v any) bool {
+	s, ok := v.(string)
+	return ok && MemoryIDPattern.MatchString(s)
+}
+
+func tokenCount(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
+			return 0, false
+		}
+		return int(n), true
+	case int:
+		if n < 0 {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// ObservationFrom validates a decoded observation.
+func ObservationFrom(v any) (Observation, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return Observation{}, false
+	}
+	count, okCount := tokenCount(m["tokenCount"])
+	ids, okIDs := nonEmptyStrings(m["sourceEntryIds"])
+	if !IsMemoryID(m["id"]) || !IsNonEmptyString(m["content"]) || !IsNonEmptyString(m["timestamp"]) || !IsRelevance(m["relevance"]) || !okIDs || !okCount {
+		return Observation{}, false
+	}
+	return Observation{
+		ID:             m["id"].(string),
+		Content:        m["content"].(string),
+		Timestamp:      m["timestamp"].(string),
+		Relevance:      Relevance(m["relevance"].(string)),
+		SourceEntryIDs: ids,
+		TokenCount:     count,
+	}, true
+}
+
+// IsObservation reports a valid decoded observation.
+func IsObservation(v any) bool {
+	_, ok := ObservationFrom(v)
+	return ok
+}
+
+// ReflectionFrom validates a decoded reflection.
+func ReflectionFrom(v any) (Reflection, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return Reflection{}, false
+	}
+	count, okCount := tokenCount(m["tokenCount"])
+	ids, okIDs := nonEmptyStrings(m["supportingObservationIds"])
+	content, _ := m["content"].(string)
+	if !IsMemoryID(m["id"]) || content == "" || strings.ContainsAny(content, "\r\n") || !okIDs || !okCount {
+		return Reflection{}, false
+	}
+	return Reflection{
+		ID:                       m["id"].(string),
+		Content:                  content,
+		SupportingObservationIDs: ids,
+		TokenCount:               count,
+	}, true
+}
+
+// IsReflection reports a valid decoded reflection.
+func IsReflection(v any) bool {
+	_, ok := ReflectionFrom(v)
+	return ok
+}
+
+func observationList(v any, requireNonEmpty bool) ([]Observation, bool) {
+	list, ok := v.([]any)
+	if !ok || (requireNonEmpty && len(list) == 0) {
+		return nil, false
+	}
+	out := make([]Observation, 0, len(list))
+	for _, item := range list {
+		observation, ok := ObservationFrom(item)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, observation)
+	}
+	return out, true
+}
+
+func reflectionList(v any, requireNonEmpty bool) ([]Reflection, bool) {
+	list, ok := v.([]any)
+	if !ok || (requireNonEmpty && len(list) == 0) {
+		return nil, false
+	}
+	out := make([]Reflection, 0, len(list))
+	for _, item := range list {
+		reflection, ok := ReflectionFrom(item)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, reflection)
+	}
+	return out, true
+}
+
+// ObservationsRecordedDataFrom validates a decoded om.observations.recorded payload.
+func ObservationsRecordedDataFrom(v any) (ObservationsRecordedData, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ObservationsRecordedData{}, false
+	}
+	observations, ok := observationList(m["observations"], true)
+	if !ok || !IsNonEmptyString(m["coversUpToId"]) {
+		return ObservationsRecordedData{}, false
+	}
+	return ObservationsRecordedData{Observations: observations, CoversUpToID: m["coversUpToId"].(string)}, true
+}
+
+// IsObservationsRecordedData reports a valid decoded payload.
+func IsObservationsRecordedData(v any) bool {
+	_, ok := ObservationsRecordedDataFrom(v)
+	return ok
+}
+
+// ReflectionsRecordedDataFrom validates a decoded om.reflections.recorded payload.
+func ReflectionsRecordedDataFrom(v any) (ReflectionsRecordedData, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ReflectionsRecordedData{}, false
+	}
+	reflections, ok := reflectionList(m["reflections"], true)
+	if !ok || !IsNonEmptyString(m["coversUpToId"]) {
+		return ReflectionsRecordedData{}, false
+	}
+	return ReflectionsRecordedData{Reflections: reflections, CoversUpToID: m["coversUpToId"].(string)}, true
+}
+
+// IsReflectionsRecordedData reports a valid decoded payload.
+func IsReflectionsRecordedData(v any) bool {
+	_, ok := ReflectionsRecordedDataFrom(v)
+	return ok
+}
+
+// ObservationsDroppedDataFrom validates a decoded om.observations.dropped payload.
+func ObservationsDroppedDataFrom(v any) (ObservationsDroppedData, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ObservationsDroppedData{}, false
+	}
+	ids, ok := nonEmptyStrings(m["observationIds"])
+	if !ok || !IsNonEmptyString(m["coversUpToId"]) {
+		return ObservationsDroppedData{}, false
+	}
+	return ObservationsDroppedData{ObservationIDs: ids, CoversUpToID: m["coversUpToId"].(string)}, true
+}
+
+// IsObservationsDroppedData reports a valid decoded payload.
+func IsObservationsDroppedData(v any) bool {
+	_, ok := ObservationsDroppedDataFrom(v)
+	return ok
+}
+
+// MemoryDetailsFrom validates decoded compaction details this extension wrote.
+func MemoryDetailsFrom(v any) (MemoryDetails, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return MemoryDetails{}, false
+	}
+	version, _ := m["version"].(float64)
+	fullFold, okFold := m["fullFold"].(bool)
+	observations, okObs := observationList(m["observations"], false)
+	reflections, okRef := reflectionList(m["reflections"], false)
+	foldThrough, foldPresent := m["foldThroughEntryId"]
+	foldThroughID, okFoldThrough := foldThrough.(string)
+	if foldThrough == nil {
+		okFoldThrough = true
+	}
+	if m["type"] != OMFolded || version != 1 || !okFold || !okObs || !okRef || (foldPresent && !okFoldThrough) {
+		return MemoryDetails{}, false
+	}
+	return MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID}, true
+}
+
+// IsMemoryDetails reports valid decoded memory details.
+func IsMemoryDetails(v any) bool {
+	_, ok := MemoryDetailsFrom(v)
+	return ok
+}
+
+// ObservationsRecordedEntry reads a valid om.observations.recorded entry.
+func ObservationsRecordedEntry(entry Entry) (ObservationsRecordedData, bool) {
+	if entry.Type != "custom" || entry.CustomType != OMObservationsRecorded {
+		return ObservationsRecordedData{}, false
+	}
+	return ObservationsRecordedDataFrom(entry.Data)
+}
+
+// ReflectionsRecordedEntry reads a valid om.reflections.recorded entry.
+func ReflectionsRecordedEntry(entry Entry) (ReflectionsRecordedData, bool) {
+	if entry.Type != "custom" || entry.CustomType != OMReflectionsRecorded {
+		return ReflectionsRecordedData{}, false
+	}
+	return ReflectionsRecordedDataFrom(entry.Data)
+}
+
+// ObservationsDroppedEntry reads a valid om.observations.dropped entry.
+func ObservationsDroppedEntry(entry Entry) (ObservationsDroppedData, bool) {
+	if entry.Type != "custom" || entry.CustomType != OMObservationsDropped {
+		return ObservationsDroppedData{}, false
+	}
+	return ObservationsDroppedDataFrom(entry.Data)
+}
+
+// IsObservationsRecordedEntry reports a valid om.observations.recorded entry.
+func IsObservationsRecordedEntry(entry Entry) bool {
+	_, ok := ObservationsRecordedEntry(entry)
+	return ok
+}
+
+// IsReflectionsRecordedEntry reports a valid om.reflections.recorded entry.
+func IsReflectionsRecordedEntry(entry Entry) bool {
+	_, ok := ReflectionsRecordedEntry(entry)
+	return ok
+}
+
+// IsObservationsDroppedEntry reports a valid om.observations.dropped entry.
+func IsObservationsDroppedEntry(entry Entry) bool {
+	_, ok := ObservationsDroppedEntry(entry)
+	return ok
+}
+
+// BuildObservationsRecordedData builds a payload, or nil when it would be empty.
+func BuildObservationsRecordedData(observations []Observation, coversUpToID string) *ObservationsRecordedData {
+	if len(observations) == 0 || coversUpToID == "" {
+		return nil
+	}
+	return &ObservationsRecordedData{Observations: observations, CoversUpToID: coversUpToID}
+}
+
+// BuildReflectionsRecordedData builds a payload, or nil when it would be empty.
+func BuildReflectionsRecordedData(reflections []Reflection, coversUpToID string) *ReflectionsRecordedData {
+	if len(reflections) == 0 || coversUpToID == "" {
+		return nil
+	}
+	return &ReflectionsRecordedData{Reflections: reflections, CoversUpToID: coversUpToID}
+}
+
+// BuildObservationsDroppedData builds a payload, or nil when it would be empty.
+func BuildObservationsDroppedData(observationIDs []string, coversUpToID string) *ObservationsDroppedData {
+	if len(observationIDs) == 0 || coversUpToID == "" {
+		return nil
+	}
+	return &ObservationsDroppedData{ObservationIDs: observationIDs, CoversUpToID: coversUpToID}
+}

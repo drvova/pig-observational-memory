@@ -1,0 +1,191 @@
+// Package host abstracts what the extension needs from the PiG host, so the
+// memory logic runs against the SDK in production and against fakes in tests.
+package host
+
+import (
+	"context"
+
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+)
+
+// Model is a Pi model object as the registry serves it (provider, id,
+// contextWindow, maxTokens, reasoning, api, baseUrl, …).
+type Model = map[string]any
+
+// ModelString reads a string member of a model.
+func ModelString(model Model, key string) string {
+	if model == nil {
+		return ""
+	}
+	switch v := model[key].(type) {
+	case string:
+		return v
+	case map[string]any:
+		// A provider may arrive as an object with an id.
+		if id, ok := v["id"].(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// ModelInt reads a numeric member of a model as an int (0 when absent or not a number).
+func ModelInt(model Model, key string) int {
+	if model == nil {
+		return 0
+	}
+	switch v := model[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
+}
+
+// ModelProvider is the model's provider id.
+func ModelProvider(model Model) string { return ModelString(model, "provider") }
+
+// ModelID is the model's id.
+func ModelID(model Model) string {
+	if id := ModelString(model, "id"); id != "" {
+		return id
+	}
+	return ModelString(model, "modelId")
+}
+
+// ModelContextWindow is the model's context window, 0 when unknown.
+func ModelContextWindow(model Model) int { return ModelInt(model, "contextWindow") }
+
+// ModelMaxTokens is the model's output limit, 0 when unknown.
+func ModelMaxTokens(model Model) int {
+	if n := ModelInt(model, "maxTokens"); n > 0 {
+		return n
+	}
+	return ModelInt(model, "maxOutputTokens")
+}
+
+// ModelReasoning reports whether the model supports reasoning.
+func ModelReasoning(model Model) bool {
+	if model == nil {
+		return false
+	}
+	switch v := model["reasoning"].(type) {
+	case bool:
+		return v
+	case nil:
+		return false
+	}
+	return true
+}
+
+// Auth is the host's resolved request authentication for a model.
+type Auth struct {
+	OK      bool
+	APIKey  *string
+	Headers map[string]any
+	Env     map[string]string
+	BaseURL string
+	Error   string
+}
+
+// AuthFromMap reads the host's getModelAuth reply.
+func AuthFromMap(m map[string]any) Auth {
+	auth := Auth{}
+	if m == nil {
+		return auth
+	}
+	if ok, isBool := m["ok"].(bool); isBool {
+		auth.OK = ok
+	}
+	if key, ok := m["apiKey"].(string); ok {
+		auth.APIKey = &key
+	}
+	if headers, ok := m["headers"].(map[string]any); ok {
+		auth.Headers = headers
+	}
+	if env, ok := m["env"].(map[string]any); ok {
+		auth.Env = map[string]string{}
+		for k, v := range env {
+			if s, ok := v.(string); ok {
+				auth.Env[k] = s
+			}
+		}
+	} else if env, ok := m["env"].(map[string]string); ok {
+		auth.Env = env
+	}
+	auth.BaseURL, _ = m["baseUrl"].(string)
+	auth.Error, _ = m["error"].(string)
+	return auth
+}
+
+// RefreshOptions are the model registry refresh options.
+type RefreshOptions struct {
+	AllowNetwork *bool
+	Providers    []string
+}
+
+// ModelStream is a model call in flight.
+type ModelStream interface {
+	Events(ctx context.Context) <-chan map[string]any
+	Result() map[string]any
+}
+
+// Models is the model registry the memory workers use.
+type Models interface {
+	Find(provider, id string) Model
+	GetApiKeyAndHeaders(model Model) (Auth, error)
+	IsUsingOAuth(model Model) bool
+	HasConfiguredAuth(model Model) bool
+	Refresh(ctx context.Context, options RefreshOptions) error
+	// Stream starts a model request through the host's provider runtime.
+	// request is Pi's stream request (messages, tools, systemPrompt plus the
+	// request options).
+	Stream(model Model, request map[string]any) ModelStream
+}
+
+// Session reads and appends the current session branch.
+type Session interface {
+	GetBranch() ([]session.Entry, error)
+	AppendEntry(customType string, data any) error
+	SessionID() string
+	SessionFile() string
+}
+
+// UI notifies the user.
+type UI interface {
+	HasUI() bool
+	Notify(message, level string)
+}
+
+// ContextUsage is the host's context-window usage.
+type ContextUsage struct {
+	Tokens        *int
+	ContextWindow int
+}
+
+// CompactCallbacks receive a compaction's outcome.
+type CompactCallbacks struct {
+	OnComplete func()
+	OnError    func(err error)
+}
+
+// Agent controls the session's agent.
+type Agent interface {
+	IsIdle() (bool, error)
+	Compact(callbacks CompactCallbacks)
+	GetContextUsage() (*ContextUsage, error)
+}
+
+// Host is everything the extension reads from and writes to PiG for one event.
+type Host interface {
+	Session
+	UI
+	Agent
+	Cwd() string
+	// SessionModel is the session's active model, nil when none is set.
+	SessionModel() Model
+	Models() Models
+}

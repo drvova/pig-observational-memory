@@ -1,0 +1,280 @@
+package hooks
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+)
+
+const defaultObservationsPoolMaxTokens = 20_000
+
+func observationsPoolMaxTokens(cfg config.Config) float64 {
+	if cfg.ObservationsPoolMaxTokens > 0 {
+		return float64(cfg.ObservationsPoolMaxTokens)
+	}
+	return defaultObservationsPoolMaxTokens
+}
+
+// CompactionCut is where a compaction cuts.
+type CompactionCut struct {
+	// FirstKeptEntryID is the first entry Pi keeps in context.
+	FirstKeptEntryID string
+	// FoldThroughEntryID is the entry through which the memory ledger is folded into the rendered summary.
+	FoldThroughEntryID string
+}
+
+// CutResolution is the hook's decision: a cut, or a delegation to Pi's native summarizer.
+type CutResolution struct {
+	// Kind is "cut" or "delegate".
+	Kind string
+	Cut  CompactionCut
+	// Gap is the unobserved source before Pi's cut, when any.
+	Gap *ledger.UnobservedSourceSpan
+	// RetainedTokens is the estimated source kept when the cut moved; -1 when it did not.
+	RetainedTokens int
+	Reason         string
+}
+
+// CutOptions bound a cut decision.
+type CutOptions struct {
+	MaxRetainedTokens int
+	Reason            string
+}
+
+func cutAt(firstKept, foldThrough string) CutResolution {
+	return CutResolution{Kind: "cut", Cut: CompactionCut{FirstKeptEntryID: firstKept, FoldThroughEntryID: foldThrough}, RetainedTokens: -1}
+}
+
+func delegate(reason string, gap *ledger.UnobservedSourceSpan) CutResolution {
+	return CutResolution{Kind: "delegate", Reason: reason, Gap: gap, RetainedTokens: -1}
+}
+
+// ResolveCompactionCut decides where this compaction cuts. Pi proposes
+// firstKeptEntryID from its own keepRecentTokens budget; the observer may not
+// have reached it yet. When unobserved source sits before the cut, retain it by
+// moving the boundary back to the nearest valid cut point at or before the
+// first unobserved entry and fold every recorded observation into the summary.
+// If retaining is impossible or exceeds the budget, delegate to Pi's native
+// summarizer so the pre-cut context is summarized instead of dropped.
+func ResolveCompactionCut(entries []ledger.Entry, firstKeptEntryID string, options CutOptions) CutResolution {
+	cutIndex := ledger.EntryIndexForID(entries, firstKeptEntryID)
+	if cutIndex == -1 {
+		return cutAt(firstKeptEntryID, firstKeptEntryID)
+	}
+	gap := ledger.UnobservedSourceSpanBefore(entries, cutIndex)
+	if gap == nil {
+		return cutAt(firstKeptEntryID, firstKeptEntryID)
+	}
+	// Overflow recovery must free context now; retaining more than Pi asked
+	// for risks overflowing again on the retried turn.
+	if options.Reason == "overflow" {
+		return delegate("overflow recovery", gap)
+	}
+	coverageMarkerID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
+	if coverageMarkerID == "" {
+		return delegate("no observation coverage", gap)
+	}
+	// Only source the observer has covered inside the current compaction range
+	// can be folded. Compare source tokens, not indices: Pi's retention
+	// boundary may sit on a metadata entry that carries no context tokens.
+	rangeStart := ledger.CompactionRangeStartIndex(entries)
+	coverageIndex := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
+	if coverageIndex < rangeStart {
+		return delegate("nothing observed can be compacted", gap)
+	}
+	safeCutIndex := findCutPointAtOrBefore(entries, gap.FirstIndex, rangeStart)
+	if safeCutIndex <= rangeStart {
+		return delegate("nothing observed can be compacted", gap)
+	}
+	freed := ledger.RawTokensAfterIndex(entries, rangeStart-1) - ledger.RawTokensAfterIndex(entries, safeCutIndex-1)
+	if freed <= 0 {
+		return delegate("nothing observed can be compacted", gap)
+	}
+	retained := ledger.RawTokensAfterIndex(entries, safeCutIndex-1)
+	if retained > options.MaxRetainedTokens {
+		return delegate(fmt.Sprintf("retaining ~%s tokens exceeds the ~%s-token budget", jsfmt.Locale(retained), jsfmt.Locale(options.MaxRetainedTokens)), gap)
+	}
+	resolution := cutAt(entries[safeCutIndex].ID, coverageMarkerID)
+	resolution.Gap = gap
+	resolution.RetainedTokens = retained
+	return resolution
+}
+
+func gapLabel(gap ledger.UnobservedSourceSpan) string {
+	noun := "entries"
+	if gap.EntryCount == 1 {
+		noun = "entry"
+	}
+	return fmt.Sprintf("%d source %s (~%s tokens)", gap.EntryCount, noun, jsfmt.Locale(gap.Tokens))
+}
+
+// BeforeCompactEvent is Pi's session_before_compact event as this hook reads it.
+type BeforeCompactEvent struct {
+	FirstKeptEntryID string
+	TokensBefore     int
+	BranchEntries    []ledger.Entry
+	Reason           string
+}
+
+// CompactionResult is the extension-provided compaction.
+type CompactionResult struct {
+	Summary          string
+	FirstKeptEntryID string
+	TokensBefore     int
+	Details          ledger.MemoryDetails
+}
+
+// ToMap is the result in Pi's CompactionResult wire shape.
+func (r CompactionResult) ToMap() map[string]any {
+	return map[string]any{
+		"summary":          r.Summary,
+		"firstKeptEntryId": r.FirstKeptEntryID,
+		"tokensBefore":     r.TokensBefore,
+		"details":          r.Details,
+	}
+}
+
+// BeforeCompactOutcome is the hook's answer: cancel, own the compaction, or
+// (neither) decline so Pi's native summarizer runs.
+type BeforeCompactOutcome struct {
+	Cancel     bool
+	Compaction *CompactionResult
+}
+
+// ToResult is the outcome in Pi's SessionBeforeCompactResult wire shape, or nil to decline.
+func (o BeforeCompactOutcome) ToResult() map[string]any {
+	if o.Cancel {
+		return map[string]any{"cancel": true}
+	}
+	if o.Compaction != nil {
+		return map[string]any{"compaction": o.Compaction.ToMap()}
+	}
+	return nil
+}
+
+func debugScope(rt *runtime.Runtime, h host.Host) debuglog.Context {
+	return debuglog.Context{
+		Enabled:     rt.Config().DebugLog,
+		Cwd:         h.Cwd(),
+		SessionID:   h.SessionID(),
+		SessionFile: h.SessionFile(),
+		RunID:       "compaction-" + strconv.FormatInt(Now().UnixMilli(), 36),
+	}
+}
+
+// HandleBeforeCompact is the session_before_compact handler. ctx carries the
+// event's cancellation.
+func HandleBeforeCompact(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) BeforeCompactOutcome {
+	if !rt.TryEnterCompactHook() {
+		notifyUI(h, "Observational memory: another compaction is already in progress; cancelling duplicate", "warning")
+		return BeforeCompactOutcome{Cancel: true}
+	}
+	defer rt.LeaveCompactHook()
+	rt.EnsureConfig(h.Cwd())
+	return handleCompaction(debuglog.With(ctx, debugScope(rt, h)), rt, h, event)
+}
+
+func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) BeforeCompactOutcome {
+	cfg := rt.Config()
+	entries := event.BranchEntries
+	contextWindow := host.ModelContextWindow(h.SessionModel())
+	maxRetainedTokens := config.ResolveCompactionMaxRetainedTokens(cfg, contextWindow)
+	summaryMaxTokens := config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow)
+	resolution := ResolveCompactionCut(entries, event.FirstKeptEntryID, CutOptions{MaxRetainedTokens: maxRetainedTokens, Reason: event.Reason})
+
+	// The background observer is behind Pi's cut. Rather than retaining the
+	// tail or handing the whole range to Pi's native summarizer, observe the
+	// gap now: Pi waits for this hook, so the memory model has the server to
+	// itself, and observations are durable where a native summary is not.
+	if resolution.Gap != nil && cfg.CompactionCatchUpMaxChunks > 0 && !rt.ConsolidationInFlight() && ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded) != "" {
+		catchUp := CatchUpObserver(ctx, CatchUpArgs{Runtime: rt, Host: h, Entries: entries, Gap: *resolution.Gap, MaxChunks: cfg.CompactionCatchUpMaxChunks})
+		data := map[string]any{"chunksRecorded": catchUp.ChunksRecorded, "gapEntries": resolution.Gap.EntryCount, "gapTokens": resolution.Gap.Tokens}
+		if catchUp.StoppedBecause != "" {
+			data["stoppedBecause"] = catchUp.StoppedBecause
+		}
+		debuglog.Log(ctx, "compaction.catch_up", data)
+		if catchUp.ChunksRecorded > 0 {
+			if fresh, err := h.GetBranch(); err == nil && fresh != nil {
+				entries = fresh
+			}
+			resolution = ResolveCompactionCut(entries, event.FirstKeptEntryID, CutOptions{MaxRetainedTokens: maxRetainedTokens, Reason: event.Reason})
+		}
+	}
+
+	var projection *ledger.CompactionProjection
+	summary := ""
+	if resolution.Kind == "cut" {
+		built := ledger.BuildCompactionProjection(entries, resolution.Cut.FoldThroughEntryID, ledger.CompactionProjectionConfig{ObservationsPoolMaxTokens: observationsPoolMaxTokens(cfg)})
+		projection = &built
+		rendered := ledger.RenderSummaryWithBudget(projection.Reflections, projection.Observations, summaryMaxTokens)
+		summary = rendered.Text
+		// A summary that kept no record would replace older context with only
+		// instructions and an omission notice. Decline instead, so Pi's native
+		// summarizer preserves the facts.
+		hadRecords := len(projection.Reflections)+len(projection.Observations) > 0
+		if hadRecords && len(rendered.Reflections)+len(rendered.Observations) == 0 {
+			debuglog.Log(ctx, "compaction.summary_budget_empty", map[string]any{"summaryMaxTokens": summaryMaxTokens, "reflections": len(projection.Reflections), "observations": len(projection.Observations)})
+			notifyUI(h, fmt.Sprintf("Observational memory: no memory record fits the ~%s-token summary budget; delegating to Pi's native summarizer", jsfmt.Locale(summaryMaxTokens)), "warning")
+			summary = ""
+		}
+		// A moved cut keeps the unobserved tail AND adds the rendered memory on
+		// top of it. Both must fit the budget, or Pi's threshold fires again
+		// right after this compaction and the next hook call can only delegate.
+		if resolution.Gap != nil && resolution.RetainedTokens >= 0 {
+			summaryTokens := tokens.EstimateStringTokens(summary)
+			if resolution.RetainedTokens+summaryTokens > maxRetainedTokens {
+				resolution = delegate(fmt.Sprintf("retaining ~%s tokens plus a ~%s-token memory summary exceeds the ~%s-token budget", jsfmt.Locale(resolution.RetainedTokens), jsfmt.Locale(summaryTokens), jsfmt.Locale(maxRetainedTokens)), resolution.Gap)
+			}
+		}
+	}
+
+	if resolution.Gap != nil {
+		data := map[string]any{
+			"proposedFirstKeptEntryId": event.FirstKeptEntryID,
+			"unobservedEntries":        resolution.Gap.EntryCount,
+			"unobservedTokens":         resolution.Gap.Tokens,
+			"outcome":                  resolution.Kind,
+		}
+		if resolution.Kind == "cut" {
+			data["firstKeptEntryId"] = resolution.Cut.FirstKeptEntryID
+			data["foldThroughEntryId"] = resolution.Cut.FoldThroughEntryID
+			if resolution.RetainedTokens >= 0 {
+				data["retainedTokens"] = resolution.RetainedTokens
+			}
+			data["summaryTokens"] = tokens.EstimateStringTokens(summary)
+			data["maxRetainedTokens"] = maxRetainedTokens
+		} else {
+			data["reason"] = resolution.Reason
+		}
+		debuglog.Log(ctx, "compaction.observer_behind", data)
+	}
+
+	if resolution.Kind == "delegate" {
+		gap := ledger.UnobservedSourceSpan{}
+		if resolution.Gap != nil {
+			gap = *resolution.Gap
+		}
+		notifyUI(h, fmt.Sprintf("Observational memory: observer has not reached %s before the compaction cut and they cannot be retained (%s); delegating to Pi's native summarizer", gapLabel(gap), resolution.Reason), "warning")
+		return BeforeCompactOutcome{}
+	}
+	if projection == nil || summary == "" {
+		return BeforeCompactOutcome{}
+	}
+	if resolution.Gap != nil {
+		notifyUI(h, fmt.Sprintf("Observational memory: observer has not reached %s before the compaction cut; keeping them in context until they are observed", gapLabel(*resolution.Gap)), "info")
+	}
+	return BeforeCompactOutcome{Compaction: &CompactionResult{
+		Summary:          summary,
+		FirstKeptEntryID: resolution.Cut.FirstKeptEntryID,
+		TokensBefore:     event.TokensBefore,
+		Details:          projection.Details,
+	}}
+}

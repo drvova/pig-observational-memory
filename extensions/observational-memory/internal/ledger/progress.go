@@ -1,0 +1,375 @@
+package ledger
+
+import (
+	"math"
+
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+)
+
+// IsSourceEntry reports an entry that carries conversation content.
+func IsSourceEntry(entry Entry) bool {
+	switch entry.Type {
+	case "message", "custom_message", "branch_summary":
+		return true
+	}
+	return false
+}
+
+// EntryIndexByID maps ids to branch indexes.
+func EntryIndexByID(entries []Entry) map[string]int {
+	index := make(map[string]int, len(entries))
+	for i, entry := range entries {
+		index[entry.ID] = i
+	}
+	return index
+}
+
+// EntryIndexForID is the branch index of entryID, or -1.
+func EntryIndexForID(entries []Entry, entryID string) int {
+	if entryID == "" {
+		return -1
+	}
+	if idx, ok := EntryIndexByID(entries)[entryID]; ok {
+		return idx
+	}
+	return -1
+}
+
+func nonEmptyList(v any) bool {
+	switch list := v.(type) {
+	case []any:
+		return len(list) > 0
+	case []string:
+		return len(list) > 0
+	}
+	return false
+}
+
+// coverageEntry reads a coverage marker entry of customType; it validates only
+// what coverage needs (a coversUpToId and a non-empty record list).
+func coverageEntry(entry Entry, customType string) (string, bool) {
+	if entry.Type != "custom" || entry.CustomType != customType {
+		return "", false
+	}
+	data, ok := entry.Data.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	coversUpTo, ok := data["coversUpToId"].(string)
+	if !ok {
+		return "", false
+	}
+	switch customType {
+	case OMObservationsRecorded:
+		if !nonEmptyList(data["observations"]) {
+			return "", false
+		}
+	case OMReflectionsRecorded:
+		if !nonEmptyList(data["reflections"]) {
+			return "", false
+		}
+	default:
+		if !nonEmptyList(data["observationIds"]) {
+			return "", false
+		}
+	}
+	return coversUpTo, true
+}
+
+// LatestCoverageIndex is the branch index of the furthest entry a marker of
+// customType covers, or -1.
+func LatestCoverageIndex(entries []Entry, customType string) int {
+	index := EntryIndexByID(entries)
+	latest := -1
+	for _, entry := range entries {
+		coversUpTo, ok := coverageEntry(entry, customType)
+		if !ok {
+			continue
+		}
+		covered, ok := index[coversUpTo]
+		if ok && covered > latest {
+			latest = covered
+		}
+	}
+	return latest
+}
+
+// LatestCoverageMarkerID is the id of the furthest entry a marker of customType covers.
+func LatestCoverageMarkerID(entries []Entry, customType string) string {
+	index := EntryIndexByID(entries)
+	latestIndex := -1
+	latestID := ""
+	for _, entry := range entries {
+		coversUpTo, ok := coverageEntry(entry, customType)
+		if !ok {
+			continue
+		}
+		covered, ok := index[coversUpTo]
+		if ok && covered > latestIndex {
+			latestIndex = covered
+			latestID = coversUpTo
+		}
+	}
+	return latestID
+}
+
+// EarlierCoverageMarkerID is whichever of two marker ids sits earlier on the branch.
+func EarlierCoverageMarkerID(entries []Entry, firstID, secondID string) string {
+	if firstID == "" {
+		return secondID
+	}
+	if secondID == "" {
+		return firstID
+	}
+	index := EntryIndexByID(entries)
+	firstIndex, firstOK := index[firstID]
+	secondIndex, secondOK := index[secondID]
+	if !firstOK {
+		if !secondOK {
+			return ""
+		}
+		return secondID
+	}
+	if !secondOK {
+		return firstID
+	}
+	if firstIndex <= secondIndex {
+		return firstID
+	}
+	return secondID
+}
+
+// RawTokensAfterIndex sums estimated source tokens after index.
+func RawTokensAfterIndex(entries []Entry, index int) int {
+	total := 0
+	for i := max(0, index+1); i < len(entries); i++ {
+		if IsSourceEntry(entries[i]) {
+			total += tokens.EstimateEntryTokens(entries[i])
+		}
+	}
+	return total
+}
+
+// RawTokensSinceCoverage sums estimated source tokens after the latest marker of customType.
+func RawTokensSinceCoverage(entries []Entry, customType string) int {
+	return RawTokensAfterIndex(entries, LatestCoverageIndex(entries, customType))
+}
+
+// RawTokensSinceObservationCoverage is the unobserved source backlog.
+func RawTokensSinceObservationCoverage(entries []Entry) int {
+	return RawTokensSinceCoverage(entries, OMObservationsRecorded)
+}
+
+// RawTokensSinceReflectionCoverage is the source backlog since the last reflection marker.
+func RawTokensSinceReflectionCoverage(entries []Entry) int {
+	return RawTokensSinceCoverage(entries, OMReflectionsRecorded)
+}
+
+// ObservedTokensSinceReflectionCoverage is the source the observer has covered
+// since the latest reflection marker: the material new reflections could draw
+// on. A large unobserved backlog does not make the reflector due.
+func ObservedTokensSinceReflectionCoverage(entries []Entry) int {
+	reflectionIndex := LatestCoverageIndex(entries, OMReflectionsRecorded)
+	observationIndex := LatestCoverageIndex(entries, OMObservationsRecorded)
+	if observationIndex <= reflectionIndex {
+		return 0
+	}
+	total := 0
+	for i := reflectionIndex + 1; i <= observationIndex; i++ {
+		if IsSourceEntry(entries[i]) {
+			total += tokens.EstimateEntryTokens(entries[i])
+		}
+	}
+	return total
+}
+
+// RawTokensSinceDropCoverage is the source backlog since the last drop marker.
+func RawTokensSinceDropCoverage(entries []Entry) int {
+	return RawTokensSinceCoverage(entries, OMObservationsDropped)
+}
+
+// FindLastCompactionIndex is the branch index of the latest compaction entry, or -1.
+func FindLastCompactionIndex(entries []Entry) int {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Type == "compaction" {
+			return i
+		}
+	}
+	return -1
+}
+
+func finiteNumber(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, !math.IsNaN(n) && !math.IsInf(n, 0)
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+// ContextTokensFromUsage reads provider-reported context size: totalTokens
+// when positive, else the sum of the four components when all are numbers.
+func ContextTokensFromUsage(usage any) (int, bool) {
+	u, ok := usage.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	if total, ok := finiteNumber(u["totalTokens"]); ok && total > 0 {
+		return int(total), true
+	}
+	sum := 0.0
+	for _, key := range []string{"input", "output", "cacheRead", "cacheWrite"} {
+		n, ok := finiteNumber(u[key])
+		if !ok {
+			return 0, false
+		}
+		sum += n
+	}
+	if sum > 0 {
+		return int(sum), true
+	}
+	return 0, false
+}
+
+func validAssistantContextTokens(entry Entry) (int, bool) {
+	if entry.Type != "message" || entry.Message == nil {
+		return 0, false
+	}
+	if entry.Message["role"] != "assistant" {
+		return 0, false
+	}
+	if stop, _ := entry.Message["stopReason"].(string); stop == "aborted" || stop == "error" {
+		return 0, false
+	}
+	return ContextTokensFromUsage(entry.Message["usage"])
+}
+
+// RealContextTokensAfterCompaction is the first valid assistant usage after a
+// compaction: the post-compaction baseline. The compaction entry's own usage
+// is the summary call's and is never used.
+func RealContextTokensAfterCompaction(entries []Entry, compactionIdx int) (int, bool) {
+	for i := compactionIdx + 1; i < len(entries); i++ {
+		if t, ok := validAssistantContextTokens(entries[i]); ok {
+			return t, true
+		}
+	}
+	return 0, false
+}
+
+// RealContextTokensAtCoverage is the last valid assistant usage at or before a
+// coverage index.
+func RealContextTokensAtCoverage(entries []Entry, coverageIdx int) (int, bool) {
+	for i := coverageIdx; i >= 0; i-- {
+		if t, ok := validAssistantContextTokens(entries[i]); ok {
+			return t, true
+		}
+	}
+	return 0, false
+}
+
+// RealTokensSinceAnchor is the provider-reported context growth since the most
+// recent anchor (a compaction, or the coverage marker of customType; "" means
+// no coverage). It reports false when the baseline cannot be measured or the
+// current context shrank below it.
+func RealTokensSinceAnchor(entries []Entry, customType string, currentContextTokens int) (int, bool) {
+	coverageIdx := -1
+	if customType != "" {
+		coverageIdx = LatestCoverageIndex(entries, customType)
+	}
+	compactionIdx := FindLastCompactionIndex(entries)
+	if compactionIdx > coverageIdx {
+		baseline, ok := RealContextTokensAfterCompaction(entries, compactionIdx)
+		if !ok {
+			return 0, false
+		}
+		delta := currentContextTokens - baseline
+		if delta < 0 {
+			return 0, false
+		}
+		return delta, true
+	}
+	if coverageIdx >= 0 {
+		baseline, ok := RealContextTokensAtCoverage(entries, coverageIdx)
+		if !ok {
+			return 0, false
+		}
+		delta := currentContextTokens - baseline
+		if delta < 0 {
+			return 0, false
+		}
+		return delta, true
+	}
+	return max(0, currentContextTokens), true
+}
+
+// CompactionRangeStartIndex is where Pi's next compaction range starts: the
+// retained boundary of the latest compaction, the entry after it when the
+// boundary id is missing, or 0 before any compaction.
+func CompactionRangeStartIndex(entries []Entry) int {
+	compactionIndex := FindLastCompactionIndex(entries)
+	if compactionIndex == -1 {
+		return 0
+	}
+	firstKept := EntryIndexForID(entries, entries[compactionIndex].FirstKeptEntryID)
+	if firstKept == -1 {
+		return compactionIndex + 1
+	}
+	return firstKept
+}
+
+// RawTokensSinceLastCompaction sums estimated source tokens in the current compaction range.
+func RawTokensSinceLastCompaction(entries []Entry) int {
+	return RawTokensAfterIndex(entries, CompactionRangeStartIndex(entries)-1)
+}
+
+// ObservedTokensSinceLastCompaction sums the estimated source tokens in the
+// current compaction range that observation coverage has reached.
+func ObservedTokensSinceLastCompaction(entries []Entry) int {
+	start := CompactionRangeStartIndex(entries)
+	coverageIndex := LatestCoverageIndex(entries, OMObservationsRecorded)
+	if coverageIndex < start {
+		return 0
+	}
+	total := 0
+	for i := start; i <= coverageIndex; i++ {
+		if IsSourceEntry(entries[i]) {
+			total += tokens.EstimateEntryTokens(entries[i])
+		}
+	}
+	return total
+}
+
+// UnobservedSourceSpan is the unobserved source before a cut.
+type UnobservedSourceSpan struct {
+	FirstIndex int
+	LastIndex  int
+	EntryCount int
+	Tokens     int
+}
+
+// UnobservedSourceSpanBefore is the source inside the current compaction
+// range, before cutIndex (exclusive), that observation coverage has not
+// reached; nil when coverage reaches the cut.
+func UnobservedSourceSpanBefore(entries []Entry, cutIndex int) *UnobservedSourceSpan {
+	coverageIndex := LatestCoverageIndex(entries, OMObservationsRecorded)
+	start := max(coverageIndex+1, CompactionRangeStartIndex(entries))
+	span := UnobservedSourceSpan{FirstIndex: -1, LastIndex: -1}
+	for i := start; i < cutIndex && i < len(entries); i++ {
+		if !IsSourceEntry(entries[i]) {
+			continue
+		}
+		if span.FirstIndex == -1 {
+			span.FirstIndex = i
+		}
+		span.LastIndex = i
+		span.EntryCount++
+		span.Tokens += tokens.EstimateEntryTokens(entries[i])
+	}
+	if span.FirstIndex == -1 {
+		return nil
+	}
+	return &span
+}

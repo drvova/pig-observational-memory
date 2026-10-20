@@ -1,0 +1,115 @@
+package recall_test
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/recall"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+)
+
+func expectContains(t *testing.T, text string, fragments ...string) {
+	for _, fragment := range fragments {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("text lacks %q:\n%s", fragment, text)
+		}
+	}
+}
+
+func teaObservation() ledger.Observation {
+	return testfix.Observation("aaaaaaaaaaaa", func(o *ledger.Observation) {
+		o.Content = "User likes tea."
+		o.SourceEntryIDs = []string{"raw-1"}
+	})
+}
+
+func TestKeepsPublicToolNameAndCallRendering(t *testing.T) {
+	if recall.ToolName != "recall" || recall.Label != "Recall memory evidence" || recall.FormatCallForTui("aaaaaaaaaaaa") != "recall aaaaaaaaaaaa" {
+		t.Fatal("tool identity changed")
+	}
+	if recall.FormatCallForTui("") != "recall ..." {
+		t.Fatalf("call rendering %q", recall.FormatCallForTui(""))
+	}
+}
+
+func TestRendersActiveObservationSourceEvidence(t *testing.T) {
+	entries := []ledger.Entry{
+		testfix.RawMessage("raw-1", "I like tea."),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{teaObservation()}, "raw-1"),
+	}
+
+	text, details := recall.Execute(entries, "aaaaaaaaaaaa")
+
+	if details.Status != recall.StatusOK || details.Matches[0].Observation.Status != "active" {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "I like tea.")
+	expectContains(t, recall.FormatRenderedResultForTui(&details, text, false), "✓ observation")
+}
+
+func TestRendersDroppedObservationsAsRecallable(t *testing.T) {
+	entries := []ledger.Entry{
+		testfix.RawMessage("raw-1", "I like tea."),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{teaObservation()}, "raw-1"),
+		testfix.ObservationsDroppedEntry("om-drop", []string{"aaaaaaaaaaaa"}, "om-obs"),
+	}
+
+	text, details := recall.Execute(entries, "aaaaaaaaaaaa")
+
+	if details.Matches[0].Observation.Status != "dropped" {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "dropped from active memory but remains recallable")
+	expectContains(t, recall.FormatRenderedResultForTui(&details, text, false), "[dropped]")
+}
+
+func TestRendersReflectionRecallWithSupportingObservationsAndSources(t *testing.T) {
+	ref := testfix.Reflection("eeeeeeeeeeee", []string{"aaaaaaaaaaaa"}, func(r *ledger.Reflection) { r.Content = "User likes tea." })
+	entries := []ledger.Entry{
+		testfix.RawMessage("raw-1", "I like tea."),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{teaObservation()}, "raw-1"),
+		testfix.ReflectionsRecordedEntry("om-ref", []ledger.Reflection{ref}, "om-obs"),
+	}
+
+	text, details := recall.Execute(entries, "eeeeeeeeeeee")
+
+	if details.Status != recall.StatusOK || len(details.Reflections) != 1 || len(details.Observations) != 1 {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "Reflections:", "[eeeeeeeeeeee] User likes tea.", "Observations:", "Sources:", "I like tea.")
+}
+
+func TestReportsMissingSourcesAsPartial(t *testing.T) {
+	obs := testfix.Observation("aaaaaaaaaaaa", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"missing-raw"} })
+	entries := []ledger.Entry{testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obs}, "om-obs")}
+
+	text, details := recall.Execute(entries, "aaaaaaaaaaaa")
+
+	if details.Status != recall.StatusPartial || !reflect.DeepEqual(details.MissingSourceEntryIDs, []string{"missing-raw"}) {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "missing: missing-raw")
+}
+
+func TestReportsInvalidIDs(t *testing.T) {
+	text, details := recall.Execute(nil, "not-valid")
+
+	if details.Status != recall.StatusInvalidID {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "Memory id must be 12 lowercase hex characters")
+	if recall.FormatHeaderForTui(details) != "× failure" {
+		t.Fatalf("header %q", recall.FormatHeaderForTui(details))
+	}
+}
+
+func TestReportsNotFoundAndIgnoresV2Memory(t *testing.T) {
+	text, details := recall.Execute([]ledger.Entry{testfix.OldV2ObservationEntry("v2-obs")}, "aaaaaaaaaaaa")
+
+	if details.Status != recall.StatusNotFound {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "No observation or reflection with id aaaaaaaaaaaa was found")
+}
