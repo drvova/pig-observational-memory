@@ -102,7 +102,7 @@ The observer is the first stage of the consolidation pipeline, which launches fr
 
 When Pi reports provider context usage, the observer is also due once the real context has grown by `observeAfterTokens` since the coverage marker (or since the latest compaction, when coverage is behind it). Either measure reaching the threshold launches the observer: the provider delta catches content the character heuristic undercounts, and the raw backlog keeps an observer that fell behind several compactions from starving on a small context window that Pi compacts every few thousand tokens.
 
-Lower values create smaller chunks and more frequent model calls. Higher values reduce model-call frequency but let unobserved raw conversation accumulate longer. If the observer deliberately emits no observations, no ledger entry is written; the same range remains uncovered, and the observer retries after another `observeAfterTokens` of raw source tokens accumulate (provider-reported growth does not shorten this wait), or sooner when coverage moves or the branch no longer contains the chunk it judged.
+Lower values create smaller chunks and more frequent model calls. Higher values reduce model-call frequency but let unobserved raw conversation accumulate longer. If the observer deliberately emits no observations, no ledger entry is written; the same range remains uncovered, and the observer retries after another `observeAfterTokens` of source tokens it can read accumulate (provider-reported growth and `!!command` output do not shorten this wait), or sooner when coverage moves or the branch no longer contains the chunk it judged.
 
 ## `observerChunkMaxTokens`
 

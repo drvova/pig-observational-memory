@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
 )
 
 func pct(current, total int) int {
@@ -93,7 +94,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	obsProgress := hooks.ObserverProgressTokens(entries, h)
 	reflectionProgress := hooks.ReflectorProgressTokens(entries, h)
 	compactionProgress := hooks.CompactionProgress(cfg, entries)
-	unobservedSinceCompaction := max(0, ledger.RawTokensSinceLastCompaction(entries)-ledger.ObservedTokensSinceLastCompaction(entries))
+	// What the observer still has to read before the compaction cut can pass
+	// it: entries that render nothing for it never need coverage.
+	unobservedSinceCompaction := ledger.RawTokensAfterIndexWhere(entries, max(ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded), ledger.CompactionRangeStartIndex(entries)-1), serialize.ObserverRenders)
 	compactThreshold := config.ResolveCompactAfterTokens(cfg, host.ModelContextWindow(h.SessionModel()))
 
 	lines := []string{}
@@ -118,10 +121,10 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		fmt.Sprintf("Active observation pool: ~%s / %s target tokens (%d%%)", jsfmt.Locale(activePool.ObservationTokens), jsfmt.Locale(cfg.ObservationsPoolTargetTokens), pct(activePool.ObservationTokens, cfg.ObservationsPoolTargetTokens)),
 		fmt.Sprintf("Reflection pool:         ~%s tokens", jsfmt.Locale(visibleReflectionTokens)),
 	)
-	// The observer backoff is measured on the raw backlog alone, not on the
-	// larger figure "Next observation" shows.
+	// The observer backoff is measured on the observer's backlog alone, not on
+	// the larger figure "Next observation" shows.
 	if backoff := hooks.ActiveObserverBackoff(rt, h, entries, cfg); backoff != nil {
-		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s raw backlog tokens; resumes at ~%s (raw backlog now ~%s)",
+		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s backlog tokens; resumes at ~%s (backlog now ~%s)",
 			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(hooks.ObserverBacklog(entries))))
 	}
 	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); backoff != nil {

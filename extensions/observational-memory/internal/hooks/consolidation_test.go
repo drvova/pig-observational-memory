@@ -1612,6 +1612,31 @@ func TestIdleSettlesOnOneAbortedRunLaunchNothingBesideOwedCompaction(t *testing.
 	never(t, "launched a worker beside the compaction", func() bool { return fx.obs.count() != 1 || fx.h.CompactCount() != 1 })
 }
 
+// A settle that adopted a run another settle then aborted, for an agent_start
+// that came before this settle, is still in idle time: once the run is over it
+// settles again instead of skipping its work.
+func TestIdleSettleOnRunAbortedForEarlierIdleEndSettlesAgain(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+	entered, release := make(chan struct{}), make(chan struct{})
+	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		close(entered)
+		<-release
+		return agents.ObserverResult{}, ctx.Err()
+	})
+	// Settle A launches; an agent_start and that run's settle B follow before A
+	// notices the idle end and aborts its run.
+	done := MaybeLaunchConsolidation(fx.rt, fx.h)
+	waitDone(t, entered)
+	fx.rt.NoteIdleEnd()
+	OnAgentSettledEvent(fx.rt, fx.h)
+	if !fx.rt.AbortConsolidation() {
+		t.Fatal("nothing to abort")
+	}
+	close(release)
+	waitDone(t, done)
+	eventually(t, func() bool { return fx.obs.count() == 2 })
+}
+
 // A second launch while a run is in flight launches nothing.
 func TestLaunchRefusesWhileRunInFlight(t *testing.T) {
 	rt := runtime.New()

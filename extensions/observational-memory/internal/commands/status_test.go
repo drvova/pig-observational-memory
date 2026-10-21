@@ -149,6 +149,22 @@ func TestStatusCountsOnlyObservedTokensTowardCompaction(t *testing.T) {
 	expectContains(t, output, "Next compaction:  ~3 / 30 observed source tokens (10%)", "Observer backlog: ~4 unobserved source tokens since the compaction boundary")
 }
 
+// A !!command run PiG keeps out of context is not backlog: the observer never
+// reads it and the compaction cut does not wait for it.
+func TestStatusBacklogLeavesOutExcludedBashRuns(t *testing.T) {
+	entries := []ledger.Entry{
+		testfix.CompactionEntry("cmp-1", testfix.CompactionArgs{FirstKeptEntryID: "raw-1"}),
+		testfix.TextCustomMessage("raw-1", "aaaaaaaaaaaa"),
+		testfix.ObservationsRecordedEntry("om-cov", []ledger.Observation{testfix.Observation("aaaaaaaaaaaa")}, "raw-1"),
+		testfix.TextCustomMessage("raw-2", "bbbbbbbbbbbbbbbb"),
+		testfix.MessageEntry("bash-1", map[string]any{"role": "bashExecution", "command": "cat log", "output": strings.Repeat("x", 400), "excludeFromContext": true}),
+	}
+
+	output := statusOutput(t, statusRuntime(statusConfig()), testfix.NewFakeHost(entries...))
+
+	expectContains(t, output, "Next observation: ~4 / ", "Observer backlog: ~4 unobserved source tokens since the compaction boundary")
+}
+
 // The compaction line follows a mid-session toggle of Pi's auto-compaction:
 // status re-reads compaction.enabled for a configuration loaded from disk.
 func TestStatusRereadsPiAutoCompactionMidSession(t *testing.T) {
@@ -312,7 +328,7 @@ func TestStatusProgressMirrorsWorkerGating(t *testing.T) {
 		return statusOutput(t, rt, withContextTokens(testfix.NewFakeHost(branch...), 5100))
 	}
 
-	expectContains(t, status(judged, entries), "Next observation: ~5,000 / 10 tokens", "Observer backoff: nothing new at ~4 raw backlog tokens; resumes at ~14 (raw backlog now ~4)")
+	expectContains(t, status(judged, entries), "Next observation: ~5,000 / 10 tokens", "Observer backoff: nothing new at ~4 backlog tokens; resumes at ~14 (backlog now ~4)")
 
 	// The observer discards the backoff in each of these, so status does not show it.
 	otherSession := judged

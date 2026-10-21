@@ -511,12 +511,10 @@ func settleIdle(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks, idle
 	if hooks.AfterIdleConsolidation == nil {
 		return
 	}
-	adoptedAborted := false
 	if launched == nil {
 		// Nothing launched now, but an earlier run may still be in flight; the
 		// after-hook waits for it rather than racing it.
 		launched = rt.ConsolidationDone()
-		adoptedAborted = rt.RunAborted(launched)
 	}
 	if launched == nil {
 		hooks.AfterIdleConsolidation(h)
@@ -526,17 +524,18 @@ func settleIdle(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks, idle
 		defer func() { _ = recover() }()
 		<-launched
 		switch {
-		case rt.IdleEnds() != idleEnds || (!adoptedAborted && rt.RunAborted(launched)):
+		case rt.IdleEnds() != idleEnds:
 			// The agent started again (or the session ended) before the run was
 			// over, so this is no longer idle time. The next idle settle owes the
 			// check and runs it before launching: a stage that stays due relaunches
 			// at every settle, and the next prompt may abort every one of them.
 			rt.SetAfterHookOwed(true)
 			debuglog.Log(context.Background(), "consolidation.after_hook_skipped", map[string]any{"reason": "aborted"})
-		case adoptedAborted:
-			// The run was aborted before this settle and is over now, and the
-			// idle window has not ended since: settle again. Every settle that
-			// adopted the run wakes here together; only the first settles again.
+		case rt.RunAborted(launched):
+			// Every abort follows an idle end, and none came after this settle:
+			// the run was aborted for one before it, so this window is still idle
+			// and the run is over. Settle again. Every settle that waited on the
+			// run wakes here together; only the first settles again.
 			if rt.ClaimResettle(launched) {
 				settleIdle(rt, h, hooks, idleEnds)
 			}

@@ -80,7 +80,7 @@ Every V3 ledger entry has `data.coversUpToId`. That field is a progress and proj
 
 | Worker/trigger | Progress source |
 |---|---|
-| Observer | source tokens after the latest `om.observations.recorded.data.coversUpToId` |
+| Observer | source tokens after the latest `om.observations.recorded.data.coversUpToId`, leaving out entries that render nothing for the observer (`!!command` runs, aborted empty turns) |
 | Reflector | observed source tokens: those after the latest `om.reflections.recorded.data.coversUpToId` and up to the latest observation coverage marker |
 | Dropper | no clock; runs only after a non-empty same-run reflection, when the folded active observation pool is over `observationsPoolTargetTokens` |
 | Auto-compaction | observed source tokens from the latest compaction boundary through the latest observation coverage marker (raw source tokens after the boundary when Pi's `compaction.enabled` is `false`) |
@@ -176,7 +176,7 @@ The observer is the first stage of the consolidation pipeline. The pipeline laun
 3. Skip the launch if a consolidation run is already in flight.
 4. Skip the launch unless the observer or the reflector is due (see [Source entries and progress](#source-entries-and-progress)); a reflector in its empty-verdict backoff does not count.
 5. In the run, skip the observer stage if its progress is below `observeAfterTokens`; the run moves on to the reflector.
-6. Honor any deliberate-empty backoff until another `observeAfterTokens` of raw source tokens arrive, coverage changes, the chunk it judged leaves the branch, or the session changes.
+6. Honor any deliberate-empty backoff until another `observeAfterTokens` of source tokens the observer can read arrive, coverage changes, the chunk it judged leaves the branch, or the session changes.
 7. Resolve the memory model. If no usable model resolves, the run ends.
 8. Select the oldest size-capped chunk after the latest observation coverage marker.
 9. Serialize those source entries for the observer prompt, with prior memory bounded by `workerMemoryMaxTokens`. Assistant thinking blocks are left out, and `!command` shell executions carry their command and output; `!!command` runs, which PiG keeps out of the agent's context, are left out too.
@@ -185,7 +185,7 @@ The observer is the first stage of the consolidation pipeline. The pipeline laun
 12. Compute deterministic 12-character ids and per-observation token counts in code.
 13. Append `om.observations.recorded` only if at least one observation was accepted and the session and branch the stage read are still current.
 
-If no observations are generated, the worker writes no entry and does not advance coverage, and the run continues to the reflector. A later eligible observer run will see a larger range. Deliberate empty runs back off until another `observeAfterTokens` worth of new raw source tokens arrives, so they do not re-fire every turn; like the observer's due check, that count leaves out entries the observer cannot read, such as `!!command` runs. The backoff is measured on the raw backlog, not on provider-reported growth, so a compaction cannot stretch it, and it is keyed on the chunk it judged, so a branch switch that removes that chunk clears it. Observer chunks are capped at `observerChunkMaxTokens` (minimum 256); when it is unset, the cap is 20% of the memory model's context window (the smaller of the primary and fallback windows when `fallbackModel` is set), or 60,000 estimated tokens when the window is unknown. Complete entries are added oldest-first while they fit, so an oversized uncovered span drains in slices; when the oldest entry alone exceeds the cap, it is sent as a clearly marked head/tail excerpt, preventing coverage from stalling while the original entry stays in the session. When the model call fails or reaches the `agentMaxTurns` cap after some observations were accepted, the stage appends them and advances coverage only through the last source entry they cite; the rest of the chunk is read again on a later run. API/stream failures that leave no accepted observation surface as `observer failed` / `observer.stream_error` rather than as an empty run, and end the run before the reflector.
+If no observations are generated, the worker writes no entry and does not advance coverage, and the run continues to the reflector. A later eligible observer run will see a larger range. Deliberate empty runs back off until another `observeAfterTokens` worth of new raw source tokens arrives, so they do not re-fire every turn; like the observer's due check, that count leaves out entries the observer cannot read, such as `!!command` runs. The backoff is measured on the source backlog the observer reads, not on provider-reported growth, so a compaction cannot stretch it, and it is keyed on the chunk it judged, so a branch switch that removes that chunk clears it. Observer chunks are capped at `observerChunkMaxTokens` (minimum 256); when it is unset, the cap is 20% of the memory model's context window (the smaller of the primary and fallback windows when `fallbackModel` is set), or 60,000 estimated tokens when the window is unknown. Complete entries are added oldest-first while they fit, so an oversized uncovered span drains in slices; when the oldest entry alone exceeds the cap, it is sent as a clearly marked head/tail excerpt, preventing coverage from stalling while the original entry stays in the session. When the model call fails or reaches the `agentMaxTurns` cap after some observations were accepted, the stage appends them and advances coverage only through the last source entry they cite; the rest of the chunk is read again on a later run. API/stream failures that leave no accepted observation surface as `observer failed` / `observer.stream_error` rather than as an empty run, and end the run before the reflector.
 
 ## Reflect/drop flow
 
@@ -320,14 +320,14 @@ Shows:
 - passive mode, when `passive` is true;
 - recorded/dropped/active/visible observation counts, with plain `+N` / `-N` visible-vs-full drift suffixes when drift exists;
 - recorded/visible reflection counts, with a plain `+N` drift suffix when full memory has extra reflections;
-- `Next observation`: the larger of source tokens since observation coverage and provider-reported growth since it, against `observeAfterTokens` (the measure the observer acts on);
+- `Next observation`: the larger of readable source tokens since observation coverage and provider-reported growth since it, against `observeAfterTokens` (the measure the observer acts on);
 - `Next reflection`: the larger of observed tokens since reflection coverage and provider-reported growth since it, against `reflectAfterTokens`; it reads 0 until an observation lands after reflection coverage, as the reflector is not due before then;
 - `Next compaction`: observed source tokens (estimated source tokens when Pi's `compaction.enabled` is `false`) against the resolved compaction threshold;
-- `Observer backlog`: unobserved source tokens since the compaction boundary;
+- `Observer backlog`: unobserved source tokens since the compaction boundary, leaving out entries the observer never reads;
 - visible observation pool pressure against `observationsPoolMaxTokens` from visible memory;
 - active observation pool pressure against `observationsPoolTargetTokens` from folded active observations;
 - reflection pool token total of visible reflections;
-- `Observer backoff`, `Compaction backoff`, and `Reflector backoff` lines while the observer's empty-verdict backoff, a refused compaction's backoff, or the reflector's empty-verdict backoff is active, each saying when it resumes (the observer's in raw backlog tokens, the measure it waits on, not the larger `Next observation` figure);
+- `Observer backoff`, `Compaction backoff`, and `Reflector backoff` lines while the observer's empty-verdict backoff, a refused compaction's backoff, or the reflector's empty-verdict backoff is active, each saying when it resumes (the observer's in backlog tokens, the measure it waits on, not the larger `Next observation` figure);
 - an in-flight section (consolidation run and its phase, auto-compaction, compaction hook) when any is running;
 - a last-error section with the last observer, reflector, and dropper errors.
 
