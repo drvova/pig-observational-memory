@@ -1065,7 +1065,7 @@ func TestIdleKeepsDefaultEntrypointsWhenDisabled(t *testing.T) {
 
 func settledWithAfterHook(fx *consFixture) <-chan struct{} {
 	after := make(chan struct{})
-	OnAgentSettled(fx.rt, fx.h, ConsolidationHooks{AfterIdleConsolidation: func(h host.Host) { close(after) }})
+	OnAgentSettled(fx.rt, fx.h, ConsolidationHooks{AfterIdleConsolidation: func(h host.Host) bool { close(after); return false }})
 	return after
 }
 
@@ -1163,7 +1163,7 @@ func TestIdleCallsAfterHookWhenRunFinishesOrImmediately(t *testing.T) {
 		reflectAfterTokens: 100,
 	})
 	calls := 0
-	OnAgentSettled(idle.rt, idle.h, ConsolidationHooks{AfterIdleConsolidation: func(h host.Host) { calls++ }})
+	OnAgentSettled(idle.rt, idle.h, ConsolidationHooks{AfterIdleConsolidation: func(h host.Host) bool { calls++; return false }})
 	if calls != 1 {
 		t.Fatalf("after hook calls %d", calls)
 	}
@@ -1223,6 +1223,99 @@ func TestSessionEndAbortsInFlightRunQuietly(t *testing.T) {
 	if len(fx.h.Notifications) != before {
 		t.Fatalf("notifications %+v", fx.h.Notifications)
 	}
+}
+
+// A session end (a tree jump) waits for the run it aborted, and a stage that
+// passed its branch check as the abort came appends nothing: the host moves
+// the leaf once the handler returns, and the entry would land on the new branch.
+func TestSessionEndWaitsForAbortedRunAndDropsItsAppend(t *testing.T) {
+	observed := []ledger.Entry{text("raw-1", "aaaaaaaa"), testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obsA}, "raw-1")}
+	newRef := testfix.Reflection("ffffffffffff", []string{"aaaaaaaaaaaa"})
+	for _, tc := range []struct {
+		stage string
+		args  consArgs
+		// script makes the stage call park before its branch check.
+		script func(fx *consFixture, park func())
+		// appends is what the run records before that stage (the dropper follows a reflection).
+		appends int
+	}{
+		{"observer", consArgs{entries: dueEntries(), reflectAfterTokens: 999}, func(fx *consFixture, park func()) {
+			fx.obs.impl(func(context.Context, agents.ObserverArgs) (agents.ObserverResult, error) {
+				park()
+				return agents.Observed([]ledger.Observation{newObservation()}), nil
+			})
+		}, 0},
+		{"reflector", consArgs{entries: observed, observeAfterTokens: 999}, func(fx *consFixture, park func()) {
+			fx.ref.impl(func(context.Context, agents.ReflectorArgs) ([]ledger.Reflection, error) {
+				park()
+				return []ledger.Reflection{newRef}, nil
+			})
+		}, 0},
+		{"dropper", consArgs{entries: observed, observeAfterTokens: 999, poolMaxTokens: 10}, func(fx *consFixture, park func()) {
+			fx.ref.resolve([]ledger.Reflection{newRef})
+			fx.drop.impl(func(context.Context, agents.DropperArgs) ([]string, error) {
+				park()
+				return []string{"aaaaaaaaaaaa"}, nil
+			})
+		}, 1},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			fx := consSetup(t, tc.args)
+			h := &hookedBranchHost{FakeHost: fx.h}
+			parked, release := make(chan struct{}), make(chan struct{})
+			// The stage's branch check is its next host read after the model call.
+			tc.script(fx, func() { h.onNextGetBranch(func() { close(parked); <-release }) })
+			done := MaybeLaunchConsolidation(fx.rt, h)
+			if done == nil {
+				t.Fatal("consolidation did not launch")
+			}
+			waitDone(t, parked)
+
+			returned := make(chan struct{})
+			go func() {
+				OnSessionEnd(fx.rt, "session_before_tree")
+				close(returned)
+			}()
+			expectNeverClosed(t, returned)
+			close(release)
+			waitDone(t, returned)
+			select {
+			case <-done:
+			default:
+				t.Fatal("OnSessionEnd returned before the aborted run was over")
+			}
+			if len(fx.h.Appended) != tc.appends {
+				t.Fatalf("appended %+v", fx.h.Appended)
+			}
+		})
+	}
+}
+
+// The wait is bounded: a run stuck in an uncancellable call does not hold up
+// the host's session change.
+func TestSessionEndWaitIsBounded(t *testing.T) {
+	old := SessionEndWaitTimeout
+	SessionEndWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { SessionEndWaitTimeout = old })
+	fx := consSetup(t, consArgs{entries: dueEntries(), reflectAfterTokens: 999})
+	entered, release := make(chan struct{}), make(chan struct{})
+	fx.obs.impl(func(context.Context, agents.ObserverArgs) (agents.ObserverResult, error) {
+		close(entered)
+		<-release
+		return agents.Observed([]ledger.Observation{newObservation()}), nil
+	})
+	done := fx.launch()
+	waitDone(t, entered)
+
+	returned := make(chan struct{})
+	go func() {
+		OnSessionEnd(fx.rt, "session_shutdown")
+		close(returned)
+	}()
+	waitDone(t, returned)
+	close(release)
+	waitDone(t, done)
+	fx.expectNoAppends()
 }
 
 func eventually(t *testing.T, condition func() bool) {
@@ -1303,7 +1396,7 @@ func TestIdleSettleWaitsForInFlightRunBeforeCompactionCheck(t *testing.T) {
 	var mu sync.Mutex
 	after := 0
 	count := func() int { mu.Lock(); defer mu.Unlock(); return after }
-	hook := ConsolidationHooks{AfterIdleConsolidation: func(host.Host) { mu.Lock(); after++; mu.Unlock() }}
+	hook := ConsolidationHooks{AfterIdleConsolidation: func(host.Host) bool { mu.Lock(); after++; mu.Unlock(); return false }}
 
 	OnAgentSettled(fx.rt, fx.h, hook) // launches
 	OnAgentSettled(fx.rt, fx.h, hook) // in flight: waits
@@ -1313,13 +1406,113 @@ func TestIdleSettleWaitsForInFlightRunBeforeCompactionCheck(t *testing.T) {
 	release()
 	eventually(t, func() bool { return count() == 2 })
 
-	// The event entry point: idle mode defers the compaction check to the run.
-	trigger := consSetup(t, consArgs{entries: covered(dueEntries(), ""), idle: true, reflectAfterTokens: 999, observeAfterTokens: 1_000_000_000})
+	// The event entry point: idle mode defers the compaction check until the
+	// run it launched is over, never beside the worker.
+	trigger := consSetup(t, consArgs{entries: append(covered(dueEntries(), ""), text("raw-2", "bbbbbbbb")), idle: true, reflectAfterTokens: 999})
 	cfg := trigger.rt.Config()
 	cfg.CompactAfterTokens = 1
 	trigger.rt.SetConfig(cfg)
+	releaseTrigger := trigger.blockObserver()
 	OnAgentSettledEvent(trigger.rt, trigger.h)
+	if !trigger.rt.ConsolidationInFlight() {
+		t.Fatal("agent_settled did not launch the due run")
+	}
+	never(t, "compaction ran beside the idle worker", func() bool { return trigger.h.CompactCount() != 0 })
+	releaseTrigger()
 	eventually(t, func() bool { return trigger.h.CompactCount() == 1 })
+
+	// Nothing due or in flight: the check runs at once.
+	nothingDue := consSetup(t, consArgs{entries: covered(dueEntries(), ""), idle: true, reflectAfterTokens: 999, observeAfterTokens: 1_000_000_000})
+	cfg = nothingDue.rt.Config()
+	cfg.CompactAfterTokens = 1
+	nothingDue.rt.SetConfig(cfg)
+	OnAgentSettledEvent(nothingDue.rt, nothingDue.h)
+	eventually(t, func() bool { return nothingDue.h.CompactCount() == 1 })
+}
+
+// compactionDue makes proactive compaction due on fx's branch: a one-token
+// threshold over raw source, as counted when Pi's own compaction is off.
+func (fx *consFixture) compactionDue() {
+	cfg := fx.rt.Config()
+	cfg.CompactAfterTokens = 1
+	cfg.PiAutoCompactionEnabled = false
+	fx.rt.SetConfig(cfg)
+}
+
+// An idle run the next prompt aborts owes its compaction check to the next
+// settle, which runs it before launching again. Otherwise a stage that stays
+// due relaunches, and is aborted, at every settle, and compaction never runs.
+func TestIdleAbortedRunOwesCompactionCheckToNextSettle(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+	fx.compactionDue()
+
+	entered := fx.abortingObserver()
+	OnAgentSettledEvent(fx.rt, fx.h)
+	done := fx.rt.ConsolidationDone()
+	if done == nil {
+		t.Fatal("agent_settled did not launch")
+	}
+	waitDone(t, entered)
+	OnAgentStart(fx.rt, fx.h)
+	waitDone(t, done)
+	// The agent is busy again: nothing compacts after the aborted run.
+	never(t, "compacted after a run the next prompt aborted", func() bool { return fx.h.CompactCount() != 0 })
+
+	entered = fx.abortingObserver()
+	OnAgentSettledEvent(fx.rt, fx.h)
+	launched := fx.rt.ConsolidationDone()
+	if launched != nil {
+		waitDone(t, entered)
+	}
+	OnAgentStart(fx.rt, fx.h)
+	waitDone(t, launched)
+	eventually(t, func() bool { return fx.h.CompactCount() == 1 })
+	if launched != nil || fx.obs.count() != 1 {
+		t.Fatalf("a run launched beside the owed compaction: observer calls %d", fx.obs.count())
+	}
+}
+
+// A settle that finds a run the previous prompt already aborted, still
+// unwinding, waits for it and then settles again, since the agent is idle: it
+// relaunches the due run or runs the compaction check. A prompt that starts
+// meanwhile keeps both skipped.
+func TestIdleSettleOnAbortedRunSettlesAgainOnceItEnds(t *testing.T) {
+	setup := func(compact bool) (fx *consFixture, release chan struct{}, done <-chan struct{}) {
+		fx = consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+		if compact {
+			fx.compactionDue()
+		}
+		// The observer outlives the abort, as an uncancellable host call does.
+		entered, release := make(chan struct{}), make(chan struct{})
+		fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+			close(entered)
+			<-release
+			return agents.ObserverResult{}, ctx.Err()
+		})
+		OnAgentSettledEvent(fx.rt, fx.h)
+		done = fx.rt.ConsolidationDone()
+		waitDone(t, entered)
+		OnAgentStart(fx.rt, fx.h)
+		OnAgentSettledEvent(fx.rt, fx.h) // that prompt ended at once
+		return fx, release, done
+	}
+
+	relaunch, release, done := setup(false)
+	close(release)
+	waitDone(t, done)
+	eventually(t, func() bool { return relaunch.obs.count() == 2 })
+	waitDone(t, relaunch.rt.ConsolidationDone())
+
+	compact, release, done := setup(true)
+	close(release)
+	waitDone(t, done)
+	eventually(t, func() bool { return compact.h.CompactCount() == 1 })
+
+	busy, release, done := setup(true)
+	OnAgentStart(busy.rt, busy.h)
+	close(release)
+	waitDone(t, done)
+	never(t, "worked while the agent was busy", func() bool { return busy.h.CompactCount() != 0 || busy.obs.count() != 1 })
 }
 
 // Aborting during the reflector or the dropper records nothing and retries nothing.

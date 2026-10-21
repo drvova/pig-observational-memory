@@ -36,8 +36,10 @@ var (
 type ConsolidationHooks struct {
 	// AfterIdleConsolidation runs after an idle-mode consolidation run finishes
 	// (or is skipped) with the agent_settled host, so work that shares the
-	// settled event (proactive compaction) gets its turn afterwards.
-	AfterIdleConsolidation func(h host.Host)
+	// settled event (proactive compaction) gets its turn afterwards. It reports
+	// whether it started such work; a settle that runs an owed check first
+	// launches no worker beside that work.
+	AfterIdleConsolidation func(h host.Host) bool
 }
 
 type stageOutcome string
@@ -420,6 +422,8 @@ func OnAgentStart(rt *runtime.Runtime, h host.Host) {
 		MaybeLaunchConsolidation(rt, h)
 		return
 	}
+	// A settle still waiting on a run must not treat the time after it as idle.
+	rt.NoteAgentStart()
 	// Coverage markers are only appended on success, so an aborted run simply
 	// retries after the next settled event.
 	if rt.AbortConsolidation() {
@@ -428,15 +432,31 @@ func OnAgentStart(rt *runtime.Runtime, h host.Host) {
 	}
 }
 
-// OnSessionEnd handles session_shutdown, session_before_switch and
-// session_before_fork. The host replaces the session (under PiG the extension
-// process too), so an in-flight run is abandoned quietly instead of failing
-// later against a stale context (upstream issue #22). Coverage is appended
-// only on success, so only the abandoned run's results are lost; the next due
-// turn starts it over.
+// SessionEndWaitTimeout bounds how long OnSessionEnd waits for the run it
+// aborted; tests shorten it.
+var SessionEndWaitTimeout = time.Second
+
+// OnSessionEnd handles session_shutdown, session_before_switch,
+// session_before_fork and session_before_tree. The host replaces the session
+// (under PiG the extension process too) or moves the leaf, so an in-flight run
+// is abandoned quietly instead of failing later against a stale context
+// (upstream issue #22). Coverage is appended only on success, so only the
+// abandoned run's results are lost; the next due turn starts it over.
+//
+// The host acts once this handler returns, so it waits, bounded, for the
+// aborted run; with each stage re-checking the run context just before its
+// append, a worker past its branch check cannot land an entry on the new leaf.
 func OnSessionEnd(rt *runtime.Runtime, reason string) {
-	if rt.AbortConsolidation() {
-		debuglog.Log(context.Background(), "consolidation.aborted", map[string]any{"reason": reason})
+	done := rt.ConsolidationDone()
+	if !rt.AbortConsolidation() {
+		return
+	}
+	debuglog.Log(context.Background(), "consolidation.aborted", map[string]any{"reason": reason})
+	if rt.RunAborted(done) {
+		select {
+		case <-done:
+		case <-time.After(SessionEndWaitTimeout):
+		}
 	}
 }
 
@@ -454,14 +474,30 @@ func OnAgentSettled(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks) 
 	if !idleMode(rt, h) {
 		return
 	}
+	settleIdle(rt, h, hooks, rt.AgentStarts())
+}
+
+// settleIdle is OnAgentSettled for a settle that came after starts
+// agent_start events; a later one means the agent is busy again.
+func settleIdle(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks, starts uint64) {
+	if hooks.AfterIdleConsolidation != nil && !rt.ConsolidationInFlight() && rt.TakeAfterHookOwed() {
+		// An earlier settle's run was aborted, so its check never ran. Run it
+		// before launching a run the next prompt could abort the same way;
+		// work it starts keeps this idle window, and the next settle launches.
+		if hooks.AfterIdleConsolidation(h) {
+			return
+		}
+	}
 	launched := MaybeLaunchConsolidation(rt, h)
 	if hooks.AfterIdleConsolidation == nil {
 		return
 	}
+	adoptedAborted := false
 	if launched == nil {
 		// Nothing launched now, but an earlier run may still be in flight; the
 		// after-hook waits for it rather than racing it.
 		launched = rt.ConsolidationDone()
+		adoptedAborted = rt.RunAborted(launched)
 	}
 	if launched == nil {
 		hooks.AfterIdleConsolidation(h)
@@ -470,13 +506,21 @@ func OnAgentSettled(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks) 
 	go func() {
 		defer func() { _ = recover() }()
 		<-launched
-		if rt.RunAborted(launched) {
-			// The agent started again and aborted the run, so this is no longer
-			// idle time; the next settle re-evaluates compaction.
+		switch {
+		case rt.AgentStarts() != starts || (!adoptedAborted && rt.RunAborted(launched)):
+			// The agent started again (or the session ended) before the run was
+			// over, so this is no longer idle time. The next idle settle owes the
+			// check and runs it before launching: a stage that stays due relaunches
+			// at every settle, and the next prompt may abort every one of them.
+			rt.SetAfterHookOwed(true)
 			debuglog.Log(context.Background(), "consolidation.after_hook_skipped", map[string]any{"reason": "aborted"})
-			return
+		case adoptedAborted:
+			// The run was aborted before this settle and is over now, and the
+			// agent has not started since: settle again.
+			settleIdle(rt, h, hooks, starts)
+		default:
+			hooks.AfterIdleConsolidation(h)
 		}
-		hooks.AfterIdleConsolidation(h)
 	}()
 }
 
@@ -485,7 +529,7 @@ func OnAgentSettled(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks) 
 // is due or in flight), never beside a running worker; otherwise it runs now.
 func OnAgentSettledEvent(rt *runtime.Runtime, h host.Host) {
 	if idleMode(rt, h) {
-		OnAgentSettled(rt, h, ConsolidationHooks{AfterIdleConsolidation: func(settled host.Host) { MaybeTriggerCompaction(rt, settled) }})
+		OnAgentSettled(rt, h, ConsolidationHooks{AfterIdleConsolidation: func(settled host.Host) bool { return MaybeTriggerCompaction(rt, settled) != nil }})
 		return
 	}
 	MaybeTriggerCompaction(rt, h)
@@ -719,6 +763,12 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		debuglog.Log(ctx, "observer.branch_changed", map[string]any{"coversUpToId": coversUpToID})
 		return outcomeAbort, nil
 	}
+	// A session end may have aborted the run during the branch check; the host
+	// moves the leaf once its handler returns, so an aborted run appends nothing.
+	if ctx.Err() != nil {
+		debuglog.Log(ctx, "observer.aborted", map[string]any{"coversUpToId": coversUpToID})
+		return outcomeAbort, nil
+	}
 	if err := h.AppendEntry(ledger.OMObservationsRecorded, data); err != nil {
 		return outcomeAbort, err
 	}
@@ -820,6 +870,10 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 		debuglog.Log(ctx, "reflector.branch_changed", map[string]any{})
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
 	}
+	if ctx.Err() != nil {
+		debuglog.Log(ctx, "reflector.aborted", map[string]any{})
+		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
+	}
 	if err := h.AppendEntry(ledger.OMReflectionsRecorded, data); err != nil {
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, err
 	}
@@ -903,6 +957,10 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	if data != nil {
 		if !branchStillCurrent(h, sessionIdentity, leafID) {
 			debuglog.Log(ctx, "dropper.branch_changed", map[string]any{})
+			return outcomeAbort, nil
+		}
+		if ctx.Err() != nil {
+			debuglog.Log(ctx, "dropper.aborted", map[string]any{})
 			return outcomeAbort, nil
 		}
 		if err := h.AppendEntry(ledger.OMObservationsDropped, data); err != nil {

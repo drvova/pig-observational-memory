@@ -124,6 +124,13 @@ type Runtime struct {
 	consolidationCtx      context.Context
 	// abortedDone is the completion channel of the last run AbortConsolidation cancelled.
 	abortedDone chan struct{}
+	// agentStarts counts idle-mode agent_start events, so a settle can tell
+	// whether the agent started again while it waited on a run.
+	agentStarts uint64
+	// afterHookOwed is set when an idle settle skipped its after-run check
+	// (proactive compaction) because the agent started again; the next idle
+	// settle runs it before launching another run.
+	afterHookOwed bool
 
 	compactInFlight        bool
 	compactHookInFlight    bool
@@ -262,6 +269,20 @@ func (r *Runtime) SetCompactInFlight(v bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.compactInFlight = v
+}
+
+// TryStartCompact claims the proactive compaction slot; false when a
+// compaction is already in flight. Checking and claiming in one step keeps two
+// callers released together (two settles waiting on one run) from both
+// compacting.
+func (r *Runtime) TryStartCompact() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.compactInFlight {
+		return false
+	}
+	r.compactInFlight = true
+	return true
 }
 
 // TryEnterCompactHook marks the compaction hook running; false when it already is.
@@ -705,6 +726,36 @@ func (r *Runtime) ConsolidationDone() <-chan struct{} {
 func (r *Runtime) WasAborted() bool {
 	ctx := r.ConsolidationContext()
 	return ctx != nil && ctx.Err() != nil
+}
+
+// NoteAgentStart records an idle-mode agent_start.
+func (r *Runtime) NoteAgentStart() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.agentStarts++
+}
+
+// AgentStarts is how many agent_start events NoteAgentStart recorded.
+func (r *Runtime) AgentStarts() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.agentStarts
+}
+
+// SetAfterHookOwed records or clears an idle settle's skipped after-run check.
+func (r *Runtime) SetAfterHookOwed(v bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.afterHookOwed = v
+}
+
+// TakeAfterHookOwed reports and clears an owed after-run check.
+func (r *Runtime) TakeAfterHookOwed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	owed := r.afterHookOwed
+	r.afterHookOwed = false
+	return owed
 }
 
 // AbortConsolidation cancels the in-flight consolidation run, if any.

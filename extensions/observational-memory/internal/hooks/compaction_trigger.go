@@ -81,9 +81,16 @@ func ActiveCompactionBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.
 func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 	rt.EnsureConfig(h.Cwd())
 	cfg := rt.LiveConfig(h.Cwd())
-	if cfg.Passive || rt.CompactInFlight() {
+	if cfg.Passive || !rt.TryStartCompact() {
 		return nil
 	}
+	// The claim is released on every return until the deferred step owns it.
+	deferred := false
+	defer func() {
+		if !deferred {
+			rt.SetCompactInFlight(false)
+		}
+	}()
 	entries, err := h.GetBranch()
 	if err != nil {
 		return nil
@@ -101,7 +108,7 @@ func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 	rt.SetCompactionBackoff(nil)
 	sessionIdentity := sessionIdentityOf(h)
 	notifyUI(h, fmt.Sprintf("Observational memory: compaction threshold reached (~%s %s source tokens); triggering compaction", jsfmt.Locale(progress), ProgressLabel(cfg)), "info")
-	rt.SetCompactInFlight(true)
+	deferred = true
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

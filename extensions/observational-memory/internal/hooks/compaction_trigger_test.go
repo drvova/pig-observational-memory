@@ -122,6 +122,35 @@ func TestTriggerSkipsWhenCompactionInFlight(t *testing.T) {
 	}
 }
 
+// Two callers released together (two idle settles waiting on one run) claim
+// one compaction: the second arrives while the first waits on its branch read.
+func TestTriggerClaimsCompactionAtomically(t *testing.T) {
+	rt := triggerRuntime(triggerArgs{})
+	h := &hookedBranchHost{FakeHost: triggerHost(dueBranch())}
+	var second <-chan struct{}
+	h.onNextGetBranch(func() { second = MaybeTriggerCompaction(rt, h) })
+	first := MaybeTriggerCompaction(rt, h)
+	waitDone(t, first)
+	waitDone(t, second)
+	notices := 0
+	for _, message := range h.Messages() {
+		if strings.Contains(message, "compaction threshold reached") {
+			notices++
+		}
+	}
+	if second != nil || h.CompactCount() != 1 || notices != 1 {
+		t.Fatalf("second scheduled %v compact calls %d notices %d", second != nil, h.CompactCount(), notices)
+	}
+
+	// A claim that schedules nothing is released.
+	rt, failing := triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
+	failing.BranchErr = errors.New("stale context")
+	fireTrigger(t, rt, failing)
+	if rt.CompactInFlight() {
+		t.Fatal("claim kept after a failed branch read")
+	}
+}
+
 func TestTriggerDefersWhenNoLongerIdle(t *testing.T) {
 	rt, h := triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
 	h.Idle = false

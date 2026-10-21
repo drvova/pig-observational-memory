@@ -41,6 +41,43 @@ func expectNeverClosed(t *testing.T, ch <-chan struct{}) {
 	}
 }
 
+// never asserts condition stays false for a short grace period.
+func never(t *testing.T, message string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if condition() {
+			t.Fatal(message)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// hookedBranchHost runs the function set with onNextGetBranch inside the next
+// GetBranch call, the moment that host round trip is in flight.
+type hookedBranchHost struct {
+	*testfix.FakeHost
+	hookMu sync.Mutex
+	hook   func()
+}
+
+func (h *hookedBranchHost) onNextGetBranch(fn func()) {
+	h.hookMu.Lock()
+	defer h.hookMu.Unlock()
+	h.hook = fn
+}
+
+func (h *hookedBranchHost) GetBranch() ([]ledger.Entry, error) {
+	h.hookMu.Lock()
+	fn := h.hook
+	h.hook = nil
+	h.hookMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+	return h.FakeHost.GetBranch()
+}
+
 func text(id, content string) ledger.Entry { return testfix.TextCustomMessage(id, content) }
 
 func userMessage(id string, content ...string) ledger.Entry {
