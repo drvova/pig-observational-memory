@@ -97,6 +97,42 @@ func LatestCoverageMarkerID(entries []Entry, customType string) string {
 	return latestID
 }
 
+// StraddlingCoverageMarkerID is the id covered by the earliest marker of
+// customType that reaches cutIndex, when that marker straddles the cut: no
+// earlier marker covers some source entry before cutIndex, so this marker read
+// source before the cut as well as at or after it. "" when no marker straddles
+// the cut. Only source entries for which needsCoverage is true count (nil
+// counts every source entry), as in UnobservedSourceSpanBeforeWhere.
+func StraddlingCoverageMarkerID(entries []Entry, cutIndex int, customType string, needsCoverage func(Entry) bool) string {
+	index := EntryIndexByID(entries)
+	before := -1
+	reaching := -1
+	for _, entry := range entries {
+		coversUpTo, ok := coverageEntry(entry, customType)
+		if !ok {
+			continue
+		}
+		covered, ok := index[coversUpTo]
+		if !ok {
+			continue
+		}
+		if covered < cutIndex {
+			before = max(before, covered)
+		} else if reaching == -1 || covered < reaching {
+			reaching = covered
+		}
+	}
+	if reaching == -1 {
+		return ""
+	}
+	for i := before + 1; i < cutIndex; i++ {
+		if IsSourceEntry(entries[i]) && (needsCoverage == nil || needsCoverage(entries[i])) {
+			return entries[reaching].ID
+		}
+	}
+	return ""
+}
+
 // EarlierCoverageMarkerID is whichever of two marker ids sits earlier on the branch.
 func EarlierCoverageMarkerID(entries []Entry, firstID, secondID string) string {
 	if firstID == "" {

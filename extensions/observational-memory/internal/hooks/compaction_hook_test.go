@@ -423,24 +423,132 @@ func TestHookDecodesCustomInstructionsFromWire(t *testing.T) {
 	}
 }
 
-// A marker covering past Pi's cut still describes the source this compaction
-// removes: the no-gap fold goes through the observation frontier.
-func TestHookFoldsThroughCoverageBeyondPiCut(t *testing.T) {
+// Markers past Pi's cut that cover only source Pi keeps wait for the next
+// compaction: with no marker straddling the cut, the fold goes through it.
+func TestHookFoldsThroughPiCutWhenNoMarkerStraddlesIt(t *testing.T) {
 	entries := append(laggingBranch(), coverage("om-a2", "a2", "cccccccccccc"))
 	rt, h := lagSetup(lagArgs{entries: entries})
 
-	// Pi cuts at u1 (index 2); the markers cover a0 (1), a1 (3) and a2 (5).
+	// Pi cuts at u1 (index 2); the markers cover a0 (1), a1 (3) and a2 (5),
+	// so om-a0 covers all the removed source and the others only kept source.
 	result := compactionOf(t, runHook(rt, h, entries, "u1", "threshold"))
 
-	if result.FirstKeptEntryID != "u1" || result.Details.FoldThroughEntryID != "a2" {
+	if result.FirstKeptEntryID != "u1" || result.Details.FoldThroughEntryID != "u1" {
+		t.Fatalf("result %+v", result)
+	}
+	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa"}) {
+		t.Fatalf("observations %v", observationIDs(result.Details.Observations))
+	}
+	resolution := ResolveCompactionCut(entries, "u1", CutOptions{MaxRetainedTokens: 1000})
+	if resolution.Kind != "cut" || resolution.Cut != (CompactionCut{FirstKeptEntryID: "u1", FoldThroughEntryID: "u1"}) || resolution.Gap != nil {
+		t.Fatalf("resolution %+v", resolution)
+	}
+
+	// An entry the observer could never read does not make om-a1 straddle.
+	empty := testfix.RawMessage("empty", "", map[string]any{"message": map[string]any{"role": "assistant", "content": []any{}, "stopReason": "aborted"}})
+	withEmpty := append(append(append([]ledger.Entry{}, entries[:2]...), empty), entries[2:]...)
+	if resolution := ResolveCompactionCut(withEmpty, "u1", CutOptions{MaxRetainedTokens: 1000}); resolution.Cut.FoldThroughEntryID != "u1" {
+		t.Fatalf("resolution %+v", resolution)
+	}
+}
+
+// A marker straddling Pi's cut read source this compaction removes, so the
+// fold goes through it; a later marker covering only kept source stays out.
+func TestHookFoldsThroughMarkerStraddlingPiCut(t *testing.T) {
+	entries := []ledger.Entry{
+		userMessage("u0"), assistantMessage("a0"), userMessage("u1"), assistantMessage("a1"), toolResultMessage("t1"),
+		assistantMessage("a2"), userMessage("u2"), assistantMessage("a3"),
+		coverage("om-a0", "a0", "aaaaaaaaaaaa"),
+		coverage("om-a2", "a2", "bbbbbbbbbbbb"),
+		coverage("om-a3", "a3", "cccccccccccc"),
+	}
+	rt, h := lagSetup(lagArgs{entries: entries})
+
+	// Pi cuts at a1 (index 3). om-a2 covers u1 (2), which is removed, through
+	// a2 (5); om-a3 covers only u2 and a3.
+	result := compactionOf(t, runHook(rt, h, entries, "a1", "threshold"))
+
+	if result.FirstKeptEntryID != "a1" || result.Details.FoldThroughEntryID != "a2" {
+		t.Fatalf("result %+v", result)
+	}
+	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}) {
+		t.Fatalf("observations %v", observationIDs(result.Details.Observations))
+	}
+
+	// With no marker before the cut, the first marker past it straddles.
+	firstMarkerPastCut := append(laggingBranch()[:7], coverage("om-a1", "a1", "bbbbbbbbbbbb"), coverage("om-a2", "a2", "cccccccccccc"))
+	resolution := ResolveCompactionCut(firstMarkerPastCut, "u1", CutOptions{MaxRetainedTokens: 1000})
+	if resolution.Cut != (CompactionCut{FirstKeptEntryID: "u1", FoldThroughEntryID: "a1"}) || resolution.Gap != nil {
+		t.Fatalf("resolution %+v", resolution)
+	}
+}
+
+// Under a tight summary budget, observations of kept source must not push out
+// observations of the source this compaction removes.
+func TestHookKeepsRemovedSourceObservationsUnderTightBudget(t *testing.T) {
+	observationsOf := func(first int, sourceID string) []ledger.Observation {
+		observations := []ledger.Observation{}
+		for i := first; i < first+20; i++ {
+			observations = append(observations, testfix.Observation(fmt.Sprintf("%012x", i+1), func(o *ledger.Observation) {
+				o.SourceEntryIDs = []string{sourceID}
+				o.Content = fmt.Sprintf("Observation %d: %s", i, strings.Repeat("detail ", 14))
+			}))
+		}
+		return observations
+	}
+	removed, kept := observationsOf(0, "a0"), observationsOf(20, "a2")
+	entries := []ledger.Entry{
+		userMessage("u0"), assistantMessage("a0"),
+		testfix.ObservationsRecordedEntry("om-removed", removed, "a0"),
+		userMessage("u1"), assistantMessage("a1"), userMessage("u2"), assistantMessage("a2"),
+		testfix.ObservationsRecordedEntry("om-kept", kept, "a2"),
+	}
+	const budget = 1200
+	if both := ledger.RenderSummaryWithBudget(nil, append(append([]ledger.Observation{}, removed...), kept...), budget); both.OmittedObservations == 0 {
+		t.Fatal("test needs both observation sets to overflow the summary budget together")
+	}
+	rt, h := lagSetup(lagArgs{entries: entries, summaryMaxTokens: budget})
+
+	// Pi cuts at u1, so u0 and a0 are removed and om-kept covers only kept source.
+	result := compactionOf(t, runHook(rt, h, entries, "u1", "threshold"))
+
+	if result.Details.FoldThroughEntryID != "u1" || !reflect.DeepEqual(observationIDs(result.Details.Observations), observationIDs(removed)) {
+		t.Fatalf("details %+v", result.Details)
+	}
+	for _, observation := range removed {
+		if !strings.Contains(result.Summary, "["+observation.ID+"]") {
+			t.Fatalf("summary omits removed-source observation %s: %q", observation.ID, result.Summary)
+		}
+	}
+	if strings.Contains(result.Summary, "omitted to fit the summary budget") {
+		t.Fatalf("summary %q", result.Summary)
+	}
+}
+
+// The fold boundary never moves back past the latest full fold's, even when
+// Pi's cut comes before it: later compactions apply drops and reflections
+// through that boundary.
+func TestHookNeverFoldsBehindLatestFullFold(t *testing.T) {
+	entries := []ledger.Entry{
+		userMessage("u0"), assistantMessage("a0"), userMessage("u1"), assistantMessage("a1"), toolResultMessage("t1"),
+		assistantMessage("a2"), userMessage("u2"), assistantMessage("a3"),
+		coverage("om-a0", "a0", "aaaaaaaaaaaa"),
+		coverage("om-a2", "a2", "bbbbbbbbbbbb"),
+		coverage("om-a3", "a3", "cccccccccccc"),
+		testfix.CompactionEntry("cmp-full", testfix.CompactionArgs{FirstKeptEntryID: "u1", Details: testfix.MemoryDetails(testfix.MemoryDetailsArgs{FullFold: true, FoldThroughEntryID: "a3"})}),
+		userMessage("u4"), assistantMessage("a4"),
+	}
+	rt, h := lagSetup(lagArgs{entries: entries})
+
+	// Pi cuts at u2 (index 6), which no marker straddles, but cmp-full folded
+	// through a3 (7).
+	result := compactionOf(t, runHook(rt, h, entries, "u2", "threshold"))
+
+	if result.FirstKeptEntryID != "u2" || result.Details.FoldThroughEntryID != "a3" {
 		t.Fatalf("result %+v", result)
 	}
 	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"}) {
 		t.Fatalf("observations %v", observationIDs(result.Details.Observations))
-	}
-	resolution := ResolveCompactionCut(entries, "u1", CutOptions{MaxRetainedTokens: 1000})
-	if resolution.Kind != "cut" || resolution.Cut != (CompactionCut{FirstKeptEntryID: "u1", FoldThroughEntryID: "a2"}) || resolution.Gap != nil {
-		t.Fatalf("resolution %+v", resolution)
 	}
 }
 
@@ -459,15 +567,63 @@ func TestLagIgnoresContentlessEntryBeforeCut(t *testing.T) {
 	}
 }
 
-// Instructions share the summary budget; the memory render keeps at least half.
-func TestHookReservesBudgetForCustomInstructions(t *testing.T) {
+// A record that fits the summary budget but not the memory's share of it names
+// the share, and that the compaction instructions took the rest.
+func TestHookNamesMemoryShareWhenInstructionsCrowdOutEveryRecord(t *testing.T) {
+	big := testfix.ObservationsRecordedEntry("om-big", []ledger.Observation{testfix.Observation("dddddddddddd", func(o *ledger.Observation) {
+		o.SourceEntryIDs = []string{"a0"}
+		o.Content = strings.Repeat("x", 3200)
+	})}, "u2")
+	entries := []ledger.Entry{userMessage("u0"), assistantMessage("a0"), userMessage("u1"), assistantMessage("a1"), userMessage("u2"), big}
+	const budget = 2000
+	// ~1,500 tokens of instructions leave the memory its half-budget floor.
+	instructions := strings.TrimSpace(strings.Repeat("Keep the deploy checklist and the open questions. ", 120))
+
+	rt, h := lagSetup(lagArgs{entries: entries, summaryMaxTokens: budget})
+	compactionOf(t, runHook(rt, h, entries, "u2", "threshold"))
+	rt, h = lagSetup(lagArgs{entries: entries, summaryMaxTokens: budget})
+	expectDelegated(t, HandleBeforeCompact(context.Background(), rt, h, BeforeCompactEvent{FirstKeptEntryID: "u2", TokensBefore: 1, BranchEntries: entries, Reason: "threshold", CustomInstructions: instructions}))
+
+	expectNotification(t, h, "Observational memory: no memory record fits its ~1,000-token share of the ~2,000-token summary budget (the compaction instructions take the rest); delegating to Pi's native summarizer", "warning")
+}
+
+func instructionBudgetBranch() []ledger.Entry {
 	observations := []ledger.Observation{}
 	for i := 0; i < 30; i++ {
 		observations = append(observations, testfix.Observation(fmt.Sprintf("%012x", i+1), func(o *ledger.Observation) {
 			o.Content = fmt.Sprintf("Observation %d: %s", i, strings.Repeat("detail ", 10))
 		}))
 	}
-	entries := []ledger.Entry{text("raw-1", "aaaa"), testfix.ObservationsRecordedEntry("om-many", observations, "raw-1")}
+	return []ledger.Entry{text("raw-1", "aaaa"), testfix.ObservationsRecordedEntry("om-many", observations, "raw-1")}
+}
+
+// Instructions longer than half the summary budget do not crowd the memory
+// out: its render keeps the half-budget floor.
+func TestHookKeepsHalfTheBudgetForMemoryUnderLongInstructions(t *testing.T) {
+	entries := instructionBudgetBranch()
+	const budget = 1200
+	instructions := strings.TrimSpace(strings.Repeat("Keep the deploy checklist and the open questions. ", 64))
+	instructionTokens := tokens.EstimateStringTokens("\n\n---\n\n" + instructions)
+	if instructionTokens <= budget/2 {
+		t.Fatalf("test needs instructions over half the budget; got %d tokens", instructionTokens)
+	}
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, summaryMaxTokens: budget})
+
+	result := compactionOf(t, HandleBeforeCompact(context.Background(), rt, h, BeforeCompactEvent{FirstKeptEntryID: "raw-1", TokensBefore: 1, BranchEntries: entries, CustomInstructions: instructions}))
+
+	memoryPart := strings.Split(result.Summary, "\n\n---\n\n")[0]
+	if !strings.HasSuffix(result.Summary, instructions) || !strings.Contains(memoryPart, "Observation 29: ") {
+		t.Fatalf("summary %q", result.Summary)
+	}
+	// The floor, not the budget minus the instructions, sized the memory.
+	if got := tokens.EstimateStringTokens(memoryPart); got > budget/2 || got <= budget-instructionTokens {
+		t.Fatalf("memory part %d tokens, want more than %d and at most %d", got, budget-instructionTokens, budget/2)
+	}
+}
+
+// Instructions share the summary budget: the memory render gets what they leave.
+func TestHookReservesBudgetForCustomInstructions(t *testing.T) {
+	entries := instructionBudgetBranch()
 	const budget = 600
 	instructions := strings.TrimSpace(strings.Repeat("Keep the deploy checklist and the open questions. ", 16))
 

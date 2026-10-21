@@ -76,13 +76,20 @@ func ResolveCompactionCut(entries []ledger.Entry, firstKeptEntryID string, optio
 	// moved cut onto them with a "~0 tokens" notice.
 	gap := ledger.UnobservedSourceSpanBeforeWhere(entries, cutIndex, serialize.ObserverRenders)
 	if gap == nil {
-		// Coverage reaches Pi's cut. A marker may still cover entries beyond
-		// it; its observations describe the source this compaction removes,
-		// so fold through the observation frontier, not through the cut,
-		// which would leave the straddling marker out of the summary.
+		// Coverage reaches Pi's cut, so fold through the cut. A marker that
+		// straddles it also read source this compaction removes; folding
+		// through the cut would leave its observations of that source out of
+		// the summary, so fold through that marker instead. Later markers
+		// cover only retained source and wait for the next compaction rather
+		// than take summary budget from the source being removed.
 		foldThrough := firstKeptEntryID
-		if ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded) > cutIndex {
-			foldThrough = ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
+		if straddling := ledger.StraddlingCoverageMarkerID(entries, cutIndex, ledger.OMObservationsRecorded, serialize.ObserverRenders); straddling != "" {
+			foldThrough = straddling
+		}
+		// Never fold through less than the latest full fold did: later
+		// compactions apply drops and reflections through the fold boundary.
+		if fullFold := ledger.EntryIndexForID(entries, ledger.LatestFullFoldBoundaryID(entries)); fullFold > ledger.EntryIndexForID(entries, foldThrough) {
+			foldThrough = entries[fullFold].ID
 		}
 		return cutAt(firstKeptEntryID, foldThrough)
 	}
@@ -249,8 +256,12 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 		// summarizer preserves the facts.
 		hadRecords := len(projection.Reflections)+len(projection.Observations) > 0
 		if hadRecords && len(rendered.Reflections)+len(rendered.Observations) == 0 {
-			debuglog.Log(ctx, "compaction.summary_budget_empty", map[string]any{"summaryMaxTokens": summaryMaxTokens, "reflections": len(projection.Reflections), "observations": len(projection.Observations)})
-			notifyUI(h, fmt.Sprintf("Observational memory: no memory record fits the ~%s-token summary budget; delegating to Pi's native summarizer", jsfmt.Locale(summaryMaxTokens)), "warning")
+			debuglog.Log(ctx, "compaction.summary_budget_empty", map[string]any{"summaryMaxTokens": summaryMaxTokens, "memoryBudget": memoryBudget, "reflections": len(projection.Reflections), "observations": len(projection.Observations)})
+			budgetText := fmt.Sprintf("the ~%s-token summary budget", jsfmt.Locale(summaryMaxTokens))
+			if memoryBudget < summaryMaxTokens {
+				budgetText = fmt.Sprintf("its ~%s-token share of the ~%s-token summary budget (the compaction instructions take the rest)", jsfmt.Locale(memoryBudget), jsfmt.Locale(summaryMaxTokens))
+			}
+			notifyUI(h, "Observational memory: no memory record fits "+budgetText+"; delegating to Pi's native summarizer", "warning")
 			summary = ""
 		}
 		// Instructions another extension or the user attached to this compaction
