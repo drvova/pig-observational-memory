@@ -59,3 +59,33 @@ export const heroGlyphs: readonly Glyph[] = [  { name: "P", x: 0, y: 0, rows: ["
   { name: "G", x: 16, y: 0, rows: ["..11111111.", ".1111111111", "1111....111", "111........", "111........", "111..111111", "111..111111", "111.....111", "111.....111", "1111....111", ".1111111111", "..11111111."] },
   { name: ".", x: 28, y: 9, rows: ["111", "111", "111"] },
 ];
+
+// PiG's default sprite: the standard pig in the green of the PiG website
+// (variants.go "pig-default"). The suit-up scene turns it into Spider-Ham.
+export const pigDefault: readonly string[] = [
+  "................",
+  "...OOOO..OOOO...",
+  "...OeeO..OeeO...",
+  "..OeePPPPPPeeO..",
+  ".OPPPpPPPPpPPPO.",
+  ".OPPWWPPPPWWPPO.",
+  ".OPPWKPPPPKWPPO.",
+  ".OPbbPssssPbbPO.",
+  ".OPPPsKssKsPPPO.",
+  ".OPPPPssssPPPPO.",
+  ".OPPPPPPPPPPPPO.",
+  "..OPPPPPPPPPPO..",
+  "...OOOOOOOOOO...",
+  "................"
+];
+
+export const defaultPalette: Readonly<Record<string, string>> = {
+  "K": "#18151D",
+  "O": "#18151D",
+  "P": "#48A381",
+  "W": "#FEFEFE",
+  "b": "#82DBBA",
+  "e": "#48A381",
+  "p": "#64BE9E",
+  "s": "#32775E"
+};

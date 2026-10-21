@@ -20,8 +20,9 @@ go vet ./... && go test -race ./...` (CI runs the same `go` job); registrations:
 
 ## README animations
 
-`docs/assets/banner.svg`, `banner.gif` and `spider-ham.svg` are exported, not hand-edited: change the Clayzo
-TypeScript in `docs/animation/` and run `npm run export` there (needs `clayzo login`; see its README).
+The scene SVGs in `docs/assets/` (`banner`, `suit-up`, `swing`, `spider-sense`, `credits`) and `banner.gif` are
+exported, not hand-edited: change the Clayzo TypeScript in `docs/animation/` and run `npm run export` there
+(needs `clayzo login`; see its README). A new scene goes in the `scenes` list in `make.ts`.
 The Clayzo agent skills live in `.agents/skills/` (linked from `.claude/skills/`).
 
 ## Model auth (OAuth vs API key)

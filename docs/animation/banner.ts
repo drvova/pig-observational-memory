@@ -15,17 +15,15 @@ import {
   constant,
   withComputedRevision,
   type AnimationDocument,
-  type PathData,
   type SceneNode,
 } from "@clayzo/animation/authoring";
-import { baseNode, BLINK_STEPS, cellRects, ease, hex, LOOP_TICKS, pathNode, rectsPath, solid, TICKS_PER_SECOND, track, transform } from "./lib.ts";
+import { baseNode, BLINK_STEPS, cardBackdrop, cellRects, FIELD, FRAME_INSET, ease, hex, LOOP_TICKS, manropeFonts, pathNode, rectsPath, solid, textLine, TICKS_PER_SECOND, track, transform, webPath, webStroke } from "./lib.ts";
 import { heroGlyphs, logoPeriod, logoShadow, palette, ramp, spiderHam } from "./sprite.ts";
 
 const W = 1280;
 const H = 420;
 const D = LOOP_TICKS;
-const FIELD = "#0B0F14";
-const FRAME = 28;
+const FRAME = FRAME_INSET;
 
 const PIG = { x: 162, y: 132, px: 13 };
 const PIG_CENTRE = { x: PIG.x + 8 * PIG.px, y: PIG.y + 7 * PIG.px };
@@ -46,65 +44,10 @@ const add = (node: SceneNode, drawn = true) => {
 };
 const base = (id: string, x = 0, y = 0) => baseNode(id, D, x, y);
 
-// Field: rounded card and PiG's dot grid.
-add({ ...base("field", W / 2, H / 2), type: "rect", size: constant({ width: W, height: H }), cornerRadius: constant(22), style: solid(FIELD) });
-const dots = [];
-for (let x = 12; x < W; x += 24) for (let y = 12; y < H; y += 24) dots.push({ x: x - 1.2, y: y - 1.2, w: 2.4, h: 2.4 });
-add(pathNode("dots", D, rectsPath(dots), solid("#1C2A33")));
-
-// Frame: a 2 px rounded ring, filled with a gradient from Spider-Ham red to PiG
-// cyan. A ring because a stroke takes no gradient; its inner contour winds the
-// other way, so nonzero fill leaves the hole (the SVG export drops fillRule).
-function roundedRect(w: number, h: number, r: number) {
-  const k = 0.5523 * r; // cubic approximation of a quarter circle
-  const v = (x: number, y: number, inT: [number, number], outT: [number, number]) =>
-    ({ point: { x, y }, inTangent: { x: inT[0], y: inT[1] }, outTangent: { x: outT[0], y: outT[1] } });
-  const x = w / 2;
-  const y = h / 2;
-  return {
-    closed: true,
-    vertices: [
-      v(-x + r, -y, [-k, 0], [0, 0]), v(x - r, -y, [0, 0], [k, 0]),
-      v(x, -y + r, [0, -k], [0, 0]), v(x, y - r, [0, 0], [0, k]),
-      v(x - r, y, [k, 0], [0, 0]), v(-x + r, y, [0, 0], [-k, 0]),
-      v(-x, y - r, [0, k], [0, 0]), v(-x, -y + r, [0, 0], [0, -k]),
-    ],
-  };
-}
-const reversed = (contour: ReturnType<typeof roundedRect>) => ({
-  ...contour,
-  vertices: [...contour.vertices].reverse().map((v) => ({ point: v.point, inTangent: v.outTangent, outTangent: v.inTangent })),
-});
-const frameW = W - 2 * FRAME;
-const frameH = H - 2 * FRAME;
-add({ ...base("frame", W / 2, H / 2), type: "path",
-  path: constant({ fillRule: "nonzero", contours: [roundedRect(frameW + 2, frameH + 2, 13), reversed(roundedRect(frameW - 2, frameH - 2, 11))] }),
-  style: { gradientFill: { kind: "linear", opacity: constant(0.9), start: constant({ x: -frameW / 2, y: 0 }), end: constant({ x: frameW / 2, y: 0 }),
-    stops: constant([{ position: 0, color: hex(logoPeriod) }, { position: 0.45, color: hex(palette.p) }, { position: 0.55, color: hex(ramp[8]) }, { position: 1, color: hex(ramp[0]) }]) } } });
-
-// Corner webs: spokes from the corner, threads sagging toward the hub between them.
-function web(cx: number, cy: number, fromDeg: number, toDeg: number, length: number, rings: number[], spokes: number): PathData {
-  const angles = Array.from({ length: spokes }, (_, i) => ((fromDeg + ((toDeg - fromDeg) * i) / (spokes - 1)) * Math.PI) / 180);
-  const at = (r: number, a: number) => ({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
-  const v = (p: { x: number; y: number }, inT = { x: 0, y: 0 }, outT = { x: 0, y: 0 }) => ({ point: p, inTangent: inT, outTangent: outT });
-  const contours = angles.map((a) => ({ closed: false, vertices: [v({ x: cx, y: cy }), v(at(length, a))] }));
-  for (const r of rings) {
-    const vertices = angles.map((a) => v(at(r, a)));
-    for (let i = 0; i + 1 < angles.length; i++) {
-      // The quadratic sag of the threads between two spokes, as cubic tangents.
-      const q = at(r * 0.86, (angles[i] + angles[i + 1]) / 2);
-      const p0 = vertices[i].point;
-      const p1 = vertices[i + 1].point;
-      vertices[i].outTangent = { x: (2 / 3) * (q.x - p0.x), y: (2 / 3) * (q.y - p0.y) };
-      vertices[i + 1].inTangent = { x: (2 / 3) * (q.x - p1.x), y: (2 / 3) * (q.y - p1.y) };
-    }
-    contours.push({ closed: false, vertices });
-  }
-  return { contours };
-}
-const webStroke = { stroke: { color: constant(hex("#C9D1D9")), opacity: constant(0.22), width: constant(1.4), lineCap: "round", lineJoin: "round", miterLimit: 4 } };
-add(pathNode("web-top-left", D, web(FRAME, FRAME, 0, 90, 230, [48, 92, 136, 180, 222], 7), webStroke));
-add(pathNode("web-bottom-right", D, web(W - FRAME, H - FRAME, 180, 270, 190, [44, 84, 124, 164], 6), webStroke));
+// The card: field, PiG's dot grid, the gradient frame, and corner webs.
+cardBackdrop(W, H, D).forEach((node) => add(node));
+add(pathNode("web-top-left", D, webPath(FRAME, FRAME, 0, 90, 230, [48, 92, 136, 180, 222], 7), webStroke));
+add(pathNode("web-bottom-right", D, webPath(W - FRAME, H - FRAME, 180, 270, 190, [44, 84, 124, 164], 6), webStroke));
 
 // Spider-Ham on its line. The rig is one group pivoting on the line's anchor above
 // the banner, so it drops, bounces and sways as one pendulum. Inside it: the line,
@@ -209,21 +152,13 @@ add({ ...base("period"), type: "group", children: ["period-shadow", "period-dot"
   transform: { ...transform(periodCentre.x, periodCentre.y, periodCentre.x, periodCentre.y), scale: track("period-pop", popSteps) } });
 
 // Title and tagline in Manrope (bundled with the Clayzo CLI, OFL).
-const run = (text: string, size: number, weight: number, color: string) =>
-  ({ text, fontAssetId: `manrope-${weight}`, fontFamily: "Manrope", fontSize: size, fontWeight: weight, letterSpacing: 0, lineHeight: 1.2, color: hex(color) });
-add({ ...base("title", 522, 290), type: "text", wrap: "none", align: "left", verticalAlign: "baseline",
-  runs: constant([run("observational memory", 46, 800, "#E6EDF3")]) });
-// Runs in one text node overprint each other, so the red word is its own node,
-// placed by advance widths measured in Manrope at these sizes.
+add(textLine("title", D, 522, 290, "observational memory", 46, 800, "#E6EDF3"));
+// The red word is its own node, placed by advance widths measured in Manrope.
 const LEAD_ADVANCE = 440.26; // "Long agent sessions that keep the " at 27 px, weight 500
 const THREAD_ADVANCE = 87.28; // "thread" at 27 px, weight 700
-const line = (id: string, x: number, text: string, weight: number, color: string) =>
-  add({ ...base(id, x, 338), type: "text", wrap: "none", align: "left", verticalAlign: "baseline", runs: constant([run(text, 27, weight, color)]) });
-line("tagline", 524, "Long agent sessions that keep the ", 500, "#AEB8C2");
-line("tagline-thread", 524 + LEAD_ADVANCE, "thread", 700, palette.p);
-line("tagline-end", 524 + LEAD_ADVANCE + THREAD_ADVANCE, ".", 500, "#AEB8C2");
-
-const font = (weight: number) => ({ id: `manrope-${weight}`, type: "font" as const, uri: "../fonts/Manrope-wght.ttf", family: "Manrope", style: "normal", weight });
+add(textLine("tagline", D, 524, 338, "Long agent sessions that keep the ", 27, 500, "#AEB8C2"));
+add(textLine("tagline-thread", D, 524 + LEAD_ADVANCE, 338, "thread", 27, 700, palette.p));
+add(textLine("tagline-end", D, 524 + LEAD_ADVANCE + THREAD_ADVANCE, 338, ".", 27, 500, "#AEB8C2"));
 
 const document = withComputedRevision({
   version: ANIMATION_DOCUMENT_VERSION,
@@ -232,7 +167,7 @@ const document = withComputedRevision({
   name: "pig-observational-memory banner",
   canvas: { width: W, height: H, pixelAspectRatio: 1, backgroundColor: hex(FIELD) },
   timing: { ticksPerSecond: TICKS_PER_SECOND, frameRate: { numerator: 30, denominator: 1 }, durationTicks: D, displayStartTick: 0 },
-  assets: { "manrope-500": font(500), "manrope-700": font(700), "manrope-800": font(800) },
+  assets: manropeFonts(),
   compositions: { main: { id: "main", name: "main", width: W, height: H, durationTicks: D, nodes, rootNodeIds: root } },
   rootCompositionId: "main",
   components: {},

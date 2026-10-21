@@ -34,6 +34,8 @@ This extension does the memory work while the session runs, so it is ready befor
 
 ## Quick start
 
+<img src="docs/assets/suit-up.svg" width="100%" alt="In a pixel terminal, pig install and /sprite set spider-ham type themselves out; a web strand hits PiG's green pig on a moonlit rooftop, and it spins into Spider-Ham and winks.">
+
 You need the `pig` CLI and a Go 1.26 or newer toolchain: the `go` on your `PATH`, or one installed with `pig setup go`.
 
 ```bash
@@ -64,6 +66,8 @@ pig install ./extensions/observational-memory --validate-only --json
 ```
 
 ## How it works
+
+<img src="docs/assets/swing.svg" width="100%" alt="Spider-Ham web-swings through a pixel city at night while cyan memory windows release pixels that string onto a web, like observations being collected.">
 
 Observations are what happened: a decision, a finished migration, a bug traced to a module, a constraint the user stated. Reflections are what stays true: the stack, a hard deadline, a preference for minimal abstractions.
 
@@ -113,6 +117,8 @@ When a line is too compressed to act on, the agent calls `recall` with its id an
 The summary is capped at `compactionSummaryMaxTokens` (an eighth of the context window by default). When memory outgrows it, the oldest lines are left out and a closing line says how many. If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and how compaction decides what to keep.
 
 ## Commands
+
+<img src="docs/assets/spider-sense.svg" width="100%" alt="/om:status climbs to 10,000 tokens while Spider-Ham's spider-sense tingles; at 100% a web strand catches the bar and one memory pixel joins the observations.">
 
 | Command | Shows |
 | --- | --- |
@@ -186,7 +192,7 @@ extensions/observational-memory/   the extension, a standalone Go module
     ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
     └── testfix/                   fake host and entry builders for tests
 docs/                              concepts, internals, settings, PiG port notes, contributing
-docs/animation/                    Clayzo sources for the README banner and mascot
+docs/animation/                    Clayzo sources for the README animations
 ```
 
 From the module directory, run the same checks as CI:
@@ -212,15 +218,12 @@ go test -race ./...
 
 ## Credits
 
-Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors. Spider-Ham and the PiG. wordmark in the banner are PiG's own pixel art, drawn from its [sprite catalogue](https://github.com/MichaelKinsy/PiG/tree/main/coding/piglogin) (MIT), and animated with [Clayzo](docs/animation/README.md).
+Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors. Spider-Ham, PiG's green pig and the PiG. wordmark in the README scenes are PiG's own pixel art, drawn from its [sprite catalogue](https://github.com/MichaelKinsy/PiG/tree/main/coding/piglogin) (MIT), and animated with [Clayzo](docs/animation/README.md).
 
 ## License
 
 [MIT](LICENSE)
 
-<div align="center">
 <br>
-<img src="docs/assets/spider-ham.svg" width="56" alt="Spider-Ham, PiG's red pixel pig">
-<br>
-<sub>Your friendly neighborhood memory.</sub>
-</div>
+
+<img src="docs/assets/credits.svg" width="100%" alt="End credits: Spider-Ham watches the sunset from a rooftop by a water tower, swings off into the sun and swings back to the ledge. Your friendly neighborhood memory.">
