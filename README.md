@@ -71,23 +71,7 @@ pig install ./extensions/observational-memory --validate-only --json
 
 Observations are what happened: a decision, a finished migration, a bug traced to a module, a constraint the user stated. Reflections are what stays true: the stack, a hard deadline, a preference for minimal abstractions.
 
-```mermaid
-flowchart LR
-    S([session history]) --> O[Observer]
-    O -->|observations| L[(memory ledger<br>in the session)]
-    L --> R[Reflector]
-    R -->|reflections| L
-    R -.->|observations over target| D[Dropper]
-    D -->|retires observations| L
-    L -->|rendered, no summarization model| C([compaction summary])
-
-    classDef worker fill:#E62429,stroke:#7A1118,color:#FFFFFF
-    classDef ledger fill:#087BAF,stroke:#075285,color:#FFFFFF
-    classDef io fill:#0B0F14,stroke:#67E8F9,color:#E6EDF3
-    class O,R,D worker
-    class L ledger
-    class S,C io
-```
+<img src="docs/assets/memory-web.svg" width="100%" alt="System diagram drawn as a pixel web: session history feeds the Observer, which writes observations into the memory ledger in the session; the Reflector reads them and writes reflections back; when observations are over target the Dropper retires observations, which stay in the session; the ledger is rendered, with no summarization model, into the compaction summary.">
 
 Three memory workers run in one background pipeline and save what they write as entries in the session: the memory ledger. They use the session model unless you configure another.
 

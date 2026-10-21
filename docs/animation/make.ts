@@ -11,6 +11,7 @@ const scenes = [
   { name: "banner", hold: 4.2667, title: "pig-observational-memory: PiG's Spider-Ham pixel pig drops in on a web line beside the PiG. wordmark" },
   { name: "suit-up", hold: 6.6, title: "Quick start: pig install and /sprite set spider-ham type out in a pixel terminal, and PiG's green pig spins into Spider-Ham" },
   { name: "swing", hold: 6.6, title: "Spider-Ham web-swings through a pixel city at night and flips past the moon while cyan memory windows release pixels that string onto a web" },
+  { name: "memory-web", hold: 0.4, title: "How it works as a pixel web: session history feeds the Observer, which writes observations into the memory ledger in the session; the Reflector reads them and writes reflections back, each citing the observations it preserves; after a reflection, when observations are over target, the Dropper retires observations, which stay in the session; the compaction summary is rendered from the ledger with no summarization model" },
   { name: "spider-sense", hold: 3.783333, title: "Spider-Ham's spider-sense tingles as /om:status climbs to 10,000 tokens, then a web strand catches the full bar and stores one memory pixel" },
   { name: "credits", hold: 1.6667, title: "Spider-Ham, PiG's pixel pig, watches the sunset from a rooftop beside a water tower, swings away into the sun and swings back to land on the ledge" },
 ];
