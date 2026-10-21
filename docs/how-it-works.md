@@ -2,18 +2,18 @@
 
 This is the V3 technical reference for `pi-observational-memory`.
 
-V3 is ledger-centered: memory state is reconstructed by folding V3 ledger entries on the current branch. When that projection is non-empty, V3 renders it model-free into the summary the agent sees. Empty projections delegate to Pi's native summarizer.
+V3 is ledger-centered: memory state is reconstructed by folding V3 ledger entries on the current branch. When that projection is non-empty, V3 renders it model-free into the summary the agent sees; no summarization model is called. Before rendering, the compaction hook may run the observer synchronously on source Pi's cut would otherwise discard (see [Compaction hook](#compaction-hook)). Empty projections delegate to Pi's native summarizer.
 
 ## Runtime entry points
 
-`src/index.ts` registers one shared runtime and these Pi surfaces:
+`src/index.ts` (and the Go port's `extension.go`) registers one shared runtime and these Pi surfaces:
 
 | Surface | Purpose |
 |---|---|
-| `turn_end` observer trigger | Maybe run the observer in the background. |
-| `turn_end` reflect/drop trigger | Maybe run the due reflector, then run dropper maintenance only after same-run successful reflection. |
-| `agent_settled` compaction trigger | Maybe call `ctx.compact()` when idle and over `compactAfterTokens`, after Pi finishes retries and queued continuation. |
-| `session_before_compact` hook | Build the V3 compaction payload deterministically. |
+| `agent_start` / `turn_end` consolidation trigger | Maybe launch one background consolidation run: observer, then reflector, then dropper only after a same-run successful reflection. With `consolidateWhenIdle`, `agent_start` aborts an in-flight run instead and `turn_end` does nothing. |
+| `agent_settled` consolidation trigger | With `consolidateWhenIdle` only: launch the consolidation run while Pi is idle, then evaluate proactive compaction after it. |
+| `agent_settled` compaction trigger | Maybe call `ctx.compact()` when idle and over the resolved compaction threshold, after Pi finishes retries and queued continuation. |
+| `session_before_compact` hook | Resolve the compaction cut, observe an unobserved gap synchronously when allowed, and build the V3 compaction payload. |
 | `/om:status` | Show ledger counts, drift, progress clocks, and worker state. |
 | `/om:view` | Show visible or full memory content and attempt to copy the rendered memory text. |
 | `recall` tool | Recover source evidence for a memory id. |
@@ -22,42 +22,45 @@ V3 is ledger-centered: memory state is reconstructed by folding V3 ledger entrie
 
 ```mermaid
 flowchart TD
+    AS[agent_start]
     TE[turn_end]
     AE[agent_settled]
     SBC[session_before_compact]
 
-    ObsDue{raw tokens since observation coverage<br/>≥ observeAfterTokens?}
-    Observer[Observer model call<br/>append om.observations.recorded]
+    Abort[abort in-flight run]
+    RunDue{no run in flight<br/>and observer or reflector due?}
+    Observer[Observer stage, when due<br/>append om.observations.recorded]
+    Reflector[Reflector stage, when due<br/>re-reads the branch<br/>append om.reflections.recorded]
+    DropDue{same-run reflection<br/>and active pool over target?}
+    Dropper[Dropper stage<br/>append om.observations.dropped]
 
-    ReflectDropDue{observer not due<br/>and reflection/drop clock due?}
-    BothDue{both due?}
-    ReflectorOnly{reflector due only?}
-    Reflector[Reflector model call<br/>append om.reflections.recorded]
-    Dropper[Dropper model call<br/>append om.observations.dropped]
-
-    CompactDue{raw tokens since compaction<br/>≥ compactAfterTokens<br/>and idle?}
+    CompactDue{observed source tokens since compaction<br/>≥ resolved threshold<br/>and idle?}
     CompactCall[ctx.compact]
 
+    Behind{observer behind Pi's cut<br/>and catch-up allowed?}
+    CatchUp[catch-up observer on the gap<br/>append om.observations.recorded]
+    Cut[resolve cut: keep, move back, or delegate]
     Fold[fold/project V3 ledger]
-    Render[render deterministic summary]
+    Render[render budgeted summary]
     Details[return om.folded details]
 
-    TE --> ObsDue
-    ObsDue -- yes --> Observer
-    ObsDue -- no --> ReflectDropDue
-    ReflectDropDue --> BothDue
-    BothDue -- yes --> Reflector --> Dropper
-    BothDue -- no --> ReflectorOnly
-    ReflectorOnly -- yes --> Reflector
-    ReflectorOnly -- no --> Dropper
+    AS -->|default| RunDue
+    AS -->|consolidateWhenIdle| Abort
+    TE -->|default| RunDue
+    AE -->|consolidateWhenIdle| RunDue
+    RunDue -- yes --> Observer --> Reflector --> DropDue
+    DropDue -- yes --> Dropper
 
     AE --> CompactDue
     CompactDue -- yes --> CompactCall
     CompactCall --> SBC
-    SBC --> Fold --> Render --> Details
+    SBC --> Behind
+    Behind -- yes --> CatchUp --> Cut
+    Behind -- no --> Cut
+    Cut --> Fold --> Render --> Details
 ```
 
-The observer has priority. Reflect/drop does not run on a turn where observer work is due.
+One `consolidationInFlight` flag guards a single consolidation pipeline. A run executes its stages in order: the observer stage, then the reflector stage, which re-reads the branch and so sees observations recorded earlier in the same run, then the dropper stage, which runs only after a non-empty same-run reflection. A stage that is not due is skipped and the run moves on; an observer or reflector failure ends the run. With `consolidateWhenIdle`, proactive compaction is also evaluated after the idle run finishes, so memory work on the same settled event does not starve it ([pig.md](pig.md) describes how the Go port orders the two).
 
 ## Source entries and progress
 
@@ -69,14 +72,16 @@ V3 raw-token progress counts only source entries:
 
 Memory ledger entries and compaction entries do not add raw-token progress.
 
-Every V3 ledger entry has `data.coversUpToId`. That field is a progress and projection watermark. Worker clocks count raw/source tokens after the latest valid watermark for that worker's ledger type:
+Every V3 ledger entry has `data.coversUpToId`. That field is a progress and projection watermark. The observer and reflector clocks count source tokens after the latest valid watermark for their ledger type; when Pi reports provider context usage, provider-reported context growth since that watermark (or since the latest compaction, when coverage is behind it) also counts, and a stage is due when either measure reaches its threshold:
 
 | Worker/trigger | Progress source |
 |---|---|
-| Observer | latest `om.observations.recorded.data.coversUpToId` |
-| Reflector | latest `om.reflections.recorded.data.coversUpToId` |
-| Dropper | latest `om.observations.dropped.data.coversUpToId` |
-| Auto-compaction | latest compaction boundary |
+| Observer | source tokens after the latest `om.observations.recorded.data.coversUpToId` |
+| Reflector | observed source tokens: those after the latest `om.reflections.recorded.data.coversUpToId` and up to the latest observation coverage marker |
+| Dropper | no clock; runs only after a non-empty same-run reflection, when the folded active observation pool is over `observationsPoolTargetTokens` |
+| Auto-compaction | observed source tokens from the latest compaction boundary through the latest observation coverage marker (raw source tokens after the boundary when Pi's `compaction.enabled` is `false`) |
+
+The Go port differs in two details: its reflector is never due on provider growth alone, and its `/om:status` reports the larger of the two measures. See [pig.md](pig.md).
 
 The watermark is also used to decide whether a memory ledger entry belongs to a bounded projection. It is not provenance. Provenance lives in `sourceEntryIds` and `supportingObservationIds`.
 
@@ -151,92 +156,107 @@ details: {
   fullFold: boolean;
   observations: Observation[];
   reflections: Reflection[];
+  foldThroughEntryId?: string;
 }
 ```
 
 These details are what later visible projections read. The ledger remains the source of truth.
 
+A compaction has two boundaries. The retention boundary is the compaction's `firstKeptEntryId`, which Pi persists: the first entry kept in context. The fold boundary, `foldThroughEntryId`, is the entry through which the ledger was folded into the summary. They are the same entry unless the hook moved the cut back to keep unobserved source in context; then the fold boundary is the latest observation coverage marker. (The Go port also folds through a coverage marker that reaches past Pi's cut; see [pig.md](pig.md).) A later compaction reads the fold boundary of the latest full fold, so it applies exactly the drops and reflections that fold applied. Details written without `foldThroughEntryId` fall back to `firstKeptEntryId`.
+
 ## Observer flow
 
-The observer trigger runs on `turn_end`.
+The observer is the first stage of the consolidation pipeline. The pipeline launches from `agent_start` and `turn_end`, or from `agent_settled` with `consolidateWhenIdle`.
 
 1. Load config if needed.
-2. Skip if `passive` is true.
-3. Skip if `observerInFlight` is true.
-4. Count raw/source tokens since latest observation coverage.
-5. Skip if below `observeAfterTokens`.
-6. Honor any deliberate-empty backoff until another `observeAfterTokens` of source tokens arrive.
-7. Select the oldest size-capped chunk after the latest observation coverage marker.
-8. Serialize those source entries for the observer prompt.
-9. Resolve the memory model.
-10. Run `runObserver()` in a background task.
+2. Skip the launch if `passive` is true.
+3. Skip the launch if `consolidationInFlight` is true.
+4. Skip the launch unless the observer or the reflector is due (see [Source entries and progress](#source-entries-and-progress)).
+5. In the run, skip the observer stage if its progress is below `observeAfterTokens`; the run moves on to the reflector.
+6. Honor any deliberate-empty backoff until another `observeAfterTokens` of source tokens arrive or coverage changes.
+7. Resolve the memory model. If no usable model resolves, the run ends.
+8. Select the oldest size-capped chunk after the latest observation coverage marker.
+9. Serialize those source entries for the observer prompt, with prior memory bounded by `workerMemoryMaxTokens`.
+10. Run the observer, retrying once with `fallbackModel` when the call fails.
 11. Validate source ids returned by the model.
 12. Compute deterministic 12-character ids and per-observation token counts in code.
 13. Append `om.observations.recorded` only if at least one observation was accepted.
 
-If no observations are generated, the worker writes no entry and does not advance coverage. A later eligible observer run will see a larger range. Deliberate empty runs back off until another `observeAfterTokens` worth of new source tokens arrives, so they do not re-fire every turn. Observer chunks target a fixed 60,000 estimated tokens, oldest-first, so an oversized uncovered span drains in slices; the oldest entry is always included even if it alone exceeds the target, preventing coverage from stalling. API/stream failures surface as `observer failed` / `observer.stream_error` rather than as an empty run.
+If no observations are generated, the worker writes no entry and does not advance coverage, and the run continues to the reflector. A later eligible observer run will see a larger range. Deliberate empty runs back off until another `observeAfterTokens` worth of new source tokens arrives, so they do not re-fire every turn. Observer chunks are capped at `observerChunkMaxTokens` (minimum 256); when it is unset, the cap is 20% of the memory model's context window, or 60,000 estimated tokens when the window is unknown. Complete entries are added oldest-first while they fit, so an oversized uncovered span drains in slices; when the oldest entry alone exceeds the cap, it is sent as a clearly marked head/tail excerpt, preventing coverage from stalling while the original entry stays in the session. API/stream failures surface as `observer failed` / `observer.stream_error` rather than as an empty run, and end the run before the reflector. The Go port measures the backoff on the raw backlog and, after a partial run, advances coverage only through the last cited entry; see [pig.md](pig.md).
 
 ## Reflect/drop flow
 
-Reflect/drop also runs on `turn_end`, but only when the observer is not due.
+Reflect/drop runs in the same consolidation run, after the observer stage. The reflector stage re-reads the branch, so it sees any observations the observer recorded earlier in the run.
 
-1. Load config if needed.
-2. Skip if `passive` is true.
-3. Skip if observer or reflect/drop work is already in flight.
-4. Skip if observer progress has reached `observeAfterTokens`.
-5. Check the reflector raw-token clock against `reflectAfterTokens`.
-6. Resolve the model only for stages that are ready to run.
-7. Fold current ledger state.
-8. If reflector is due and observation coverage exists, run the reflector. Each active observation line is annotated with current reflection coverage (`none`, `partial`, or `strong`) so the reflector can review uncovered durable facts without treating coverage as a quota.
-9. Append non-empty `om.reflections.recorded` with `coversUpToId` set to the latest observation coverage marker. Support ids are downstream dropper coverage evidence and should include all and only observations whose durable meaning is preserved with equivalent fidelity.
-10. Only after that same-run non-empty reflection append, check whether the folded active observation pool is over `observationsPoolTargetTokens`.
-11. If over target, run the dropper with same-turn reflections available. It computes a maximum drop count from tokens over target converted to an approximate observation count and annotates active observations with reflection coverage tiers (`none`, `partial`, `strong`) for model judgment.
-12. Append non-empty `om.observations.dropped` with `coversUpToId` set to the earlier branch position of latest observation coverage and same-run reflection coverage.
+1. Skip the reflector stage if its progress is below `reflectAfterTokens`.
+2. Skip it if no observation coverage exists.
+3. Resolve the model only for stages that are ready to run.
+4. Fold current ledger state.
+5. Run the reflector, with prior memory bounded by `workerMemoryMaxTokens` and one retry on `fallbackModel` when the call fails. Each active observation line is annotated with current reflection coverage (`none`, `partial`, or `strong`) so the reflector can review uncovered durable facts without treating coverage as a quota.
+6. Append non-empty `om.reflections.recorded` with `coversUpToId` set to the latest observation coverage marker. Support ids are downstream dropper coverage evidence and should include all and only observations whose durable meaning is preserved with equivalent fidelity.
+7. Only after that same-run non-empty reflection append, check whether the folded active observation pool is over `observationsPoolTargetTokens`.
+8. If over target, run the dropper with same-run reflections available. It computes a maximum drop count from tokens over target converted to an approximate observation count and annotates active observations with reflection coverage tiers (`none`, `partial`, `strong`) for model judgment.
+9. Append non-empty `om.observations.dropped` with `coversUpToId` set to the earlier branch position of latest observation coverage and same-run reflection coverage.
 
-Reflector no-output and reflector failure skip same-turn dropper. Dropper failure does not roll back already-appended reflections.
+Reflector no-output and reflector failure skip the same-run dropper. Dropper failure does not roll back already-appended reflections. The Go port also backs the reflector off after an empty verdict until the memory it reads changes; see [pig.md](pig.md).
 
 ## Auto-compaction trigger
 
-The auto-compaction trigger runs on `agent_settled`, after Pi has finished automatic retries, automatic compaction, and queued continuation.
+The auto-compaction trigger runs on `agent_settled`, after Pi has finished automatic retries, automatic compaction, and queued continuation. With `consolidateWhenIdle`, it is also evaluated after the idle consolidation run finishes.
 
 It skips when:
 
 - `passive` is true;
 - compaction is already in flight;
-- estimated source-entry progress after the latest compaction boundary is below `compactAfterTokens`;
+- compaction progress is below the resolved threshold;
 - Pi is not idle after the deferred check;
-- the raw threshold is no longer met after the deferred check.
+- the threshold is no longer met after the deferred check.
 
-The count starts at `firstKeptEntryId` when Pi provides that boundary. Memory
-ledger entries and compaction metadata contribute zero. The trigger uses this
-same raw metric before scheduling and in the deferred re-check, then calls
-`ctx.compact()` when all checks pass.
+Compaction progress counts observed source tokens: estimated source-entry
+tokens from the latest compaction boundary through the latest observation
+coverage marker. It is zero without observation coverage or while coverage is
+behind the boundary, so unobserved source never pushes compaction. When Pi's
+own `compaction.enabled` is `false`, the trigger counts raw estimated source
+tokens after the boundary instead. The count starts at `firstKeptEntryId` when
+Pi provides that boundary. Memory ledger entries and compaction metadata
+contribute zero.
 
-This trigger does not wait for observer, reflector, or dropper promises. That is intentional: background memory work should never make compaction feel stuck.
+The threshold is resolved by `compactAfterTokensMode`: `"calibrated"` (the
+default) uses `compactAfterTokens`; `"ratio"` uses
+`floor(contextWindow * compactAfterTokensRatio)` of the session model, falling
+back to `compactAfterTokens` when the context window is unknown. The trigger
+uses the same metric and threshold before scheduling and in the deferred
+re-check, then calls `ctx.compact()` when all checks pass. The Go port polls
+idleness for a short while and backs off after a refused compaction; see
+[pig.md](pig.md).
+
+Outside `consolidateWhenIdle`, this trigger does not wait for observer, reflector, or dropper promises. That is intentional: background memory work should never make compaction feel stuck.
 
 ## Compaction hook
 
 The compaction hook runs on `session_before_compact` and is the critical V3 latency path.
 
-It does only deterministic work:
+It renders deterministically, and calls a model only to catch the observer up:
 
 1. Guard against duplicate concurrent compaction hooks.
 2. Load config if needed.
-3. Read `event.preparation.firstKeptEntryId` and `event.preparation.tokensBefore`.
-4. Build a compaction projection from branch entries and `firstKeptEntryId`.
-5. Render a summary from projected reflections and observations.
-6. If the summary is empty, return no extension result so Pi uses native compaction.
-7. Otherwise return `{ compaction: { summary, firstKeptEntryId, tokensBefore, details } }` where `details.type` is `om.folded`.
+3. Read `event.preparation.firstKeptEntryId`, `event.preparation.tokensBefore`, and the event's branch entries.
+4. Resolve the cut. When observation coverage reaches Pi's `firstKeptEntryId`, keep it and fold through it. When unobserved source in the current compaction range sits before it (the gap), move `firstKeptEntryId` back to the nearest valid cut point at or before the first unobserved entry, so those entries stay in context, and fold through the latest observation coverage marker, within `compactionMaxRetainedTokens`. When that is not possible (overflow recovery, no observation coverage, nothing observed that can be compacted, or a retained tail over budget), the resolution is to delegate.
+5. Catch up when there is a gap, `compactionCatchUpMaxChunks` is above `0` (default `2`), observation coverage exists, and no background consolidation run is in flight: run the observer synchronously on the gap, starting at the observation frontier, for up to `compactionCatchUpMaxChunks` chunks, and append `om.observations.recorded` for each chunk that records observations. A chunk that records nothing, fails, or is aborted stops the catch-up. If any chunk recorded, re-read the branch and re-resolve the cut.
+6. Build a compaction projection from branch entries through the fold boundary.
+7. Render a summary from projected reflections and observations within `compactionSummaryMaxTokens`. If records exist but none fits, delegate.
+8. For a moved cut, delegate if the retained tokens plus the summary exceed `compactionMaxRetainedTokens`.
+9. If the hook delegates or the summary is empty, return no extension result so Pi uses native compaction.
+10. Otherwise return `{ compaction: { summary, firstKeptEntryId, tokensBefore, details } }` where `details.type` is `om.folded` and `details.foldThroughEntryId` is the fold boundary.
 
 It does not:
 
-- call a model;
-- run a sync observer;
+- call a summarization model;
 - run reflector/dropper;
-- wait for worker promises;
-- append ledger entries.
+- wait for worker promises (catch-up is skipped while a background consolidation run is in flight);
+- append ledger entries other than catch-up `om.observations.recorded` entries.
 
-If another compaction hook is already in flight, it returns `{ cancel: true }`. Delegating an empty projection is intentionally different: Pi proceeds with its native summarizer so pre-cut context is preserved.
+If another compaction hook is already in flight, it returns `{ cancel: true }`. Delegating an empty projection is intentionally different: Pi proceeds with its native summarizer so pre-cut context is preserved. The Go port's catch-up also retries on `fallbackModel`, and it appends a caller's `customInstructions` to the summary; see [pig.md](pig.md).
 
 ## Projections
 
@@ -252,7 +272,7 @@ Visible projection without a boundary reads the latest V3 `om.folded` compaction
 
 ### Compaction projection
 
-When compaction runs, the projection helper decides whether this compaction is a full fold. It first builds the normal compaction projection: observations whose `coversUpToId` reaches `firstKeptEntryId`, with reflection/drop effects held stable from the latest full-fold boundary. If there is no previous full-fold boundary, normal compaction includes observations only and excludes reflections/drops. It sums that projection's active observation `tokenCount`; if the total is at or above `observationsPoolMaxTokens`, it performs a full fold through `firstKeptEntryId`, applying observations, reflections, and drops by coverage marker. Otherwise, it keeps the normal projection.
+When compaction runs, the projection helper decides whether this compaction is a full fold. It works on the fold boundary: Pi's `firstKeptEntryId`, or the latest observation coverage marker when the hook moved the cut back. It first builds the normal compaction projection: observations whose `coversUpToId` reaches the fold boundary, with reflection/drop effects held stable from the latest full-fold boundary (that compaction's `foldThroughEntryId`, else its `firstKeptEntryId`). If there is no previous full-fold boundary, normal compaction includes observations only and excludes reflections/drops. It sums that projection's active observation `tokenCount`; if the total is at or above `observationsPoolMaxTokens`, it performs a full fold through the fold boundary, applying observations, reflections, and drops by coverage marker. Otherwise, it keeps the normal projection. Either way, the details record the fold boundary as `foldThroughEntryId`.
 
 ### Diff projection
 
@@ -287,16 +307,20 @@ The renderer is deterministic. It does not call a model and does not rewrite mem
 
 Shows:
 
-- recorded/dropped/visible observation counts, with plain `+N` / `-N` visible-vs-full drift suffixes when drift exists;
+- passive mode, when `passive` is true;
+- recorded/dropped/active/visible observation counts, with plain `+N` / `-N` visible-vs-full drift suffixes when drift exists;
 - recorded/visible reflection counts, with a plain `+N` drift suffix when full memory has extra reflections;
-- next observation/reflection/compaction token progress and drop coverage since the last successful drop;
-- visible observation pool pressure against `observationsPoolMaxTokens` from the current compaction projection;
+- `Next observation`: source tokens since observation coverage against `observeAfterTokens`;
+- `Next reflection`: observed tokens since reflection coverage against `reflectAfterTokens`;
+- `Next compaction`: observed source tokens (estimated source tokens when Pi's `compaction.enabled` is `false`) against the resolved compaction threshold;
+- `Observer backlog`: unobserved source tokens since the compaction boundary;
+- visible observation pool pressure against `observationsPoolMaxTokens` from visible memory;
 - active observation pool pressure against `observationsPoolTargetTokens` from folded active observations;
-- dropper state explaining whether the active pool is under target or waiting for the next successful reflection;
-- reflection pool token total;
-- passive mode;
-- worker in-flight flags;
-- last observer and reflect/drop errors.
+- reflection pool token total of visible reflections;
+- an in-flight section (consolidation run and its phase, auto-compaction, compaction hook) when any is running;
+- a last-error section with the last observer, reflector, and dropper errors.
+
+The Go port also shows active observer, reflector, and compaction backoffs, and its progress lines use the same measures the workers act on; see [pig.md](pig.md).
 
 ### `/om:view`
 
@@ -325,12 +349,13 @@ Recall ignores old V2 memory by construction because it indexes only V3 ledger e
 
 ## Error and race handling
 
-- Worker in-flight flags prevent duplicate observer or reflect/drop runs.
-- Observer priority prevents reflect/drop from advancing while source text is due for observation.
+- One `consolidationInFlight` flag prevents overlapping consolidation runs; separate flags guard the compaction trigger and the compaction hook.
+- Stages run in order within a run: the reflector reads the branch after the observer stage, and an observer failure ends the run before the reflector.
+- With `consolidateWhenIdle`, `agent_start` aborts an in-flight run; stages check for the abort before recording errors or appending, so an aborted run leaves the ledger untouched.
 - No-output workers append no empty ledger entries.
 - Invalid source/support/drop ids are filtered or rejected by code.
 - Background worker errors are recorded on runtime state and surfaced in `/om:status`.
-- Compaction does not wait for background workers; it folds whatever ledger state is already present.
+- Compaction does not wait for background workers. When no background run is in flight and the observer is behind Pi's cut, the hook may observe the gap synchronously; otherwise it folds whatever ledger state is already present.
 - Historical or invalid coverage markers are tolerated by progress helpers instead of throwing.
 
 ## V2 behavior
@@ -341,7 +366,7 @@ V3 does not use V2 state shapes. Old V2 custom memory entries, old V2 compaction
 
 - The branch-local V3 ledger is the memory source of truth.
 - Pi compaction summaries represent what the agent sees.
-- Non-empty V3 compaction projections are deterministic and model-free; empty projections delegate to Pi's native summarizer.
+- Non-empty V3 compaction projections are rendered deterministically, without a summarization model; the hook's only model calls are catch-up observer runs. Empty projections delegate to Pi's native summarizer.
 - Observer input is raw/source entries only.
 - `coversUpToId` is a progress/projection watermark, not provenance.
 - Kept observations and reflections are rendered without paraphrase.

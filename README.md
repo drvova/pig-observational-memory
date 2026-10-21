@@ -208,14 +208,14 @@ The Go extension registers the same `om:status` and `om:view` commands and the s
 
 ## Development
 
-`src/` is the source of truth. To regenerate the prebuilt module after editing `src/`, run `npm run build`. CI fails when `dist/` is stale.
-
-The Go port in `extensions/observational-memory` is a standalone module with no generated artifacts. It mirrors `src/` package for package; a behavior or user-facing string change in `src/` is ported there with its tests:
+The Go port in `extensions/observational-memory` is where fixes land. It is a standalone module with no generated artifacts:
 
 ```bash
 cd extensions/observational-memory
 gofmt -l . && go vet ./... && go test ./...
 ```
+
+`src/` (the TypeScript extension) is frozen pending its removal. It diverges from the Go port where the port cleared upstream issues; [`docs/pig.md`](docs/pig.md) lists the differences. Test it with `npm test` and typecheck it with `npm run typecheck`. To regenerate the prebuilt module after editing `src/`, run `npm run build`. CI fails when `dist/` is stale.
 
 ---
 
@@ -288,7 +288,7 @@ the trigger scale with the active model's `contextWindow`:
 In ratio mode the effective threshold is
 `floor(model.contextWindow * compactAfterTokensRatio)` (clamped to a minimum of
 1). With the example above, a 1,000,000-token window compacts after about
-500,000 estimated source-entry tokens after the latest compaction boundary; a
+500,000 observed source-entry tokens after the latest compaction boundary; a
 200,000-token window uses about 100,000. The threshold counts source entries,
 not Pi's system prompt, tool schemas, or provider accounting. Pi's native
 window-pressure compaction remains independent.
@@ -372,7 +372,7 @@ For details and tuning guidance, see [`docs/configuration.md`](docs/configuratio
 
 ```mermaid
 flowchart TD
-    Turn[turn_end]
+    Turn[agent_start / turn_end]
     Observe[Capture observations]
     Reflect[Distill reflections]
     AgentSettled[agent_settled]
@@ -395,11 +395,17 @@ The high-level lifecycle:
 
 The important part: compaction does not need to rethink the whole session from scratch.
 
-The proactive compaction threshold counts estimated source-entry tokens after
-the latest compaction boundary. It includes source entries retained by
-`firstKeptEntryId` and newer source entries, while memory ledger entries and
-compaction metadata contribute zero. `/om:status` uses the same metric. Pi's
-own window-pressure compaction remains independent.
+The proactive compaction threshold counts observed source tokens: estimated
+source-entry tokens after the latest compaction boundary that the observer has
+already covered (raw estimated source tokens when Pi's `compaction.enabled` is
+`false`). It includes source entries retained by `firstKeptEntryId` and newer
+source entries, while memory ledger entries and compaction metadata contribute
+zero. The threshold is resolved by `compactAfterTokensMode`: `compactAfterTokens`
+in `"calibrated"` mode, or a share of the session model's context window in
+`"ratio"` mode (see
+[Scaling compaction](#scaling-compaction-to-the-models-context-window)).
+`/om:status` uses the same metric. Pi's own window-pressure compaction remains
+independent.
 
 ---
 
@@ -409,10 +415,10 @@ Current behavior:
 
 * **Observation-centered memory.** The extension records useful session observations while you work.
 * **Durable reflections.** The extension distills stable facts that help the agent stay oriented over time.
-* **Fast compaction.** When prepared V3 memory exists, `session_before_compact` renders it without calling a model or waiting for background workers. An empty V3 projection delegates to Pi's native summarizer instead of replacing prior context with an empty summary.
+* **Fast compaction.** When prepared V3 memory exists, `session_before_compact` renders it without calling a summarization model or waiting for background workers; its only model calls are catch-up observer runs when the observer is behind (next point). An empty V3 projection delegates to Pi's native summarizer instead of replacing prior context with an empty summary.
 * **Bounded summaries, fewer native compactions.** The rendered memory summary respects `compactionSummaryMaxTokens`, and when the observer is behind the hook observes the gap synchronously (`compactionCatchUpMaxChunks`) so most compactions stay model-light and structured instead of falling back to Pi's growing prose summary.
 * **No unobserved context is discarded.** Proactive compaction counts only source tokens the observer has covered, and the compaction hook keeps entries the observer has not reached yet in context (within `compactionMaxRetainedTokens`) or delegates to Pi's native summarizer, instead of dropping them with no memory record.
-* **Background memory work.** Observation and reflection work run from `turn_end` when their token clocks are due; dropper work runs only after successful reflection and prunes the folded active observation ledger toward `observationsPoolTargetTokens`.
+* **Background memory work.** One consolidation pipeline runs observer, then reflector, then dropper. It launches from `agent_start` and `turn_end` (or from `agent_settled` with `consolidateWhenIdle`) when the observation or reflection clock is due; dropper work runs only after a successful reflection in the same run and prunes the folded active observation ledger toward `observationsPoolTargetTokens`.
 * **Source-backed recall.** Observations and reflections can be traced back through the `recall` tool.
 * **Visible/full views.** `/om:view` shows visible memory and `/om:view full` shows the full current memory state. Use `/om:status` for visible-vs-full drift and for the separate visible observation pool vs active observation pool.
 * **No V2 compatibility layer.** Old V2 settings and memory entries are ignored rather than migrated.

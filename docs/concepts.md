@@ -70,32 +70,36 @@ Dropping does not delete history. Dropped observations remain recallable from le
 
 ### Observer
 
-The observer runs asynchronously from `turn_end` when raw/source tokens after the latest observation coverage marker reach `observeAfterTokens`. After a deliberate empty result, it waits for another `observeAfterTokens` of source tokens before retrying the uncovered range.
+The observer is the first stage of the background consolidation pipeline, which launches from `agent_start` and `turn_end` (or from `agent_settled` with `consolidateWhenIdle`). It runs when raw/source tokens after the latest observation coverage marker (or provider-reported context growth since it) reach `observeAfterTokens`. After a deliberate empty result, it waits for another `observeAfterTokens` of source tokens before retrying the uncovered range.
 
-It receives an oldest-first chunk of raw/source entries, validates source ids, and appends a non-empty `om.observations.recorded` entry. Chunking targets a fixed 60,000 estimated tokens but always includes at least one entry, so a single oversized entry cannot stall coverage. If there is nothing worth recording, it writes no entry and leaves the raw range uncovered.
+It receives an oldest-first chunk of raw/source entries, validates source ids, and appends a non-empty `om.observations.recorded` entry. Chunks are capped at `observerChunkMaxTokens` (minimum 256); when unset, the cap is 20% of the memory model's context window, or 60,000 estimated tokens when the window is unknown. A chunk always includes at least one entry: an oldest entry over the cap is sent as a clearly marked head/tail excerpt, so a single oversized entry cannot stall coverage. If there is nothing worth recording, it writes no entry and leaves the raw range uncovered.
+
+The compaction hook can also run the observer synchronously on source Pi's cut would discard; see [Compaction hook](#compaction-hook).
 
 ### Reflector
 
-The reflector runs in the reflect/drop lane from `turn_end` when its raw-token clock reaches `reflectAfterTokens` and the observer is not due.
+The reflector runs in the same consolidation run, after the observer stage, when its clock reaches `reflectAfterTokens`. Its clock counts observed source tokens: source between the latest reflection coverage marker and the latest observation coverage marker.
 
 It reads active observations and current reflections, then appends durable new reflections as `om.reflections.recorded`. Reflections must cite valid supporting observation ids. The reflector's coverage annotations describe current support state only; this first coverage-stewardship model does not repair historical coverage on existing reflections that already missed a supporting observation id.
 
 ### Dropper
 
-The dropper runs only as post-reflection maintenance: after the reflector records non-empty same-turn reflections, the dropper may run if the folded active observation ledger is over `observationsPoolTargetTokens`. The dropper can see same-turn new reflections before deciding what to prune.
+The dropper runs only as post-reflection maintenance: after the reflector records non-empty reflections in the same consolidation run, the dropper may run if the folded active observation ledger is over `observationsPoolTargetTokens`. The dropper can see those same-run reflections before deciding what to prune.
 
 The dropper can only drop active observation ids. It cannot rewrite or merge observations. Relevance is treated as importance/resistance rather than an absolute lock: `critical` observations are the highest-resistance candidates, but they can be dropped when the model judges that age, reflection coverage, supersession, redundancy, and semantic safety make removal from active memory safe. Its maximum drop count is computed from tokens over target converted to an approximate observation count, and the model may drop fewer or none.
 
 ### Compaction hook
 
-The compaction hook runs during `session_before_compact`. When V3 memory exists, it is deterministic and model-free:
+The compaction hook runs during `session_before_compact`. When V3 memory exists, it renders the summary deterministically, without a summarization model:
 
-- it does not run observer, reflector, or dropper;
-- it does not call a model;
+- it does not run the reflector or dropper;
+- it does not call a summarization model;
 - it does not wait for background memory workers;
-- it folds/projects ledger state and renders the summary.
+- it folds/projects ledger state and renders the summary within `compactionSummaryMaxTokens`.
 
-If the projection is empty, the hook returns no extension compaction and Pi uses its native summarizer. This preserves pre-cut context instead of persisting an empty summary. Prepared V3 compactions remain effectively instantaneous compared with V2.
+When the observer has not reached Pi's proposed cut, observation coverage exists, and no background consolidation run is in flight, the hook first runs the observer synchronously on the gap, up to `compactionCatchUpMaxChunks` chunks (default `2`), appends `om.observations.recorded` for each chunk that records observations, and re-resolves the cut. Unobserved source that remains is kept in context by moving `firstKeptEntryId` back (within `compactionMaxRetainedTokens`), or the hook delegates.
+
+If the projection is empty, the hook returns no extension compaction and Pi uses its native summarizer. This preserves pre-cut context instead of persisting an empty summary. Prepared V3 compactions with no observer gap remain effectively instantaneous compared with V2.
 
 ## Ledger entries
 
@@ -127,8 +131,11 @@ type MemoryDetails = {
   fullFold: boolean;
   observations: Observation[];
   reflections: Reflection[];
+  foldThroughEntryId?: string; // entry the ledger was folded through
 }
 ```
+
+A compaction has two boundaries. The retention boundary, `firstKeptEntryId`, is the first entry Pi keeps in context; the hook may move it back from Pi's proposal to the turn holding the first unobserved entry, within `compactionMaxRetainedTokens`. The fold boundary, `foldThroughEntryId`, is the entry through which the ledger was folded into the summary: usually the same entry as `firstKeptEntryId`, and the latest observation coverage marker when the cut moved (the Go port also folds through a coverage marker that reaches past Pi's cut; see [pig.md](pig.md)). Later compactions use the fold boundary of the latest full fold.
 
 Old V2 memory entry/details formats are ignored.
 

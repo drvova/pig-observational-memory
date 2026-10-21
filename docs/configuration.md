@@ -33,6 +33,8 @@ The extension loads config once for its runtime. After changing settings, restar
     "reflectAfterTokens": 20000,
     "observerChunkMaxTokens": 60000,
     "compactAfterTokens": 81000,
+    "compactAfterTokensMode": "calibrated",
+    "compactAfterTokensRatio": 0.68,
     "observationsPoolMaxTokens": 20000,
     "observationsPoolTargetTokens": 10000,
     "agentMaxTurns": 16,
@@ -63,6 +65,8 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `reflectAfterTokens` | positive integer | `20000` | Raw/source token threshold for reflector runs; successful reflection creates dropper maintenance opportunities. |
 | `observerChunkMaxTokens` | positive integer | derived; minimum `256` | Maximum estimated tokens sent to one observer run. Unset: 20% of the resolved memory model's context window, or `60000` when unknown. |
 | `compactAfterTokens` | positive integer | `81000` | Estimated source-entry threshold for proactive auto-compaction, counted after the latest compaction boundary and only up to the observation frontier. |
+| `compactAfterTokensMode` | enum | `"calibrated"` | How the proactive compaction threshold is resolved: `"calibrated"` uses `compactAfterTokens`; `"ratio"` scales it to the session model's context window. |
+| `compactAfterTokensRatio` | number between `0` and `1`, exclusive | `0.68` | In `"ratio"` mode, the threshold is `floor(contextWindow * compactAfterTokensRatio)`, or `compactAfterTokens` when the context window is unknown. |
 | `compactionMaxRetainedTokens` | positive integer | derived | Maximum estimated source tokens the compaction hook may keep in context when it retains entries the observer has not reached yet. Unset: half of the active session model's context window, or `60000` when unknown. |
 | `observationsPoolMaxTokens` | positive integer | `20000` | Normal compaction-projection observation-token pressure that makes compaction do a full fold. |
 | `observationsPoolTargetTokens` | positive integer below max | half of `observationsPoolMaxTokens` | Folded active observation target used by post-reflection dropper maintenance. |
@@ -76,24 +80,23 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `compactionCatchUpMaxChunks` | non-negative integer | `2` | Observer chunks the compaction hook may run synchronously to cover source entries the background observer has not reached before Pi's cut. `0` disables. |
 | `workerMemoryMaxTokens` | positive integer | derived | Estimated token budget for the prior memory each observer, reflector, and dropper request carries. Unset: a quarter of the memory model's context window, or `16000` when unknown. |
 | `consolidateWhenIdle` | boolean | `false` | Run memory workers only while the agent is idle (launch from `agent_settled`, abort when a new agent run starts). For hosts where the session model and the memory model share one context budget. |
-
 | `fallbackModel` | object | unset | Optional model the memory workers fall back to when the primary memory model fails to resolve or a worker call errors. |
-| `fallbackModel.provider` | string | unset | Provider name in Pi's model registry. Required when `fallbackModel` is set. |
+| `fallbackModel.provider` | string | unset | Provider name in Pi's model registry. Required when `fallbackModel` is set (the Go port resolves an `id` alone against the session model's provider). |
 | `fallbackModel.id` | string | unset | Model id in Pi's model registry. Required when `fallbackModel` is set. |
 | `fallbackModel.thinking` | enum | unset; falls back to `model.thinking` then `low` | Optional reasoning/thinking level used when the fallback is active. |
 | `showWorkerNotifications` | boolean | `true` | Shows routine observer, reflector, and dropper progress notifications. |
 | `passive` | boolean | `false` | Disables proactive background memory and auto-compaction triggers. |
 | `debugLog` | boolean | `false` | Writes best-effort per-session extension debug events to Pi's agent directory. |
 
-Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`.
 
-Invalid values are ignored. Positive-integer settings must be finite integers greater than zero. `observationsPoolTargetTokens` must also be below `observationsPoolMaxTokens`; if omitted or invalid, it is derived as `Math.floor(observationsPoolMaxTokens / 2)`.
+Invalid values are ignored. Positive-integer settings must be finite integers greater than zero. `compactAfterTokensRatio` must be a finite number strictly between `0` and `1`. `observationsPoolTargetTokens` must also be below `observationsPoolMaxTokens`; if omitted or invalid, it is derived as `Math.floor(observationsPoolMaxTokens / 2)`.
 
 ## `observeAfterTokens`
 
 Default: `10000`.
 
-The observer runs from Pi's `turn_end` hook. It counts raw/source tokens after the latest `om.observations.recorded.data.coversUpToId` marker. When the count reaches `observeAfterTokens`, the observer receives source entries after that marker and may append a non-empty `om.observations.recorded` ledger entry.
+The observer is the first stage of the consolidation pipeline, which launches from Pi's `agent_start` and `turn_end` hooks (or from `agent_settled` with [`consolidateWhenIdle`](#consolidatewhenidle)). It counts raw/source tokens after the latest `om.observations.recorded.data.coversUpToId` marker. When the count reaches `observeAfterTokens`, the observer receives source entries after that marker and may append a non-empty `om.observations.recorded` ledger entry.
 
 When Pi reports provider context usage, the observer is also due once the real context has grown by `observeAfterTokens` since the coverage marker (or since the latest compaction, when coverage is behind it). Either measure reaching the threshold launches the observer: the provider delta catches content the character heuristic undercounts, and the raw backlog keeps an observer that fell behind several compactions from starving on a small context window that Pi compacts every few thousand tokens.
 
@@ -113,7 +116,7 @@ Default: `20000`.
 
 The reflector uses this source-token threshold. Reflector progress counts source entries between the latest `om.reflections.recorded.data.coversUpToId` marker and the latest observation coverage marker — material the observer has already turned into observations. Source the observer has not reached yet does not count, so an observer draining a large backlog in small chunks does not trigger a reflector (and dropper) pass after every chunk. When Pi reports provider context usage, real context growth of `reflectAfterTokens` since the marker also makes the reflector due.
 
-The dropper no longer uses `reflectAfterTokens` as its own launch threshold. Dropper work is gated by successful reflection: after the reflector records non-empty reflections in a consolidation pass, the dropper may run if the folded active observation ledger is over `observationsPoolTargetTokens`. It can see same-turn new reflections before deciding what to prune.
+The dropper no longer uses `reflectAfterTokens` as its own launch threshold. Dropper work is gated by successful reflection: after the reflector records non-empty reflections in a consolidation pass, the dropper may run if the folded active observation ledger is over `observationsPoolTargetTokens`. It can see those same-run reflections before deciding what to prune.
 
 Lower values distill reflections more often and therefore create more opportunities for post-reflection dropper maintenance. Higher values reduce reflector model calls but leave more observations between reflection and dropper opportunities.
 
@@ -121,15 +124,35 @@ Lower values distill reflections more often and therefore create more opportunit
 
 Default: `81000`.
 
-The auto-compaction trigger runs from Pi's `agent_settled` hook, after retries, automatic compaction, and queued continuation finish. It counts estimated source-entry tokens after the latest compaction boundary **that observation coverage has already reached** — the span a compaction can fold into memory. The count starts at `firstKeptEntryId` when Pi provides that boundary, so retained source entries remain part of the metric, and it stops at the latest observer coverage marker. Memory ledger entries and compaction metadata contribute zero. If the count reaches `compactAfterTokens`, the extension defers with `setTimeout(0)`, checks that Pi is idle, re-checks the same metric, and calls `ctx.compact()`. Pi's provider context usage is not used for this threshold.
+The auto-compaction trigger runs from Pi's `agent_settled` hook, after retries, automatic compaction, and queued continuation finish. It counts estimated source-entry tokens after the latest compaction boundary **that observation coverage has already reached** — the span a compaction can fold into memory. The count starts at `firstKeptEntryId` when Pi provides that boundary, so retained source entries remain part of the metric, and it stops at the latest observer coverage marker. Memory ledger entries and compaction metadata contribute zero. If the count reaches the threshold resolved by [`compactAfterTokensMode`](#compactaftertokensmode-and-compactaftertokensratio) (`compactAfterTokens` by default), the extension defers with `setTimeout(0)`, checks that Pi is idle, re-checks the same metric, and calls `ctx.compact()`. Pi's provider context usage is not used for this threshold.
 
 Source entries the observer has not reached yet never count toward this threshold, so a session whose observer is slower than the conversation waits for coverage instead of compacting away unobserved context. Without any observation coverage, proactive compaction does not fire at all; Pi's own threshold compaction remains in charge.
 
 That backstop only exists while Pi's own automatic compaction is on. When Pi's `compaction.enabled` is `false` (read from the same `settings.json` files), the trigger counts raw source tokens after the boundary instead, as before this change, so a stalled observer cannot leave context growing unchecked. The compaction hook still protects the unobserved entries (catch-up, retention, or delegation to Pi's native summarizer). `/om:status` labels the metric accordingly: "observed" or "estimated" source tokens.
 
-This trigger does not wait for observer, reflector, or dropper work. Actual compaction summary creation happens later in `session_before_compact`. A non-empty V3 projection is rendered deterministically and model-free; an empty projection delegates to Pi's native summarizer so prior context is not replaced by an empty summary.
+Outside `consolidateWhenIdle`, this trigger does not wait for observer, reflector, or dropper work. Actual compaction summary creation happens later in `session_before_compact`. A non-empty V3 projection is rendered deterministically, without a summarization model; an empty projection delegates to Pi's native summarizer so prior context is not replaced by an empty summary.
 
 Pi's own window-pressure compaction and manual compaction can still happen independently of this proactive trigger. See [`compactionMaxRetainedTokens`](#compactionmaxretainedtokens) for how the hook protects unobserved context in those cases.
+
+## `compactAfterTokensMode` and `compactAfterTokensRatio`
+
+Defaults: `"calibrated"` and `0.68`.
+
+`compactAfterTokensMode` decides which threshold the proactive trigger compares its count against:
+
+- `"calibrated"` uses `compactAfterTokens` directly.
+- `"ratio"` uses `floor(contextWindow * compactAfterTokensRatio)` (at least `1`), where `contextWindow` is the active session model's context window. When the window is unknown (missing, `0`, or negative), it falls back to `compactAfterTokens`.
+
+```json
+{
+  "observational-memory": {
+    "compactAfterTokensMode": "ratio",
+    "compactAfterTokensRatio": 0.5
+  }
+}
+```
+
+With this example, a 1,000,000-token window compacts after about 500,000 counted source tokens and a 200,000-token window after about 100,000. Ratio mode keeps a large-context model from compacting at the default ~81K; lower the ratio for models that advertise a large window but degrade at long range. The mode must be exactly `calibrated` or `ratio`, and the ratio a finite number strictly between `0` and `1`; other values are ignored and the defaults apply. The count itself is unchanged by the mode, and `/om:status` shows the resolved threshold on its `Next compaction` line.
 
 ## `compactionMaxRetainedTokens`
 
@@ -198,9 +221,20 @@ Set `model` when you want the observer, reflector, and dropper to use a cheaper 
 }
 ```
 
-`provider` and `id` must both be non-empty strings. `thinking` is optional. If the configured model cannot be resolved, the runtime attempts to fall back to the current session model and notifies once. Memory workers accept either an API key or OAuth-style auth headers (e.g. `Authorization: Bearer …`), so OAuth-authenticated providers work without an API key. If no usable model or credentials are available, the relevant background worker skips/fails safely rather than inventing memory.
+`provider` and `id` must both be non-empty strings in the TypeScript extension. The Go port also accepts `id` alone and resolves it against the session model's provider ([pig.md](pig.md)). `thinking` is optional. If the configured model is not found in Pi's model registry, the runtime warns and falls back to the current session model. Memory workers accept either an API key or OAuth-style auth headers (e.g. `Authorization: Bearer …`), so OAuth-authenticated providers work without an API key. If no usable model or credentials are available, the relevant background worker skips/fails safely rather than inventing memory.
 
 Workers stream through Pi's composed provider runtime, not `@earendil-works/pi-ai/compat` alone. Session models whose `api` id comes from `pi.registerProvider` (`cursor-sdk`, CLIProxyAPI, commandcode, and other custom APIs) work without a second built-in provider. `model` remains optional: set it only when you want cheaper/faster workers than the coding agent. Leaving it unset is the Cursor-only setup.
+
+### Choosing the worker model and thinking level
+
+The observer, reflector and dropper summarize and cite; they do not solve problems. A fast, inexpensive model that calls tools reliably is the right default.
+
+* **Tool calling is required.** Each worker answers only through its tool (`record_observations`, `record_reflections`, `drop_observations`). A model that answers in prose instead records nothing.
+* **The context window sets the work size.** When unset, an observer chunk is 20% of the memory model's window (`observerChunkMaxTokens`) and the prior memory each worker sees is 25% (`workerMemoryMaxTokens`). A small window means smaller chunks and less prior memory per call.
+* **`thinking` applies only to reasoning models.** The level is sent only when Pi's model registry marks the model as `reasoning`; on other models it is ignored. `off` sends none, and an unset level means `low`. When the fallback model is active, `fallbackModel.thinking` replaces it.
+* **Start at `low`.** Raise the level only if the observer misses facts you expected it to record, or the reflector or dropper makes poor choices. Higher levels cost tokens and time on every background call.
+* **Slow models have a cost even in the background.** When the observer is behind Pi's cut, the compaction hook runs it synchronously (`compactionCatchUpMaxChunks`), so a slow model delays compaction. With `consolidateWhenIdle`, a run still in flight when you send the next prompt is aborted, and a slow model may rarely finish. An observer that lags also delays proactive compaction, because the trigger counts only observed source. `/om:status` shows how far behind it is.
+* **Leave `model` unset** to use the session model, for example when the only provider you have is the session's own, or it authenticates by OAuth. Set a separate `model` (and a `fallbackModel`) for cheaper workers, or when the session model is a local server whose capacity the workers would compete for; pair that with `consolidateWhenIdle`.
 
 ## `compactionSummaryMaxTokens`
 
@@ -280,7 +314,7 @@ When `false`, the extension hides routine observer, reflector, and dropper progr
 
 Default: `false`.
 
-When `true`, the extension does not proactively run the observer, reflector/dropper lane, or auto-compaction trigger. Manual/Pi compaction hooks, `/om:status`, `/om:view`, and `recall` remain available.
+When `true`, the extension does not proactively run the consolidation pipeline (observer, reflector, dropper) or the auto-compaction trigger. Manual/Pi compaction hooks, `/om:status`, `/om:view`, and `recall` remain available.
 
 Environment override:
 
