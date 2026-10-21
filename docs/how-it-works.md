@@ -179,7 +179,7 @@ The observer is the first stage of the consolidation pipeline. The pipeline laun
 6. Honor any deliberate-empty backoff until another `observeAfterTokens` of raw source tokens arrive, coverage changes, the chunk it judged leaves the branch, or the session changes.
 7. Resolve the memory model. If no usable model resolves, the run ends.
 8. Select the oldest size-capped chunk after the latest observation coverage marker.
-9. Serialize those source entries for the observer prompt, with prior memory bounded by `workerMemoryMaxTokens`. Assistant thinking blocks are left out, and `!command` shell executions carry their command and output.
+9. Serialize those source entries for the observer prompt, with prior memory bounded by `workerMemoryMaxTokens`. Assistant thinking blocks are left out, and `!command` shell executions carry their command and output; `!!command` runs, which PiG keeps out of the agent's context, are left out too.
 10. Run the observer, retrying once with `fallbackModel` when the call fails before any observation is accepted.
 11. Validate each record in code: its source ids must come from the chunk, its timestamp must be `YYYY-MM-DD HH:MM`, its relevance must be known, and its content must not be empty after trimming; content is folded to one line. The model is told why a record was rejected.
 12. Compute deterministic 12-character ids and per-observation token counts in code.

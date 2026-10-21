@@ -211,10 +211,19 @@ func textOnly(content any) string {
 	return ""
 }
 
-// bashExecutionText renders a `!command` run the way the agent saw it: the
-// command, its output, and a note when it was cancelled or truncated. Such
-// messages carry command/output fields and no content, so the generic
-// tool-result rendering would show them as empty.
+// bashExcludedFromContext reports whether msg is a `!!command` run. PiG keeps
+// such runs out of the agent's context (agent/messages.go customUserMessage),
+// so memory keeps them out too: they render nothing for the observer or recall.
+func bashExcludedFromContext(msg map[string]any) bool {
+	excluded, _ := msg["excludeFromContext"].(bool)
+	return excluded
+}
+
+// bashExecutionText renders a `!command` run that reached the agent's context:
+// the command, its output, and a note when it exited non-zero, was cancelled or
+// was truncated. Such messages carry command/output fields and no content, so
+// the generic tool-result rendering would show them as empty. Callers skip
+// `!!command` runs (bashExcludedFromContext) first.
 func bashExecutionText(msg map[string]any) string {
 	command, _ := msg["command"].(string)
 	output, _ := msg["output"].(string)
@@ -288,6 +297,9 @@ func SerializeConversation(messages []map[string]any) string {
 			}
 			blocks = append(blocks, "[Assistant @ "+timestamp+"]: "+body)
 		case "bashExecution":
+			if bashExcludedFromContext(msg) {
+				continue
+			}
 			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+bashExecutionText(msg))
 		default:
 			blocks = append(blocks, "[Tool result for "+jsString(msg["toolName"])+" @ "+timestamp+"]: "+textOnly(msg["content"]))
@@ -430,8 +442,8 @@ func isSourceRenderableEntry(entry session.Entry) bool {
 
 // ObserverRenders reports whether the observer chunk would carry anything for
 // entry: a source entry with renderable content. Entries that render nothing
-// (an aborted assistant turn with no content) are skipped by the chunk
-// serializer and therefore never need observation coverage.
+// (an aborted assistant turn with no content, a `!!command` run) are skipped
+// by the chunk serializer and therefore never need observation coverage.
 func ObserverRenders(entry session.Entry) bool {
 	if entry.ID == "" || !isSourceRenderableEntry(entry) {
 		return false
@@ -507,6 +519,9 @@ func renderRecallMessage(entry session.Entry) (string, bool) {
 		}
 		return "[Assistant @ " + timestamp + "]: " + body, true
 	case "bashExecution":
+		if bashExcludedFromContext(msg) {
+			return "", false
+		}
 		return "[Bash @ " + timestamp + "]: " + bashExecutionText(msg), true
 	}
 	return "[Tool result: " + jsString(msg["toolName"]) + " @ " + timestamp + "]: " + textAndPlaceholders(msg["content"], placeholderOptions{}), true
