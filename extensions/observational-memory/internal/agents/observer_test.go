@@ -269,6 +269,18 @@ func TestObserverNormalizesContentAndFlagsPartialRuns(t *testing.T) {
 		t.Fatalf("result %+v err %v", result, err)
 	}
 
+	// A run whose final turn is a text reply finished, whether that turn lands
+	// on the cap or before it.
+	for _, maxTurns := range []int{2, 3} {
+		rec = &tf.StreamRecorder{Replies: []map[string]any{observerCall("fact"), tf.AssistantText("done")}}
+		args = detailedArgs(rec)
+		args.MaxTurns = maxTurns
+		result, err = agents.RunObserverDetailed(context.Background(), args)
+		if err != nil || result.Partial || result.StreamError != nil || len(result.Observations) != 1 || rec.Calls() != 2 {
+			t.Fatalf("max turns %d: result %+v err %v calls %d", maxTurns, result, err, rec.Calls())
+		}
+	}
+
 	// Whitespace-only content is rejected like empty content.
 	rec = &tf.StreamRecorder{Replies: []map[string]any{observerCall("   \n  "), tf.AssistantText("done")}}
 	if got, err := agents.RunObserver(context.Background(), detailedArgs(rec)); err != nil || got != nil {
