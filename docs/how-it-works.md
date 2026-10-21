@@ -193,7 +193,7 @@ Reflect/drop runs in the same consolidation run, after the observer stage. The r
 
 1. Skip the reflector stage if its progress is below `reflectAfterTokens`, or if observation coverage has not moved past reflection coverage (no new observations).
 2. Skip it if no observation coverage exists.
-3. Skip it while its empty-verdict backoff holds (see below). An empty verdict from a `fallbackModel` retry after a failed primary call sets no backoff, since the primary, which the next run tries first, never judged that memory.
+3. Skip it while its empty-verdict backoff holds (see below). An empty verdict from a `fallbackModel` retry after a failed primary call does not hold the backoff yet: the primary never judged that memory, so the next run gives it one try, without the fallback retry. The backoff holds once that try fails or records nothing, or when that run is on the fallback again.
 4. Resolve the model only for stages that are ready to run.
 5. Fold current ledger state.
 6. Run the reflector, with prior memory bounded by `workerMemoryMaxTokens` and one retry on `fallbackModel` when the call fails. Each active observation line is annotated with current reflection coverage (`none`, `partial`, or `strong`) so the reflector can review uncovered durable facts without treating coverage as a quota.

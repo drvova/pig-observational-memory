@@ -143,10 +143,21 @@ func reflectorInputKey(entries []ledger.Entry) string {
 }
 
 // ReflectorBackedOff reports whether the reflector already found nothing
-// stable in exactly this memory; it stays quiet until the memory changes.
+// stable in exactly this memory; it stays quiet until the memory changes. A
+// verdict that still owes the primary a try does not hold it back.
 func ReflectorBackedOff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) bool {
+	backoff := reflectorBackoffFor(rt, h, entries)
+	return backoff != nil && !backoff.PrimaryOwed
+}
+
+// reflectorBackoffFor is the reflector backoff recorded over exactly this
+// memory in this session, or nil.
+func reflectorBackoffFor(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) *runtime.ReflectorEmptyBackoff {
 	backoff := rt.ReflectorEmptyBackoff()
-	return backoff != nil && backoff.SessionIdentity == sessionIdentityOf(h) && backoff.InputKey == reflectorInputKey(entries)
+	if backoff == nil || backoff.SessionIdentity != sessionIdentityOf(h) || backoff.InputKey != reflectorInputKey(entries) {
+		return nil
+	}
+	return backoff
 }
 
 // ActiveObserverBackoff is the deliberate-empty observer backoff that applies
@@ -727,10 +738,15 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	if !reflectorDue(entries, cfg, current, hasCurrent) {
 		return none, nil
 	}
-	if ReflectorBackedOff(rt, h, entries) {
+	backoff := reflectorBackoffFor(rt, h, entries)
+	if backoff != nil && !backoff.PrimaryOwed {
 		debuglog.Log(ctx, "reflector.empty_backoff", map[string]any{})
 		return none, nil
 	}
+	// The fallback found nothing stable in this memory after the primary
+	// failed. The primary gets one try at it, and the fallback is not asked
+	// the same question again.
+	primaryOwed := backoff != nil
 	inputKey := reflectorInputKey(entries)
 	reflectionTokens := stageTokens(entries, ledger.OMReflectionsRecorded, current, hasCurrent, ledger.ObservedTokensSinceReflectionCoverage)
 	observationCoverageID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
@@ -747,20 +763,37 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 		debuglog.Log(ctx, "reflector.aborted", map[string]any{})
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
 	}
+	settled := &runtime.ReflectorEmptyBackoff{SessionIdentity: sessionIdentity, InputKey: inputKey}
+	if primaryOwed && resolved.FallbackUsed {
+		// This pass runs on the fallback, which already judged this memory.
+		rt.SetReflectorEmptyBackoff(settled)
+		debuglog.Log(ctx, "reflector.empty_backoff", map[string]any{"primaryOwed": true})
+		return none, nil
+	}
 	// Announced only once the model resolved, like the observer: an
 	// unresolvable model is reported once by the resolver, not every turn.
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: reflector running (~%s tokens)", jsfmt.Locale(reflectionTokens)))
 	folded := ledger.FoldLedger(entries, "")
 	var judge runtime.ResolveResult
-	reflections, err := runStageWithFallback(ctx, h, runtime.PhaseReflector, *resolved, resolver, func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
+	reflectWith := func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
 		judge = worker
 		memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), false)
 		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(cfg, h, worker), Reflections: memory.Reflections, Observations: memory.Observations})
-	})
+	}
+	var reflections []ledger.Reflection
+	if primaryOwed {
+		reflections, err = reflectWith(*resolved)
+	} else {
+		reflections, err = runStageWithFallback(ctx, h, runtime.PhaseReflector, *resolved, resolver, reflectWith)
+	}
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {
 			debuglog.Log(ctx, "reflector.aborted", map[string]any{})
 			return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
+		}
+		if primaryOwed {
+			// The primary failed again: wait for the memory to change.
+			rt.SetReflectorEmptyBackoff(settled)
 		}
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, err
 	}
@@ -770,14 +803,12 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	}
 	if len(reflections) == 0 {
 		// Nothing stable enough in this memory: do not send the same prompt
-		// again until the memory changes. A fallback retry's verdict sets no
-		// backoff: the primary, which the next pass tries first, never judged
-		// this memory, and its prompt may hold more of it.
-		fallbackRetry := resolver.retriedOnFallback(judge)
-		if !fallbackRetry {
-			rt.SetReflectorEmptyBackoff(&runtime.ReflectorEmptyBackoff{SessionIdentity: sessionIdentity, InputKey: inputKey})
-		}
-		debuglog.Log(ctx, "reflector.empty", map[string]any{"fallbackRetry": fallbackRetry})
+		// again until the memory changes. A fallback retry's verdict still owes
+		// the primary one try: it never judged this memory, and its prompt may
+		// hold more of it.
+		settled.PrimaryOwed = resolver.retriedOnFallback(judge)
+		rt.SetReflectorEmptyBackoff(settled)
+		debuglog.Log(ctx, "reflector.empty", map[string]any{"primaryOwed": settled.PrimaryOwed})
 		return none, nil
 	}
 	rt.SetReflectorEmptyBackoff(nil)

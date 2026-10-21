@@ -1449,18 +1449,27 @@ func TestReflectorBacksOffAfterEmptyVerdict(t *testing.T) {
 	fx.expectAppended(0, ledger.OMReflectionsRecorded, recordedReflections([]ledger.Reflection{newRef}, "raw-2"))
 }
 
-// An empty verdict from a fallback retry does not back off the reflector: the
-// primary, which the next pass tries first, never judged that memory. A
-// fallback chosen at resolution time still backs off, as the next pass
-// resolves it again.
-func TestReflectorFallbackRetryEmptyVerdictDoesNotBackOff(t *testing.T) {
+// An empty verdict from a fallback retry owes the primary one try: it never
+// judged that memory. A primary that fails that try, or a pass that is on the
+// fallback again, settles the backoff, so a primary that stays down does not
+// send the fallback the same prompt every turn. A fallback chosen at
+// resolution time backs off at once, as the next pass resolves it again.
+func TestReflectorFallbackRetryEmptyVerdictOwesPrimaryOneTry(t *testing.T) {
 	entries := []ledger.Entry{text("raw-1", "aaaaaaaa"), testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obsA}, "raw-1")}
 	withFallback := consArgs{entries: entries, observeAfterTokens: 999, fallback: fallbackConfig(""), fallbackModel: fallbackRegistryModel(), fallbackAuth: testfix.KeyAuth("go-key")}
+	owed := func(fx *consFixture) bool {
+		backoff := fx.rt.ReflectorEmptyBackoff()
+		return backoff != nil && backoff.PrimaryOwed
+	}
+	settled := func(fx *consFixture) bool {
+		backoff := fx.rt.ReflectorEmptyBackoff()
+		return backoff != nil && !backoff.PrimaryOwed && fx.launch() == nil
+	}
 	fx := consSetup(t, withFallback)
 	fx.ref.reject(errors.New("primary down")) // the fallback retry then records nothing
 
 	fx.run()
-	if fx.ref.count() != 2 || !isFallbackModel(fx.ref.call(1).Model) || fx.rt.ReflectorEmptyBackoff() != nil {
+	if fx.ref.count() != 2 || !isFallbackModel(fx.ref.call(1).Model) || !owed(fx) {
 		t.Fatalf("reflector calls %d backoff %+v", fx.ref.count(), fx.rt.ReflectorEmptyBackoff())
 	}
 
@@ -1468,10 +1477,20 @@ func TestReflectorFallbackRetryEmptyVerdictDoesNotBackOff(t *testing.T) {
 	newRef := testfix.Reflection("ffffffffffff", []string{"aaaaaaaaaaaa"})
 	fx.ref.resolve([]ledger.Reflection{newRef})
 	fx.run()
-	if fx.ref.count() != 3 || isFallbackModel(fx.ref.call(2).Model) {
-		t.Fatalf("reflector calls %d", fx.ref.count())
+	if fx.ref.count() != 3 || isFallbackModel(fx.ref.call(2).Model) || fx.rt.ReflectorEmptyBackoff() != nil {
+		t.Fatalf("reflector calls %d backoff %+v", fx.ref.count(), fx.rt.ReflectorEmptyBackoff())
 	}
 	fx.expectAppended(0, ledger.OMReflectionsRecorded, recordedReflections([]ledger.Reflection{newRef}, "raw-1"))
+
+	// The primary is still down: its one try fails without a fallback retry.
+	down := consSetup(t, withFallback)
+	down.ref.reject(errors.New("primary down"))
+	down.run()
+	down.ref.reject(errors.New("primary still down"))
+	down.run()
+	if down.ref.count() != 3 || isFallbackModel(down.ref.call(2).Model) || down.rt.Snapshot().LastReflectorError != "primary still down" || !settled(down) {
+		t.Fatalf("reflector calls %d backoff %+v state %+v", down.ref.count(), down.rt.ReflectorEmptyBackoff(), down.rt.Snapshot())
+	}
 
 	// The same holds when an earlier stage's retry left the pass on the fallback.
 	earlier := withFallback
@@ -1480,7 +1499,13 @@ func TestReflectorFallbackRetryEmptyVerdictDoesNotBackOff(t *testing.T) {
 	later.obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
 	later.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
 	later.run()
-	if later.ref.count() != 1 || !isFallbackModel(later.ref.call(0).Model) || later.rt.ReflectorEmptyBackoff() != nil {
+	if later.ref.count() != 1 || !isFallbackModel(later.ref.call(0).Model) || !owed(later) {
+		t.Fatalf("reflector calls %d backoff %+v", later.ref.count(), later.rt.ReflectorEmptyBackoff())
+	}
+	// The next pass resolves the fallback again, which already judged this memory.
+	later.h.ModelsFake.Auth["anthropic"] = host.Auth{OK: false}
+	later.run()
+	if later.ref.count() != 1 || !settled(later) {
 		t.Fatalf("reflector calls %d backoff %+v", later.ref.count(), later.rt.ReflectorEmptyBackoff())
 	}
 
@@ -1488,10 +1513,7 @@ func TestReflectorFallbackRetryEmptyVerdictDoesNotBackOff(t *testing.T) {
 	resolved.primaryAuth = &host.Auth{OK: false}
 	onFallback := consSetup(t, resolved)
 	onFallback.run()
-	if onFallback.ref.count() != 1 || !isFallbackModel(onFallback.ref.call(0).Model) || onFallback.rt.ReflectorEmptyBackoff() == nil {
+	if onFallback.ref.count() != 1 || !isFallbackModel(onFallback.ref.call(0).Model) || !settled(onFallback) {
 		t.Fatalf("reflector calls %d backoff %+v", onFallback.ref.count(), onFallback.rt.ReflectorEmptyBackoff())
-	}
-	if onFallback.launch() != nil {
-		t.Fatal("a consolidation launched over unchanged memory")
 	}
 }

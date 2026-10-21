@@ -73,6 +73,10 @@ type ReflectorEmptyBackoff struct {
 	// InputKey identifies the memory the reflector read (active observations
 	// and reflections); it changes whenever that memory changes.
 	InputKey string
+	// PrimaryOwed marks the verdict of a fallback retry after the primary call
+	// failed. The primary has not judged this memory, so the next pass gives it
+	// one try, without the fallback retry; the backoff holds after that.
+	PrimaryOwed bool
 }
 
 // CompactionBackoff records a proactive compaction the host refused or failed
