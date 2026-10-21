@@ -1,14 +1,19 @@
 <div align="center">
 
+<img src="docs/assets/banner.svg" width="100%" alt="Spider-Ham, PiG's red pixel pig, drops in on a web thread beside the PiG. wordmark: observational memory, long agent sessions that keep the thread.">
+
 # pig-observational-memory
 
 **Observational memory for [PiG](https://github.com/MichaelKinsy/PiG): long agent sessions that keep the thread across compactions.**
 
+*Does whatever a spider can, and remembers all of it.*
+
 A PiG extension that gives the agent a lasting memory of the session. It records what happens while you work, distills what stays true, and makes compaction a quick render instead of a slow rewrite.
 
 [![CI](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml)
-[![Go 1.26+](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](extensions/observational-memory/go.mod)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PiG extension](https://img.shields.io/badge/PiG-extension-E62429?style=flat-square)](https://github.com/MichaelKinsy/PiG)
+[![Go 1.26+](https://img.shields.io/badge/go-1.26%2B-087BAF?style=flat-square&logo=go&logoColor=white)](extensions/observational-memory/go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-0B2033?style=flat-square)](LICENSE)
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Commands](#commands) · [Configuration](#configuration) · [Docs](#documentation)
 
@@ -36,6 +41,9 @@ pig install git:github.com/drvova/pig-observational-memory
 ```
 
 The first run compiles the extension, so it starts more slowly; later sessions reuse the build.
+
+> [!TIP]
+> Want PiG to match this page? Run `/sprite set spider-ham` and the header pig puts on the suit.
 
 Start `pig` and work as usual. Run `/om:status` to confirm the extension loaded: it prints memory counts and a line such as `Next observation: ~2,300 / 10,000 tokens (23%)`. The first observation is recorded after about 10k tokens of conversation. The workers call the session model in the background; [Configuration](#configuration) shows how to use a cheaper one.
 
@@ -68,6 +76,13 @@ flowchart LR
     R -.->|observations over target| D[Dropper]
     D -->|retires observations| L
     L -->|rendered, no summarization model| C([compaction summary])
+
+    classDef worker fill:#E62429,stroke:#7A1118,color:#FFFFFF
+    classDef ledger fill:#087BAF,stroke:#075285,color:#FFFFFF
+    classDef io fill:#0B0F14,stroke:#67E8F9,color:#E6EDF3
+    class O,R,D worker
+    class L ledger
+    class S,C io
 ```
 
 Three memory workers run in one background pipeline and save what they write as entries in the session: the memory ledger. They use the session model unless you configure another.
@@ -196,8 +211,15 @@ go test -race ./...
 
 ## Credits
 
-Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors.
+Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors. Spider-Ham and the PiG. wordmark in the banner are PiG's own pixel art, drawn from its [sprite catalogue](https://github.com/MichaelKinsy/PiG/tree/main/coding/piglogin) (MIT).
 
 ## License
 
 [MIT](LICENSE)
+
+<div align="center">
+<br>
+<img src="docs/assets/spider-ham.svg" width="56" alt="Spider-Ham, PiG's red pixel pig">
+<br>
+<sub>Your friendly neighborhood memory.</sub>
+</div>
