@@ -1,4 +1,4 @@
-// Small helpers shared by the banner and mascot documents.
+// Small helpers shared by the README scenes.
 import {
   constant,
   type Animatable,
@@ -14,8 +14,8 @@ import { logoPeriod, palette, ramp } from "./sprite.ts";
 export const TICKS_PER_SECOND = 240;
 export const FRAME_TICKS = 8; // 30 fps
 
-// Both documents loop on the same 7.5 s cycle and blink on the same ticks, so the
-// banner pig and the footer mascot blink together on the page.
+// The banner and the swing loop on the same 7.5 s cycle and blink on the same
+// ticks, so their pigs blink together on the page.
 export const LOOP_TICKS = 1800;
 export const BLINK_STEPS: Array<[number, number]> = [[0, 0], [776, 1], [792, 0], [824, 1], [840, 0], [1232, 1], [1248, 0], [LOOP_TICKS, 0]];
 
