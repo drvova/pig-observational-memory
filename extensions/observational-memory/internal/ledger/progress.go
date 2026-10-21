@@ -161,9 +161,15 @@ func EarlierCoverageMarkerID(entries []Entry, firstID, secondID string) string {
 
 // RawTokensAfterIndex sums estimated source tokens after index.
 func RawTokensAfterIndex(entries []Entry, index int) int {
+	return RawTokensAfterIndexWhere(entries, index, nil)
+}
+
+// RawTokensAfterIndexWhere is RawTokensAfterIndex over the source entries
+// include accepts; a nil include accepts every source entry.
+func RawTokensAfterIndexWhere(entries []Entry, index int, include func(Entry) bool) int {
 	total := 0
 	for i := max(0, index+1); i < len(entries); i++ {
-		if IsSourceEntry(entries[i]) {
+		if IsSourceEntry(entries[i]) && (include == nil || include(entries[i])) {
 			total += tokens.EstimateEntryTokens(entries[i])
 		}
 	}

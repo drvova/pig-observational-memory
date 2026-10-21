@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1523,6 +1524,126 @@ func TestIdleSettleOnAbortedRunSettlesAgainOnceItEnds(t *testing.T) {
 	close(release)
 	waitDone(t, done)
 	never(t, "worked after the session ended", func() bool { return ended.h.CompactCount() != 0 || ended.obs.count() != 1 })
+}
+
+// slowBranchHost adds host latency to every branch read once slow is set, so
+// concurrent settles all pass their launch check before any of them launches.
+type slowBranchHost struct {
+	*testfix.FakeHost
+	slow atomic.Bool
+}
+
+func (h *slowBranchHost) GetBranch() ([]ledger.Entry, error) {
+	if h.slow.Load() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	return h.FakeHost.GetBranch()
+}
+
+// Settles that adopted the same aborted run all wake when it ends. One of them
+// settles again, so a single run is relaunched and the next agent_start can
+// abort it; a second, orphaned run would outlive the abort.
+func TestIdleSettlesOnOneAbortedRunRelaunchOnce(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+	h := &slowBranchHost{FakeHost: fx.h}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var live, peak atomic.Int32
+	// The first observer outlives the abort, as an uncancellable host call does.
+	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		close(entered)
+		<-release
+		return agents.ObserverResult{}, ctx.Err()
+	})
+	relaunched := func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		n := live.Add(1)
+		defer live.Add(-1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		<-ctx.Done()
+		return agents.ObserverResult{}, ctx.Err()
+	}
+	fx.obs.impl(relaunched)
+	fx.obs.impl(relaunched)
+
+	OnAgentSettledEvent(fx.rt, h)
+	stuck := fx.rt.ConsolidationDone()
+	waitDone(t, entered)
+	OnAgentStart(fx.rt, h)
+	// Two settles with no agent_start between them, as PiG sends for a prompt
+	// it rejects while another run holds the session.
+	OnAgentSettledEvent(fx.rt, h)
+	OnAgentSettledEvent(fx.rt, h)
+	h.slow.Store(true)
+	close(release)
+	waitDone(t, stuck)
+	eventually(t, func() bool { return live.Load() == 1 })
+	never(t, "relaunched two runs", func() bool { return fx.obs.count() > 2 })
+
+	OnAgentStart(fx.rt, h)
+	eventually(t, func() bool { return live.Load() == 0 && !fx.rt.ConsolidationInFlight() })
+	if peak.Load() != 1 {
+		t.Fatalf("peak concurrent relaunched runs %d", peak.Load())
+	}
+}
+
+// When the settles that adopted an aborted run owe a compaction check, the one
+// that settles again starts the compaction and the others stand down, so no
+// worker is launched beside it.
+func TestIdleSettlesOnOneAbortedRunLaunchNothingBesideOwedCompaction(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+	fx.compactionDue()
+	entered, release := make(chan struct{}), make(chan struct{})
+	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		close(entered)
+		<-release
+		return agents.ObserverResult{}, ctx.Err()
+	})
+	OnAgentSettledEvent(fx.rt, fx.h)
+	stuck := fx.rt.ConsolidationDone()
+	waitDone(t, entered)
+	OnAgentStart(fx.rt, fx.h)
+	OnAgentSettledEvent(fx.rt, fx.h)
+	OnAgentSettledEvent(fx.rt, fx.h)
+	fx.rt.SetAfterHookOwed(true)
+	close(release)
+	waitDone(t, stuck)
+	// The fake compaction never reports back, so it stays in flight.
+	eventually(t, func() bool { return fx.h.CompactCount() == 1 })
+	never(t, "launched a worker beside the compaction", func() bool { return fx.obs.count() != 1 || fx.h.CompactCount() != 1 })
+}
+
+// A second launch while a run is in flight launches nothing.
+func TestLaunchRefusesWhileRunInFlight(t *testing.T) {
+	rt := runtime.New()
+	release := make(chan struct{})
+	first := rt.LaunchConsolidationTask(nil, func(context.Context) error { <-release; return nil })
+	if second := rt.LaunchConsolidationTask(nil, func(context.Context) error { t.Error("second run started"); return nil }); second != nil {
+		t.Fatal("second launch returned a run")
+	}
+	if rt.ConsolidationDone() != first {
+		t.Fatal("second launch replaced the running run")
+	}
+	close(release)
+	waitDone(t, first)
+}
+
+// A !!command run renders nothing for the observer, so it neither lifts the
+// observer's empty backoff nor sends the judged chunk again.
+func TestExcludedBashRunDoesNotLiftObserverBackoff(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: []ledger.Entry{text("raw-1", strings.Repeat("a", 40))}, observeAfterTokens: 10, reflectAfterTokens: 999})
+	fx.run()
+	if fx.obs.count() != 1 || fx.rt.ObserverEmptyBackoff() == nil {
+		t.Fatalf("observer calls %d, backoff %+v", fx.obs.count(), fx.rt.ObserverEmptyBackoff())
+	}
+	fx.addEntries(testfix.MessageEntry("bash-1", map[string]any{"role": "bashExecution", "command": "cat log", "output": strings.Repeat("x", 400), "excludeFromContext": true}))
+	fx.runIfDue()
+	if fx.obs.count() != 1 {
+		t.Fatalf("observer ran again on the same chunk: %d calls", fx.obs.count())
+	}
+	entries, _ := fx.h.GetBranch()
+	if got := ObserverBacklog(entries); got != fx.rt.ObserverEmptyBackoff().TokensAtEmpty {
+		t.Fatalf("observer backlog %d counts the excluded run", got)
+	}
 }
 
 // An agent_start that lands while a settle is launching finds no run to abort

@@ -122,7 +122,7 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	// larger figure "Next observation" shows.
 	if backoff := hooks.ActiveObserverBackoff(rt, h, entries, cfg); backoff != nil {
 		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s raw backlog tokens; resumes at ~%s (raw backlog now ~%s)",
-			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(ledger.RawTokensSinceObservationCoverage(entries))))
+			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(hooks.ObserverBacklog(entries))))
 	}
 	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); backoff != nil {
 		lines = append(lines, fmt.Sprintf("Compaction backoff: last attempt failed (%s); asks again at ~%s %s source tokens", backoff.Reason, jsfmt.Locale(backoff.Progress+compactThreshold), hooks.ProgressLabel(cfg)))

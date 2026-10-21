@@ -124,6 +124,9 @@ type Runtime struct {
 	consolidationCtx      context.Context
 	// abortedDone is the completion channel of the last run AbortConsolidation cancelled.
 	abortedDone chan struct{}
+	// resettled is the completion channel of the last aborted run a settle
+	// claimed to settle again after (ClaimResettle).
+	resettled <-chan struct{}
 	// idleEnds counts events that end an idle window (an idle-mode
 	// agent_start, a session end), so a settle can tell whether the time after
 	// a run it launched or waited on is still idle.
@@ -647,8 +650,15 @@ func (r *Runtime) recheckProviderCredential(ctx context.Context, models host.Mod
 
 // LaunchConsolidationTask starts a consolidation run in the background. The
 // returned channel closes when it finishes; a failure is notified and recorded.
+// It launches nothing and returns nil while a run is in flight: checking and
+// claiming the slot under one lock keeps two concurrent launchers from
+// starting two runs, one of which nothing could abort.
 func (r *Runtime) LaunchConsolidationTask(ui host.UI, work func(ctx context.Context) error) <-chan struct{} {
 	r.mu.Lock()
+	if r.consolidationInFlight {
+		r.mu.Unlock()
+		return nil
+	}
 	r.consolidationInFlight = true
 	r.consolidationPhase = ""
 	r.lastObserverError = ""
@@ -749,6 +759,19 @@ func (r *Runtime) SetAfterHookOwed(v bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.afterHookOwed = v
+}
+
+// ClaimResettle reports whether the caller is the first to settle again after
+// the aborted run whose completion channel is done; every settle that adopted
+// that run wakes when it ends, and one settle covers them all.
+func (r *Runtime) ClaimResettle(done <-chan struct{}) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if done == nil || r.resettled == done {
+		return false
+	}
+	r.resettled = done
+	return true
 }
 
 // TakeAfterHookOwed reports and clears an owed after-run check.

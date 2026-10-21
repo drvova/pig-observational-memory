@@ -174,14 +174,22 @@ func ActiveObserverBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.En
 	if backoff.ChunkEndID != "" && ledger.EntryIndexForID(entries, backoff.ChunkEndID) == -1 {
 		return nil
 	}
-	if ledger.RawTokensSinceObservationCoverage(entries) >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
+	if ObserverBacklog(entries) >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
 		return nil
 	}
 	return backoff
 }
 
+// ObserverBacklog is the uncovered source the observer can read: the raw
+// backlog without entries that render nothing for it (a !!command run PiG keeps
+// out of context, an aborted turn with no content). Counting those would make
+// the observer due, or lift its empty backoff, on input it never sees.
+func ObserverBacklog(entries []ledger.Entry) int {
+	return ledger.RawTokensAfterIndexWhere(entries, ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded), serialize.ObserverRenders)
+}
+
 func anyStageDue(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
-	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, ledger.RawTokensSinceObservationCoverage, cfg.ObserveAfterTokens) ||
+	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, ObserverBacklog, cfg.ObserveAfterTokens) ||
 		(reflectorDue(entries, cfg, current, hasCurrent) && !ReflectorBackedOff(rt, h, entries))
 }
 
@@ -189,7 +197,7 @@ func anyStageDue(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg c
 // uncovered backlog and the provider-reported growth since its anchor.
 func ObserverProgressTokens(entries []ledger.Entry, h host.Host) int {
 	current, hasCurrent := realContextTokens(h)
-	return stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ledger.RawTokensSinceObservationCoverage)
+	return stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ObserverBacklog)
 }
 
 // ReflectorProgressTokens is what gates the reflector, on the same basis. Like
@@ -527,8 +535,11 @@ func settleIdle(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks, idle
 			debuglog.Log(context.Background(), "consolidation.after_hook_skipped", map[string]any{"reason": "aborted"})
 		case adoptedAborted:
 			// The run was aborted before this settle and is over now, and the
-			// idle window has not ended since: settle again.
-			settleIdle(rt, h, hooks, idleEnds)
+			// idle window has not ended since: settle again. Every settle that
+			// adopted the run wakes here together; only the first settles again.
+			if rt.ClaimResettle(launched) {
+				settleIdle(rt, h, hooks, idleEnds)
+			}
 		default:
 			hooks.AfterIdleConsolidation(h)
 		}
@@ -632,12 +643,12 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		return outcomeAbort, err
 	}
 	current, hasCurrent := realContextTokens(h)
-	tokens := stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ledger.RawTokensSinceObservationCoverage)
+	tokens := stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ObserverBacklog)
 	if tokens < cfg.ObserveAfterTokens {
 		return outcomeContinue, nil
 	}
 	leafID := branchLeafID(entries)
-	rawTokens := ledger.RawTokensSinceObservationCoverage(entries)
+	rawTokens := ObserverBacklog(entries)
 	sessionIdentity := sessionIdentityOf(h)
 	coverageID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
 
