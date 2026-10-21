@@ -1,10 +1,10 @@
 # observational-memory (PiG extension)
 
-The Go port of [pi-observational-memory](../../README.md) for [Pi in Go](https://github.com/MichaelKinsy/PiG).
+The [pi-observational-memory](../../README.md) extension for [Pi in Go](https://github.com/MichaelKinsy/PiG).
 
 ```bash
 pig -e ./extensions/observational-memory
 pig install ./extensions/observational-memory --validate-only --json
 ```
 
-Documentation: [docs/pig.md](../../docs/pig.md). Tests: `go test ./...` in this directory.
+Install and layout: [docs/pig.md](../../docs/pig.md). Checks: [docs/contributing.md](../../docs/contributing.md).

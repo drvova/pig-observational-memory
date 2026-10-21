@@ -4,9 +4,7 @@ This page says where changes go, what a pull request should contain, and which c
 
 ## Where changes land
 
-The Go port in `extensions/observational-memory` is the maintained implementation. It runs as a [PiG](https://github.com/MichaelKinsy/PiG) extension. Fix bugs and add features there.
-
-The TypeScript extension in `src/` (built to `dist/index.ts`) is frozen pending its removal. Do not add features to it. Where the Go port behaves differently, the difference is listed in [pig.md](pig.md), and a change that adds one updates that list.
+The extension is the Go module in `extensions/observational-memory`, run as a [PiG](https://github.com/MichaelKinsy/PiG) extension. [pig.md](pig.md) shows its package layout. A change that makes it behave differently from the TypeScript extension it was ported from adds an entry to the change list there.
 
 ## What a pull request contains
 
