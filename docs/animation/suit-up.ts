@@ -571,16 +571,17 @@ add({ ...base("cursor"), type: "rect", size: constant({ width: 11, height: 22 })
 // --- The camera layers draw above the card, the strand above everything ------------
 
 // Thwip: Enter shoots a strand from the end of the command to the pig, which
-// crouches on the hit and snaps it as it leaps.
+// crouches on the hit and snaps it as it leaps: the strand recoils into the window
+// rather than hanging where the pig was.
 const START = { x: CMD_X + SPRITE_ADV[SPRITE.length] + 18, y: ROW.sprite - 8 };
 const END = { x: PIG_LEFT + 2 * PX, y: PIG_TOP + 8 * PX };
 const LEN = Math.hypot(END.x - START.x, END.y - START.y);
 const ANG = (Math.atan2(END.y - START.y, END.x - START.x) * 180) / Math.PI;
 const shot: CubicBezier = { x1: 0.2, y1: 0.6, x2: 0.4, y2: 1 };
 add({ ...base("thwip"), type: "rect", size: constant({ width: LEN, height: 3 }), cornerRadius: constant(1.5),
-  style: fillTrack(WEB, track("thwip-o", [[0, 0], [E, 1], [LAUNCH, 1, ease.drain], [LAUNCH + 24, 0], [D, 0]])),
+  style: fillTrack(WEB, track("thwip-o", [[0, 0], [E, 1], [LAUNCH + 24, 0], [D, 0]])),
   transform: { ...transform(START.x, START.y, -LEN / 2, 0), rotation: constant(r3(ANG)),
-    scale: track("thwip-scale", [[0, v3(0, 1)], [E, v3(0, 1), shot], [HIT, v3(1, 1)], [LAUNCH, v3(1, 1), ease.drain], [LAUNCH + 24, v3(0.7, 1)], [D, v3(0.7, 1)]]) } } as SceneNode);
+    scale: track("thwip-scale", [[0, v3(0, 1)], [E, v3(0, 1), shot], [HIT, v3(1, 1)], [LAUNCH, v3(1, 1), shot], [LAUNCH + 24, v3(0, 1)], [D, v3(0, 1)]]) } } as SceneNode);
 // Its head: a white pixel that leads the strand and flashes on the hit.
 add({ ...base("thwip-head"), type: "rect", size: constant({ width: 10, height: 10 }), cornerRadius: constant(0),
   style: fillTrack("#FFFFFF", track("thwip-head-o", [[0, 0], [E, 1], [HIT + 16, 1, ease.drain], [HIT + 40, 0], [D, 0]])),
