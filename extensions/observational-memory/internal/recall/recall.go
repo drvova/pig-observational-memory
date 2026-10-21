@@ -96,10 +96,10 @@ type MatchDetails struct {
 	ObservationEntryID     string               `json:"observationEntryId"`
 	ObservationRecordIndex int                  `json:"observationRecordIndex"`
 	Observation            ObservationDetails   `json:"observation"`
-	SourceEntryIDs         []string             `json:"sourceEntryIds,omitempty"`
-	SourceEntries          []SourceEntryDetails `json:"sourceEntries,omitempty"`
-	MissingSourceEntryIDs  []string             `json:"missingSourceEntryIds,omitempty"`
-	NonSourceEntryIDs      []string             `json:"nonSourceEntryIds,omitempty"`
+	SourceEntryIDs         []string             `json:"sourceEntryIds"`
+	SourceEntries          []SourceEntryDetails `json:"sourceEntries"`
+	MissingSourceEntryIDs  []string             `json:"missingSourceEntryIds"`
+	NonSourceEntryIDs      []string             `json:"nonSourceEntryIds"`
 	SourceCharacterCount   *int                 `json:"sourceCharacterCount,omitempty"`
 }
 
@@ -125,6 +125,14 @@ type Details struct {
 	NonSourceEntryIDs                 []string                           `json:"nonSourceEntryIds"`
 	SourceCharacterCount              *int                               `json:"sourceCharacterCount,omitempty"`
 	Message                           string                             `json:"message,omitempty"`
+}
+
+// nonNil keeps an empty list a JSON [] rather than null.
+func nonNil(items []string) []string {
+	if items == nil {
+		return []string{}
+	}
+	return items
 }
 
 func uniqueStrings(items []string) []string {
@@ -241,10 +249,10 @@ func observationMatchDetails(match ledger.RecalledObservation, includeSourceCont
 		ObservationEntryID:     match.ObservationEntryID,
 		ObservationRecordIndex: match.ObservationRecordIndex,
 		Observation:            observationDetails(match.Observation, match.Status),
-		SourceEntryIDs:         match.SourceEntryIDs,
+		SourceEntryIDs:         nonNil(match.SourceEntryIDs),
 		SourceEntries:          sources,
-		MissingSourceEntryIDs:  match.MissingSourceEntryIDs,
-		NonSourceEntryIDs:      match.NonSourceEntryIDs,
+		MissingSourceEntryIDs:  nonNil(match.MissingSourceEntryIDs),
+		NonSourceEntryIDs:      nonNil(match.NonSourceEntryIDs),
 		SourceCharacterCount:   &count,
 	}
 }
@@ -340,14 +348,18 @@ func renderObservationOnlyText(result ledger.RecallResult) string {
 		if match.Status == "dropped" {
 			sections = append(sections, fmt.Sprintf("Observation %s is dropped from active memory but remains recallable.", match.Observation.ID))
 		}
-		if len(match.MissingSourceEntryIDs) > 0 || len(match.NonSourceEntryIDs) > 0 {
+		unavailable := len(match.MissingSourceEntryIDs) > 0 || len(match.NonSourceEntryIDs) > 0
+		if unavailable {
 			sections = append(sections, friendlySourceUnavailableMessage(observationMatchDetails(match, false)))
-			continue
 		}
 		if len(match.SourceEntries) == 0 {
-			sections = append(sections, friendlyNoSourceMessage(match.Observation.ID))
+			if !unavailable {
+				sections = append(sections, friendlyNoSourceMessage(match.Observation.ID))
+			}
 			continue
 		}
+		// Sources that did resolve are still evidence the agent should see,
+		// as the TUI already shows them.
 		sourceText := serialize.RenderRecallSourceEntries(match.SourceEntries)
 		if strings.TrimSpace(sourceText) != "" {
 			sections = append(sections, sourceText)
@@ -427,8 +439,8 @@ func resultDetails(result ledger.RecallResult, includeSourceContent bool) Detail
 	for _, id := range result.MissingSupportingObservationIDs {
 		details.UnavailableSupportingObservations = append(details.UnavailableSupportingObservations, UnavailableSupportingObservation{ObservationID: id})
 	}
-	details.MissingSourceEntryIDs = result.MissingSourceEntryIDs
-	details.NonSourceEntryIDs = result.NonSourceEntryIDs
+	details.MissingSourceEntryIDs = nonNil(result.MissingSourceEntryIDs)
+	details.NonSourceEntryIDs = nonNil(result.NonSourceEntryIDs)
 	count := jsfmt.UTF16Len(serialize.RenderRecallSourceEntries(result.SourceEntries))
 	details.SourceCharacterCount = &count
 	details.Status = aggregateStatus(details)

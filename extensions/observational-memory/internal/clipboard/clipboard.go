@@ -3,17 +3,20 @@
 package clipboard
 
 import (
+	"bytes"
 	"context"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // Command is one clipboard program invocation.
 type Command struct {
 	Command string
 	Args    []string
+	// UTF16 sends the text as UTF-16LE with a byte order mark.
+	UTF16 bool
 }
 
 // Runner runs one command with text on stdin and reports success.
@@ -25,7 +28,9 @@ func Commands(platform string) []Command {
 	case "darwin":
 		return []Command{{Command: "pbcopy"}}
 	case "windows":
-		return []Command{{Command: "clip"}}
+		// clip.exe decodes piped input in the console code page unless it
+		// starts with a UTF-16 byte order mark.
+		return []Command{{Command: "clip", UTF16: true}}
 	default:
 		return []Command{
 			{Command: "wl-copy"},
@@ -52,6 +57,20 @@ func Copy(text string, runner Runner, commands []Command) bool {
 	return false
 }
 
+// Input is the bytes written to command's stdin for text.
+func Input(command Command, text string) []byte {
+	if !command.UTF16 {
+		return []byte(text)
+	}
+	units := utf16.Encode([]rune(text))
+	out := make([]byte, 0, 2+2*len(units))
+	out = append(out, 0xff, 0xfe)
+	for _, unit := range units {
+		out = append(out, byte(unit), byte(unit>>8))
+	}
+	return out
+}
+
 // Timeout bounds one clipboard command.
 const Timeout = 2 * time.Second
 
@@ -60,7 +79,7 @@ func Run(command Command, text string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command.Command, command.Args...)
-	cmd.Stdin = strings.NewReader(text)
+	cmd.Stdin = bytes.NewReader(Input(command, text))
 	if err := cmd.Run(); err != nil {
 		return false
 	}

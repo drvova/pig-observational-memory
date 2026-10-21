@@ -1,7 +1,9 @@
 package ledger_test
 
 import (
+	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -90,5 +92,18 @@ func TestRenderSummaryOversizedNewest(t *testing.T) {
 	rendered := ledger.RenderSummaryWithBudget(nil, []ledger.Observation{older, newest}, 500)
 	if !reflect.DeepEqual(tf.IDs(rendered.Observations), []string{"a1aaaaaaaaaa"}) || !strings.Contains(rendered.Text, "[a1aaaaaaaaaa] ") || !strings.Contains(rendered.Text, "Short older fact.") {
 		t.Fatal("shorter older observation lost behind an oversized newest one")
+	}
+}
+
+// The omission notice uses plain digits, as the TypeScript version renders it.
+func TestOmissionNoticeUsesPlainDigits(t *testing.T) {
+	observations := make([]ledger.Observation, 0, 1200)
+	for i := 0; i < 1200; i++ {
+		observations = append(observations, tf.Observation(fmt.Sprintf("%012x", i+1)))
+	}
+	rendered := ledger.RenderSummaryWithBudget(nil, observations, 400)
+	match := regexp.MustCompile(`\(([0-9,]+) older observations omitted`).FindStringSubmatch(rendered.Text)
+	if match == nil || len(match[1]) < 4 || strings.Contains(match[1], ",") {
+		t.Fatalf("notice count %v in %q", match, rendered.Text)
 	}
 }

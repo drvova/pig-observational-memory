@@ -67,7 +67,7 @@ func removedSuffix(count int) string {
 // StatusLines renders the /om:status report.
 func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	rt.EnsureConfig(h.Cwd())
-	cfg := rt.Config()
+	cfg := rt.LiveConfig(h.Cwd())
 	entries, err := h.GetBranch()
 	if err != nil {
 		return nil, err
@@ -120,6 +120,12 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	)
 	if backoff := rt.ObserverEmptyBackoff(); backoff != nil && backoff.CoverageID == ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded) {
 		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s tokens; resumes at ~%s", jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens)))
+	}
+	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); backoff != nil {
+		lines = append(lines, fmt.Sprintf("Compaction backoff: last attempt failed (%s); asks again at ~%s %s source tokens", backoff.Reason, jsfmt.Locale(backoff.Progress+compactThreshold), hooks.ProgressLabel(cfg)))
+	}
+	if hooks.ReflectorBackedOff(rt, h, entries) {
+		lines = append(lines, "Reflector backoff: nothing stable in the current memory; resumes when it changes")
 	}
 
 	state := rt.Snapshot()

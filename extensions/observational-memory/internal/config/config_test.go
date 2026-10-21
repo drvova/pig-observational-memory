@@ -235,3 +235,34 @@ func TestDerivedBudgets(t *testing.T) {
 		t.Fatal("explicit chunk cap should respect the minimum")
 	}
 }
+
+// The compaction and worker budget keys parse from settings, including the
+// documented way to disable catch-up.
+func TestBudgetKeysParse(t *testing.T) {
+	f := setup(t)
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{
+		"observerChunkMaxTokens": 4000, "compactionMaxRetainedTokens": 30000, "compactionSummaryMaxTokens": 5000,
+		"workerMemoryMaxTokens": 9000, "compactionCatchUpMaxChunks": 0, "consolidateWhenIdle": true,
+	}})
+	got := f.load(env{})
+	if got.ObserverChunkMaxTokens != 4000 || got.CompactionMaxRetainedTokens != 30000 || got.CompactionSummaryMaxTokens != 5000 ||
+		got.WorkerMemoryMaxTokens != 9000 || got.CompactionCatchUpMaxChunks != 0 || !got.ConsolidateWhenIdle {
+		t.Fatalf("config %+v", got)
+	}
+}
+
+// Pi's compaction.enabled is readable on its own, project over global.
+func TestReadPiAutoCompaction(t *testing.T) {
+	f := setup(t)
+	if _, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); ok {
+		t.Fatal("unset setting reported")
+	}
+	f.writeJSON(t, f.global(), map[string]any{"compaction": map[string]any{"enabled": false}})
+	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); !ok || enabled {
+		t.Fatalf("global %v %v", enabled, ok)
+	}
+	f.writeJSON(t, f.project(), map[string]any{"compaction": map[string]any{"enabled": true}})
+	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); !ok || !enabled {
+		t.Fatalf("project %v %v", enabled, ok)
+	}
+}

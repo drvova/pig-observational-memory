@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
@@ -98,10 +99,10 @@ func RenderSummaryWithBudget(reflections []Reflection, observations []Observatio
 	if omittedReflections > 0 || omittedObservations > 0 {
 		omitted := []string{}
 		if omittedReflections > 0 {
-			omitted = append(omitted, jsfmt.Locale(omittedReflections)+" older "+jsfmt.Plural(omittedReflections, "reflection"))
+			omitted = append(omitted, strconv.Itoa(omittedReflections)+" older "+jsfmt.Plural(omittedReflections, "reflection"))
 		}
 		if omittedObservations > 0 {
-			omitted = append(omitted, jsfmt.Locale(omittedObservations)+" older "+jsfmt.Plural(omittedObservations, "observation"))
+			omitted = append(omitted, strconv.Itoa(omittedObservations)+" older "+jsfmt.Plural(omittedObservations, "observation"))
 		}
 		parts = append(parts, "("+strings.Join(omitted, " and ")+" omitted to fit the summary budget; they remain in the session memory ledger, see /om:view full.)")
 	}

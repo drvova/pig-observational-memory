@@ -294,3 +294,25 @@ func TestCatchUpPartialRunClaimsOnlyCitedCoverage(t *testing.T) {
 		t.Fatalf("result %+v", result)
 	}
 }
+
+// A catch-up chunk whose primary model call fails is retried once on the
+// configured fallback, and later chunks keep using it.
+func TestCatchUpRetriesChunkOnFallback(t *testing.T) {
+	obs, _, _ := mockWorkers(t)
+	obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
+	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("t1", "a2")}))
+	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch()})
+	cfg := fx.rt.Config()
+	cfg.FallbackModel = &config.ConfiguredModel{Provider: "opencode-go", ID: "deepseek-v4.1-flash"}
+	fx.rt.SetConfig(cfg)
+	fx.h.ModelsFake.Add(testfix.Model("opencode-go", "deepseek-v4.1-flash", map[string]any{"contextWindow": 65536}), testfix.KeyAuth("go-key"))
+
+	result := compactionOf(t, fx.run("u2"))
+
+	if obs.count() != 2 || *obs.call(1).APIKey != "go-key" || len(fx.h.Appended) != 1 || result.FirstKeptEntryID != "u2" {
+		t.Fatalf("observer calls %d appended %d result %+v", obs.count(), len(fx.h.Appended), result)
+	}
+	if !hasNotificationContaining(fx.h, "retrying with fallback model", "warning") || hasNotificationContaining(fx.h, "catch-up observer failed", "") {
+		t.Fatalf("notifications %+v", fx.h.Notifications)
+	}
+}

@@ -39,3 +39,16 @@ func TestCopyStopsAtFirstSuccess(t *testing.T) {
 		t.Fatal("all-fail copy wrong")
 	}
 }
+
+// clip.exe gets UTF-16LE with a byte order mark; other commands get UTF-8.
+func TestWindowsClipboardInputIsUTF16(t *testing.T) {
+	clip := clipboard.Commands("windows")[0]
+	got := clipboard.Input(clip, "── a")
+	want := []byte{0xff, 0xfe, 0x00, 0x25, 0x00, 0x25, 0x20, 0x00, 0x61, 0x00}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("clip input % x", got)
+	}
+	if got := clipboard.Input(clipboard.Commands("darwin")[0], "── a"); string(got) != "── a" {
+		t.Fatalf("pbcopy input % x", got)
+	}
+}

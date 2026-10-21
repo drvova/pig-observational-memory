@@ -30,6 +30,17 @@ func waitDone(t *testing.T, done <-chan struct{}) {
 	}
 }
 
+// expectNeverClosed asserts ch stays open for a short grace period: the
+// goroutine that would close it has had time to run and chose not to.
+func expectNeverClosed(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatal("expected the channel to stay open")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func text(id, content string) ledger.Entry { return testfix.TextCustomMessage(id, content) }
 
 func userMessage(id string, content ...string) ledger.Entry {

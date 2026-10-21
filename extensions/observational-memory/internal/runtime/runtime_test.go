@@ -492,3 +492,81 @@ func TestIDOnlyFallbackModelIdentityCheck(t *testing.T) {
 		t.Fatalf("result %+v", result)
 	}
 }
+
+// Resolution warnings are shown once per episode: repeats are quiet, and a
+// clean resolution re-arms them.
+func TestResolveWarningsShownOncePerEpisode(t *testing.T) {
+	rt := withConfig(func(cfg *config.Config) { cfg.Model = &config.ConfiguredModel{Provider: "anthropic", ID: "missing"} })
+	models := testfix.NewFakeModels()
+	models.Auth["openai"] = testfix.KeyAuth("key")
+	n := &notifier{}
+	session := host.Model{"provider": "openai", "id": "gpt"}
+
+	for i := 0; i < 3; i++ {
+		if result := rt.ResolveModel(context.Background(), resolveCtx(session, models, n)); !result.OK {
+			t.Fatalf("result %+v", result)
+		}
+	}
+	if len(n.calls) != 1 {
+		t.Fatalf("notifications %+v", n.calls)
+	}
+
+	// The configured model appears: a clean resolution clears the episode.
+	models.Add(testfix.Model("anthropic", "missing"), testfix.KeyAuth("key"))
+	rt.ResolveModel(context.Background(), resolveCtx(session, models, n))
+	delete(models.Registry, testfix.Key("anthropic", "missing"))
+	rt.ResolveModel(context.Background(), resolveCtx(session, models, n))
+	if len(n.calls) != 2 {
+		t.Fatalf("notifications %+v", n.calls)
+	}
+}
+
+// RunAborted tells an aborted run from one that finished.
+func TestRunAbortedTracksTheAbortedRun(t *testing.T) {
+	rt := runtime.New()
+	release := make(chan struct{})
+	done := rt.LaunchConsolidationTask(nil, func(ctx context.Context) error { <-ctx.Done(); return nil })
+	if !rt.AbortConsolidation() {
+		t.Fatal("nothing to abort")
+	}
+	<-done
+	if !rt.RunAborted(done) {
+		t.Fatal("aborted run not reported")
+	}
+	finished := rt.LaunchConsolidationTask(nil, func(ctx context.Context) error { <-release; return nil })
+	close(release)
+	<-finished
+	if rt.RunAborted(finished) || rt.RunAborted(nil) {
+		t.Fatal("finished run reported as aborted")
+	}
+}
+
+// Pi's own compaction.enabled is re-read for a configuration loaded from disk.
+func TestLiveConfigRereadsPiAutoCompaction(t *testing.T) {
+	rt := runtime.New()
+	rt.LoadConfig = func(string) config.Config { return config.Defaults }
+	enabled, set := true, true
+	rt.ReadPiAutoCompaction = func(string) (bool, bool) { return enabled, set }
+	rt.EnsureConfig("/project")
+
+	if !rt.LiveConfig("/project").PiAutoCompactionEnabled {
+		t.Fatal("enabled not read")
+	}
+	enabled = false
+	if rt.LiveConfig("/project").PiAutoCompactionEnabled {
+		t.Fatal("toggle not picked up")
+	}
+	set = false
+	if rt.LiveConfig("/project").PiAutoCompactionEnabled != config.Defaults.PiAutoCompactionEnabled {
+		t.Fatal("unset setting should fall back to the default")
+	}
+
+	// An explicitly set configuration is left as set.
+	cfg := config.Defaults
+	cfg.PiAutoCompactionEnabled = false
+	rt.SetConfig(cfg)
+	enabled, set = true, true
+	if rt.LiveConfig("/project").PiAutoCompactionEnabled {
+		t.Fatal("explicit configuration overridden")
+	}
+}

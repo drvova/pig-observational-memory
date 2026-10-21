@@ -12,13 +12,30 @@ import (
 )
 
 // Host is a host.Host over one sdk.Context. A handler may retain it past its
-// own completion: later host calls use the live extension connection.
+// own completion (background memory workers do): later host calls use the
+// live extension connection.
+//
+// The SDK panics from Cwd, HasUI, Model and ModelProvider once the session
+// has been replaced or reloaded. A retained host must never take the
+// extension process down that way, so the values that cannot change within a
+// session (working directory, UI) are read once while the handler's context
+// is live, and the model lookup recovers to "no model".
 type Host struct {
-	ctx sdk.Context
+	ctx   sdk.Context
+	cwd   string
+	hasUI bool
 }
 
-// New wraps an SDK context.
-func New(ctx sdk.Context) *Host { return &Host{ctx: ctx} }
+// New wraps an SDK context. Call it inside the event handler.
+func New(ctx sdk.Context) *Host {
+	h := &Host{ctx: ctx}
+	func() {
+		defer func() { _ = recover() }()
+		h.cwd = ctx.Cwd()
+		h.hasUI = ctx.HasUI()
+	}()
+	return h
+}
 
 // Context is the wrapped SDK context.
 func (h *Host) Context() sdk.Context { return h.ctx }
@@ -56,7 +73,7 @@ func (h *Host) SessionFile() string {
 }
 
 // HasUI reports whether the host has a UI.
-func (h *Host) HasUI() bool { return h.ctx.HasUI() }
+func (h *Host) HasUI() bool { return h.hasUI }
 
 // Notify shows a notification.
 func (h *Host) Notify(message, level string) { h.ctx.Notify(message, level) }
@@ -90,10 +107,16 @@ func (h *Host) GetContextUsage() (*host.ContextUsage, error) {
 }
 
 // Cwd is the working directory.
-func (h *Host) Cwd() string { return h.ctx.Cwd() }
+func (h *Host) Cwd() string { return h.cwd }
 
-// SessionModel is the session's active model object, nil when none is set.
-func (h *Host) SessionModel() host.Model {
+// SessionModel is the session's active model object, nil when none is set or
+// the session has been replaced.
+func (h *Host) SessionModel() (model host.Model) {
+	defer func() {
+		if recover() != nil {
+			model = nil
+		}
+	}()
 	provider, id := h.ctx.ModelProvider(), h.ctx.Model()
 	if provider != "" && id != "" {
 		if model := h.ctx.ModelRegistry().Find(provider, id); model != nil {
@@ -104,7 +127,7 @@ func (h *Host) SessionModel() host.Model {
 	if err != nil || info == nil {
 		return nil
 	}
-	model := host.Model{"provider": info.Provider, "id": info.ID, "name": info.Name, "reasoning": info.Reasoning}
+	model = host.Model{"provider": info.Provider, "id": info.ID, "name": info.Name, "reasoning": info.Reasoning}
 	if info.ContextWindow > 0 {
 		model["contextWindow"] = float64(info.ContextWindow)
 	}
@@ -141,6 +164,9 @@ func (m models) HasConfiguredAuth(model host.Model) bool {
 	return err == nil && configured
 }
 
+// Refresh cannot be cancelled: the SDK call takes no context, so a refresh
+// that outlives the caller's deadline keeps running in the host until it
+// answers. The caller bounds how long it waits, not the host call.
 func (m models) Refresh(_ context.Context, options host.RefreshOptions) error {
 	_, err := m.registry.Refresh(sdk.ModelsRefreshOptions{AllowNetwork: options.AllowNetwork, Providers: options.Providers})
 	return err

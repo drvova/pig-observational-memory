@@ -1097,12 +1097,15 @@ func TestIdleAbortsInFlightRunOnAgentStart(t *testing.T) {
 	entered := fx.abortingObserver()
 
 	after := settledWithAfterHook(fx)
-	if !fx.rt.ConsolidationInFlight() {
+	done := fx.rt.ConsolidationDone()
+	if done == nil {
 		t.Fatal("agent_settled did not launch")
 	}
 	waitDone(t, entered)
 	OnAgentStart(fx.rt, fx.h)
-	waitDone(t, after)
+	waitDone(t, done)
+	// An aborted run is not idle time: the compaction after-hook is skipped.
+	expectNeverClosed(t, after)
 
 	fx.expectNoAppends()
 	if fx.rt.Snapshot().LastObserverError != "" || hasNotificationContaining(fx.h, "failed", "warning") {
@@ -1119,9 +1122,11 @@ func TestIdleDoesNotRetryWithFallbackWhenAborted(t *testing.T) {
 	entered := fx.abortingObserver()
 
 	after := settledWithAfterHook(fx)
+	done := fx.rt.ConsolidationDone()
 	waitDone(t, entered)
 	OnAgentStart(fx.rt, fx.h)
-	waitDone(t, after)
+	waitDone(t, done)
+	expectNeverClosed(t, after)
 
 	if fx.obs.count() != 1 || authCount(fx.h.ModelsFake, fallbackTarget.Provider) != 0 {
 		t.Fatalf("observer calls %d auth lookups %v", fx.obs.count(), fx.h.ModelsFake.AuthCalls)
@@ -1417,4 +1422,29 @@ func TestBackoffClearsWhenChunkLeavesBranch(t *testing.T) {
 	if fx.obs.count() != 2 {
 		t.Fatalf("observer calls %d", fx.obs.count())
 	}
+}
+
+// A reflector run that records nothing is not repeated over unchanged memory:
+// no launch, no model call, until the memory changes.
+func TestReflectorBacksOffAfterEmptyVerdict(t *testing.T) {
+	entries := []ledger.Entry{text("raw-1", "aaaaaaaa"), testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obsA}, "raw-1")}
+	fx := consSetup(t, consArgs{entries: entries, observeAfterTokens: 999})
+
+	fx.run() // the reflector records nothing
+	if fx.ref.count() != 1 || fx.rt.ReflectorEmptyBackoff() == nil {
+		t.Fatalf("reflector calls %d backoff %+v", fx.ref.count(), fx.rt.ReflectorEmptyBackoff())
+	}
+	if fx.launch() != nil {
+		t.Fatal("a consolidation launched over unchanged memory")
+	}
+
+	// New observations change the memory: the reflector runs again and records.
+	fx.addEntries(text("raw-2", "bbbbbbbb"), testfix.ObservationsRecordedEntry("om-obs-b", []ledger.Observation{obsB}, "raw-2"))
+	newRef := testfix.Reflection("ffffffffffff", []string{"bbbbbbbbbbbb"})
+	fx.ref.resolve([]ledger.Reflection{newRef})
+	fx.run()
+	if fx.ref.count() != 2 || fx.rt.ReflectorEmptyBackoff() != nil {
+		t.Fatalf("reflector calls %d backoff %+v", fx.ref.count(), fx.rt.ReflectorEmptyBackoff())
+	}
+	fx.expectAppended(0, ledger.OMReflectionsRecorded, recordedReflections([]ledger.Reflection{newRef}, "raw-2"))
 }

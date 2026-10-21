@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
@@ -124,9 +126,32 @@ func reflectorDue(entries []ledger.Entry, cfg config.Config, current int, hasCur
 	return stageDue(entries, current, hasCurrent, ledger.OMReflectionsRecorded, ledger.ObservedTokensSinceReflectionCoverage, cfg.ReflectAfterTokens)
 }
 
-func anyStageDue(entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
+// reflectorInputKey identifies what the reflector reads: the active
+// observations and the reflections the ledger folds to. An unchanged key means
+// an identical prompt, so a run that recorded nothing would record nothing
+// again.
+func reflectorInputKey(entries []ledger.Entry) string {
+	folded := ledger.FoldLedger(entries, "")
+	parts := make([]string, 0, len(folded.ActiveObservations)+len(folded.Reflections))
+	for _, observation := range folded.ActiveObservations {
+		parts = append(parts, "o:"+observation.ID)
+	}
+	for _, reflection := range folded.Reflections {
+		parts = append(parts, "r:"+reflection.ID)
+	}
+	return ids.HashID(strings.Join(parts, ","))
+}
+
+// ReflectorBackedOff reports whether the reflector already found nothing
+// stable in exactly this memory; it stays quiet until the memory changes.
+func ReflectorBackedOff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) bool {
+	backoff := rt.ReflectorEmptyBackoff()
+	return backoff != nil && backoff.SessionIdentity == sessionIdentityOf(h) && backoff.InputKey == reflectorInputKey(entries)
+}
+
+func anyStageDue(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
 	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, ledger.RawTokensSinceObservationCoverage, cfg.ObserveAfterTokens) ||
-		reflectorDue(entries, cfg, current, hasCurrent)
+		(reflectorDue(entries, cfg, current, hasCurrent) && !ReflectorBackedOff(rt, h, entries))
 }
 
 // ObserverProgressTokens is what gates the observer: the larger of the raw
@@ -175,17 +200,17 @@ func branchStillCurrent(h host.Host, sessionIdentity, leafID string) bool {
 	return ledger.EntryIndexForID(fresh, leafID) != -1
 }
 
-func shouldNotifyWorker(cfg config.Config, h host.Host) bool {
-	return cfg.ShowWorkerNotifications && h.HasUI()
-}
-
 func notifyWorker(cfg config.Config, h host.Host, message string) {
-	if shouldNotifyWorker(cfg, h) {
-		h.Notify(message, "info")
+	if cfg.ShowWorkerNotifications {
+		notifyUI(h, message, "info")
 	}
 }
 
+// notifyUI shows a notification. It never panics: background work may hold a
+// host whose session has been replaced, and a notification is never worth
+// taking the extension process down.
 func notifyUI(h host.Host, message, level string) {
+	defer func() { _ = recover() }()
 	if h.HasUI() {
 		h.Notify(message, level)
 	}
@@ -401,7 +426,14 @@ func OnAgentSettled(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks) 
 		return
 	}
 	go func() {
+		defer func() { _ = recover() }()
 		<-launched
+		if rt.RunAborted(launched) {
+			// The agent started again and aborted the run, so this is no longer
+			// idle time; the next settle re-evaluates compaction.
+			debuglog.Log(context.Background(), "consolidation.after_hook_skipped", map[string]any{"reason": "aborted"})
+			return
+		}
 		hooks.AfterIdleConsolidation(h)
 	}()
 }
@@ -434,7 +466,7 @@ func MaybeLaunchConsolidation(rt *runtime.Runtime, h host.Host) <-chan struct{} 
 		return nil
 	}
 	current, hasCurrent := realContextTokens(h)
-	if !anyStageDue(entries, cfg, current, hasCurrent) {
+	if !anyStageDue(rt, h, entries, cfg, current, hasCurrent) {
 		return nil
 	}
 	scope := debuglog.Context{Enabled: cfg.DebugLog, Cwd: h.Cwd(), SessionID: h.SessionID(), SessionFile: h.SessionFile(), RunID: newRunID("consolidation")}
@@ -671,6 +703,11 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	if !reflectorDue(entries, cfg, current, hasCurrent) {
 		return none, nil
 	}
+	if ReflectorBackedOff(rt, h, entries) {
+		debuglog.Log(ctx, "reflector.empty_backoff", map[string]any{})
+		return none, nil
+	}
+	inputKey := reflectorInputKey(entries)
 	reflectionTokens := stageTokens(entries, ledger.OMReflectionsRecorded, current, hasCurrent, ledger.ObservedTokensSinceReflectionCoverage)
 	observationCoverageID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
 	if observationCoverageID == "" {
@@ -706,8 +743,13 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
 	}
 	if len(reflections) == 0 {
+		// Nothing stable enough in this memory: do not send the same prompt
+		// again until the memory changes.
+		rt.SetReflectorEmptyBackoff(&runtime.ReflectorEmptyBackoff{SessionIdentity: sessionIdentity, InputKey: inputKey})
+		debuglog.Log(ctx, "reflector.empty", map[string]any{})
 		return none, nil
 	}
+	rt.SetReflectorEmptyBackoff(nil)
 	data := ledger.BuildReflectionsRecordedData(reflections, observationCoverageID)
 	if data == nil {
 		return none, nil

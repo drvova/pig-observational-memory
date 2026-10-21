@@ -214,3 +214,21 @@ func TestMovedCutFoldBoundary(t *testing.T) {
 		t.Fatal("older compactions should fall back to firstKeptEntryId")
 	}
 }
+
+// After a native (delegated) compaction, its prose summary is what Pi shows:
+// no V3 record is visible, however much an earlier V3 compaction held.
+func TestVisibleProjectionFollowsNewestCompaction(t *testing.T) {
+	obs := tf.Observation("aaaaaaaaaaaa")
+	entries := []ledger.Entry{
+		tf.TextCustomMessage("raw-1", "aaaa"),
+		tf.CompactionEntry("cmp-v3", tf.CompactionArgs{FirstKeptEntryID: "raw-1", Details: tf.MemoryDetails(tf.MemoryDetailsArgs{Observations: []ledger.Observation{obs}})}),
+		tf.TextCustomMessage("raw-2", "bbbb"),
+		tf.CompactionEntry("cmp-native", tf.CompactionArgs{FirstKeptEntryID: "raw-2"}),
+	}
+	if visible := ledger.VisibleProjection(entries, ""); len(visible.Observations) != 0 || len(visible.Reflections) != 0 {
+		t.Fatalf("visible %+v", visible)
+	}
+	if visible := ledger.VisibleProjection(entries[:3], ""); len(visible.Observations) != 1 {
+		t.Fatalf("visible before the native compaction %+v", visible)
+	}
+}

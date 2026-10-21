@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,6 +17,11 @@ import (
 
 // ObservationTimestampPattern constrains an observation's time.
 const ObservationTimestampPattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$"
+
+// observationTimestamp enforces the pattern the tool schema declares. Pi's
+// agent loop validates tool arguments against the schema before running a
+// tool; this loop does not, so the observer checks the field itself.
+var observationTimestamp = regexp.MustCompile(ObservationTimestampPattern)
 
 // WorkerArgs are what every worker call shares.
 type WorkerArgs struct {
@@ -195,7 +201,7 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			"then emit a short plain-text confirmation to end the run.",
 		Parameters: recordObservationsSchema,
 		Execute: func(_ context.Context, params map[string]any) (ToolResult, error) {
-			added, duplicates, rejected := 0, 0, 0
+			added, duplicates, rejected, invalid := 0, 0, 0, 0
 			items, _ := params["observations"].([]any)
 			for _, raw := range items {
 				obs, _ := raw.(map[string]any)
@@ -213,8 +219,8 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 				content, okContent := normalizeObservationContent(rawContent)
 				timestamp, _ := obs["timestamp"].(string)
 				relevance, _ := obs["relevance"].(string)
-				if !okContent || timestamp == "" || !ledger.IsRelevance(relevance) {
-					rejected++
+				if !okContent || !observationTimestamp.MatchString(timestamp) || !ledger.IsRelevance(relevance) {
+					invalid++
 					continue
 				}
 				id := ids.HashID(content)
@@ -237,6 +243,9 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			if rejected > 0 {
 				rejectedPart = fmt.Sprintf(" %d %s rejected for missing or invalid sourceEntryIds.", rejected, jsfmt.Plural(rejected, "observation"))
 			}
+			if invalid > 0 {
+				rejectedPart += fmt.Sprintf(" %d %s rejected for empty content, a timestamp not in 'YYYY-MM-DD HH:MM' form, or an unknown relevance.", invalid, jsfmt.Plural(invalid, "observation"))
+			}
 			duplicatePart := "."
 			if duplicates > 0 {
 				duplicatePart = fmt.Sprintf("(%d %s skipped).", duplicates, jsfmt.Plural(duplicates, "duplicate"))
@@ -244,7 +253,7 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			ack := fmt.Sprintf("Recorded %d new %s ", added, jsfmt.Plural(added, "observation")) + duplicatePart + rejectedPart +
 				fmt.Sprintf(" Total so far this run: %d. ", len(accumulated)) +
 				"Continue if the chunk still has uncovered content; otherwise stop calling the tool and emit a short plain-text confirmation."
-			return ToolResult{Text: ack, Details: map[string]any{"added": added, "duplicates": duplicates, "rejected": rejected, "total": len(accumulated)}}, nil
+			return ToolResult{Text: ack, Details: map[string]any{"added": added, "duplicates": duplicates, "rejected": rejected + invalid, "total": len(accumulated)}}, nil
 		},
 	}
 

@@ -1,6 +1,8 @@
 package observationalmemory
 
 import (
+	"path/filepath"
+	goruntime "runtime"
 	"testing"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
@@ -27,5 +29,16 @@ func TestDecodeBeforeCompactReadsPiPayload(t *testing.T) {
 	}
 	if event := decodeBeforeCompact(map[string]any{}); event.FirstKeptEntryID != "" || len(event.BranchEntries) != 0 {
 		t.Fatalf("empty payload %+v", event)
+	}
+}
+
+// PiG identifies a factory by its directory name: Name must match it.
+func TestNameMatchesFactoryDirectory(t *testing.T) {
+	_, file, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("no caller information")
+	}
+	if dir := filepath.Base(filepath.Dir(file)); dir != Name {
+		t.Fatalf("Name %q does not match the factory directory %q", Name, dir)
 	}
 }

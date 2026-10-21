@@ -28,3 +28,18 @@ func TestSerializeBashExecution(t *testing.T) {
 		t.Fatal("renderability misjudged")
 	}
 }
+
+// The truncation note uses plain digits, as stored by the TypeScript version.
+func TestTruncationNoteUsesPlainDigits(t *testing.T) {
+	text := serialize.TruncateRecordContent(strings.Repeat("x", serialize.MaxRecordContentChars+1500))
+	if !strings.HasSuffix(text, "[truncated 1500 chars]") {
+		t.Fatalf("suffix %q", text[len(text)-40:])
+	}
+}
+
+// Tool-call arguments are rendered like JSON.stringify: no HTML escaping.
+func TestToolCallArgumentsAreNotHTMLEscaped(t *testing.T) {
+	if got := serialize.JSONStringify(map[string]any{"command": "ls > out && cat out"}); got != `{"command":"ls > out && cat out"}` {
+		t.Fatalf("got %s", got)
+	}
+}

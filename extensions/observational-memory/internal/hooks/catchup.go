@@ -50,10 +50,12 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		result.StoppedBecause = "model_unavailable"
 		return result
 	}
-	// The same request decorations as the background pipeline: Console Go
-	// session headers, and the fallback's thinking level when it is active.
-	resolved = workerHeadersFor(h, resolved)
-	contextWindow := host.ModelContextWindow(resolved.Model)
+	// The same request shaping and fallback handling as the background
+	// pipeline: Console Go session headers, the fallback's thinking level, and
+	// one retry on the configured fallback when a chunk's model call fails.
+	resolver := &modelResolver{rt: rt, h: h, cached: &resolved}
+	current := workerHeadersFor(h, resolved)
+	contextWindow := observerChunkContextWindow(cfg, h, current)
 	maxChunkTokens := config.ResolveObserverChunkMaxTokens(cfg, contextWindow)
 	entries := args.Entries
 	// Start at the global observation frontier, not at the gap: a coverage
@@ -67,7 +69,6 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 	}
 	branch := entries
-	thinking := workerThinkingLevel(cfg, resolved)
 	for chunkIndex := 0; chunkIndex < args.MaxChunks && len(remaining) > 0; chunkIndex++ {
 		if ctx.Err() != nil {
 			result.StoppedBecause = "aborted"
@@ -96,22 +97,19 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		for _, observation := range memory.Observations {
 			priorObservations = append(priorObservations, ledger.ObservationToSummaryLine(observation))
 		}
-		outcome, err := runObserver(ctx, agents.ObserverArgs{
-			WorkerArgs: agents.WorkerArgs{
-				Model:           resolved.Model,
-				APIKey:          resolved.APIKey,
-				Headers:         resolved.Headers,
-				Env:             resolved.Env,
-				MaxTurns:        cfg.AgentMaxTurns,
-				MaxOutputTokens: cfg.AgentMaxTokens,
-				ThinkingLevel:   thinking,
-				Stream:          h.Models().Stream,
-			},
-			PriorReflections:      priorReflections,
-			PriorObservations:     priorObservations,
-			Chunk:                 serialized.Text,
-			AllowedSourceEntryIDs: serialized.SourceEntryIDs,
+		outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, current, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
+			return runObserver(ctx, agents.ObserverArgs{
+				WorkerArgs:            workerArgs(cfg, h, worker),
+				PriorReflections:      priorReflections,
+				PriorObservations:     priorObservations,
+				Chunk:                 serialized.Text,
+				AllowedSourceEntryIDs: serialized.SourceEntryIDs,
+			})
 		})
+		if resolver.fallbackActive != nil {
+			// Later chunks go straight to the fallback that worked.
+			current = *resolver.fallbackActive
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				result.StoppedBecause = "aborted"

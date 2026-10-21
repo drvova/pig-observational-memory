@@ -275,3 +275,22 @@ func TestObserverNormalizesContentAndFlagsPartialRuns(t *testing.T) {
 		t.Fatalf("blank content accepted: %v err %v", got, err)
 	}
 }
+
+// A timestamp outside the declared pattern is rejected, as Pi's schema
+// validation would reject it.
+func TestObserverRejectsMalformedTimestamps(t *testing.T) {
+	bad := tf.AssistantToolCall("tool-1", "record_observations", map[string]any{"observations": []any{map[string]any{
+		"timestamp": "2026-05-02T10:00:00Z", "content": "fact", "relevance": "medium", "sourceEntryIds": []any{"raw-1"},
+	}}})
+	rec := &tf.StreamRecorder{Replies: []map[string]any{bad, tf.AssistantText("done")}}
+	if got, err := agents.RunObserver(context.Background(), detailedArgs(rec)); err != nil || got != nil {
+		t.Fatalf("malformed timestamp accepted: %v err %v", got, err)
+	}
+	messages, _ := rec.Requests[1]["messages"].([]any)
+	last, _ := messages[len(messages)-1].(map[string]any)
+	content, _ := last["content"].([]any)
+	block, _ := content[0].(map[string]any)
+	if text, _ := block["text"].(string); !strings.Contains(text, "rejected for empty content, a timestamp not in 'YYYY-MM-DD HH:MM' form") {
+		t.Fatalf("ack %q", text)
+	}
+}

@@ -1,6 +1,7 @@
 package recall_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -112,4 +113,41 @@ func TestReportsNotFoundAndIgnoresV2Memory(t *testing.T) {
 		t.Fatalf("details %+v", details)
 	}
 	expectContains(t, text, "No observation or reflection with id aaaaaaaaaaaa was found")
+}
+
+// Sources that resolved are shown even when a sibling source is missing.
+func TestObservationRecallShowsResolvedSourcesBesideMissingOnes(t *testing.T) {
+	obs := testfix.Observation("aaaaaaaaaaaa", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"raw-1", "missing-raw"} })
+	entries := []ledger.Entry{
+		testfix.RawMessage("raw-1", "I like tea."),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obs}, "raw-1"),
+	}
+
+	text, details := recall.Execute(entries, "aaaaaaaaaaaa")
+
+	if details.Status != recall.StatusPartial {
+		t.Fatalf("details %+v", details)
+	}
+	expectContains(t, text, "missing: missing-raw", "I like tea.")
+}
+
+// Details keep empty lists as [] in their JSON, as the TypeScript tool writes them.
+func TestRecallDetailsKeepEmptyLists(t *testing.T) {
+	entries := []ledger.Entry{
+		testfix.RawMessage("raw-1", "I like tea."),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{teaObservation()}, "raw-1"),
+	}
+	_, details := recall.Execute(entries, "aaaaaaaaaaaa")
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`"missingSourceEntryIds":[]`, `"nonSourceEntryIds":[]`} {
+		if !strings.Contains(string(encoded), fragment) {
+			t.Fatalf("details JSON lacks %s: %s", fragment, encoded)
+		}
+	}
+	if strings.Contains(string(encoded), "null") {
+		t.Fatalf("details JSON has null: %s", encoded)
+	}
 }

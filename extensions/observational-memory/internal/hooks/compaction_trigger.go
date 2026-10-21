@@ -56,12 +56,31 @@ func waitForIdle(h host.Host) bool {
 	return false
 }
 
+func latestCompactionID(entries []ledger.Entry) string {
+	if idx := ledger.FindLastCompactionIndex(entries); idx >= 0 {
+		return entries[idx].ID
+	}
+	return ""
+}
+
+// ActiveCompactionBackoff is the backoff that applies to this branch, or nil.
+// A refused compaction is not asked for again until the session or the
+// compaction boundary changes, or another threshold's worth of source arrives
+// (the failed-attempt half of upstream issue #47).
+func ActiveCompactionBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) *runtime.CompactionBackoff {
+	backoff := rt.CompactionBackoff()
+	if backoff == nil || backoff.SessionIdentity != sessionIdentityOf(h) || backoff.BoundaryID != latestCompactionID(entries) {
+		return nil
+	}
+	return backoff
+}
+
 // MaybeTriggerCompaction triggers proactive compaction when the observed-source
 // threshold is reached and Pi is idle. The returned channel closes once the
 // deferred step ran; it is nil when nothing was scheduled.
 func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 	rt.EnsureConfig(h.Cwd())
-	cfg := rt.Config()
+	cfg := rt.LiveConfig(h.Cwd())
 	if cfg.Passive || rt.CompactInFlight() {
 		return nil
 	}
@@ -74,6 +93,13 @@ func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 	if progress < threshold {
 		return nil
 	}
+	if backoff := ActiveCompactionBackoff(rt, h, entries); backoff != nil {
+		if progress < backoff.Progress+threshold {
+			return nil
+		}
+	}
+	rt.SetCompactionBackoff(nil)
+	sessionIdentity := sessionIdentityOf(h)
 	notifyUI(h, fmt.Sprintf("Observational memory: compaction threshold reached (~%s %s source tokens); triggering compaction", jsfmt.Locale(progress), ProgressLabel(cfg)), "info")
 	rt.SetCompactInFlight(true)
 	done := make(chan struct{})
@@ -95,26 +121,33 @@ func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 			rt.SetCompactInFlight(false)
 			return
 		}
-		if CompactionProgress(cfg, currentEntries) < threshold {
+		currentProgress := CompactionProgress(cfg, currentEntries)
+		if currentProgress < threshold {
 			rt.SetCompactInFlight(false)
 			notifyUI(h, "Observational memory: compaction skipped — another compaction already ran before deferred compaction", "info")
 			return
 		}
+		boundaryID := latestCompactionID(currentEntries)
 		h.Compact(host.CompactCallbacks{
 			OnComplete: func() {
+				rt.SetCompactionBackoff(nil)
 				rt.SetCompactInFlight(false)
 				notifyUI(h, "Observational memory: compaction complete", "info")
 			},
 			OnError: func(err error) {
-				rt.SetCompactInFlight(false)
 				if err != nil && err.Error() == "Compaction cancelled" {
 					// The hook already told the user the real reason before cancelling.
+					rt.SetCompactInFlight(false)
 					return
 				}
 				message := "unknown error"
 				if err != nil {
 					message = err.Error()
 				}
+				// Asking again on the next settle would fail the same way and
+				// notify again; wait for the branch to change.
+				rt.SetCompactionBackoff(&runtime.CompactionBackoff{SessionIdentity: sessionIdentity, BoundaryID: boundaryID, Progress: currentProgress, Reason: message})
+				rt.SetCompactInFlight(false)
 				notifyUI(h, "Observational memory: "+message, "error")
 			},
 		})

@@ -119,13 +119,15 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 	return Projection{Observations: active, Reflections: reflections}
 }
 
+// latestV3CompactionDetails is the om.folded details of the newest compaction
+// entry on the branch. Pi puts only the newest compaction's summary in
+// context, so when that compaction was written by Pi's native summarizer (the
+// hook delegated) or by an older version, no V3 record is in context, however
+// much an earlier V3 compaction held.
 func latestV3CompactionDetails(entries []Entry) (MemoryDetails, bool) {
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Type != "compaction" {
-			continue
-		}
-		if details, ok := MemoryDetailsFrom(entries[i].Details); ok {
-			return details, true
+		if entries[i].Type == "compaction" {
+			return MemoryDetailsFrom(entries[i].Details)
 		}
 	}
 	return MemoryDetails{}, false

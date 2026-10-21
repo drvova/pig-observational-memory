@@ -66,6 +66,29 @@ type ObserverEmptyBackoff struct {
 	ChunkEndID string
 }
 
+// ReflectorEmptyBackoff records a reflector run that recorded nothing over a
+// given memory input, so an identical prompt is not sent again every turn.
+type ReflectorEmptyBackoff struct {
+	SessionIdentity string
+	// InputKey identifies the memory the reflector read (active observations
+	// and reflections); it changes whenever that memory changes.
+	InputKey string
+}
+
+// CompactionBackoff records a proactive compaction the host refused or failed
+// ("Nothing to compact", "Already compacted", a summarizer error), so the
+// trigger does not ask again on every settle while nothing has changed.
+type CompactionBackoff struct {
+	SessionIdentity string
+	// BoundaryID is the newest compaction entry at the refusal, "" before the first.
+	BoundaryID string
+	// Progress is the counted source tokens at the refusal; the trigger asks
+	// again once another threshold's worth has arrived.
+	Progress int
+	// Reason is the host's error message.
+	Reason string
+}
+
 // How long to wait for the availability re-check, and how long before the same
 // provider may be re-checked again. Tests shorten them.
 var (
@@ -83,12 +106,20 @@ type Runtime struct {
 	LoadConfig func(cwd string) config.Config
 	// Now is the clock; tests replace it.
 	Now func() time.Time
+	// ReadPiAutoCompaction re-reads Pi's own compaction.enabled setting
+	// (enabled, whether any settings file sets it); tests replace it.
+	ReadPiAutoCompaction func(cwd string) (bool, bool)
+	// configFromDisk is true when EnsureConfig loaded the configuration,
+	// false when a caller set it (tests).
+	configFromDisk bool
 
 	consolidationInFlight bool
 	consolidationDone     chan struct{}
 	consolidationPhase    Phase
 	consolidationCancel   context.CancelFunc
 	consolidationCtx      context.Context
+	// abortedDone is the completion channel of the last run AbortConsolidation cancelled.
+	abortedDone chan struct{}
 
 	compactInFlight        bool
 	compactHookInFlight    bool
@@ -100,6 +131,11 @@ type Runtime struct {
 
 	availabilityRecheckedAt map[string]time.Time
 	observerEmptyBackoff    *ObserverEmptyBackoff
+	reflectorEmptyBackoff   *ReflectorEmptyBackoff
+	compactionBackoff       *CompactionBackoff
+	// resolveNotices holds the resolution warnings already shown; a clean
+	// resolution clears it, so a recurring condition warns once per episode.
+	resolveNotices map[string]bool
 }
 
 // New creates a runtime with the default configuration.
@@ -107,6 +143,7 @@ func New() *Runtime {
 	return &Runtime{
 		config:                  config.Defaults,
 		LoadConfig:              func(cwd string) config.Config { return config.Load(cwd, config.DefaultPaths(), nil) },
+		ReadPiAutoCompaction:    func(cwd string) (bool, bool) { return config.ReadPiAutoCompaction(cwd, config.DefaultPaths()) },
 		Now:                     time.Now,
 		availabilityRecheckedAt: map[string]time.Time{},
 	}
@@ -121,6 +158,7 @@ func (r *Runtime) EnsureConfig(cwd string) {
 	}
 	r.config = r.LoadConfig(cwd)
 	r.configLoaded = true
+	r.configFromDisk = true
 }
 
 // Config is the current configuration.
@@ -136,6 +174,25 @@ func (r *Runtime) SetConfig(cfg config.Config) {
 	defer r.mu.Unlock()
 	r.config = cfg
 	r.configLoaded = true
+	r.configFromDisk = false
+}
+
+// LiveConfig is the configuration with Pi's own compaction.enabled re-read.
+// The user can toggle Pi's automatic compaction mid-session, and it decides
+// which token domain the proactive trigger counts, so a startup snapshot
+// would leave a session with no compaction backstop at all.
+func (r *Runtime) LiveConfig(cwd string) config.Config {
+	r.mu.Lock()
+	cfg, fromDisk, read := r.config, r.configFromDisk, r.ReadPiAutoCompaction
+	r.mu.Unlock()
+	if fromDisk && read != nil {
+		if enabled, ok := read(cwd); ok {
+			cfg.PiAutoCompactionEnabled = enabled
+		} else {
+			cfg.PiAutoCompactionEnabled = config.Defaults.PiAutoCompactionEnabled
+		}
+	}
+	return cfg
 }
 
 // ConfigLoaded reports whether EnsureConfig ran.
@@ -256,6 +313,55 @@ func (r *Runtime) SetObserverEmptyBackoff(b *ObserverEmptyBackoff) {
 	r.observerEmptyBackoff = b
 }
 
+// CompactionBackoff is the current proactive-compaction backoff, or nil.
+func (r *Runtime) CompactionBackoff() *CompactionBackoff {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.compactionBackoff
+}
+
+// SetCompactionBackoff records or clears the proactive-compaction backoff.
+func (r *Runtime) SetCompactionBackoff(b *CompactionBackoff) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compactionBackoff = b
+}
+
+// ReflectorEmptyBackoff is the current reflector backoff, or nil.
+func (r *Runtime) ReflectorEmptyBackoff() *ReflectorEmptyBackoff {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reflectorEmptyBackoff
+}
+
+// SetReflectorEmptyBackoff records or clears the reflector backoff.
+func (r *Runtime) SetReflectorEmptyBackoff(b *ReflectorEmptyBackoff) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reflectorEmptyBackoff = b
+}
+
+// noticeOnce shows a resolution warning unless it was already shown in the
+// current episode.
+func (r *Runtime) noticeOnce(rc ResolveCtx, message, level string) {
+	r.mu.Lock()
+	if r.resolveNotices == nil {
+		r.resolveNotices = map[string]bool{}
+	}
+	seen := r.resolveNotices[message]
+	r.resolveNotices[message] = true
+	r.mu.Unlock()
+	if !seen {
+		rc.notify(message, level)
+	}
+}
+
+func (r *Runtime) clearNotices() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolveNotices = nil
+}
+
 // SetLastError records a stage's last error (tests use it directly).
 func (r *Runtime) SetLastError(phase Phase, message string) {
 	r.mu.Lock()
@@ -296,9 +402,19 @@ func modelLabel(provider, id string) string {
 // then config.fallbackModel when the primary resolution fails. With no
 // fallback configured the primary reason is returned unchanged; with a
 // configured-but-broken fallback both reasons are reported.
+//
+// The "configured model not found" and "using fallback" warnings are shown
+// once per episode: a resolution that needs neither clears them, so the user
+// is told again only after the condition went away and came back.
 func (r *Runtime) ResolveModel(ctx context.Context, rc ResolveCtx) ResolveResult {
-	primary := r.resolvePrimaryModel(ctx, rc)
+	primary, notFound := r.resolvePrimaryModel(ctx, rc)
+	if notFound != "" {
+		r.noticeOnce(rc, notFound, "warning")
+	}
 	if primary.OK {
+		if notFound == "" {
+			r.clearNotices()
+		}
 		return primary
 	}
 	fallback := r.ResolveFallbackModel(ctx, rc)
@@ -325,15 +441,16 @@ func (r *Runtime) ResolveModel(ctx context.Context, rc ResolveCtx) ResolveResult
 	if id == "" {
 		id = "unknown"
 	}
-	rc.notify(fmt.Sprintf("Observational memory: primary model unavailable (%s); using fallback %s/%s", primary.Reason, provider, id), "warning")
+	r.noticeOnce(rc, fmt.Sprintf("Observational memory: primary model unavailable (%s); using fallback %s/%s", primary.Reason, provider, id), "warning")
 	debuglog.Log(ctx, "resolve.fallback_used", map[string]any{"provider": provider, "id": id, "primaryFailure": primary.Reason})
 	fallback.FallbackUsed = true
 	fallback.PrimaryFailure = primary.Reason
 	return fallback
 }
 
-// config.model when it resolves in Pi's registry, otherwise the session model.
-func (r *Runtime) resolvePrimaryModel(ctx context.Context, rc ResolveCtx) ResolveResult {
+// config.model when it resolves in Pi's registry, otherwise the session
+// model. notFound is the warning to show when config.model was not found.
+func (r *Runtime) resolvePrimaryModel(ctx context.Context, rc ResolveCtx) (result ResolveResult, notFound string) {
 	cfg := r.Config()
 	model := rc.Model
 	if cfg.Model != nil {
@@ -341,13 +458,13 @@ func (r *Runtime) resolvePrimaryModel(ctx context.Context, rc ResolveCtx) Resolv
 		if configured := rc.Models.Find(provider, cfg.Model.ID); configured != nil {
 			model = configured
 		} else {
-			rc.notify(fmt.Sprintf("Observational memory: configured model %s not found, using session model", modelLabel(provider, cfg.Model.ID)), "warning")
+			notFound = fmt.Sprintf("Observational memory: configured model %s not found, using session model", modelLabel(provider, cfg.Model.ID))
 		}
 	}
 	if model == nil {
-		return ResolveResult{Reason: "no model available (session has no model and no observational-memory model configured)"}
+		return ResolveResult{Reason: "no model available (session has no model and no observational-memory model configured)"}, notFound
 	}
-	return r.resolveCandidate(ctx, rc, model)
+	return r.resolveCandidate(ctx, rc, model), notFound
 }
 
 // ResolveFallbackModel resolves config.fallbackModel with the same auth rules
@@ -520,9 +637,7 @@ func (r *Runtime) LaunchConsolidationTask(ui host.UI, work func(ctx context.Cont
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				if ui != nil && ui.HasUI() {
-					ui.Notify(fmt.Sprintf("Observational memory: consolidation failed: %v", recovered), "warning")
-				}
+				safeNotify(ui, fmt.Sprintf("Observational memory: consolidation failed: %v", recovered), "warning")
 			}
 			r.mu.Lock()
 			r.consolidationInFlight = false
@@ -538,11 +653,31 @@ func (r *Runtime) LaunchConsolidationTask(ui host.UI, work func(ctx context.Cont
 			cancel()
 			close(done)
 		}()
-		if err := work(ctx); err != nil && ui != nil && ui.HasUI() {
-			ui.Notify("Observational memory: consolidation failed: "+err.Error(), "warning")
+		if err := work(ctx); err != nil {
+			safeNotify(ui, "Observational memory: consolidation failed: "+err.Error(), "warning")
 		}
 	}()
 	return done
+}
+
+// safeNotify shows a notification and never panics, even when the host's
+// context has gone stale (it is called from recover blocks).
+func safeNotify(ui host.UI, message, level string) {
+	if ui == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	if ui.HasUI() {
+		ui.Notify(message, level)
+	}
+}
+
+// RunAborted reports whether the run whose completion channel is done was
+// cancelled by AbortConsolidation.
+func (r *Runtime) RunAborted(done <-chan struct{}) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return done != nil && r.abortedDone != nil && (<-chan struct{})(r.abortedDone) == done
 }
 
 // ConsolidationContext is the running consolidation's cancellation, or nil.
@@ -575,6 +710,7 @@ func (r *Runtime) AbortConsolidation() bool {
 	if r.consolidationCancel == nil || !r.consolidationInFlight {
 		return false
 	}
+	r.abortedDone = r.consolidationDone
 	r.consolidationCancel()
 	return true
 }
@@ -583,8 +719,6 @@ func (r *Runtime) AbortConsolidation() bool {
 func (r *Runtime) RecordConsolidationStageError(ui host.UI, phase Phase, err error) string {
 	message := err.Error()
 	r.SetLastError(phase, message)
-	if ui != nil && ui.HasUI() {
-		ui.Notify(fmt.Sprintf("Observational memory: %s failed: %s", phase, message), "warning")
-	}
+	safeNotify(ui, fmt.Sprintf("Observational memory: %s failed: %s", phase, message), "warning")
 	return message
 }

@@ -443,6 +443,16 @@ func DefaultPaths() Paths {
 	return paths
 }
 
+// ReadPiAutoCompaction reads Pi's own compaction.enabled the way Load does:
+// the project setting wins over the global one. ok is false when neither file
+// sets it.
+func ReadPiAutoCompaction(cwd string, paths Paths) (enabled bool, ok bool) {
+	if enabled, ok := readPiCompactionEnabled(filepath.Join(cwd, paths.ProjectDirName, "settings.json")); ok {
+		return enabled, true
+	}
+	return readPiCompactionEnabled(filepath.Join(paths.AgentDir, "settings.json"))
+}
+
 // Load reads the global and project settings and the environment.
 func Load(cwd string, paths Paths, lookupEnv func(string) (string, bool)) Config {
 	if lookupEnv == nil {

@@ -3,6 +3,7 @@
 package serialize
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -127,11 +128,17 @@ func JSONStringify(v any) string {
 	if v == nil {
 		return "{}"
 	}
-	encoded, err := json.Marshal(v)
-	if err != nil {
+	// JSON.stringify does not HTML-escape <, > and &; encoding/json does by
+	// default, which would inflate shell commands in the observer chunk. Key
+	// order is sorted (the arguments arrive as a decoded map), where
+	// JSON.stringify keeps insertion order.
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
 		return "{}"
 	}
-	return string(encoded)
+	return strings.TrimSuffix(buffer.String(), "\n")
 }
 
 func textAndPlaceholders(content any, options placeholderOptions) string {
@@ -302,7 +309,9 @@ func TruncateRecordContent(content string) string {
 	return head + " … [truncated " + itoa(length-MaxRecordContentChars) + " chars]"
 }
 
-func itoa(n int) string { return jsfmt.Locale(n) }
+// itoa is the plain decimal the TypeScript version interpolates: the
+// truncation note is stored record content and feeds the record's id.
+func itoa(n int) string { return strconv.Itoa(n) }
 
 func renderCustomMessage(entry session.Entry, recallFormat bool) string {
 	var timestamp string
