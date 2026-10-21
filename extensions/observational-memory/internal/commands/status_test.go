@@ -285,21 +285,67 @@ func TestStatusRatioModeFallsBackWithoutModel(t *testing.T) {
 	expectContains(t, statusOutput(t, statusRuntime(ratioConfig()), h), "Next compaction:  ~0 / 30 observed source tokens (0%)")
 }
 
-// Status reports what gates the workers: provider growth counts, and an
-// active deliberate-empty backoff is shown.
+func assistantUsage(id string, totalTokens int) ledger.Entry {
+	return testfix.RawMessage(id, "done", map[string]any{"message": map[string]any{"role": "assistant", "content": "done", "stopReason": "end_turn", "usage": map[string]any{"totalTokens": totalTokens}}})
+}
+
+func withContextTokens(h *testfix.FakeHost, tokens int) *testfix.FakeHost {
+	h.Usage = &host.ContextUsage{Tokens: &tokens, ContextWindow: 200000}
+	return h
+}
+
+// Status reports what gates the workers: provider growth counts, and the
+// observer backoff is shown only while the observer would honor it, on the raw
+// backlog it is measured on.
 func TestStatusProgressMirrorsWorkerGating(t *testing.T) {
 	entries := []ledger.Entry{
-		testfix.RawMessage("assistant-1", "done", map[string]any{"message": map[string]any{"role": "assistant", "content": "done", "stopReason": "end_turn", "usage": map[string]any{"totalTokens": 100}}}),
+		assistantUsage("assistant-1", 100),
 		testfix.TextCustomMessage("raw-1", "aaaa"),
 		testfix.ObservationsRecordedEntry("om-cov", []ledger.Observation{testfix.Observation("aaaaaaaaaaaa")}, "raw-1"),
+		testfix.TextCustomMessage("raw-2", "bbbbbbbbbbbbbbbb"), // 4 tokens, judged empty
 	}
-	h := testfix.NewFakeHost(entries...)
-	tokens := 5100
-	h.Usage = &host.ContextUsage{Tokens: &tokens, ContextWindow: 200000}
-	rt := statusRuntime(statusConfig())
-	rt.SetObserverEmptyBackoff(&runtime.ObserverEmptyBackoff{SessionIdentity: "session-1", CoverageID: "raw-1", TokensAtEmpty: 4, ChunkEndID: "raw-2"})
+	// What the observer records after an empty verdict over raw-2.
+	judged := runtime.ObserverEmptyBackoff{SessionIdentity: "session-1", CoverageID: "raw-1", TokensAtEmpty: 4, ChunkEndID: "raw-2"}
+	status := func(backoff runtime.ObserverEmptyBackoff, branch []ledger.Entry) string {
+		rt := statusRuntime(statusConfig())
+		rt.SetObserverEmptyBackoff(&backoff)
+		return statusOutput(t, rt, withContextTokens(testfix.NewFakeHost(branch...), 5100))
+	}
 
-	output := statusOutput(t, rt, h)
+	expectContains(t, status(judged, entries), "Next observation: ~5,000 / 10 tokens", "Observer backoff: nothing new at ~4 raw backlog tokens; resumes at ~14 (raw backlog now ~4)")
 
-	expectContains(t, output, "Next observation: ~5,000 / 10 tokens", "Observer backoff: nothing new at ~4 tokens; resumes at ~14")
+	// The observer discards the backoff in each of these, so status does not show it.
+	otherSession := judged
+	otherSession.SessionIdentity = "session-2"
+	sibling := append(append([]ledger.Entry{}, entries[:3]...), testfix.TextCustomMessage("raw-2b", "cccccccccccccccc"))
+	grown := append(append([]ledger.Entry{}, entries...), testfix.TextCustomMessage("raw-3", strings.Repeat("c", 40)))
+	for name, output := range map[string]string{
+		"another session":      status(otherSession, entries),
+		"chunk off the branch": status(judged, sibling),
+		"backlog at resume":    status(judged, grown),
+	} {
+		t.Run(name, func(t *testing.T) { expectLacks(t, output, "Observer backoff") })
+	}
+}
+
+// The reflector is not due until an observation lands after its coverage, so
+// provider growth alone does not move its progress.
+func TestStatusReflectionProgressWaitsForNewObservations(t *testing.T) {
+	obs := testfix.Observation("aaaaaaaaaaaa")
+	entries := []ledger.Entry{
+		assistantUsage("assistant-1", 100),
+		testfix.TextCustomMessage("raw-1", "aaaa"),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obs}, "raw-1"),
+		testfix.ReflectionsRecordedEntry("om-ref", []ledger.Reflection{testfix.Reflection("eeeeeeeeeeee", []string{"aaaaaaaaaaaa"})}, "raw-1"),
+	}
+	output := statusOutput(t, statusRuntime(statusConfig()), withContextTokens(testfix.NewFakeHost(entries...), 5100))
+	expectContains(t, output, "Next reflection:  ~0 / 20 observed tokens (0%)")
+
+	// A new observation makes it due on the same basis, provider growth included.
+	entries = append(entries,
+		testfix.TextCustomMessage("raw-2", "bbbb"),
+		testfix.ObservationsRecordedEntry("om-obs-2", []ledger.Observation{testfix.Observation("bbbbbbbbbbbb")}, "raw-2"),
+	)
+	output = statusOutput(t, statusRuntime(statusConfig()), withContextTokens(testfix.NewFakeHost(entries...), 5100))
+	expectContains(t, output, "Next reflection:  ~5,000 / 20 observed tokens")
 }

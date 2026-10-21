@@ -127,9 +127,9 @@ func reflectorDue(entries []ledger.Entry, cfg config.Config, current int, hasCur
 }
 
 // reflectorInputKey identifies what the reflector reads: the active
-// observations and the reflections the ledger folds to. An unchanged key means
-// an identical prompt, so a run that recorded nothing would record nothing
-// again.
+// observations and the reflections the ledger folds to. Over an unchanged key
+// the same model gets an identical prompt, so a run that recorded nothing
+// would record nothing again.
 func reflectorInputKey(entries []ledger.Entry) string {
 	folded := ledger.FoldLedger(entries, "")
 	parts := make([]string, 0, len(folded.ActiveObservations)+len(folded.Reflections))
@@ -149,6 +149,24 @@ func ReflectorBackedOff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry
 	return backoff != nil && backoff.SessionIdentity == sessionIdentityOf(h) && backoff.InputKey == reflectorInputKey(entries)
 }
 
+// ActiveObserverBackoff is the deliberate-empty observer backoff that applies
+// to this branch, or nil. It holds while the session, the observation coverage
+// and the judged chunk are unchanged and the raw uncovered backlog stays below
+// TokensAtEmpty+ObserveAfterTokens.
+func ActiveObserverBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config) *runtime.ObserverEmptyBackoff {
+	backoff := rt.ObserverEmptyBackoff()
+	if backoff == nil || backoff.SessionIdentity != sessionIdentityOf(h) || backoff.CoverageID != ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded) {
+		return nil
+	}
+	if backoff.ChunkEndID != "" && ledger.EntryIndexForID(entries, backoff.ChunkEndID) == -1 {
+		return nil
+	}
+	if ledger.RawTokensSinceObservationCoverage(entries) >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
+		return nil
+	}
+	return backoff
+}
+
 func anyStageDue(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
 	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, ledger.RawTokensSinceObservationCoverage, cfg.ObserveAfterTokens) ||
 		(reflectorDue(entries, cfg, current, hasCurrent) && !ReflectorBackedOff(rt, h, entries))
@@ -161,8 +179,13 @@ func ObserverProgressTokens(entries []ledger.Entry, h host.Host) int {
 	return stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ledger.RawTokensSinceObservationCoverage)
 }
 
-// ReflectorProgressTokens is what gates the reflector, on the same basis.
+// ReflectorProgressTokens is what gates the reflector, on the same basis. Like
+// reflectorDue it reads 0 until an observation lands after the last reflection
+// coverage, however much the context grew.
 func ReflectorProgressTokens(entries []ledger.Entry, h host.Host) int {
+	if ledger.ObservedTokensSinceReflectionCoverage(entries) == 0 {
+		return 0
+	}
 	current, hasCurrent := realContextTokens(h)
 	return stageTokens(entries, ledger.OMReflectionsRecorded, current, hasCurrent, ledger.ObservedTokensSinceReflectionCoverage)
 }
@@ -335,6 +358,14 @@ func (r *modelResolver) resolveFallback(ctx context.Context, stage runtime.Phase
 	r.fallbackActive = &resolved
 	debuglog.Log(ctx, string(stage)+".fallback_active", map[string]any{"provider": host.ModelProvider(resolved.Model), "id": host.ModelID(resolved.Model)})
 	return r.fallbackActive
+}
+
+// retriedOnFallback reports whether worker is the fallback this pass switched
+// to after a primary call failed, rather than the model the pass resolved. The
+// next pass tries that primary again; a fallback chosen at resolution time
+// (no usable primary) is what the next pass resolves too.
+func (r *modelResolver) retriedOnFallback(worker runtime.ResolveResult) bool {
+	return worker.FallbackUsed && (r.cached == nil || !r.cached.FallbackUsed)
 }
 
 // runStageWithFallback runs one worker stage against the resolved primary
@@ -541,23 +572,16 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	}
 	leafID := branchLeafID(entries)
 	rawTokens := ledger.RawTokensSinceObservationCoverage(entries)
-	sessionIdentity := h.SessionID()
-	if sessionIdentity == "" {
-		sessionIdentity = h.SessionFile()
-	}
+	sessionIdentity := sessionIdentityOf(h)
 	coverageID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
 
 	// Deliberate-empty backoff: an intentional "nothing to record" verdict
 	// must not re-fire the observer every turn over the same span.
-	if backoff := rt.ObserverEmptyBackoff(); backoff != nil {
-		chunkStillHere := backoff.ChunkEndID == "" || ledger.EntryIndexForID(entries, backoff.ChunkEndID) != -1
-		if sessionIdentity != backoff.SessionIdentity || coverageID != backoff.CoverageID || !chunkStillHere || rawTokens >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
-			rt.SetObserverEmptyBackoff(nil)
-		} else {
-			debuglog.Log(ctx, "observer.empty_backoff", map[string]any{"tokens": rawTokens, "resumeAtTokens": backoff.TokensAtEmpty + cfg.ObserveAfterTokens})
-			return outcomeContinue, nil
-		}
+	if backoff := ActiveObserverBackoff(rt, h, entries, cfg); backoff != nil {
+		debuglog.Log(ctx, "observer.empty_backoff", map[string]any{"tokens": rawTokens, "resumeAtTokens": backoff.TokensAtEmpty + cfg.ObserveAfterTokens})
+		return outcomeContinue, nil
 	}
+	rt.SetObserverEmptyBackoff(nil)
 
 	// Resolve the model before building the chunk: the default chunk cap
 	// derives from the resolved model's context window.
@@ -727,7 +751,9 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	// unresolvable model is reported once by the resolver, not every turn.
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: reflector running (~%s tokens)", jsfmt.Locale(reflectionTokens)))
 	folded := ledger.FoldLedger(entries, "")
+	var judge runtime.ResolveResult
 	reflections, err := runStageWithFallback(ctx, h, runtime.PhaseReflector, *resolved, resolver, func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
+		judge = worker
 		memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), false)
 		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(cfg, h, worker), Reflections: memory.Reflections, Observations: memory.Observations})
 	})
@@ -744,9 +770,14 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	}
 	if len(reflections) == 0 {
 		// Nothing stable enough in this memory: do not send the same prompt
-		// again until the memory changes.
-		rt.SetReflectorEmptyBackoff(&runtime.ReflectorEmptyBackoff{SessionIdentity: sessionIdentity, InputKey: inputKey})
-		debuglog.Log(ctx, "reflector.empty", map[string]any{})
+		// again until the memory changes. A fallback retry's verdict sets no
+		// backoff: the primary, which the next pass tries first, never judged
+		// this memory, and its prompt may hold more of it.
+		fallbackRetry := resolver.retriedOnFallback(judge)
+		if !fallbackRetry {
+			rt.SetReflectorEmptyBackoff(&runtime.ReflectorEmptyBackoff{SessionIdentity: sessionIdentity, InputKey: inputKey})
+		}
+		debuglog.Log(ctx, "reflector.empty", map[string]any{"fallbackRetry": fallbackRetry})
 		return none, nil
 	}
 	rt.SetReflectorEmptyBackoff(nil)

@@ -118,8 +118,11 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		fmt.Sprintf("Active observation pool: ~%s / %s target tokens (%d%%)", jsfmt.Locale(activePool.ObservationTokens), jsfmt.Locale(cfg.ObservationsPoolTargetTokens), pct(activePool.ObservationTokens, cfg.ObservationsPoolTargetTokens)),
 		fmt.Sprintf("Reflection pool:         ~%s tokens", jsfmt.Locale(visibleReflectionTokens)),
 	)
-	if backoff := rt.ObserverEmptyBackoff(); backoff != nil && backoff.CoverageID == ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded) {
-		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s tokens; resumes at ~%s", jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens)))
+	// The observer backoff is measured on the raw backlog alone, not on the
+	// larger figure "Next observation" shows.
+	if backoff := hooks.ActiveObserverBackoff(rt, h, entries, cfg); backoff != nil {
+		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s raw backlog tokens; resumes at ~%s (raw backlog now ~%s)",
+			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(ledger.RawTokensSinceObservationCoverage(entries))))
 	}
 	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); backoff != nil {
 		lines = append(lines, fmt.Sprintf("Compaction backoff: last attempt failed (%s); asks again at ~%s %s source tokens", backoff.Reason, jsfmt.Locale(backoff.Progress+compactThreshold), hooks.ProgressLabel(cfg)))

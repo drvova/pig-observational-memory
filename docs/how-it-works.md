@@ -193,7 +193,7 @@ Reflect/drop runs in the same consolidation run, after the observer stage. The r
 
 1. Skip the reflector stage if its progress is below `reflectAfterTokens`, or if observation coverage has not moved past reflection coverage (no new observations).
 2. Skip it if no observation coverage exists.
-3. Skip it while its empty-verdict backoff holds (see below).
+3. Skip it while its empty-verdict backoff holds (see below). An empty verdict from a `fallbackModel` retry after a failed primary call sets no backoff, since the primary, which the next run tries first, never judged that memory.
 4. Resolve the model only for stages that are ready to run.
 5. Fold current ledger state.
 6. Run the reflector, with prior memory bounded by `workerMemoryMaxTokens` and one retry on `fallbackModel` when the call fails. Each active observation line is annotated with current reflection coverage (`none`, `partial`, or `strong`) so the reflector can review uncovered durable facts without treating coverage as a quota.
@@ -321,13 +321,13 @@ Shows:
 - recorded/dropped/active/visible observation counts, with plain `+N` / `-N` visible-vs-full drift suffixes when drift exists;
 - recorded/visible reflection counts, with a plain `+N` drift suffix when full memory has extra reflections;
 - `Next observation`: the larger of source tokens since observation coverage and provider-reported growth since it, against `observeAfterTokens` (the measure the observer acts on);
-- `Next reflection`: the larger of observed tokens since reflection coverage and provider-reported growth since it, against `reflectAfterTokens`;
+- `Next reflection`: the larger of observed tokens since reflection coverage and provider-reported growth since it, against `reflectAfterTokens`; it reads 0 until an observation lands after reflection coverage, as the reflector is not due before then;
 - `Next compaction`: observed source tokens (estimated source tokens when Pi's `compaction.enabled` is `false`) against the resolved compaction threshold;
 - `Observer backlog`: unobserved source tokens since the compaction boundary;
 - visible observation pool pressure against `observationsPoolMaxTokens` from visible memory;
 - active observation pool pressure against `observationsPoolTargetTokens` from folded active observations;
 - reflection pool token total of visible reflections;
-- `Observer backoff`, `Compaction backoff`, and `Reflector backoff` lines while the observer's empty-verdict backoff, a refused compaction's backoff, or the reflector's empty-verdict backoff is active, each saying when it resumes;
+- `Observer backoff`, `Compaction backoff`, and `Reflector backoff` lines while the observer's empty-verdict backoff, a refused compaction's backoff, or the reflector's empty-verdict backoff is active, each saying when it resumes (the observer's in raw backlog tokens, the measure it waits on, not the larger `Next observation` figure);
 - an in-flight section (consolidation run and its phase, auto-compaction, compaction hook) when any is running;
 - a last-error section with the last observer, reflector, and dropper errors.
 
