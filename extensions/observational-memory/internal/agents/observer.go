@@ -63,6 +63,7 @@ var recordObservationsSchema = map[string]any{
 	"properties": map[string]any{
 		"observations": map[string]any{
 			"type":        "array",
+			"minItems":    1,
 			"description": "Batch of new observations. May be empty only if the tool is not called at all.",
 			"items": map[string]any{
 				"type": "object",
@@ -130,9 +131,59 @@ func NormalizeSourceEntryIDs(sourceEntryIDs, allowed []string) ([]string, bool) 
 // nil observations and no error for a deliberate empty result, and a
 // *StreamError when the model call failed without recording anything.
 func RunObserver(ctx context.Context, args ObserverArgs) ([]ledger.Observation, error) {
+	result, err := RunObserverDetailed(ctx, args)
+	return result.Observations, err
+}
+
+// ObserverResult is one observer run's outcome.
+type ObserverResult struct {
+	Observations []ledger.Observation
+	// Partial is true when the run ended before the model worked through the
+	// whole chunk: a stream failure after some batches, or the turn cap. The
+	// caller must then claim coverage only through the last source entry the
+	// observations cite, or the unread rest of the chunk is marked observed.
+	Partial bool
+	// StreamError is the failure that cut a partial run short, when one did.
+	StreamError *StreamError
+}
+
+// Observed wraps a complete observation list.
+func Observed(observations []ledger.Observation) ObserverResult {
+	return ObserverResult{Observations: observations}
+}
+
+// LastCitedSourceEntryID is the last id in chunk order that any observation
+// cites, or "" when none cites a chunk entry.
+func LastCitedSourceEntryID(observations []ledger.Observation, chunkOrder []string) string {
+	cited := map[string]bool{}
+	for _, observation := range observations {
+		for _, id := range observation.SourceEntryIDs {
+			cited[id] = true
+		}
+	}
+	last := ""
+	for _, id := range chunkOrder {
+		if cited[id] {
+			last = id
+		}
+	}
+	return last
+}
+
+// normalizeObservationContent trims an observation and folds line breaks and
+// runs of whitespace into single spaces: the prompt asks for single-line
+// prose, and a multi-line record would break the one-line-per-record rendering
+// in summaries and worker prompts.
+func normalizeObservationContent(content string) (string, bool) {
+	normalized := serialize.TruncateRecordContent(strings.Join(strings.Fields(content), " "))
+	return normalized, normalized != ""
+}
+
+// RunObserverDetailed is RunObserver with the run's completeness.
+func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult, error) {
 	conversation := strings.TrimSpace(args.Chunk)
 	if conversation == "" {
-		return nil, nil
+		return ObserverResult{}, nil
 	}
 	accumulated := map[string]ledger.Observation{}
 	order := []string{}
@@ -158,14 +209,14 @@ func RunObserver(ctx context.Context, args ObserverArgs) ([]ledger.Observation, 
 					rejected++
 					continue
 				}
-				content, _ := obs["content"].(string)
+				rawContent, _ := obs["content"].(string)
+				content, okContent := normalizeObservationContent(rawContent)
 				timestamp, _ := obs["timestamp"].(string)
 				relevance, _ := obs["relevance"].(string)
-				if content == "" || timestamp == "" || !ledger.IsRelevance(relevance) {
+				if !okContent || timestamp == "" || !ledger.IsRelevance(relevance) {
 					rejected++
 					continue
 				}
-				content = serialize.TruncateRecordContent(content)
 				id := ids.HashID(content)
 				if _, dup := accumulated[id]; dup {
 					duplicates++
@@ -212,17 +263,17 @@ NEW CONVERSATION CHUNK:
 
 	result, err := RunLoop(ctx, args.Stream, args.loopConfig("observer"), ObserverSystem, userText, []Tool{recordObservations})
 	if err != nil {
-		return nil, err
+		return ObserverResult{}, err
 	}
 	if len(accumulated) == 0 {
 		if result.StreamError != nil {
-			return nil, result.StreamError
+			return ObserverResult{}, result.StreamError
 		}
-		return nil, nil
+		return ObserverResult{}, nil
 	}
 	observations := make([]ledger.Observation, 0, len(order))
 	for _, id := range order {
 		observations = append(observations, accumulated[id])
 	}
-	return observations, nil
+	return ObserverResult{Observations: observations, Partial: result.StreamError != nil || result.HitMaxTurns, StreamError: result.StreamError}, nil
 }

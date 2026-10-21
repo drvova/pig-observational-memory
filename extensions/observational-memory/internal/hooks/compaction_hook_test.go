@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
 type hookArgs struct {
@@ -418,5 +420,74 @@ func TestHookDecodesCustomInstructionsFromWire(t *testing.T) {
 	event := BeforeCompactEvent{}
 	if event.CustomInstructions != "" {
 		t.Fatal("zero value")
+	}
+}
+
+// A marker covering past Pi's cut still describes the source this compaction
+// removes: the no-gap fold goes through the observation frontier.
+func TestHookFoldsThroughCoverageBeyondPiCut(t *testing.T) {
+	entries := append(laggingBranch(), coverage("om-a2", "a2", "cccccccccccc"))
+	rt, h := lagSetup(lagArgs{entries: entries})
+
+	// Pi cuts at u1 (index 2); the markers cover a0 (1), a1 (3) and a2 (5).
+	result := compactionOf(t, runHook(rt, h, entries, "u1", "threshold"))
+
+	if result.FirstKeptEntryID != "u1" || result.Details.FoldThroughEntryID != "a2" {
+		t.Fatalf("result %+v", result)
+	}
+	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"}) {
+		t.Fatalf("observations %v", observationIDs(result.Details.Observations))
+	}
+	resolution := ResolveCompactionCut(entries, "u1", CutOptions{MaxRetainedTokens: 1000})
+	if resolution.Kind != "cut" || resolution.Cut != (CompactionCut{FirstKeptEntryID: "u1", FoldThroughEntryID: "a2"}) || resolution.Gap != nil {
+		t.Fatalf("resolution %+v", resolution)
+	}
+}
+
+// An unobserved entry the observer could never read does not hold the cut.
+func TestLagIgnoresContentlessEntryBeforeCut(t *testing.T) {
+	entries := laggingBranch()
+	empty := testfix.RawMessage("empty", "", map[string]any{"message": map[string]any{"role": "assistant", "content": []any{}, "stopReason": "aborted"}})
+	entries = append(entries[:6], append([]ledger.Entry{empty}, entries[6:]...)...) // before u2
+	entries = append(entries, coverage("om-a2", "a2", "cccccccccccc"))
+	rt, h := lagSetup(lagArgs{entries: entries})
+
+	result := compactionOf(t, runHook(rt, h, entries, "u2", "threshold"))
+
+	if result.FirstKeptEntryID != "u2" || len(h.Notifications) != 0 {
+		t.Fatalf("result %+v notifications %+v", result, h.Notifications)
+	}
+}
+
+// Instructions share the summary budget; the memory render keeps at least half.
+func TestHookReservesBudgetForCustomInstructions(t *testing.T) {
+	observations := []ledger.Observation{}
+	for i := 0; i < 30; i++ {
+		observations = append(observations, testfix.Observation(fmt.Sprintf("%012x", i+1), func(o *ledger.Observation) {
+			o.Content = fmt.Sprintf("Observation %d: %s", i, strings.Repeat("detail ", 10))
+		}))
+	}
+	entries := []ledger.Entry{text("raw-1", "aaaa"), testfix.ObservationsRecordedEntry("om-many", observations, "raw-1")}
+	const budget = 600
+	instructions := strings.TrimSpace(strings.Repeat("Keep the deploy checklist and the open questions. ", 16))
+
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, summaryMaxTokens: budget})
+	plain := compactionOf(t, runHook(rt, h, entries, "raw-1", "threshold"))
+	rt, h = hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, summaryMaxTokens: budget})
+	withInstructions := compactionOf(t, HandleBeforeCompact(context.Background(), rt, h, BeforeCompactEvent{FirstKeptEntryID: "raw-1", TokensBefore: 1, BranchEntries: entries, CustomInstructions: instructions}))
+
+	memoryPart := strings.Split(withInstructions.Summary, "\n\n---\n\n")[0]
+	instructionTokens := tokens.EstimateStringTokens("\n\n---\n\n" + instructions)
+	if !strings.HasSuffix(withInstructions.Summary, instructions) {
+		t.Fatalf("instructions missing from %q", withInstructions.Summary)
+	}
+	if got := tokens.EstimateStringTokens(memoryPart); got > budget-instructionTokens {
+		t.Fatalf("memory part %d tokens exceeds its %d-token share", got, budget-instructionTokens)
+	}
+	if got := tokens.EstimateStringTokens(plain.Summary); got <= budget-instructionTokens {
+		t.Fatalf("test needs a memory render larger than the reserved share; got %d tokens", got)
+	}
+	if got := tokens.EstimateStringTokens(withInstructions.Summary); got > budget+2 {
+		t.Fatalf("summary %d tokens exceeds the %d-token budget", got, budget)
 	}
 }

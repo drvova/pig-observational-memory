@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
@@ -177,5 +178,21 @@ func TestSurvivesRefreshFailure(t *testing.T) {
 
 	if result.OK || len(models.RefreshCalls) != 1 {
 		t.Fatalf("result %+v refresh calls %d", result, len(models.RefreshCalls))
+	}
+}
+
+// A refresh that never returns cannot freeze consolidation: the re-check is bounded.
+func TestRecheckTimesOutOnHangingRefresh(t *testing.T) {
+	old := runtime.AvailabilityRecheckTimeout
+	runtime.AvailabilityRecheckTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { runtime.AvailabilityRecheckTimeout = old })
+	models := ambientModels(false, false)
+	models.RefreshFn = func(ctx context.Context, _ host.RefreshOptions) error { <-ctx.Done(); return ctx.Err() }
+
+	start := time.Now()
+	result := resolveBedrock(withConfig(nil), models)
+
+	if result.OK || len(models.RefreshCalls) != 1 || time.Since(start) > 5*time.Second {
+		t.Fatalf("result %+v refresh calls %d elapsed %s", result, len(models.RefreshCalls), time.Since(start))
 	}
 }

@@ -77,7 +77,7 @@ func gapObservation(sourceEntryIDs ...string) ledger.Observation {
 func TestCatchUpObservesGapThenCutsAtProposedBoundary(t *testing.T) {
 	obs, _, _ := mockWorkers(t)
 	gapObs := gapObservation("t1", "a2")
-	obs.resolve([]ledger.Observation{gapObs})
+	obs.resolve(agents.Observed([]ledger.Observation{gapObs}))
 	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch()})
 
 	result := compactionOf(t, fx.run("u2"))
@@ -101,7 +101,7 @@ func TestCatchUpObservesGapThenCutsAtProposedBoundary(t *testing.T) {
 
 func TestCatchUpRetainsTailWhenObserverRecordsNothing(t *testing.T) {
 	obs, _, _ := mockWorkers(t)
-	obs.resolve(nil)
+	obs.resolve(agents.Observed(nil))
 	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch()})
 
 	result := compactionOf(t, fx.run("u2"))
@@ -126,7 +126,7 @@ func TestCatchUpRetainsTailAndWarnsWhenObserverFails(t *testing.T) {
 
 func TestCatchUpCoversOneChunkWhenCapStopsIt(t *testing.T) {
 	obs, _, _ := mockWorkers(t)
-	obs.resolve([]ledger.Observation{gapObservation("t1")})
+	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("t1")}))
 	// t1 alone exceeds the minimum chunk budget, so each chunk carries one entry.
 	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch(string(make([]byte, 0)) + repeatX(4000)), maxChunks: 1, maxChunksSet: true, chunkMaxTokens: 256})
 
@@ -154,7 +154,7 @@ func repeatX(n int) string {
 
 func TestCatchUpTreatsSkippedEntriesAsCovered(t *testing.T) {
 	obs, _, _ := mockWorkers(t)
-	obs.resolve([]ledger.Observation{gapObservation("a2")})
+	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("a2")}))
 	// An assistant message with no content renders nothing and is never part
 	// of a chunk; it must not count as a leftover after coverage passes it.
 	entries := laggingBranch()
@@ -216,7 +216,7 @@ func TestCatchUpStartsAtGlobalObservationFrontier(t *testing.T) {
 	// u1/a1 are unread and outside the retained range. A marker through a3
 	// must not claim them unread, so the catch-up starts at u1.
 	obs, _, _ := mockWorkers(t)
-	obs.resolve([]ledger.Observation{testfix.Observation("cccccccccccc", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"u1", "a3"} })})
+	obs.resolve(agents.Observed([]ledger.Observation{testfix.Observation("cccccccccccc", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"u1", "a3"} })}))
 	entries := []ledger.Entry{
 		userMessage("u0"), assistantMessage("a0"),
 		coverage("om-a0", "a0", "aaaaaaaaaaaa"),
@@ -233,4 +233,64 @@ func TestCatchUpStartsAtGlobalObservationFrontier(t *testing.T) {
 	}
 }
 
-var _ = agents.ErrAborted
+// The catch-up applies the same request decorations as the background pipeline.
+func TestCatchUpAppliesWorkerHeadersAndFallbackThinking(t *testing.T) {
+	obs, _, _ := mockWorkers(t)
+	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("t1", "a2")}))
+	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch(), resolveFails: true})
+	// The primary is unavailable; the fallback is a Console Go model with its own thinking level.
+	cfg := fx.rt.Config()
+	cfg.FallbackModel = &config.ConfiguredModel{Provider: "opencode-go", ID: "deepseek-v4.1-flash", Thinking: "high"}
+	fx.rt.SetConfig(cfg)
+	fx.h.ModelsFake.Add(testfix.Model("opencode-go", "deepseek-v4.1-flash", map[string]any{"baseUrl": opencodeBaseURL, "contextWindow": 65536}), testfix.KeyAuth("go-key"))
+
+	compactionOf(t, fx.run("u2"))
+
+	call := obs.call(0)
+	if !reflect.DeepEqual(call.Headers, opencodeHeaders("session-1")) || call.ThinkingLevel != "high" || call.APIKey == nil || *call.APIKey != "go-key" {
+		t.Fatalf("observer args %+v", call)
+	}
+}
+
+// An aborted compaction stops the catch-up without appending or warning.
+func TestCatchUpAbortStopsWithoutAppending(t *testing.T) {
+	obs, _, _ := mockWorkers(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		cancel()
+		<-ctx.Done()
+		return agents.ObserverResult{}, ctx.Err()
+	})
+	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch()})
+
+	outcome := HandleBeforeCompact(ctx, fx.rt, fx.h, BeforeCompactEvent{FirstKeptEntryID: "u2", TokensBefore: 123, BranchEntries: fx.entries, Reason: "threshold"})
+
+	if len(fx.h.Appended) != 0 || hasNotificationContaining(fx.h, "catch-up observer failed", "") {
+		t.Fatalf("appended %d notifications %+v", len(fx.h.Appended), fx.h.Notifications)
+	}
+	// The hook still answers: the unobserved tail is retained.
+	if outcome.Compaction == nil || outcome.Compaction.FirstKeptEntryID != "a1" {
+		t.Fatalf("outcome %+v", outcome)
+	}
+}
+
+// A partial catch-up run claims coverage only through the last cited entry.
+func TestCatchUpPartialRunClaimsOnlyCitedCoverage(t *testing.T) {
+	obs, _, _ := mockWorkers(t)
+	obs.resolve(agents.ObserverResult{Observations: []ledger.Observation{gapObservation("t1")}, Partial: true, StreamError: &agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "connection reset"}})
+	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch(), maxChunks: 1, maxChunksSet: true})
+
+	result := compactionOf(t, fx.run("u2"))
+
+	if len(fx.h.Appended) != 1 {
+		t.Fatalf("appended %+v", fx.h.Appended)
+	}
+	if data, _ := fx.h.Appended[0].Data.(map[string]any); data["coversUpToId"] != "t1" {
+		t.Fatalf("coverage %v", data)
+	}
+	// a2 was not cited, so it stays unobserved and the cut lands on it.
+	if result.FirstKeptEntryID != "a2" {
+		t.Fatalf("result %+v", result)
+	}
+}

@@ -313,6 +313,8 @@ type FakeModels struct {
 	FindCalls []string
 	// AuthCalls records the provider of every GetApiKeyAndHeaders call.
 	AuthCalls []string
+	// OnFind, when set, runs after every Find (outside the lock).
+	OnFind func(provider, id string)
 }
 
 // NewFakeModels creates an empty registry.
@@ -346,9 +348,14 @@ func KeyAuth(key string) host.Auth { k := key; return host.Auth{OK: true, APIKey
 
 func (m *FakeModels) Find(provider, id string) host.Model {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.FindCalls = append(m.FindCalls, Key(provider, id))
-	return m.Registry[Key(provider, id)]
+	model := m.Registry[Key(provider, id)]
+	hook := m.OnFind
+	m.mu.Unlock()
+	if hook != nil {
+		hook(provider, id)
+	}
+	return model
 }
 
 func (m *FakeModels) GetApiKeyAndHeaders(model host.Model) (host.Auth, error) {
@@ -506,6 +513,14 @@ func (h *FakeHost) Compact(callbacks host.CompactCallbacks) {
 	if fn != nil {
 		fn(callbacks)
 	}
+}
+
+// CompactCount is how many times Compact was called (safe to read while the
+// trigger's goroutine runs).
+func (h *FakeHost) CompactCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.CompactCalls
 }
 
 func (h *FakeHost) GetContextUsage() (*host.ContextUsage, error) { return h.Usage, h.UsageErr }

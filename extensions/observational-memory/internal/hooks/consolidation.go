@@ -25,7 +25,7 @@ var Now = time.Now
 
 // The worker entry points; tests replace them.
 var (
-	runObserver  = agents.RunObserver
+	runObserver  = agents.RunObserverDetailed
 	runReflector = agents.RunReflector
 	runDropper   = agents.RunDropper
 )
@@ -113,9 +113,66 @@ func stageTokens(entries []ledger.Entry, customType string, current int, hasCurr
 	return raw
 }
 
+// reflectorDue is stageDue for the reflector with one more condition: the
+// provider delta alone never makes it due. The reflector works on
+// observations, so while no new observation has landed since the last
+// reflection there is nothing to reflect on, however much the context grew.
+func reflectorDue(entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
+	if ledger.ObservedTokensSinceReflectionCoverage(entries) == 0 {
+		return false
+	}
+	return stageDue(entries, current, hasCurrent, ledger.OMReflectionsRecorded, ledger.ObservedTokensSinceReflectionCoverage, cfg.ReflectAfterTokens)
+}
+
 func anyStageDue(entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
 	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, ledger.RawTokensSinceObservationCoverage, cfg.ObserveAfterTokens) ||
-		stageDue(entries, current, hasCurrent, ledger.OMReflectionsRecorded, ledger.ObservedTokensSinceReflectionCoverage, cfg.ReflectAfterTokens)
+		reflectorDue(entries, cfg, current, hasCurrent)
+}
+
+// ObserverProgressTokens is what gates the observer: the larger of the raw
+// uncovered backlog and the provider-reported growth since its anchor.
+func ObserverProgressTokens(entries []ledger.Entry, h host.Host) int {
+	current, hasCurrent := realContextTokens(h)
+	return stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ledger.RawTokensSinceObservationCoverage)
+}
+
+// ReflectorProgressTokens is what gates the reflector, on the same basis.
+func ReflectorProgressTokens(entries []ledger.Entry, h host.Host) int {
+	current, hasCurrent := realContextTokens(h)
+	return stageTokens(entries, ledger.OMReflectionsRecorded, current, hasCurrent, ledger.ObservedTokensSinceReflectionCoverage)
+}
+
+func sessionIdentityOf(h host.Host) string {
+	if id := h.SessionID(); id != "" {
+		return id
+	}
+	return h.SessionFile()
+}
+
+func branchLeafID(entries []ledger.Entry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	return entries[len(entries)-1].ID
+}
+
+// branchStillCurrent reports whether the branch a stage read is still the one
+// the host would append to: the same session, with the entry that was its
+// leaf still on it. A session replacement or a tree jump during the model
+// call fails the check, and the stage abandons its result rather than record
+// coverage for entries that are not on the current branch.
+func branchStillCurrent(h host.Host, sessionIdentity, leafID string) bool {
+	if sessionIdentityOf(h) != sessionIdentity {
+		return false
+	}
+	if leafID == "" {
+		return true
+	}
+	fresh, err := h.GetBranch()
+	if err != nil {
+		return false
+	}
+	return ledger.EntryIndexForID(fresh, leafID) != -1
 }
 
 func shouldNotifyWorker(cfg config.Config, h host.Host) bool {
@@ -274,6 +331,11 @@ func runStageWithFallback[T any](ctx context.Context, h host.Host, stage runtime
 	if fallback == nil {
 		return value, err
 	}
+	// Resolving the fallback can take a while (an OAuth refresh, the
+	// availability re-check); the run may have been aborted meanwhile.
+	if ctx.Err() != nil {
+		return value, err
+	}
 	debuglog.Log(ctx, string(stage)+".fallback_retry", map[string]any{"primaryError": err.Error(), "provider": host.ModelProvider(fallback.Model), "id": host.ModelID(fallback.Model)})
 	notifyUI(h, fmt.Sprintf("Observational memory: %s failed (%s); retrying with fallback model", stage, err.Error()), "warning")
 	return work(*fallback)
@@ -330,6 +392,11 @@ func OnAgentSettled(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks) 
 		return
 	}
 	if launched == nil {
+		// Nothing launched now, but an earlier run may still be in flight; the
+		// after-hook waits for it rather than racing it.
+		launched = rt.ConsolidationDone()
+	}
+	if launched == nil {
 		hooks.AfterIdleConsolidation(h)
 		return
 	}
@@ -337,6 +404,17 @@ func OnAgentSettled(rt *runtime.Runtime, h host.Host, hooks ConsolidationHooks) 
 		<-launched
 		hooks.AfterIdleConsolidation(h)
 	}()
+}
+
+// OnAgentSettledEvent is the agent_settled handler. In idle mode the proactive
+// compaction check runs after the idle consolidation (or at once when nothing
+// is due or in flight), never beside a running worker; otherwise it runs now.
+func OnAgentSettledEvent(rt *runtime.Runtime, h host.Host) {
+	if idleMode(rt, h) {
+		OnAgentSettled(rt, h, ConsolidationHooks{AfterIdleConsolidation: func(settled host.Host) { MaybeTriggerCompaction(rt, settled) }})
+		return
+	}
+	MaybeTriggerCompaction(rt, h)
 }
 
 func newRunID(prefix string) string {
@@ -429,6 +507,8 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	if tokens < cfg.ObserveAfterTokens {
 		return outcomeContinue, nil
 	}
+	leafID := branchLeafID(entries)
+	rawTokens := ledger.RawTokensSinceObservationCoverage(entries)
 	sessionIdentity := h.SessionID()
 	if sessionIdentity == "" {
 		sessionIdentity = h.SessionFile()
@@ -438,10 +518,11 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	// Deliberate-empty backoff: an intentional "nothing to record" verdict
 	// must not re-fire the observer every turn over the same span.
 	if backoff := rt.ObserverEmptyBackoff(); backoff != nil {
-		if sessionIdentity != backoff.SessionIdentity || coverageID != backoff.CoverageID || tokens >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
+		chunkStillHere := backoff.ChunkEndID == "" || ledger.EntryIndexForID(entries, backoff.ChunkEndID) != -1
+		if sessionIdentity != backoff.SessionIdentity || coverageID != backoff.CoverageID || !chunkStillHere || rawTokens >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
 			rt.SetObserverEmptyBackoff(nil)
 		} else {
-			debuglog.Log(ctx, "observer.empty_backoff", map[string]any{"tokens": tokens, "resumeAtTokens": backoff.TokensAtEmpty + cfg.ObserveAfterTokens})
+			debuglog.Log(ctx, "observer.empty_backoff", map[string]any{"tokens": rawTokens, "resumeAtTokens": backoff.TokensAtEmpty + cfg.ObserveAfterTokens})
 			return outcomeContinue, nil
 		}
 	}
@@ -501,7 +582,7 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		"omittedObservations": memory.OmittedObservations,
 	})
 
-	observations, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, *resolved, resolver, func(worker runtime.ResolveResult) ([]ledger.Observation, error) {
+	outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, *resolved, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
 		return runObserver(ctx, agents.ObserverArgs{
 			WorkerArgs:            workerArgs(cfg, h, worker),
 			PriorReflections:      priorReflections,
@@ -528,13 +609,35 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		debuglog.Log(ctx, "observer.aborted", map[string]any{"coversUpToId": coversUpToID})
 		return outcomeAbort, nil
 	}
+	observations := outcome.Observations
 	if len(observations) == 0 {
 		debuglog.Log(ctx, "observer.empty", map[string]any{"coversUpToId": coversUpToID})
-		rt.SetObserverEmptyBackoff(&runtime.ObserverEmptyBackoff{SessionIdentity: sessionIdentity, CoverageID: coverageID, TokensAtEmpty: tokens})
+		rt.SetObserverEmptyBackoff(&runtime.ObserverEmptyBackoff{SessionIdentity: sessionIdentity, CoverageID: coverageID, TokensAtEmpty: rawTokens, ChunkEndID: coversUpToID})
 		notifyWorker(cfg, h, "Observational memory: observer found nothing new in this chunk (coverage unchanged; will retry later)")
 		return outcomeContinue, nil
 	}
 	rt.SetObserverEmptyBackoff(nil)
+	if outcome.Partial {
+		// The model stopped before the end of the chunk (a stream failure after
+		// some batches, or the turn cap). Coverage is a positional claim, so it
+		// advances only through the last source entry the observations cite;
+		// the rest of the chunk is read again next run.
+		cited := agents.LastCitedSourceEntryID(observations, serialized.SourceEntryIDs)
+		reason := "turn cap reached"
+		if outcome.StreamError != nil {
+			reason = outcome.StreamError.Error()
+		}
+		debuglog.Log(ctx, "observer.partial", map[string]any{"reason": reason, "count": len(observations), "chunkEndId": coversUpToID, "citedUpToId": cited})
+		if cited == "" {
+			if outcome.StreamError != nil {
+				rt.RecordConsolidationStageError(h, runtime.PhaseObserver, outcome.StreamError)
+				return outcomeAbort, nil
+			}
+			return outcomeContinue, nil
+		}
+		coversUpToID = cited
+		notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer stopped early (%s); coverage advances to the last cited entry", reason))
+	}
 
 	data := ledger.BuildObservationsRecordedData(observations, coversUpToID)
 	if data == nil {
@@ -545,6 +648,10 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		observationTokens += observation.TokenCount
 	}
 	debuglog.Log(ctx, "observer.records", map[string]any{"count": len(observations), "observationTokens": observationTokens, "coversUpToId": coversUpToID})
+	if !branchStillCurrent(h, sessionIdentity, leafID) {
+		debuglog.Log(ctx, "observer.branch_changed", map[string]any{"coversUpToId": coversUpToID})
+		return outcomeAbort, nil
+	}
 	if err := h.AppendEntry(ledger.OMObservationsRecorded, data); err != nil {
 		return outcomeAbort, err
 	}
@@ -561,15 +668,16 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 		return reflectorStageResult{outcome: outcomeAbort}, err
 	}
 	current, hasCurrent := realContextTokens(h)
-	reflectionTokens := stageTokens(entries, ledger.OMReflectionsRecorded, current, hasCurrent, ledger.ObservedTokensSinceReflectionCoverage)
-	if reflectionTokens < cfg.ReflectAfterTokens {
+	if !reflectorDue(entries, cfg, current, hasCurrent) {
 		return none, nil
 	}
+	reflectionTokens := stageTokens(entries, ledger.OMReflectionsRecorded, current, hasCurrent, ledger.ObservedTokensSinceReflectionCoverage)
 	observationCoverageID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
 	if observationCoverageID == "" {
 		return none, nil
 	}
-	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: reflector running (~%s tokens)", jsfmt.Locale(reflectionTokens)))
+	sessionIdentity := sessionIdentityOf(h)
+	leafID := branchLeafID(entries)
 	resolved := resolver.resolve(ctx, runtime.PhaseReflector)
 	if resolved == nil {
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
@@ -578,6 +686,9 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 		debuglog.Log(ctx, "reflector.aborted", map[string]any{})
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
 	}
+	// Announced only once the model resolved, like the observer: an
+	// unresolvable model is reported once by the resolver, not every turn.
+	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: reflector running (~%s tokens)", jsfmt.Locale(reflectionTokens)))
 	folded := ledger.FoldLedger(entries, "")
 	reflections, err := runStageWithFallback(ctx, h, runtime.PhaseReflector, *resolved, resolver, func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
 		memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), false)
@@ -601,6 +712,10 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	if data == nil {
 		return none, nil
 	}
+	if !branchStillCurrent(h, sessionIdentity, leafID) {
+		debuglog.Log(ctx, "reflector.branch_changed", map[string]any{})
+		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
+	}
 	if err := h.AppendEntry(ledger.OMReflectionsRecorded, data); err != nil {
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, err
 	}
@@ -621,6 +736,8 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	if observationCoverageID == "" {
 		return outcomeContinue, nil
 	}
+	sessionIdentity := sessionIdentityOf(h)
+	leafID := branchLeafID(entries)
 	folded := ledger.FoldLedger(entries, "")
 	metrics := agents.ObservationPoolMetrics(folded.ActiveObservations, cfg.ObservationsPoolTargetTokens)
 	if !metrics.Ready {
@@ -680,6 +797,10 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	}
 	debuglog.Log(ctx, "dropper.append", map[string]any{"droppedIdsCount": len(droppedIDs), "coversUpToId": coversUpToID, "dataBuilt": data != nil, "appended": data != nil})
 	if data != nil {
+		if !branchStillCurrent(h, sessionIdentity, leafID) {
+			debuglog.Log(ctx, "dropper.branch_changed", map[string]any{})
+			return outcomeAbort, nil
+		}
 		if err := h.AppendEntry(ledger.OMObservationsDropped, data); err != nil {
 			return outcomeAbort, err
 		}

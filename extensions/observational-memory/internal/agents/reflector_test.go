@@ -136,7 +136,7 @@ func TestReflectorRecords(t *testing.T) {
 	content := "User prefers source-backed memory."
 	rec := &tf.StreamRecorder{Replies: []map[string]any{reflectCall(map[string]any{"content": content, "supportingObservationIds": []any{"bbbbbbbbbbbb", "aaaaaaaaaaaa"}}), tf.AssistantText("done")}}
 	result, err := agents.RunReflector(context.Background(), reflectorArgs(rec, tf.Model("p", "m")))
-	want := []ledger.Reflection{{ID: ids.HashID(content), Content: content, SupportingObservationIDs: []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}, TokenCount: tokens.EstimateStringTokens(content)}}
+	want := []ledger.Reflection{{ID: ids.HashID(content), Content: content, SupportingObservationIDs: []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}, TokenCount: tokens.EstimateStringTokens(ledger.ReflectionToSummaryLine(ledger.Reflection{ID: ids.HashID(content), Content: content}))}}
 	if err != nil || !reflect.DeepEqual(result, want) {
 		t.Fatalf("result %+v err %v", result, err)
 	}

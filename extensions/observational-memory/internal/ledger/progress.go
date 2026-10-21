@@ -35,45 +35,29 @@ func EntryIndexForID(entries []Entry, entryID string) int {
 	return -1
 }
 
-func nonEmptyList(v any) bool {
-	switch list := v.(type) {
-	case []any:
-		return len(list) > 0
-	case []string:
-		return len(list) > 0
-	}
-	return false
-}
-
-// coverageEntry reads a coverage marker entry of customType; it validates only
-// what coverage needs (a coversUpToId and a non-empty record list).
+// coverageEntry reads a coverage marker entry of customType. Coverage is a
+// positional claim made by a valid record entry, so it applies the same guard
+// memory does: an entry memory rejects (one malformed record) must not advance
+// coverage either, or its span is never re-observed.
 func coverageEntry(entry Entry, customType string) (string, bool) {
 	if entry.Type != "custom" || entry.CustomType != customType {
 		return "", false
 	}
-	data, ok := entry.Data.(map[string]any)
-	if !ok {
-		return "", false
-	}
-	coversUpTo, ok := data["coversUpToId"].(string)
-	if !ok {
-		return "", false
-	}
 	switch customType {
 	case OMObservationsRecorded:
-		if !nonEmptyList(data["observations"]) {
-			return "", false
+		if data, ok := ObservationsRecordedEntry(entry); ok {
+			return data.CoversUpToID, true
 		}
 	case OMReflectionsRecorded:
-		if !nonEmptyList(data["reflections"]) {
-			return "", false
+		if data, ok := ReflectionsRecordedEntry(entry); ok {
+			return data.CoversUpToID, true
 		}
-	default:
-		if !nonEmptyList(data["observationIds"]) {
-			return "", false
+	case OMObservationsDropped:
+		if data, ok := ObservationsDroppedEntry(entry); ok {
+			return data.CoversUpToID, true
 		}
 	}
-	return coversUpTo, true
+	return "", false
 }
 
 // LatestCoverageIndex is the branch index of the furthest entry a marker of
@@ -354,11 +338,20 @@ type UnobservedSourceSpan struct {
 // range, before cutIndex (exclusive), that observation coverage has not
 // reached; nil when coverage reaches the cut.
 func UnobservedSourceSpanBefore(entries []Entry, cutIndex int) *UnobservedSourceSpan {
+	return UnobservedSourceSpanBeforeWhere(entries, cutIndex, nil)
+}
+
+// UnobservedSourceSpanBeforeWhere is UnobservedSourceSpanBefore counting only
+// source entries for which needsCoverage is true (nil counts every source
+// entry). The compaction hook passes the observer's own renderability test so
+// an entry the observer could never read (no renderable content) does not hold
+// the cut.
+func UnobservedSourceSpanBeforeWhere(entries []Entry, cutIndex int, needsCoverage func(Entry) bool) *UnobservedSourceSpan {
 	coverageIndex := LatestCoverageIndex(entries, OMObservationsRecorded)
 	start := max(coverageIndex+1, CompactionRangeStartIndex(entries))
 	span := UnobservedSourceSpan{FirstIndex: -1, LastIndex: -1}
 	for i := start; i < cutIndex && i < len(entries); i++ {
-		if !IsSourceEntry(entries[i]) {
+		if !IsSourceEntry(entries[i]) || (needsCoverage != nil && !needsCoverage(entries[i])) {
 			continue
 		}
 		if span.FirstIndex == -1 {

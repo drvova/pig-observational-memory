@@ -11,7 +11,6 @@ import (
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/commands"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/hooks"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/recall"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/sdkhost"
@@ -40,18 +39,17 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 		return nil, nil
 	})
 	ext.OnEvent(sdk.EventAgentSettled, func(ctx sdk.Context, _ map[string]any) (any, error) {
-		h := sdkhost.New(ctx)
-		hooks.OnAgentSettled(rt, h, hooks.ConsolidationHooks{AfterIdleConsolidation: func(settled host.Host) {
-			hooks.MaybeTriggerCompaction(rt, settled)
-		}})
 		// Pi emits agent_settled only after retries, automatic compaction and
 		// queued continuation have finished, so retry policy stays owned by Pi.
-		hooks.MaybeTriggerCompaction(rt, h)
+		// In idle mode the compaction check waits for the memory workers.
+		hooks.OnAgentSettledEvent(rt, sdkhost.New(ctx))
 		return nil, nil
 	})
 	// The session is being replaced (and under PiG this process with it):
 	// abandon in-flight memory work instead of failing against a stale context.
-	for _, event := range []string{sdk.EventSessionBeforeSwitch, sdk.EventSessionBeforeFork, sdk.EventSessionShutdown} {
+	// A tree jump changes the branch under a running worker, whose coverage
+	// claims would then describe entries that are not on the branch.
+	for _, event := range []string{sdk.EventSessionBeforeSwitch, sdk.EventSessionBeforeFork, sdk.EventSessionBeforeTree, sdk.EventSessionShutdown} {
 		reason := event
 		ext.OnEvent(reason, func(sdk.Context, map[string]any) (any, error) {
 			hooks.OnSessionEnd(rt, reason)

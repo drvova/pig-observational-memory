@@ -233,3 +233,45 @@ func TestNormalizeSourceEntryIDs(t *testing.T) {
 		t.Fatal("accepted with no allowed ids")
 	}
 }
+
+func observerCall(content string) map[string]any {
+	return tf.AssistantToolCall("tool-1", "record_observations", map[string]any{"observations": []any{map[string]any{
+		"timestamp": "2026-05-02 10:00", "content": content, "relevance": "medium", "sourceEntryIds": []any{"raw-1"},
+	}}})
+}
+
+func detailedArgs(rec *tf.StreamRecorder) agents.ObserverArgs {
+	key := "k"
+	return agents.ObserverArgs{WorkerArgs: agents.WorkerArgs{Model: tf.Model("p", "m"), APIKey: &key, Stream: rec.Stream}, Chunk: "[Source entry id: raw-1]\n[User @ 2026-05-02 10:00]: hello", AllowedSourceEntryIDs: []string{"raw-1"}}
+}
+
+// Content is single-line prose; runs that end early are flagged partial.
+func TestObserverNormalizesContentAndFlagsPartialRuns(t *testing.T) {
+	rec := &tf.StreamRecorder{Replies: []map[string]any{observerCall("  line one\nline   two  "), tf.AssistantText("done")}}
+	result, err := agents.RunObserverDetailed(context.Background(), detailedArgs(rec))
+	if err != nil || result.Partial || len(result.Observations) != 1 || result.Observations[0].Content != "line one line two" {
+		t.Fatalf("result %+v err %v", result, err)
+	}
+
+	// A stream failure after a recorded batch is a partial run, not a failure.
+	rec = &tf.StreamRecorder{Replies: []map[string]any{observerCall("fact"), tf.AssistantError("error", "connection reset")}}
+	result, err = agents.RunObserverDetailed(context.Background(), detailedArgs(rec))
+	if err != nil || !result.Partial || result.StreamError == nil || len(result.Observations) != 1 {
+		t.Fatalf("result %+v err %v", result, err)
+	}
+
+	// The turn cap ending a turn that still called tools is a partial run.
+	rec = &tf.StreamRecorder{Replies: []map[string]any{observerCall("fact"), observerCall("another fact")}}
+	args := detailedArgs(rec)
+	args.MaxTurns = 1
+	result, err = agents.RunObserverDetailed(context.Background(), args)
+	if err != nil || !result.Partial || result.StreamError != nil || len(result.Observations) != 1 {
+		t.Fatalf("result %+v err %v", result, err)
+	}
+
+	// Whitespace-only content is rejected like empty content.
+	rec = &tf.StreamRecorder{Replies: []map[string]any{observerCall("   \n  "), tf.AssistantText("done")}}
+	if got, err := agents.RunObserver(context.Background(), detailedArgs(rec)); err != nil || got != nil {
+		t.Fatalf("blank content accepted: %v err %v", got, err)
+	}
+}

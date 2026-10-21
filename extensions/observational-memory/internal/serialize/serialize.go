@@ -5,6 +5,7 @@ package serialize
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +204,40 @@ func textOnly(content any) string {
 	return ""
 }
 
+// bashExecutionText renders a `!command` run the way the agent saw it: the
+// command, its output, and a note when it was cancelled or truncated. Such
+// messages carry command/output fields and no content, so the generic
+// tool-result rendering would show them as empty.
+func bashExecutionText(msg map[string]any) string {
+	command, _ := msg["command"].(string)
+	output, _ := msg["output"].(string)
+	text := "$ " + command
+	if strings.TrimSpace(output) != "" {
+		text += "\n" + output
+	}
+	notes := []string{}
+	switch code := msg["exitCode"].(type) {
+	case float64:
+		if code != 0 {
+			notes = append(notes, "exit code "+strconv.Itoa(int(code)))
+		}
+	case int:
+		if code != 0 {
+			notes = append(notes, "exit code "+strconv.Itoa(code))
+		}
+	}
+	if cancelled, _ := msg["cancelled"].(bool); cancelled {
+		notes = append(notes, "cancelled")
+	}
+	if truncated, _ := msg["truncated"].(bool); truncated {
+		notes = append(notes, "output truncated")
+	}
+	if len(notes) > 0 {
+		text += "\n(" + strings.Join(notes, "; ") + ")"
+	}
+	return text
+}
+
 func nonEmptyLines(text string) string {
 	kept := []string{}
 	for _, line := range strings.Split(text, "\n") {
@@ -245,6 +280,8 @@ func SerializeConversation(messages []map[string]any) string {
 				continue
 			}
 			blocks = append(blocks, "[Assistant @ "+timestamp+"]: "+body)
+		case "bashExecution":
+			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+bashExecutionText(msg))
 		default:
 			blocks = append(blocks, "[Tool result for "+jsString(msg["toolName"])+" @ "+timestamp+"]: "+textOnly(msg["content"]))
 		}
@@ -382,6 +419,17 @@ func isSourceRenderableEntry(entry session.Entry) bool {
 	return entry.Type == "message" || entry.Type == "custom_message" || entry.Type == "branch_summary"
 }
 
+// ObserverRenders reports whether the observer chunk would carry anything for
+// entry: a source entry with renderable content. Entries that render nothing
+// (an aborted assistant turn with no content) are skipped by the chunk
+// serializer and therefore never need observation coverage.
+func ObserverRenders(entry session.Entry) bool {
+	if entry.ID == "" || !isSourceRenderableEntry(entry) {
+		return false
+	}
+	return strings.TrimSpace(SerializeBranchEntries([]session.Entry{entry})) != ""
+}
+
 // SerializeSourceAddressedBranchEntries serializes complete source entries up
 // to the token budget. If the first entry alone exceeds the budget, a clearly
 // marked head/tail excerpt is included so one pathological tool result cannot
@@ -449,6 +497,8 @@ func renderRecallMessage(entry session.Entry) (string, bool) {
 			return "", false
 		}
 		return "[Assistant @ " + timestamp + "]: " + body, true
+	case "bashExecution":
+		return "[Bash @ " + timestamp + "]: " + bashExecutionText(msg), true
 	}
 	return "[Tool result: " + jsString(msg["toolName"]) + " @ " + timestamp + "]: " + textAndPlaceholders(msg["content"], placeholderOptions{}), true
 }

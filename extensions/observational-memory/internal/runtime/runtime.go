@@ -57,12 +57,18 @@ func (c ResolveCtx) notify(message, level string) {
 type ObserverEmptyBackoff struct {
 	SessionIdentity string
 	CoverageID      string
-	TokensAtEmpty   int
+	// TokensAtEmpty is the raw uncovered backlog when the verdict came; the
+	// provider delta is not used here because a compaction rebases it.
+	TokensAtEmpty int
+	// ChunkEndID is the last source entry of the judged chunk. A branch that
+	// no longer carries it (a tree jump) has content the observer never read,
+	// so the backoff does not apply there.
+	ChunkEndID string
 }
 
 // How long to wait for the availability re-check, and how long before the same
-// provider may be re-checked again.
-const (
+// provider may be re-checked again. Tests shorten them.
+var (
 	AvailabilityRecheckTimeout = 5 * time.Second
 	AvailabilityRecheckRearm   = 60 * time.Second
 )

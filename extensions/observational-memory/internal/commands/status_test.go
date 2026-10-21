@@ -245,3 +245,22 @@ func TestStatusRatioModeFallsBackWithoutModel(t *testing.T) {
 	h.Model = host.Model{"contextWindow": 0}
 	expectContains(t, statusOutput(t, statusRuntime(ratioConfig()), h), "Next compaction:  ~0 / 30 observed source tokens (0%)")
 }
+
+// Status reports what gates the workers: provider growth counts, and an
+// active deliberate-empty backoff is shown.
+func TestStatusProgressMirrorsWorkerGating(t *testing.T) {
+	entries := []ledger.Entry{
+		testfix.RawMessage("assistant-1", "done", map[string]any{"message": map[string]any{"role": "assistant", "content": "done", "stopReason": "end_turn", "usage": map[string]any{"totalTokens": 100}}}),
+		testfix.TextCustomMessage("raw-1", "aaaa"),
+		testfix.ObservationsRecordedEntry("om-cov", []ledger.Observation{testfix.Observation("aaaaaaaaaaaa")}, "raw-1"),
+	}
+	h := testfix.NewFakeHost(entries...)
+	tokens := 5100
+	h.Usage = &host.ContextUsage{Tokens: &tokens, ContextWindow: 200000}
+	rt := statusRuntime(statusConfig())
+	rt.SetObserverEmptyBackoff(&runtime.ObserverEmptyBackoff{SessionIdentity: "session-1", CoverageID: "raw-1", TokensAtEmpty: 4, ChunkEndID: "raw-2"})
+
+	output := statusOutput(t, rt, h)
+
+	expectContains(t, output, "Next observation: ~5,000 / 10 tokens", "Observer backoff: nothing new at ~4 tokens; resumes at ~14")
+}

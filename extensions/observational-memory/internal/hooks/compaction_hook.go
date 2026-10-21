@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -70,9 +71,20 @@ func ResolveCompactionCut(entries []ledger.Entry, firstKeptEntryID string, optio
 	if cutIndex == -1 {
 		return cutAt(firstKeptEntryID, firstKeptEntryID)
 	}
-	gap := ledger.UnobservedSourceSpanBefore(entries, cutIndex)
+	// Entries the observer could never read (no renderable content, such as
+	// an aborted assistant turn) need no coverage; counting them would force a
+	// moved cut onto them with a "~0 tokens" notice.
+	gap := ledger.UnobservedSourceSpanBeforeWhere(entries, cutIndex, serialize.ObserverRenders)
 	if gap == nil {
-		return cutAt(firstKeptEntryID, firstKeptEntryID)
+		// Coverage reaches Pi's cut. A marker may still cover entries beyond
+		// it; its observations describe the source this compaction removes,
+		// so fold through the observation frontier, not through the cut,
+		// which would leave the straddling marker out of the summary.
+		foldThrough := firstKeptEntryID
+		if ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded) > cutIndex {
+			foldThrough = ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
+		}
+		return cutAt(firstKeptEntryID, foldThrough)
 	}
 	// Overflow recovery must free context now; retaining more than Pi asked
 	// for risks overflowing again on the retried turn.
@@ -219,7 +231,18 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 	if resolution.Kind == "cut" {
 		built := ledger.BuildCompactionProjection(entries, resolution.Cut.FoldThroughEntryID, ledger.CompactionProjectionConfig{ObservationsPoolMaxTokens: observationsPoolMaxTokens(cfg)})
 		projection = &built
-		rendered := ledger.RenderSummaryWithBudget(projection.Reflections, projection.Observations, summaryMaxTokens)
+		// Instructions attached to this compaction ride along after the
+		// memory, so the memory render gets the budget minus their share.
+		instructionsBlock := ""
+		memoryBudget := summaryMaxTokens
+		if instructions := strings.TrimSpace(event.CustomInstructions); instructions != "" {
+			instructionsBlock = "\n\n---\n\n" + instructions
+			// The memory keeps at least half the budget: instructions are the
+			// caller's explicit request and ride along in full, but they must
+			// not crowd the memory out of its own summary.
+			memoryBudget = max(summaryMaxTokens/2, summaryMaxTokens-tokens.EstimateStringTokens(instructionsBlock))
+		}
+		rendered := ledger.RenderSummaryWithBudget(projection.Reflections, projection.Observations, memoryBudget)
 		summary = rendered.Text
 		// A summary that kept no record would replace older context with only
 		// instructions and an omission notice. Decline instead, so Pi's native
@@ -233,8 +256,8 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 		// Instructions another extension or the user attached to this compaction
 		// ride along after the memory, so they reach the next context the way
 		// they would in Pi's native summary. They count toward the budget below.
-		if instructions := strings.TrimSpace(event.CustomInstructions); summary != "" && instructions != "" {
-			summary += "\n\n---\n\n" + instructions
+		if summary != "" && instructionsBlock != "" {
+			summary += instructionsBlock
 		}
 		// A moved cut keeps the unobserved tail AND adds the rendered memory on
 		// top of it. Both must fit the budget, or Pi's threshold fires again

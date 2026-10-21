@@ -167,7 +167,9 @@ func RunReflector(ctx context.Context, args ReflectorArgs) ([]ledger.Reflection,
 					duplicates++
 					continue
 				}
-				accumulated[id] = ledger.Reflection{ID: id, Content: content, SupportingObservationIDs: supporting, TokenCount: tokens.EstimateStringTokens(content)}
+				// Like observations, count the rendered line ([id] content) so the
+				// stored footprint matches what summaries and prompts re-render.
+				accumulated[id] = ledger.Reflection{ID: id, Content: content, SupportingObservationIDs: supporting, TokenCount: tokens.EstimateStringTokens(ledger.ReflectionToSummaryLine(ledger.Reflection{ID: id, Content: content}))}
 				order = append(order, id)
 				added++
 			}

@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
@@ -147,13 +149,13 @@ func (fx *consFixture) expectNoAppends() {
 // blockObserver makes the next observer call wait until the returned release runs.
 func (fx *consFixture) blockObserver() (release func()) {
 	gate := make(chan struct{})
-	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) ([]ledger.Observation, error) {
+	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
 		select {
 		case <-gate:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return agents.ObserverResult{}, ctx.Err()
 		}
-		return nil, nil
+		return agents.ObserverResult{}, nil
 	})
 	return func() { close(gate) }
 }
@@ -271,7 +273,7 @@ func TestConsolidationDoesNotLaunchWhenBacklogAndGrowthBelowThreshold(t *testing
 func TestConsolidationRunsObserverFirstAndAppendsObservations(t *testing.T) {
 	fx := consSetup(t, consArgs{entries: []ledger.Entry{text("raw-1", "aaaaaaaa")}, reflectAfterTokens: 999})
 	obs := newObservation()
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 
 	fx.run()
 
@@ -289,7 +291,7 @@ func TestConsolidationForwardsOAuthShapedAuth(t *testing.T) {
 		primaryAuth:  &host.Auth{OK: true, Headers: map[string]any{"Authorization": "Bearer oauth-token"}},
 	})
 	obs := newObservation()
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 
 	fx.run()
 
@@ -307,7 +309,7 @@ func TestConsolidationAddsOpencodeSessionHeaders(t *testing.T) {
 		primaryAuth:  &host.Auth{OK: true, APIKey: strp("go-key")},
 	})
 	obs := newObservation()
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 
 	fx.run()
 
@@ -324,7 +326,7 @@ func TestConsolidationMergesOpencodeHeadersWithAuthHeaders(t *testing.T) {
 		primaryModel: testfix.Model("opencode-go", "memory", map[string]any{"baseUrl": opencodeBaseURL}),
 		primaryAuth:  &host.Auth{OK: true, APIKey: strp("go-key"), Headers: map[string]any{"Authorization": "Bearer go-key"}},
 	})
-	fx.obs.resolve([]ledger.Observation{newObservation()})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
 
 	fx.run()
 
@@ -340,7 +342,7 @@ func TestConsolidationDetectsOpencodeByBaseURL(t *testing.T) {
 		primaryModel: testfix.Model("custom", "memory", map[string]any{"baseUrl": opencodeBaseURL}),
 		primaryAuth:  &host.Auth{OK: true, APIKey: strp("go-key")},
 	})
-	fx.obs.resolve([]ledger.Observation{newObservation()})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
 
 	fx.run()
 
@@ -355,7 +357,7 @@ func TestConsolidationLeavesHeadersForOtherProviders(t *testing.T) {
 		primaryModel: testfix.Model("anthropic", "memory", map[string]any{"baseUrl": "https://api.anthropic.com"}),
 		primaryAuth:  &host.Auth{OK: true, APIKey: strp("k")},
 	})
-	fx.obs.resolve([]ledger.Observation{newObservation()})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
 
 	fx.run()
 
@@ -375,7 +377,7 @@ func TestConsolidationUsesExistingCoverageAndRetriesLargerRanges(t *testing.T) {
 		text("raw-3", "cccccccc"),
 	}
 	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999})
-	fx.obs.resolve([]ledger.Observation{newObs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObs}))
 
 	fx.run()
 
@@ -401,7 +403,7 @@ var observerRunning = regexp.MustCompile(`^Observational memory: observer runnin
 func TestConsolidationShowsRoutineNotificationsByDefault(t *testing.T) {
 	newRef := testfix.Reflection("ffffffffffff", []string{"aaaaaaaaaaaa"})
 	fx := consSetup(t, consArgs{entries: []ledger.Entry{text("raw-1", "aaaaaaaa")}, poolTargetTokens: 5})
-	fx.obs.resolve([]ledger.Observation{obsA})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obsA}))
 	fx.ref.resolve([]ledger.Reflection{newRef})
 	fx.drop.resolve([]string{"aaaaaaaaaaaa"})
 
@@ -425,7 +427,7 @@ func TestConsolidationSuppressesRoutineNotificationsButNotWarnings(t *testing.T)
 	entries := []ledger.Entry{text("raw-1", "aaaaaaaa")}
 	newRef := testfix.Reflection("ffffffffffff", []string{"aaaaaaaaaaaa"})
 	quiet := consSetup(t, consArgs{entries: entries, poolTargetTokens: 5, quiet: true})
-	quiet.obs.resolve([]ledger.Observation{obsA})
+	quiet.obs.resolve(agents.Observed([]ledger.Observation{obsA}))
 	quiet.ref.resolve([]ledger.Reflection{newRef})
 	quiet.drop.resolve([]string{"aaaaaaaaaaaa"})
 	quiet.run()
@@ -469,7 +471,7 @@ func TestConsolidationBacksOffAfterDeliberateEmpty(t *testing.T) {
 		t.Fatalf("observer calls %d", fx.obs.count())
 	}
 	backoff := fx.rt.ObserverEmptyBackoff()
-	if backoff == nil || *backoff != (runtime.ObserverEmptyBackoff{SessionIdentity: "session-1", CoverageID: "", TokensAtEmpty: 10}) {
+	if backoff == nil || *backoff != (runtime.ObserverEmptyBackoff{SessionIdentity: "session-1", CoverageID: "", TokensAtEmpty: 10, ChunkEndID: "raw-1"}) {
 		t.Fatalf("backoff %+v", backoff)
 	}
 
@@ -482,7 +484,7 @@ func TestConsolidationBacksOffAfterDeliberateEmpty(t *testing.T) {
 
 	// 10 more new tokens: backoff satisfied, observer re-fires over the grown span.
 	fx.addEntries(text("raw-3", strings.Repeat("c", 40)))
-	fx.obs.resolve([]ledger.Observation{obsA})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obsA}))
 	fx.run()
 	if fx.obs.count() != 2 || fx.rt.ObserverEmptyBackoff() != nil {
 		t.Fatalf("observer calls %d backoff %+v", fx.obs.count(), fx.rt.ObserverEmptyBackoff())
@@ -539,7 +541,7 @@ func TestConsolidationModelResolutionFailureSkipsAndNotifiesOnce(t *testing.T) {
 func TestConsolidationRereadsBranchSoObserverUnblocksReflector(t *testing.T) {
 	newRef := testfix.Reflection("ffffffffffff", []string{"aaaaaaaaaaaa"})
 	fx := consSetup(t, consArgs{entries: []ledger.Entry{text("raw-1", "aaaaaaaa")}})
-	fx.obs.resolve([]ledger.Observation{obsA})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obsA}))
 	fx.ref.resolve([]ledger.Reflection{newRef})
 
 	fx.run()
@@ -766,7 +768,7 @@ func TestFallbackUsesResolutionLevelFallbackForObserver(t *testing.T) {
 		primaryModel: testfix.Model("anthropic", "haiku"), primaryAuth: &host.Auth{OK: false},
 		fallback: fallbackConfig("high"), fallbackModel: fallbackRegistryModel(map[string]any{"baseUrl": opencodeBaseURL}), fallbackAuth: testfix.KeyAuth("go-key"),
 	})
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 
 	fx.run()
 
@@ -784,7 +786,7 @@ func TestFallbackRetriesObserverOnceAfterPrimaryStreamError(t *testing.T) {
 		fallback: fallbackConfig(""), fallbackModel: fallbackRegistryModel(map[string]any{"baseUrl": opencodeBaseURL}), fallbackAuth: testfix.KeyAuth("go-key"),
 	})
 	fx.obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 
 	fx.run()
 
@@ -808,7 +810,7 @@ func TestFallbackReusedForLaterStagesInSamePass(t *testing.T) {
 		fallback: fallbackConfig(""), fallbackModel: fallbackRegistryModel(), fallbackAuth: testfix.KeyAuth("go-key"),
 	})
 	fx.obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 	fx.ref.resolve([]ledger.Reflection{testfix.Reflection("ffffffffffff", []string{"cccccccccccc"})})
 
 	fx.run()
@@ -911,7 +913,7 @@ func TestFallbackUsesFallbackThinkingLevelOnRetry(t *testing.T) {
 		fallback: fallbackConfig("high"), fallbackModel: fallbackRegistryModel(), fallbackAuth: testfix.KeyAuth("go-key"),
 	})
 	fx.obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
-	fx.obs.resolve([]ledger.Observation{newObservation()})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
 
 	fx.run()
 
@@ -929,7 +931,7 @@ func TestFallbackCapsObserverChunkToSmallerWindow(t *testing.T) {
 		primaryModel: testfix.Model("anthropic", "memory", map[string]any{"contextWindow": 200000}),
 		fallback:     fallbackConfig(""), fallbackModel: fallbackRegistryModel(map[string]any{"contextWindow": 100}), fallbackAuth: testfix.KeyAuth("go-key"),
 	})
-	fx.obs.resolve([]ledger.Observation{observationWith("111111111111", []string{"raw-1"}, 4)})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{observationWith("111111111111", []string{"raw-1"}, 4)}))
 
 	fx.run()
 
@@ -945,8 +947,8 @@ func TestChunkCapDrainsBacklogIncrementally(t *testing.T) {
 	second := observationWith("222222222222", []string{"raw-2"}, 4)
 	entries := []ledger.Entry{text("raw-1", strings.Repeat("a", 800)), text("raw-2", strings.Repeat("b", 800)), text("raw-3", strings.Repeat("c", 800))}
 	fx := consSetup(t, consArgs{entries: entries, chunkMaxTokens: 256, reflectAfterTokens: 999})
-	fx.obs.resolve([]ledger.Observation{first})
-	fx.obs.resolve([]ledger.Observation{second})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{first}))
+	fx.obs.resolve(agents.Observed([]ledger.Observation{second}))
 
 	fx.run()
 
@@ -977,8 +979,8 @@ func TestChunkCapBoundsOversizedToolResult(t *testing.T) {
 		text("raw-next", "later"),
 	}
 	fx := consSetup(t, consArgs{entries: entries, chunkMaxTokens: 100, reflectAfterTokens: 999})
-	fx.obs.resolve([]ledger.Observation{first})
-	fx.obs.resolve([]ledger.Observation{second})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{first}))
+	fx.obs.resolve(agents.Observed([]ledger.Observation{second}))
 
 	fx.run()
 
@@ -1011,7 +1013,7 @@ func TestChunkCapDerivedFromModelContextWindow(t *testing.T) {
 	entries := []ledger.Entry{text("raw-1", strings.Repeat("a", 800)), text("raw-2", strings.Repeat("b", 800))}
 	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999, primaryModel: testfix.Model("anthropic", "memory", map[string]any{"reasoning": true, "contextWindow": 1_280})})
 	obs := observationWith("444444444444", []string{"raw-1"}, 4)
-	fx.obs.resolve([]ledger.Observation{obs})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{obs}))
 
 	fx.run()
 
@@ -1069,7 +1071,7 @@ func settledWithAfterHook(fx *consFixture) <-chan struct{} {
 
 func TestIdlePassesRunContextToWorkers(t *testing.T) {
 	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
-	fx.obs.resolve([]ledger.Observation{newObservation()})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
 
 	waitDone(t, settledWithAfterHook(fx))
 
@@ -1082,10 +1084,10 @@ func TestIdlePassesRunContextToWorkers(t *testing.T) {
 // cancelled; the returned channel closes once the observer has been entered.
 func (fx *consFixture) abortingObserver() <-chan struct{} {
 	entered := make(chan struct{})
-	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) ([]ledger.Observation, error) {
+	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
 		close(entered)
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return agents.ObserverResult{}, ctx.Err()
 	})
 	return entered
 }
@@ -1180,7 +1182,7 @@ func TestBoundedWorkerMemorySendsNewestPriorMemoryThatFits(t *testing.T) {
 		text("raw-4", "dddddddd"),
 	}
 	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999, workerMemoryTokens: 50})
-	fx.obs.resolve([]ledger.Observation{observationWith("cccccccccccc", []string{"raw-4"}, 10)})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{observationWith("cccccccccccc", []string{"raw-4"}, 10)}))
 
 	fx.run()
 
@@ -1215,5 +1217,204 @@ func TestSessionEndAbortsInFlightRunQuietly(t *testing.T) {
 	OnSessionEnd(fx.rt, "session_before_switch")
 	if len(fx.h.Notifications) != before {
 		t.Fatalf("notifications %+v", fx.h.Notifications)
+	}
+}
+
+func eventually(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(testTimeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition not met in time")
+}
+
+// An unresolvable model is reported once; the reflector announces "running"
+// only after the model resolved.
+func TestReflectorAnnouncesRunningOnlyAfterResolving(t *testing.T) {
+	entries := []ledger.Entry{text("raw-1", "aaaaaaaa"), testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obsA}, "raw-1")}
+	fx := consSetup(t, consArgs{entries: entries, observeAfterTokens: 999, primaryAuth: &host.Auth{OK: false}})
+
+	fx.run()
+
+	skipped := 0
+	for _, n := range fx.h.Notifications {
+		if strings.HasPrefix(n.Message, "Observational memory: reflector skipped — ") {
+			skipped++
+		}
+	}
+	if skipped != 1 || hasNotificationContaining(fx.h, "reflector running", "") {
+		t.Fatalf("notifications %+v", fx.h.Notifications)
+	}
+}
+
+// Provider growth alone does not make the reflector due.
+func TestReflectorNotDueWithoutNewObservations(t *testing.T) {
+	entries := []ledger.Entry{
+		text("raw-1", "aaaaaaaa"),
+		assistantDone(1000),
+		testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obsA}, "assistant-1"),
+		testfix.ReflectionsRecordedEntry("om-ref", []ledger.Reflection{refA}, "assistant-1"),
+	}
+	fx := consSetup(t, consArgs{entries: entries, observeAfterTokens: 1_000_000_000, reflectAfterTokens: 1})
+	fx.h.Usage = usage(90_000, 200_000)
+
+	if fx.launch() != nil || fx.ref.count() != 0 {
+		t.Fatal("reflector launched on provider growth alone")
+	}
+}
+
+// A run aborted while the fallback resolves is not retried and not reported.
+func TestFallbackRetrySkippedWhenAbortedDuringResolution(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), reflectAfterTokens: 999, fallback: fallbackConfig(""), fallbackModel: fallbackRegistryModel(), fallbackAuth: testfix.KeyAuth("go-key")})
+	fx.obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{newObservation()}))
+	finds := 0
+	fx.h.ModelsFake.OnFind = func(provider, id string) {
+		// The first lookup sizes the observer chunk; the second resolves the retry.
+		if provider == fallbackTarget.Provider {
+			finds++
+			if finds == 2 {
+				fx.rt.AbortConsolidation()
+			}
+		}
+	}
+
+	fx.run()
+
+	if fx.obs.count() != 1 || hasNotificationContaining(fx.h, "retrying with fallback", "") || len(fx.h.Appended) != 0 || fx.rt.Snapshot().LastObserverError != "" {
+		t.Fatalf("observer calls %d state %+v notifications %+v", fx.obs.count(), fx.rt.Snapshot(), fx.h.Notifications)
+	}
+}
+
+// In idle mode a settle while a run is in flight waits for it before the
+// compaction check; the direct check runs only outside idle mode.
+func TestIdleSettleWaitsForInFlightRunBeforeCompactionCheck(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+	release := fx.blockObserver()
+	var mu sync.Mutex
+	after := 0
+	count := func() int { mu.Lock(); defer mu.Unlock(); return after }
+	hook := ConsolidationHooks{AfterIdleConsolidation: func(host.Host) { mu.Lock(); after++; mu.Unlock() }}
+
+	OnAgentSettled(fx.rt, fx.h, hook) // launches
+	OnAgentSettled(fx.rt, fx.h, hook) // in flight: waits
+	if count() != 0 {
+		t.Fatalf("after hook ran %d times while the run was in flight", count())
+	}
+	release()
+	eventually(t, func() bool { return count() == 2 })
+
+	// The event entry point: idle mode defers the compaction check to the run.
+	trigger := consSetup(t, consArgs{entries: covered(dueEntries(), ""), idle: true, reflectAfterTokens: 999, observeAfterTokens: 1_000_000_000})
+	cfg := trigger.rt.Config()
+	cfg.CompactAfterTokens = 1
+	trigger.rt.SetConfig(cfg)
+	OnAgentSettledEvent(trigger.rt, trigger.h)
+	eventually(t, func() bool { return trigger.h.CompactCount() == 1 })
+}
+
+// Aborting during the reflector or the dropper records nothing and retries nothing.
+func TestAbortDuringReflectorAndDropperIsQuiet(t *testing.T) {
+	covered := []ledger.Entry{text("raw-1", "aaaaaaaa"), testfix.ObservationsRecordedEntry("om-obs", []ledger.Observation{obsA}, "raw-1")}
+	fallback := consArgs{fallback: fallbackConfig(""), fallbackModel: fallbackRegistryModel(), fallbackAuth: testfix.KeyAuth("go-key")}
+
+	reflector := consSetup(t, consArgs{entries: covered, observeAfterTokens: 999, fallback: fallback.fallback, fallbackModel: fallback.fallbackModel, fallbackAuth: fallback.fallbackAuth})
+	entered := make(chan struct{})
+	reflector.ref.impl(func(ctx context.Context, args agents.ReflectorArgs) ([]ledger.Reflection, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	done := reflector.launch()
+	waitDone(t, entered)
+	reflector.rt.AbortConsolidation()
+	waitDone(t, done)
+	if len(reflector.h.Appended) != 0 || reflector.rt.Snapshot().LastReflectorError != "" || hasNotificationContaining(reflector.h, "failed", "warning") || authCount(reflector.h.ModelsFake, fallbackTarget.Provider) != 0 {
+		t.Fatalf("reflector abort: state %+v notifications %+v", reflector.rt.Snapshot(), reflector.h.Notifications)
+	}
+
+	newRef := testfix.Reflection("ffffffffffff", []string{"aaaaaaaaaaaa"})
+	dropper := consSetup(t, consArgs{entries: covered, observeAfterTokens: 999, poolMaxTokens: 10, fallback: fallback.fallback, fallbackModel: fallback.fallbackModel, fallbackAuth: fallback.fallbackAuth})
+	dropper.ref.resolve([]ledger.Reflection{newRef})
+	enteredDrop := make(chan struct{})
+	dropper.drop.impl(func(ctx context.Context, args agents.DropperArgs) ([]string, error) {
+		close(enteredDrop)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	done = dropper.launch()
+	waitDone(t, enteredDrop)
+	dropper.rt.AbortConsolidation()
+	waitDone(t, done)
+	if len(dropper.h.Appended) != 1 || dropper.rt.Snapshot().LastDropperError != "" || hasNotificationContaining(dropper.h, "failed", "warning") || authCount(dropper.h.ModelsFake, fallbackTarget.Provider) != 0 {
+		t.Fatalf("dropper abort: appended %d state %+v notifications %+v", len(dropper.h.Appended), dropper.rt.Snapshot(), dropper.h.Notifications)
+	}
+}
+
+// A branch or session that changed under the model call gets no append.
+func TestObserverSkipsAppendWhenBranchChanged(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), reflectAfterTokens: 999})
+	fx.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		// The user jumped to another branch while the model ran.
+		fx.h.SetBranch([]ledger.Entry{text("other-1", "bbbbbbbb")})
+		return agents.Observed([]ledger.Observation{newObservation()}), nil
+	})
+	fx.run()
+	fx.expectNoAppends()
+
+	session := consSetup(t, consArgs{entries: dueEntries(), reflectAfterTokens: 999})
+	session.obs.impl(func(ctx context.Context, args agents.ObserverArgs) (agents.ObserverResult, error) {
+		session.h.ID = "session-2"
+		return agents.Observed([]ledger.Observation{newObservation()}), nil
+	})
+	session.run()
+	session.expectNoAppends()
+	if fx.rt.Snapshot().LastObserverError != "" || session.rt.Snapshot().LastObserverError != "" || hasNotificationContaining(fx.h, "failed", "") || hasNotificationContaining(session.h, "failed", "") {
+		t.Fatalf("notifications %+v / %+v", fx.h.Notifications, session.h.Notifications)
+	}
+}
+
+// A partial observer run claims coverage only through the last cited entry.
+func TestPartialObserverRunClaimsOnlyCitedCoverage(t *testing.T) {
+	entries := []ledger.Entry{text("raw-1", "aaaaaaaa"), text("raw-2", "bbbbbbbb"), text("raw-3", "cccccccc")}
+	obs := observationWith("cccccccccccc", []string{"raw-2"}, 4)
+	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999})
+	fx.obs.resolve(agents.ObserverResult{Observations: []ledger.Observation{obs}, Partial: true, StreamError: &agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "connection reset"}})
+
+	fx.run()
+
+	fx.expectAppended(0, ledger.OMObservationsRecorded, recordedObservations([]ledger.Observation{obs}, "raw-2"))
+	if !hasNotificationContaining(fx.h, "observer stopped early", "info") || fx.rt.Snapshot().LastObserverError != "" {
+		t.Fatalf("state %+v notifications %+v", fx.rt.Snapshot(), fx.h.Notifications)
+	}
+
+	// Nothing cited: nothing is appended and the failure is recorded.
+	uncited := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999})
+	uncited.obs.resolve(agents.ObserverResult{Observations: []ledger.Observation{observationWith("dddddddddddd", []string{"raw-9"}, 4)}, Partial: true, StreamError: &agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "connection reset"}})
+	uncited.run()
+	uncited.expectNoAppends()
+	if !strings.Contains(uncited.rt.Snapshot().LastObserverError, "connection reset") {
+		t.Fatalf("state %+v", uncited.rt.Snapshot())
+	}
+}
+
+// A deliberate-empty backoff does not follow the observer to another branch.
+func TestBackoffClearsWhenChunkLeavesBranch(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: []ledger.Entry{text("raw-1", strings.Repeat("a", 40))}, observeAfterTokens: 10, reflectAfterTokens: 999})
+
+	fx.run()
+	if fx.obs.count() != 1 || fx.rt.ObserverEmptyBackoff() == nil {
+		t.Fatalf("observer calls %d backoff %+v", fx.obs.count(), fx.rt.ObserverEmptyBackoff())
+	}
+
+	// A sibling branch with content the observer never read.
+	fx.h.SetBranch([]ledger.Entry{text("other-1", strings.Repeat("b", 40))})
+	fx.run()
+	if fx.obs.count() != 2 {
+		t.Fatalf("observer calls %d", fx.obs.count())
 	}
 }

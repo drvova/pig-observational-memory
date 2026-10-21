@@ -84,6 +84,9 @@ type LoopResult struct {
 	// StreamError is set when the run ended with a failed or aborted model call.
 	StreamError *StreamError
 	Turns       int
+	// HitMaxTurns is set when the turn cap ended a run whose last turn still
+	// called tools: the model was cut short rather than finished.
+	HitMaxTurns bool
 }
 
 func textContent(text string) []any {
@@ -218,6 +221,9 @@ func RunLoop(ctx context.Context, stream StreamFunc, cfg LoopConfig, systemPromp
 		}
 		result.Turns++
 		if cfg.MaxTurns > 0 && result.Turns >= cfg.MaxTurns {
+			// A turn without tool calls would have ended the loop anyway; one
+			// with tool calls means the model still had work to do.
+			result.HitMaxTurns = len(calls) > 0
 			return result, nil
 		}
 		if len(calls) == 0 {

@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -410,4 +411,33 @@ func TestTriggerDefersAfterBoundedRepolls(t *testing.T) {
 		t.Fatalf("compact calls %d polls %d in flight %v", h.CompactCalls, polls, rt.CompactInFlight())
 	}
 	expectNotification(t, h, "Observational memory: compaction deferred — agent became busy before compaction", "info")
+}
+
+// The compact callbacks reset the in-flight flag: completion is announced,
+// a cancelled compaction is silent, any other error is shown.
+func TestTriggerResetsFlagThroughCompactCallbacks(t *testing.T) {
+	rt, h := triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
+	h.CompactFn = func(callbacks host.CompactCallbacks) { callbacks.OnComplete() }
+	fireTrigger(t, rt, h)
+	if rt.CompactInFlight() {
+		t.Fatal("flag still set after completion")
+	}
+	expectNotification(t, h, "Observational memory: compaction complete", "info")
+
+	rt, h = triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
+	h.CompactFn = func(callbacks host.CompactCallbacks) { callbacks.OnError(errors.New("Compaction cancelled")) }
+	fireTrigger(t, rt, h)
+	if rt.CompactInFlight() || hasNotificationContaining(h, "cancelled", "") {
+		t.Fatalf("in flight %v notifications %+v", rt.CompactInFlight(), h.Notifications)
+	}
+
+	rt, h = triggerRuntime(triggerArgs{}), triggerHost(dueBranch())
+	h.CompactFn = func(callbacks host.CompactCallbacks) {
+		callbacks.OnError(errors.New("Nothing to compact (session too small)"))
+	}
+	fireTrigger(t, rt, h)
+	if rt.CompactInFlight() {
+		t.Fatal("flag still set after an error")
+	}
+	expectNotification(t, h, "Observational memory: Nothing to compact (session too small)", "error")
 }

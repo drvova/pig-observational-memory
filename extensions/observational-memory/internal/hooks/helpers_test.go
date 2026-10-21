@@ -185,7 +185,7 @@ func (m *stageMock[A, R]) call(i int) A {
 }
 
 type (
-	observerMock  = stageMock[agents.ObserverArgs, []ledger.Observation]
+	observerMock  = stageMock[agents.ObserverArgs, agents.ObserverResult]
 	reflectorMock = stageMock[agents.ReflectorArgs, []ledger.Reflection]
 	dropperMock   = stageMock[agents.DropperArgs, []string]
 )

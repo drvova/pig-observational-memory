@@ -168,6 +168,11 @@ func rotateIfNeeded(path string) {
 		return
 	}
 	backup := path + ".1"
-	_ = os.Remove(backup)
-	_ = os.Rename(path, backup)
+	// Rename over the old backup where the platform allows it, so a second
+	// writer cannot slip between an unlink and the rename; fall back to
+	// unlink-then-rename where it does not (Windows).
+	if err := os.Rename(path, backup); err != nil {
+		_ = os.Remove(backup)
+		_ = os.Rename(path, backup)
+	}
 }

@@ -88,8 +88,10 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		fmt.Sprintf("Reflections:  %d recorded / %d visible", len(folded.Reflections), len(visible.Reflections)),
 		addedSuffix(len(drift.ReflectionsOnlyInFull)),
 	)
-	obsProgress := ledger.RawTokensSinceObservationCoverage(entries)
-	reflectionProgress := ledger.ObservedTokensSinceReflectionCoverage(entries)
+	// The same measures that gate the workers: the larger of the raw backlog
+	// and the provider-reported growth.
+	obsProgress := hooks.ObserverProgressTokens(entries, h)
+	reflectionProgress := hooks.ReflectorProgressTokens(entries, h)
 	compactionProgress := hooks.CompactionProgress(cfg, entries)
 	unobservedSinceCompaction := max(0, ledger.RawTokensSinceLastCompaction(entries)-ledger.ObservedTokensSinceLastCompaction(entries))
 	compactThreshold := config.ResolveCompactAfterTokens(cfg, host.ModelContextWindow(h.SessionModel()))
@@ -116,6 +118,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		fmt.Sprintf("Active observation pool: ~%s / %s target tokens (%d%%)", jsfmt.Locale(activePool.ObservationTokens), jsfmt.Locale(cfg.ObservationsPoolTargetTokens), pct(activePool.ObservationTokens, cfg.ObservationsPoolTargetTokens)),
 		fmt.Sprintf("Reflection pool:         ~%s tokens", jsfmt.Locale(visibleReflectionTokens)),
 	)
+	if backoff := rt.ObserverEmptyBackoff(); backoff != nil && backoff.CoverageID == ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded) {
+		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s tokens; resumes at ~%s", jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens)))
+	}
 
 	state := rt.Snapshot()
 	if state.ConsolidationInFlight || state.CompactInFlight || state.CompactHookInFlight {

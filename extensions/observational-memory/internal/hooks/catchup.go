@@ -50,6 +50,9 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		result.StoppedBecause = "model_unavailable"
 		return result
 	}
+	// The same request decorations as the background pipeline: Console Go
+	// session headers, and the fallback's thinking level when it is active.
+	resolved = workerHeadersFor(h, resolved)
 	contextWindow := host.ModelContextWindow(resolved.Model)
 	maxChunkTokens := config.ResolveObserverChunkMaxTokens(cfg, contextWindow)
 	entries := args.Entries
@@ -64,10 +67,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 	}
 	branch := entries
-	thinking := "low"
-	if cfg.Model != nil && cfg.Model.Thinking != "" {
-		thinking = string(cfg.Model.Thinking)
-	}
+	thinking := workerThinkingLevel(cfg, resolved)
 	for chunkIndex := 0; chunkIndex < args.MaxChunks && len(remaining) > 0; chunkIndex++ {
 		if ctx.Err() != nil {
 			result.StoppedBecause = "aborted"
@@ -96,7 +96,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		for _, observation := range memory.Observations {
 			priorObservations = append(priorObservations, ledger.ObservationToSummaryLine(observation))
 		}
-		observations, err := runObserver(ctx, agents.ObserverArgs{
+		outcome, err := runObserver(ctx, agents.ObserverArgs{
 			WorkerArgs: agents.WorkerArgs{
 				Model:           resolved.Model,
 				APIKey:          resolved.APIKey,
@@ -121,6 +121,18 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			notifyUI(h, "Observational memory: catch-up observer failed: "+err.Error(), "warning")
 			result.StoppedBecause = "error"
 			return result
+		}
+		observations := outcome.Observations
+		if outcome.Partial && len(observations) > 0 {
+			// The model stopped mid-chunk: claim coverage only through the
+			// last source entry the observations cite.
+			cited := agents.LastCitedSourceEntryID(observations, serialized.SourceEntryIDs)
+			debuglog.Log(ctx, "compaction.catch_up.partial", map[string]any{"chunkIndex": chunkIndex, "coversUpToId": coversUpToID, "citedUpToId": cited})
+			if cited == "" {
+				result.StoppedBecause = "error"
+				return result
+			}
+			coversUpToID = cited
 		}
 		var data *ledger.ObservationsRecordedData
 		if len(observations) > 0 {
