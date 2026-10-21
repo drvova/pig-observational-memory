@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 )
 
 func useAgentDir(t *testing.T) string {

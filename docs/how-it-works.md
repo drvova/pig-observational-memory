@@ -1,6 +1,6 @@
 # How it works
 
-This is the V3 technical reference for `pi-observational-memory`, a PiG extension.
+This is the V3 technical reference for `pig-observational-memory`, a PiG extension.
 
 V3 is ledger-centered: memory state is reconstructed by folding V3 ledger entries on the current branch. When that projection is non-empty, V3 renders it model-free into the summary the agent sees; no summarization model is called. Before rendering, the compaction hook may run the observer synchronously on source Pi's cut would otherwise discard (see [Compaction hook](#compaction-hook)). Empty projections delegate to Pi's native summarizer.
 

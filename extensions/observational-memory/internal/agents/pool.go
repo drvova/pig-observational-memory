@@ -3,8 +3,8 @@ package agents
 import (
 	"math"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
 // PoolMetrics describes the active observation pool against its target.

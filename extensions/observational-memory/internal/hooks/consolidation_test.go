@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 const opencodeBaseURL = "https://opencode.ai/zen/go/v1"

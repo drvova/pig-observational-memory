@@ -3,10 +3,10 @@ package commands
 import (
 	"strings"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/clipboard"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/clipboard"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 )
 
 // FirstArg is the command's first whitespace-separated argument.

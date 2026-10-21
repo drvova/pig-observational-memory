@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 )
 
 type env map[string]string

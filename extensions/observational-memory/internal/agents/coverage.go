@@ -1,7 +1,7 @@
 // Package agents runs the observer, reflector and dropper memory workers.
 package agents
 
-import "github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
+import "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 
 // CoverageTier is how many current reflections cite an observation.
 type CoverageTier string

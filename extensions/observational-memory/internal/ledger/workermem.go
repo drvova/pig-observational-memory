@@ -3,7 +3,7 @@ package ledger
 import (
 	"sort"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 )
 
 // WorkerMemorySlice is the prior memory a worker prompt carries.

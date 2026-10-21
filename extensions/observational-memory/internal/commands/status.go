@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/hooks"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
 
 func pct(current, total int) int {

@@ -1,4 +1,4 @@
-module github.com/drvova/pi-observational-memory/extensions/observational-memory
+module github.com/drvova/pig-observational-memory/extensions/observational-memory
 
 go 1.26
 

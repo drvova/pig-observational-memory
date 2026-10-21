@@ -1,6 +1,6 @@
 package hooks
 
-import "github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
+import "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 
 // sessionEntryToContextMessages is Pi's sessionEntryToContextMessages for the
 // entries the cut point logic reads.

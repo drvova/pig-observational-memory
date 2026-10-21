@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
-	tf "github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
 func customEntry(id, content string) session.Entry {

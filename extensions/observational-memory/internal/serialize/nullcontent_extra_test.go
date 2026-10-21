@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
-	tf "github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 // Missing or null message content renders as empty text instead of crashing

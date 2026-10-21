@@ -7,8 +7,8 @@ import (
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
 // Host is a host.Host over one sdk.Context. A handler may retain it past its

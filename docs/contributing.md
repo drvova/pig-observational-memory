@@ -4,7 +4,7 @@ This page says where changes go, what a pull request should contain, and which c
 
 ## Where changes land
 
-The extension is the Go module in `extensions/observational-memory`, run as a [PiG](https://github.com/MichaelKinsy/PiG) extension. [pig.md](pig.md) shows its package layout. A change that makes it behave differently from the TypeScript extension it was ported from adds an entry to the change list there.
+The extension is the Go module in `extensions/observational-memory`, run as a [PiG](https://github.com/MichaelKinsy/PiG) extension. [pig.md](pig.md) shows its package layout. A change that makes it behave differently from the TypeScript extension adds an entry to the migration notes there, so users moving over know what to expect.
 
 ## What a pull request contains
 

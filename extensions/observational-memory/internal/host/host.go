@@ -5,7 +5,7 @@ package host
 import (
 	"context"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
 // Model is a Pi model object as the registry serves it (provider, id,

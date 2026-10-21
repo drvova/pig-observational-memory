@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
 // Now is the clock; tests replace it.

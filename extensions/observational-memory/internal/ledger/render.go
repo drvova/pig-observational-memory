@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 )
 
 // ContextUsageInstructions opens every rendered memory summary.

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
 // The V3 custom entry types and the old V2 ones.
@@ -434,7 +434,7 @@ type FakeHost struct {
 
 // NewFakeHost creates a host with a UI, a cwd and the given entries.
 func NewFakeHost(entries ...session.Entry) *FakeHost {
-	return &FakeHost{Entries: entries, UI: true, WorkDir: "/tmp/pi-observational-memory-test", ModelsFake: NewFakeModels(), Idle: true, ID: "session-1"}
+	return &FakeHost{Entries: entries, UI: true, WorkDir: "/tmp/pig-observational-memory-test", ModelsFake: NewFakeModels(), Idle: true, ID: "session-1"}
 }
 
 func (h *FakeHost) GetBranch() ([]session.Entry, error) {

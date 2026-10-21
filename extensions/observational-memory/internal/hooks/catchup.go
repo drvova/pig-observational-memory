@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/config"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
 
 // CatchUpResult reports a synchronous observer catch-up.

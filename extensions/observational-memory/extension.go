@@ -1,6 +1,6 @@
 // Package observationalmemory is the PiG (pi-in-go) extension factory for
-// pi-observational-memory: cache-friendly tiered compaction with observations
-// and reflections, ported from the TypeScript Pi extension.
+// pig-observational-memory: cache-friendly tiered compaction with observations
+// and reflections.
 package observationalmemory
 
 import (
@@ -9,12 +9,12 @@ import (
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/commands"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/hooks"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/recall"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/sdkhost"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
 // Name is the extension identity PiG expects: the factory directory's name.

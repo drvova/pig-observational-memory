@@ -3,7 +3,7 @@ package ledger
 import (
 	"math"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
 // IsSourceEntry reports an entry that carries conversation content.

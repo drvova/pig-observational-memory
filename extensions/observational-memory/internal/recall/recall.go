@@ -6,10 +6,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/jsfmt"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/serialize"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/tokens"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
 // ToolName is the tool's name.

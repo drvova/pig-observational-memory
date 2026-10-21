@@ -5,7 +5,7 @@ import (
 	goruntime "runtime"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 // The hook reads Pi's session_before_compact payload as PiG sends it.

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 // Providers that authenticate at request time (Bedrock with AWS_PROFILE, Vertex

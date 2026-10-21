@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/clipboard"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/clipboard"
 )
 
 func names(commands []clipboard.Command) []string {

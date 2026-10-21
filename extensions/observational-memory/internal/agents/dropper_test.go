@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	tf "github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 func timestamp(ts string) func(*ledger.Observation) {

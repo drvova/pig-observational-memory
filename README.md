@@ -1,12 +1,12 @@
 <div align="center">
 
-# pi-observational-memory
+# pig-observational-memory
 
-**Long PiG sessions that keep the thread.**
+**Observational memory for [PiG](https://github.com/MichaelKinsy/PiG): long agent sessions that keep the thread across compactions.**
 
-A [PiG](https://github.com/MichaelKinsy/PiG) extension that gives the agent a lasting memory of the session. It records what happens while you work, distills what stays true, and makes compaction a quick render instead of a slow rewrite.
+A PiG extension that gives the agent a lasting memory of the session. It records what happens while you work, distills what stays true, and makes compaction a quick render instead of a slow rewrite.
 
-[![CI](https://github.com/drvova/pi-observational-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/drvova/pi-observational-memory/actions/workflows/ci.yml)
+[![CI](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml)
 [![Go 1.26+](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](extensions/observational-memory/go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -32,7 +32,7 @@ This extension does the memory work while the session runs, so it is ready befor
 You need the `pig` CLI and a Go 1.26 or newer toolchain: the `go` on your `PATH`, or one installed with `pig setup go`.
 
 ```bash
-pig install git:github.com/drvova/pi-observational-memory
+pig install git:github.com/drvova/pig-observational-memory
 ```
 
 The first run compiles the extension, so it starts more slowly; later sessions reuse the build.
@@ -43,7 +43,7 @@ Other ways to load it:
 
 ```bash
 # this project only (writes .pig/settings.json)
-pig install git:github.com/drvova/pi-observational-memory -l
+pig install git:github.com/drvova/pig-observational-memory -l
 
 # from a clone: load it for one session, without installing
 pig -e ./extensions/observational-memory
@@ -146,13 +146,13 @@ Two tips:
 
 [Configuration](docs/configuration.md) lists every setting with its validation and tuning advice.
 
-## Coming from the TypeScript extension
+## Migrating from the TypeScript extension
 
-This is a Go port of [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3).
+If you used the TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3), your sessions and settings work here.
 
 - **Sessions carry over.** The ledger entries and compaction details have the same shape, so recorded memory keeps working.
 - **Settings carry over.** The keys are the same and are read from PiG's directories, as described above.
-- **Some behavior changed.** The port fixes several upstream issues, and [pig.md](docs/pig.md) lists each change.
+- **Some behavior differs.** Several issues reported against the TypeScript extension are fixed here, and [the migration notes](docs/pig.md#migrating-from-the-typescript-extension) list each difference.
 - **V2 data is not read.** Like the TypeScript V3 release, this ignores settings and memory from the older V2 format; [Migrating from V2](docs/configuration.md#migrating-from-v2) maps the old keys.
 
 ## Development
@@ -191,12 +191,12 @@ go test -race ./...
 | [Concepts](docs/concepts.md) | Vocabulary and the memory model |
 | [How it works](docs/how-it-works.md) | Lifecycle, ledger entries, projections, compaction and recall |
 | [Configuration](docs/configuration.md) | Every setting, tuning, debugging and V2 migration |
-| [PiG extension](docs/pig.md) | Install details, package layout and changes from the TypeScript extension |
+| [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
 
 ## Credits
 
-Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. Ported from the TypeScript extension by [elpapi42](https://github.com/elpapi42) and its contributors.
+Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors.
 
 ## License
 

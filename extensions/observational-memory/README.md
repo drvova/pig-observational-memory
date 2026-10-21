@@ -1,6 +1,6 @@
 # observational-memory (PiG extension)
 
-The [pi-observational-memory](../../README.md) extension for [Pi in Go](https://github.com/MichaelKinsy/PiG).
+The [pig-observational-memory](../../README.md) extension for [PiG](https://github.com/MichaelKinsy/PiG).
 
 ```bash
 pig -e ./extensions/observational-memory

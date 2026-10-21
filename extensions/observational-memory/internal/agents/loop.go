@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/debuglog"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 )
 
 // Now is the clock for message timestamps; tests replace it.

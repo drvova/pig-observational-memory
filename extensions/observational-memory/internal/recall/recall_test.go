@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/recall"
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 func expectContains(t *testing.T, text string, fragments ...string) {

@@ -1,6 +1,6 @@
 # PiG extension
 
-`extensions/observational-memory/` is a [PiG](https://github.com/MichaelKinsy/PiG) extension: a Go package whose `Extension()` factory registers the hooks, commands and tool. The `pig` CLI builds it and runs it as a subprocess. It is a Go port of the TypeScript Pi extension [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory), which this repository no longer contains.
+`extensions/observational-memory/` is a [PiG](https://github.com/MichaelKinsy/PiG) extension: a Go package whose `Extension()` factory registers the hooks, commands and tool. The `pig` CLI builds it and runs it as a subprocess.
 
 ## Install
 
@@ -8,10 +8,10 @@ Requires Go 1.26 or newer on `PATH` (an older `go` with `GOTOOLCHAIN=auto` downl
 
 ```bash
 # install it for every session
-pig install git:github.com/drvova/pi-observational-memory
+pig install git:github.com/drvova/pig-observational-memory
 
 # install it for this project only (.pig/settings.json)
-pig install git:github.com/drvova/pi-observational-memory -l
+pig install git:github.com/drvova/pig-observational-memory -l
 
 # from a clone: run one session with it loaded, or install it
 pig -e ./extensions/observational-memory
@@ -39,7 +39,9 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 
 [contributing.md](contributing.md) lists the checks a change must pass.
 
-## Coming from the TypeScript extension
+## Migrating from the TypeScript extension
+
+These notes are for users of the TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3), whose memory model this extension shares.
 
 ### What carries over
 
@@ -47,9 +49,9 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 * **Settings.** The `observational-memory` namespace and every key in [configuration.md](configuration.md) are read unchanged, with the same precedence. They are read from PiG's directories (`~/.pig/agent/settings.json` and `<project>/.pig/settings.json` by default), not Pi's; run PiG with `PIG_USE_PI_DIRS=1` to share Pi's `~/.pi/agent` and `.pi`.
 * **Workers, compaction, commands and tool.** The observer, reflector and dropper run the same prompts, chunking and fallback-model retry, and the same tool schemas apart from the observer's argument checks listed below. The compaction trigger and hook follow the same rules. `/om:view` and `recall` render the same text, and `/om:status` keeps its layout. The changes below are the exceptions.
 
-### What changed
+### What differs
 
-These changes clear issues reported against the TypeScript extension; issue numbers refer to [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory/issues).
+These differences clear issues reported against the TypeScript extension; issue numbers refer to [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory/issues).
 
 * **The dropper gates on the whole active pool** (#102). The over-target check and the pool figures in its prompt measure every active observation, not only the slice that fits `workerMemoryMaxTokens`, so a pool that drifted above `observationsPoolTargetTokens` is pruned even when `workerMemoryMaxTokens / 2` is at or below the target. The dropper can still only drop observations it was shown.
 * **Thinking blocks never reach the workers** (#97). The observer sees the assistant's text, tool calls and tool results; a model's private reasoning is left out, which also avoids provider refusals under anti-distillation terms when the observer runs on the same frontier model as the session. `recall` still shows thinking in source evidence.

@@ -3,8 +3,8 @@ package ledger_test
 import (
 	"testing"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/ledger"
-	tf "github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 // Coverage is claimed only by entries memory accepts: one malformed record

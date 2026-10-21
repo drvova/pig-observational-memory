@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
 // The V3 custom entry types.
