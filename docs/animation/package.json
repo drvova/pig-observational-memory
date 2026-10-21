@@ -1,0 +1,17 @@
+{
+  "name": "pig-observational-memory-animation",
+  "private": true,
+  "type": "module",
+  "description": "Clayzo sources for the README banner and mascot (docs/assets/*.svg).",
+  "scripts": {
+    "build": "node banner.ts && node mascot.ts",
+    "check": "npm run build && clayzo render-frame out/banner.json out/sheet.png --samples 6 --max-dimension 1280 && clayzo render-frame out/banner.json out/seam.png --seam --max-dimension 640",
+    "export": "npm run build && clayzo export out/banner.json ../assets/banner.svg --format svg && clayzo export out/mascot.json ../assets/spider-ham.svg --format svg && node finish-svg.ts ../assets/banner.svg \"pig-observational-memory: PiG's Spider-Ham pixel pig hangs on a web thread beside the PiG. wordmark\" && node finish-svg.ts ../assets/spider-ham.svg \"Spider-Ham, PiG's red pixel pig\""
+  },
+  "dependencies": {
+    "@clayzo/animation": "^0.3.17"
+  },
+  "devDependencies": {
+    "clayzo": "^0.3.17"
+  }
+}

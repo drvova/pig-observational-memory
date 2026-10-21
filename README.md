@@ -186,6 +186,7 @@ extensions/observational-memory/   the extension, a standalone Go module
     ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
     └── testfix/                   fake host and entry builders for tests
 docs/                              concepts, internals, settings, PiG port notes, contributing
+docs/animation/                    Clayzo sources for the README banner and mascot
 ```
 
 From the module directory, run the same checks as CI:
@@ -211,7 +212,7 @@ go test -race ./...
 
 ## Credits
 
-Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors. Spider-Ham and the PiG. wordmark in the banner are PiG's own pixel art, drawn from its [sprite catalogue](https://github.com/MichaelKinsy/PiG/tree/main/coding/piglogin) (MIT).
+Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research. The memory model builds on the MIT-licensed TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) by [elpapi42](https://github.com/elpapi42) and its contributors. Spider-Ham and the PiG. wordmark in the banner are PiG's own pixel art, drawn from its [sprite catalogue](https://github.com/MichaelKinsy/PiG/tree/main/coding/piglogin) (MIT), and animated with [Clayzo](docs/animation/README.md).
 
 ## License
 
