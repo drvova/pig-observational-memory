@@ -1,6 +1,6 @@
 # README animations
 
-The animated banner (`docs/assets/banner.svg`) and footer mascot (`docs/assets/spider-ham.svg`) are [Clayzo](https://www.npmjs.com/package/clayzo) documents written in TypeScript and exported as animated SVG, which GitHub plays in a README.
+The animated banner (`docs/assets/banner.svg`) and footer mascot (`docs/assets/spider-ham.svg`) are [Clayzo](https://www.npmjs.com/package/clayzo) documents written in TypeScript and exported as animated SVG, which GitHub plays in a README. The banner is also exported as `docs/assets/banner.gif` (960 px, 20 fps, under 1 MB) for places that do not play SVG: social posts, chat apps and the repository's social preview image.
 
 | File | What it is |
 | --- | --- |
@@ -20,7 +20,7 @@ cd docs/animation
 npm ci
 npx clayzo login        # once per machine; CI uses a CLAYZO_TOKEN from `clayzo token create`
 npm run check           # sample sheet and loop-seam check in out/
-npm run export          # writes ../assets/banner.svg and ../assets/spider-ham.svg
+npm run export          # writes ../assets/banner.svg, banner.gif and spider-ham.svg
 ```
 
 Behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` so the CLI's requests use it.

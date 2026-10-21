@@ -20,7 +20,7 @@ go vet ./... && go test -race ./...` (CI runs the same `go` job); registrations:
 
 ## README animations
 
-`docs/assets/banner.svg` and `spider-ham.svg` are exported, not hand-edited: change the Clayzo
+`docs/assets/banner.svg`, `banner.gif` and `spider-ham.svg` are exported, not hand-edited: change the Clayzo
 TypeScript in `docs/animation/` and run `npm run export` there (needs `clayzo login`; see its README).
 The Clayzo agent skills live in `.agents/skills/` (linked from `.claude/skills/`).
 
