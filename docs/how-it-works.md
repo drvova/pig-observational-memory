@@ -64,7 +64,7 @@ flowchart TD
     Cut --> Fold --> Render --> Details
 ```
 
-One in-flight flag guards a single consolidation pipeline. A run executes its stages in order: the observer stage, then the reflector stage, which re-reads the branch and so sees observations recorded earlier in the same run, then the dropper stage, which runs only after a non-empty same-run reflection. A stage that is not due is skipped and the run moves on; an observer or reflector failure ends the run. Before appending, each stage checks that the session and the branch it read are still current, and abandons its result when they are not. A session switch, fork, tree jump, or shutdown aborts an in-flight run quietly, without a failure warning. With `consolidateWhenIdle`, proactive compaction is evaluated after the idle run finishes, never beside a running worker: the check waits for a run that is due or already in flight, runs at once when there is none, and is skipped when the run was aborted, since an `agent_start` abort means the agent is busy again.
+One in-flight flag guards a single consolidation pipeline. A run executes its stages in order: the observer stage, then the reflector stage, which re-reads the branch and so sees observations recorded earlier in the same run, then the dropper stage, which runs only after a non-empty same-run reflection. A stage that is not due is skipped and the run moves on; an observer or reflector failure ends the run. Before appending, each stage checks that the session and the branch it read are still current, and abandons its result when they are not. A session switch, fork, tree jump, or shutdown aborts an in-flight run quietly, without a failure warning, and waits up to a second for it to stop, so a stage past its branch check cannot append to the next branch. With `consolidateWhenIdle`, proactive compaction is evaluated after the idle run finishes, never beside a running worker: the check waits for a run that is due or already in flight, runs at once when there is none, and is skipped when the run was aborted, since an `agent_start` abort means the agent is busy again. The next idle settle runs a skipped check before it launches another run. A settle that finds a run an earlier `agent_start` already aborted waits for it, then settles again.
 
 ## Source entries and progress
 
@@ -206,7 +206,7 @@ When the reflector records nothing, it backs off: it is not run again until the 
 
 ## Auto-compaction trigger
 
-The auto-compaction trigger runs on `agent_settled`, after Pi has finished automatic retries, automatic compaction, and queued continuation. With `consolidateWhenIdle`, it runs only after the idle consolidation run finishes, or at once when no run is due or in flight; when that run is aborted (by `agent_start`, for example), the check is skipped until the next settle.
+The auto-compaction trigger runs on `agent_settled`, after Pi has finished automatic retries, automatic compaction, and queued continuation. With `consolidateWhenIdle`, it runs only after the idle consolidation run finishes, or at once when no run is due or in flight; when that run is aborted (by `agent_start`, for example), the check is skipped, and the next idle settle runs it before launching another run.
 
 It skips when:
 

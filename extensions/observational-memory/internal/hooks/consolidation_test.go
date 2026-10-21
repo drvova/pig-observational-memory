@@ -1474,8 +1474,8 @@ func TestIdleAbortedRunOwesCompactionCheckToNextSettle(t *testing.T) {
 
 // A settle that finds a run the previous prompt already aborted, still
 // unwinding, waits for it and then settles again, since the agent is idle: it
-// relaunches the due run or runs the compaction check. A prompt that starts
-// meanwhile keeps both skipped.
+// relaunches the due run or runs the compaction check. A prompt that starts,
+// or a session end, meanwhile keeps both skipped.
 func TestIdleSettleOnAbortedRunSettlesAgainOnceItEnds(t *testing.T) {
 	setup := func(compact bool) (fx *consFixture, release chan struct{}, done <-chan struct{}) {
 		fx = consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
@@ -1513,6 +1513,37 @@ func TestIdleSettleOnAbortedRunSettlesAgainOnceItEnds(t *testing.T) {
 	close(release)
 	waitDone(t, done)
 	never(t, "worked while the agent was busy", func() bool { return busy.h.CompactCount() != 0 || busy.obs.count() != 1 })
+
+	// A session end meanwhile does the same: the session is being replaced.
+	old := SessionEndWaitTimeout
+	SessionEndWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { SessionEndWaitTimeout = old })
+	ended, release, done := setup(true)
+	OnSessionEnd(ended.rt, "session_before_switch") // gives up on the stuck run
+	close(release)
+	waitDone(t, done)
+	never(t, "worked after the session ended", func() bool { return ended.h.CompactCount() != 0 || ended.obs.count() != 1 })
+}
+
+// An agent_start that lands while a settle is launching finds no run to abort
+// yet; the settle sees it once the run is launched and aborts it, so no worker
+// runs beside the agent.
+func TestIdleSettleAbortsRunLaunchedAsAgentStarts(t *testing.T) {
+	fx := consSetup(t, consArgs{entries: dueEntries(), idle: true, reflectAfterTokens: 999})
+	h := &hookedBranchHost{FakeHost: fx.h}
+	// The launch's branch read is the settle's first host read.
+	h.onNextGetBranch(func() { OnAgentStart(fx.rt, h) })
+	fx.abortingObserver()
+	OnAgentSettledEvent(fx.rt, h)
+	done := fx.rt.ConsolidationDone()
+	if done == nil {
+		t.Fatal("agent_settled did not launch")
+	}
+	waitDone(t, done)
+	if !fx.rt.RunAborted(done) {
+		t.Fatal("the run launched as the agent started was not aborted")
+	}
+	fx.expectNoAppends()
 }
 
 // Aborting during the reflector or the dropper records nothing and retries nothing.

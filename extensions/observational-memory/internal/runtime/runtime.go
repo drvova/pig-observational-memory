@@ -124,11 +124,12 @@ type Runtime struct {
 	consolidationCtx      context.Context
 	// abortedDone is the completion channel of the last run AbortConsolidation cancelled.
 	abortedDone chan struct{}
-	// agentStarts counts idle-mode agent_start events, so a settle can tell
-	// whether the agent started again while it waited on a run.
-	agentStarts uint64
+	// idleEnds counts events that end an idle window (an idle-mode
+	// agent_start, a session end), so a settle can tell whether the time after
+	// a run it launched or waited on is still idle.
+	idleEnds uint64
 	// afterHookOwed is set when an idle settle skipped its after-run check
-	// (proactive compaction) because the agent started again; the next idle
+	// (proactive compaction) because its idle window ended; the next idle
 	// settle runs it before launching another run.
 	afterHookOwed bool
 
@@ -728,18 +729,19 @@ func (r *Runtime) WasAborted() bool {
 	return ctx != nil && ctx.Err() != nil
 }
 
-// NoteAgentStart records an idle-mode agent_start.
-func (r *Runtime) NoteAgentStart() {
+// NoteIdleEnd records an event that ends an idle window: an idle-mode
+// agent_start or a session end.
+func (r *Runtime) NoteIdleEnd() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.agentStarts++
+	r.idleEnds++
 }
 
-// AgentStarts is how many agent_start events NoteAgentStart recorded.
-func (r *Runtime) AgentStarts() uint64 {
+// IdleEnds is how many events NoteIdleEnd recorded.
+func (r *Runtime) IdleEnds() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.agentStarts
+	return r.idleEnds
 }
 
 // SetAfterHookOwed records or clears an idle settle's skipped after-run check.

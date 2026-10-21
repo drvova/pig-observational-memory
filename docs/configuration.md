@@ -272,7 +272,7 @@ With `consolidateWhenIdle: true`:
 
 - Workers launch only from `agent_settled`, after the agent has finished a run and Pi is idle, so their requests never overlap the session's.
 - When a new agent run starts while a worker is still running, the run is aborted. Coverage markers are appended only when a stage succeeds, so an aborted stage leaves the ledger untouched and retries after the next settled event. PiG's extension SDK cannot cancel a model stream, so the extension stops reading the aborted request and discards its result; the provider keeps generating that response until it finishes, which costs its tokens and can overlap the session's next request.
-- Proactive compaction is evaluated after the idle run finishes (or after a run still in flight from an earlier settled event), so it is not starved by memory work sharing the same settled event and never runs beside a worker. When a new agent run aborts the idle run, the check is skipped; the next settled event evaluates it again.
+- Proactive compaction is evaluated after the idle run finishes (or after a run still in flight from an earlier settled event), so it is not starved by memory work sharing the same settled event and never runs beside a worker. When a new agent run aborts the idle run, the check is skipped; the next settled event runs it before launching another run.
 
 The trade-off is that during a long autonomous tool loop the observer does not advance; the compaction hook still protects unobserved context by catching it up, retaining it, or delegating to Pi's native summarizer (see [`compactionMaxRetainedTokens`](#compactionmaxretainedtokens)). Memory catches up while you type.
 
