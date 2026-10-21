@@ -2,6 +2,9 @@ package commands_test
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +147,42 @@ func TestStatusCountsOnlyObservedTokensTowardCompaction(t *testing.T) {
 	output := statusOutput(t, statusRuntime(statusConfig()), testfix.NewFakeHost(entries...))
 
 	expectContains(t, output, "Next compaction:  ~3 / 30 observed source tokens (10%)", "Observer backlog: ~4 unobserved source tokens since the compaction boundary")
+}
+
+// The compaction line follows a mid-session toggle of Pi's auto-compaction:
+// status re-reads compaction.enabled for a configuration loaded from disk.
+func TestStatusRereadsPiAutoCompactionMidSession(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	paths := config.Paths{AgentDir: filepath.Join(root, "agent"), ProjectDirName: ".pi"}
+	rt := runtime.New()
+	rt.LoadConfig = func(dir string) config.Config {
+		return config.Load(dir, paths, func(string) (string, bool) { return "", false })
+	}
+	rt.ReadPiAutoCompaction = func(dir string) (bool, bool) { return config.ReadPiAutoCompaction(dir, paths) }
+	setPiCompaction := func(enabled bool) {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{config.SettingsKey: map[string]any{"compactAfterTokens": 30}, "compaction": map[string]any{"enabled": enabled}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(cwd, paths.ProjectDirName, "settings.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 3 raw tokens, none of them observed.
+	h := testfix.NewFakeHost(testfix.TextCustomMessage("raw-1", "aaaaaaaaaaaa"))
+	h.WorkDir = cwd
+
+	setPiCompaction(true)
+	expectContains(t, statusOutput(t, rt, h), "Next compaction:  ~0 / 30 observed source tokens (0%)")
+
+	setPiCompaction(false)
+	expectContains(t, statusOutput(t, rt, h), "Next compaction:  ~3 / 30 estimated source tokens (10%)")
 }
 
 func TestStatusShowsOverTargetActivePool(t *testing.T) {

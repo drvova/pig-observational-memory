@@ -1,7 +1,10 @@
 package hooks
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -322,6 +325,58 @@ func TestTriggerCountsRawTokensWhenPiAutoCompactionDisabled(t *testing.T) {
 	fireTrigger(t, rt, h)
 	if h.CompactCalls != 1 {
 		t.Fatalf("compact calls %d", h.CompactCalls)
+	}
+	expectNotification(t, h, "Observational memory: compaction threshold reached (~3 estimated source tokens); triggering compaction", "info")
+}
+
+// diskConfigRuntime loads its configuration from settings files on disk, as in
+// production, instead of SetConfig. setPiCompaction rewrites Pi's own
+// compaction.enabled in the project settings.
+func diskConfigRuntime(t *testing.T, settings map[string]any) (rt *runtime.Runtime, cwd string, setPiCompaction func(enabled bool)) {
+	t.Helper()
+	root := t.TempDir()
+	cwd = filepath.Join(root, "project")
+	paths := config.Paths{AgentDir: filepath.Join(root, "agent"), ProjectDirName: ".pi"}
+	rt = runtime.New()
+	rt.LoadConfig = func(dir string) config.Config {
+		return config.Load(dir, paths, func(string) (string, bool) { return "", false })
+	}
+	rt.ReadPiAutoCompaction = func(dir string) (bool, bool) { return config.ReadPiAutoCompaction(dir, paths) }
+	setPiCompaction = func(enabled bool) {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{config.SettingsKey: settings, "compaction": map[string]any{"enabled": enabled}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(cwd, paths.ProjectDirName, "settings.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return rt, cwd, setPiCompaction
+}
+
+// Turning Pi's auto-compaction off mid-session switches the trigger to the
+// raw-token backstop: each trigger re-reads compaction.enabled.
+func TestTriggerRereadsPiAutoCompactionMidSession(t *testing.T) {
+	rt, cwd, setPiCompaction := diskConfigRuntime(t, map[string]any{"compactAfterTokens": 3})
+	setPiCompaction(true)
+	// 3 raw tokens, none of them observed.
+	h := triggerHost([]ledger.Entry{text("raw-1", "aaaaaaaaaaaa")})
+	h.WorkDir = cwd
+
+	fireTrigger(t, rt, h)
+	if h.CompactCount() != 0 {
+		t.Fatalf("compacted unobserved source with Pi's auto-compaction on: compact calls %d", h.CompactCount())
+	}
+
+	setPiCompaction(false)
+	fireTrigger(t, rt, h)
+	if h.CompactCount() != 1 {
+		t.Fatalf("raw-token backstop not used after Pi's auto-compaction was turned off: compact calls %d", h.CompactCount())
 	}
 	expectNotification(t, h, "Observational memory: compaction threshold reached (~3 estimated source tokens); triggering compaction", "info")
 }
