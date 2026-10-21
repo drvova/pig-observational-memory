@@ -13,6 +13,11 @@ import {
 export const TICKS_PER_SECOND = 240;
 export const FRAME_TICKS = 8; // 30 fps
 
+// Both documents loop on the same 7.5 s cycle and blink on the same ticks, so the
+// banner pig and the footer mascot blink together on the page.
+export const LOOP_TICKS = 1800;
+export const BLINK_STEPS: Array<[number, number]> = [[0, 0], [776, 1], [792, 0], [824, 1], [840, 0], [1232, 1], [1248, 0], [LOOP_TICKS, 0]];
+
 export const ease = {
   inOut: { x1: 0.45, y1: 0, x2: 0.55, y2: 1 },
   out: { x1: 0.2, y1: 0.45, x2: 0.45, y2: 1 },

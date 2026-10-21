@@ -1,4 +1,4 @@
-// The README footer mascot: Spider-Ham alone, blinking twice in a 4 s loop, on a
+// The README footer mascot: Spider-Ham alone, blinking with the banner pig, on a
 // transparent ground so it sits on GitHub's light and dark themes.
 import { writeFileSync, mkdirSync } from "node:fs";
 import {
@@ -9,13 +9,13 @@ import {
   type AnimationDocument,
   type SceneNode,
 } from "@clayzo/animation/authoring";
-import { cellRects, hex, pathNode, rectsPath, solid, TICKS_PER_SECOND, track } from "./lib.ts";
+import { BLINK_STEPS, cellRects, hex, LOOP_TICKS, pathNode, rectsPath, solid, TICKS_PER_SECOND, track } from "./lib.ts";
 import { palette, spiderHam } from "./sprite.ts";
 
 const PX = 8;
 const W = 16 * PX;
 const H = 14 * PX;
-const D = 4 * TICKS_PER_SECOND;
+const D = LOOP_TICKS;
 
 const nodes: Record<string, SceneNode> = {};
 const root: string[] = [];
@@ -29,7 +29,7 @@ colours.forEach((colour, n) => {
   add(pathNode(`pig-colour-${n}`, D, rectsPath(cellRects(spiderHam, (s) => s !== "." && palette[s] === colour, 0, 0, PX)), solid(colour)));
 });
 // The banner's blink, so the two pigs blink together on the page.
-const blink = track("blink", [[0, 0], [616, 1], [632, 0], [664, 1], [680, 0], [D, 0]]);
+const blink = track("blink", BLINK_STEPS);
 add(pathNode("eyelids", D, rectsPath(cellRects(spiderHam, (s) => s === "W", 0, 0, PX)), { fill: { color: constant(hex(palette.K)), opacity: blink } }));
 
 const document = withComputedRevision({
@@ -43,7 +43,7 @@ const document = withComputedRevision({
   compositions: { main: { id: "main", name: "main", width: W, height: H, durationTicks: D, nodes, rootNodeIds: root } },
   rootCompositionId: "main",
   components: {},
-  markers: [{ id: "blink", tick: 616, durationTicks: 64, name: "blink" }],
+  markers: [{ id: "blink", tick: 776, durationTicks: 64, name: "blink" }],
   capabilities: { required: [], optional: [], unsupportedPolicy: "warn" },
 } as AnimationDocument);
 

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node banner.ts && node mascot.ts",
     "check": "npm run build && clayzo render-frame out/banner.json out/sheet.png --samples 6 --max-dimension 1280 && clayzo render-frame out/banner.json out/seam.png --seam --max-dimension 640",
-    "export": "npm run build && clayzo export out/banner.json ../assets/banner.svg --format svg && clayzo export out/mascot.json ../assets/spider-ham.svg --format svg && node finish-svg.ts ../assets/banner.svg \"pig-observational-memory: PiG's Spider-Ham pixel pig hangs on a web thread beside the PiG. wordmark\" && node finish-svg.ts ../assets/spider-ham.svg \"Spider-Ham, PiG's red pixel pig\""
+    "export": "npm run build && clayzo export out/banner.json ../assets/banner.svg --format svg && clayzo export out/mascot.json ../assets/spider-ham.svg --format svg && node finish-svg.ts ../assets/banner.svg \"pig-observational-memory: PiG's Spider-Ham pixel pig drops in on a web line beside the PiG. wordmark\" 4.2667 && node finish-svg.ts ../assets/spider-ham.svg \"Spider-Ham, PiG's red pixel pig\""
   },
   "dependencies": {
     "@clayzo/animation": "^0.3.17"

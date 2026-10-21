@@ -1,11 +1,13 @@
-// The README banner: PiG's Spider-Ham hangs on a web thread beside the "PiG."
-// wordmark, and memory pulses run along a pixel trail into it.
+// The README banner: PiG's Spider-Ham drops in upside down on its web line, the
+// way Spider-Man does in the films, hangs beside the "PiG." wordmark while memory
+// pulses run along a pixel trail into it, then zips back up.
 //
-// Art direction: one lockup on PiG's dark banner field; one verb, *hang*: the
-// pig bobs on its thread, the only large motion. Geometry is the pixel square
-// throughout (13 px pig pixels, 10 px wordmark pixels, 9 px trail cells).
-// Palette: Spider-Ham's reds, black and white, PiG's cyan-to-navy wordmark ramp,
-// on #0B0F14. A 4 s seamless loop at 30 fps.
+// Art direction: one lockup on PiG's dark banner field; one verb, *drop*. The
+// landing (a bungee stretch, then a squash) is the one punch; the pendulum sway,
+// the slow bob and the pulses flow. Geometry is the pixel square throughout
+// (13 px pig pixels, 10 px wordmark pixels, 9 px trail cells). Palette:
+// Spider-Ham's reds, black and white, PiG's cyan-to-navy wordmark ramp, on
+// #0B0F14. A 7.5 s loop at 30 fps, cut while the pig is off the top.
 import { writeFileSync, mkdirSync } from "node:fs";
 import {
   ANIMATION_DOCUMENT_VERSION,
@@ -16,19 +18,22 @@ import {
   type PathData,
   type SceneNode,
 } from "@clayzo/animation/authoring";
-import { baseNode, cellRects, ease, hex, pathNode, rectsPath, solid, TICKS_PER_SECOND, track, transform } from "./lib.ts";
+import { baseNode, BLINK_STEPS, cellRects, ease, hex, LOOP_TICKS, pathNode, rectsPath, solid, TICKS_PER_SECOND, track, transform } from "./lib.ts";
 import { heroGlyphs, logoPeriod, logoShadow, palette, ramp, spiderHam } from "./sprite.ts";
 
 const W = 1280;
 const H = 420;
-const D = 4 * TICKS_PER_SECOND; // one loop
+const D = LOOP_TICKS;
 const FIELD = "#0B0F14";
 const FRAME = 28;
 
 const PIG = { x: 162, y: 132, px: 13 };
-const THREAD_X = PIG.x + 8 * PIG.px;
-const HEAD_TOP = PIG.y + 3 * PIG.px;
-const BOB = 10; // px the pig drops at the bottom of each bob
+const PIG_CENTRE = { x: PIG.x + 8 * PIG.px, y: PIG.y + 7 * PIG.px };
+const THREAD_X = PIG_CENTRE.x;
+// Hanging upside down, the sprite's bottom outline row is its top edge.
+const PIG_TOP = PIG.y + PIG.px;
+const PIVOT_Y = -300; // where the web line is anchored, above the banner
+const OFF = -400; // offset that keeps the pig, its glow and its line out of frame
 
 const LOGO = { x: 520, y: 92, px: 10 };
 
@@ -101,36 +106,65 @@ const webStroke = { stroke: { color: constant(hex("#C9D1D9")), opacity: constant
 add(pathNode("web-top-left", D, web(FRAME, FRAME, 0, 90, 230, [48, 92, 136, 180, 222], 7), webStroke));
 add(pathNode("web-bottom-right", D, web(W - FRAME, H - FRAME, 180, 270, 190, [44, 84, 124, 164], 6), webStroke));
 
-// The thread: its top stays on the frame and its foot follows the pig.
-const threadLength = HEAD_TOP + 2 - FRAME;
-add({ ...base("thread"), type: "rect", size: constant({ width: 2.2, height: threadLength }), cornerRadius: constant(1.1),
-  transform: { ...transform(THREAD_X, FRAME, 0, -threadLength / 2),
-    scale: track("thread-scale", [[0, { x: 1, y: 1, z: 1 }, ease.inOut], [D / 2, { x: 1, y: (threadLength + BOB) / threadLength, z: 1 }, ease.inOut], [D, { x: 1, y: 1, z: 1 }]]) },
+// Spider-Ham on its line. The rig is one group pivoting on the line's anchor above
+// the banner, so it drops, bounces and sways as one pendulum. Inside it: the line,
+// a red glow (the sprite's black outline would vanish on the field without it),
+// and the body, flipped upside down, which stretches and squashes on its own.
+const rigChildren: string[] = [];
+const rigChild = (node: SceneNode) => rigChildren.push(add(node, false));
+// The line runs a few pixels into the sprite so a squash never shows its end.
+const lineBottom = PIG_TOP + 8;
+rigChild({ ...base("web-line", THREAD_X, (PIVOT_Y + lineBottom) / 2), type: "rect", size: constant({ width: 2.2, height: lineBottom - PIVOT_Y }), cornerRadius: constant(1.1),
   style: { fill: { color: constant(hex("#E6EDF3")), opacity: constant(0.75) } } });
-
-// Spider-Ham: a red glow behind the sprite (its black outline would vanish on the
-// field without it), the sprite as one path per colour, and eyelids for the blink.
-const pigChildren: string[] = [];
-const child = (node: SceneNode) => pigChildren.push(add(node, false));
-child({ ...base("glow", PIG.x + 8 * PIG.px, PIG.y + 7 * PIG.px), type: "ellipse", size: constant({ width: 28 * PIG.px, height: 24 * PIG.px }),
+rigChild({ ...base("glow", PIG_CENTRE.x, PIG_CENTRE.y), type: "ellipse", size: constant({ width: 28 * PIG.px, height: 24 * PIG.px }),
   style: { gradientFill: { kind: "radial", opacity: constant(1), start: constant({ x: 0, y: 0 }), end: constant({ x: 14 * PIG.px, y: 0 }),
     stops: constant([{ position: 0, color: hex(logoPeriod, 0.3) }, { position: 0.6, color: hex(logoPeriod, 0.08) }, { position: 1, color: hex(logoPeriod, 0) }]) } } });
+
+const bodyChildren: string[] = [];
+const bodyChild = (node: SceneNode) => bodyChildren.push(add(node, false));
 // One path per colour (O and K share one).
 const pigColours = [...new Set(spiderHam.join("").replace(/\./g, "").split("").map((s) => palette[s]))];
 pigColours.forEach((colour, n) => {
-  child(pathNode(`pig-colour-${n}`, D, rectsPath(cellRects(spiderHam, (s) => s !== "." && palette[s] === colour, PIG.x, PIG.y, PIG.px)), solid(colour)));
+  bodyChild(pathNode(`pig-colour-${n}`, D, rectsPath(cellRects(spiderHam, (s) => s !== "." && palette[s] === colour, PIG.x, PIG.y, PIG.px)), solid(colour)));
 });
-// Two blinks in quick succession, a little past the middle of the loop.
-const blink = track("blink", [[0, 0], [616, 1], [632, 0], [664, 1], [680, 0], [D, 0]]);
 const eyes = cellRects(spiderHam, (s) => s === "W", PIG.x, PIG.y, PIG.px);
-child(pathNode("eyelids", D, rectsPath(eyes), { fill: { color: constant(hex(palette.K)), opacity: blink } }));
-add({ ...base("spider-ham"), type: "group", children: pigChildren,
-  transform: { ...transform(0, 0), position: track("bob", [[0, { x: 0, y: 0, z: 0 }, ease.inOut], [D / 2, { x: 0, y: BOB, z: 0 }, ease.inOut], [D, { x: 0, y: 0, z: 0 }]]) } });
+bodyChild(pathNode("eyelids", D, rectsPath(eyes), { fill: { color: constant(hex(palette.K)), opacity: track("blink", BLINK_STEPS) } }));
 
-// The memory trail: three rows of cells shading from red to cyan. A pulse runs
-// along it once a second and lands in the wordmark.
+// Beats, in ticks (30 fps is 8 ticks a frame).
+const DROP = 48; // the line shoots down
+const FALLING = 112; // still falling, nearly at full length
+const BOTTOM = 136; // the bungee's lowest point
+const REBOUND = 184;
+const SETTLED = 280;
+const LIFT = 1488; // a small dip, then the zip back up
+const GONE = 1576;
+const upright = (x: number, y: number) => ({ x, y: -y, z: 1 }); // upside down
+add({ ...base("body", PIG_CENTRE.x, PIG_CENTRE.y), type: "group", children: bodyChildren,
+  transform: { ...transform(PIG_CENTRE.x, PIG_CENTRE.y, PIG_CENTRE.x, PIG_CENTRE.y),
+    scale: track("body-stretch", [
+      [0, upright(1, 1)], [FALLING, upright(1, 1), ease.out], [BOTTOM, upright(0.9, 1.14), ease.out], [176, upright(1.07, 0.92), ease.inOut], [224, upright(1, 1)],
+      [LIFT, upright(1, 1), ease.out], [LIFT + 32, upright(0.92, 1.12)], [GONE + 24, upright(1, 1)], [D, upright(1, 1)],
+    ]) } }, false);
+rigChildren.push("body");
+
+const at = (y: number) => ({ x: THREAD_X, y: PIVOT_Y + y, z: 0 });
+add({ ...base("spider-ham"), type: "group", children: rigChildren,
+  transform: { ...transform(THREAD_X, PIVOT_Y, THREAD_X, PIVOT_Y),
+    position: track("drop", [
+      [0, at(OFF)], [DROP, at(OFF), { x1: 0.6, y1: 0, x2: 1, y2: 1 }], [FALLING, at(-40), { x1: 0, y1: 0.6, x2: 0.4, y2: 1 }], [BOTTOM, at(30), ease.out],
+      [REBOUND, at(-14), ease.inOut], [232, at(7), ease.settle], [SETTLED, at(0), ease.inOut], [920, at(9), ease.inOut], [1440, at(0), ease.out],
+      [LIFT, at(10), { x1: 0.6, y1: 0, x2: 0.9, y2: 0.4 }], [GONE, at(OFF)], [D, at(OFF)],
+    ]),
+    rotation: track("sway", [
+      [0, { x: 0, y: 0, z: 0 }], [BOTTOM, { x: 0, y: 0, z: 0 }, ease.inOut], [200, { x: 0, y: 0, z: 2.4 }, ease.inOut], [272, { x: 0, y: 0, z: -1.8 }, ease.inOut],
+      [344, { x: 0, y: 0, z: 1.1 }, ease.inOut], [416, { x: 0, y: 0, z: -0.5 }, ease.inOut], [488, { x: 0, y: 0, z: 0 }], [D, { x: 0, y: 0, z: 0 }],
+    ]) } });
+
+// The memory trail: three rows of cells shading from red to cyan. While the pig
+// hangs, a pulse runs along it once a second and lands in the wordmark.
 const trailColors = [logoPeriod, palette.p, "#F5A3B0", "#B8E6F2", ramp[3], ramp[1], ramp[0]];
-const PULSE_START = 32;
+const PULSE_START = 360;
+const PULSES = 5;
 const PULSE_STEP = 16; // ticks between columns
 const PULSE_PERIOD = TICKS_PER_SECOND;
 for (let row = 0; row < 3; row++) {
@@ -138,7 +172,7 @@ for (let row = 0; row < 3; row++) {
     if ((row === 0 && i < 2) || (row === 2 && i < 1)) return;
     const rest = 0.32 + 0.04 * i;
     const steps: Array<[number, number, typeof ease.out?]> = [[0, rest]];
-    for (let k = 0; k < D / PULSE_PERIOD; k++) {
+    for (let k = 0; k < PULSES; k++) {
       const arrive = PULSE_START + k * PULSE_PERIOD + i * PULSE_STEP;
       steps.push([arrive - 16, rest, ease.out], [arrive, 1, ease.drain], [arrive + 48, rest]);
     }
@@ -166,7 +200,7 @@ add(pathNode("period-shadow", D, rectsPath(periodCells.map((c) => cell(c.x + 1, 
 add(pathNode("period-dot", D, rectsPath(periodCells.map((c) => cell(c.x, c.y))), solid(logoPeriod)), false);
 const landed = PULSE_START + 7 * PULSE_STEP;
 const popSteps: Array<[number, { x: number; y: number; z: number }, typeof ease.pop?]> = [[0, { x: 1, y: 1, z: 1 }]];
-for (let k = 0; k < D / PULSE_PERIOD; k++) {
+for (let k = 0; k < PULSES; k++) {
   const t = landed + k * PULSE_PERIOD;
   popSteps.push([t, { x: 1, y: 1, z: 1 }, ease.pop], [t + 24, { x: 1.18, y: 1.18, z: 1 }, ease.settle], [t + 72, { x: 1, y: 1, z: 1 }]);
 }
@@ -203,9 +237,11 @@ const document = withComputedRevision({
   rootCompositionId: "main",
   components: {},
   markers: [
+    { id: "drop", tick: DROP, durationTicks: BOTTOM - DROP, name: "drop" },
+    { id: "bungee", tick: BOTTOM, durationTicks: SETTLED - BOTTOM, name: "bungee and sway" },
     { id: "pulse-lands", tick: landed, durationTicks: 72, name: "first pulse lands" },
-    { id: "bob-bottom", tick: D / 2, durationTicks: 0, name: "bottom of the bob" },
-    { id: "blink", tick: 616, durationTicks: 64, name: "blink" },
+    { id: "blink", tick: 776, durationTicks: 64, name: "blink" },
+    { id: "zip", tick: LIFT, durationTicks: GONE - LIFT, name: "zip back up" },
   ],
   capabilities: { required: [], optional: [], unsupportedPolicy: "warn" },
 } as AnimationDocument);

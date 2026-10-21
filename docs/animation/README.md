@@ -4,11 +4,11 @@ The animated banner (`docs/assets/banner.svg`) and footer mascot (`docs/assets/s
 
 | File | What it is |
 | --- | --- |
-| `banner.ts` | The banner: Spider-Ham bobs on a web thread, blinks, and memory pulses run along a pixel trail into the `PiG.` wordmark. A 4 s seamless loop. |
+| `banner.ts` | The banner: Spider-Ham drops in upside down on its web line (bungee bounce, pendulum sway), hangs and blinks while memory pulses run along a pixel trail into the `PiG.` wordmark, then zips back up. A 7.5 s loop, cut while the pig is off screen. |
 | `mascot.ts` | Spider-Ham alone, blinking in step with the banner. |
 | `sprite.ts` | Spider-Ham and the `PiG.` wordmark pixels and colors, copied from PiG's sprite catalogue (MIT). |
 | `lib.ts` | Shared helpers: transforms, keyframe tracks, pixel art to paths. |
-| `finish-svg.ts` | Adds a title and a reduced-motion rule to an exported SVG. |
+| `finish-svg.ts` | Adds a title, and a reduced-motion rule that holds one still frame, to an exported SVG. |
 | `fonts/` | Manrope, which the Clayzo CLI bundles (SIL Open Font License, `fonts/OFL.txt`). |
 
 ## Regenerate
