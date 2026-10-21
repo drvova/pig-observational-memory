@@ -1,14 +1,13 @@
 > [!IMPORTANT]
 > **V3 update notice:** this extension now uses the new V3 memory model. If you used V2, update your `observational-memory` settings before running this version. V3 does **not** read the old V2 settings or memory format, and you should start a new clean Pi session after upgrading. See [Migrating from V2](#migrating-from-v2).
 
-> [!NOTE]
-> The `master` branch is the active development branch and may include unreleased or unstable changes. For stable versions, install the published npm package with `pi install npm:pi-observational-memory`.
-
 # pi-observational-memory
 
 > **Make Pi sessions feel endless.**
 
-`pi-observational-memory` is a Pi extension that keeps long agent sessions coherent across compactions, handoffs, and days of work.
+`pi-observational-memory` is a [PiG](https://github.com/MichaelKinsy/PiG) extension that keeps long agent sessions coherent across compactions, handoffs, and days of work.
+
+It is a Go port of the TypeScript extension [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory); sessions recorded by it keep working, and [`docs/pig.md`](docs/pig.md) lists what changed.
 
 It helps Pi remember what matters while you work, so your agent does not lose the thread when the session gets long.
 
@@ -173,49 +172,41 @@ This extension is especially useful when the session contains decisions that sho
 
 ## Install
 
-Requires Pi 0.81.0 or newer. Proactive compaction uses the `agent_settled` lifecycle event introduced in that release.
+Requires the `pig` CLI and Go 1.26 or newer on `PATH`. An older `go` with `GOTOOLCHAIN=auto` downloads the right toolchain, and `pig setup go` shows or installs it. The first run builds the extension and the SDK; later runs reuse the build.
 
 ```bash
-pi install npm:pi-observational-memory
-```
+# every session (global settings)
+pig install git:github.com/drvova/pi-observational-memory
 
-Or install from GitHub/local development:
+# this project only (.pig/settings.json)
+pig install git:github.com/drvova/pi-observational-memory -l
 
-```bash
-pi install git:github.com/elpapi42/pi-observational-memory
-# or, from a local checkout:
-pi install /absolute/path/to/pi-observational-memory
-```
+# from a clone
+pig install ./extensions/observational-memory
 
-Pi loads the extension from the prebuilt `dist/index.ts` module that the package `pi.extensions` entry points at.
-
-### Pi in Go (PiG)
-
-A full Go port of the extension lives in [`extensions/observational-memory`](extensions/observational-memory) as a [PiG](https://github.com/MichaelKinsy/PiG) extension. It needs Go 1.26 or newer and the `pig` CLI.
-
-```bash
-# run one PiG session with the extension loaded
+# one session, no install
 pig -e ./extensions/observational-memory
 
-# or check what it registers, then install it
+# report what it registers without installing
 pig install ./extensions/observational-memory --validate-only --json
-pig install ./extensions/observational-memory
 ```
 
-The Go extension registers the same `om:status` and `om:view` commands and the same `recall` tool, reads the same `observational-memory` settings namespace from PiG's agent directory and the project's config directory, and appends the same V3 ledger entries, so a session's memory means the same thing under either host. See [`docs/pig.md`](docs/pig.md).
+Given the repository root, PiG discovers the extension under `extensions/`. See [`docs/pig.md`](docs/pig.md) for install details and the package layout.
 
 ---
 
 ## Development
 
-The Go port in `extensions/observational-memory` is where fixes land. It is a standalone module with no generated artifacts:
+The extension is a standalone Go module in [`extensions/observational-memory`](extensions/observational-memory) with no generated artifacts. Run the same checks CI runs from that directory:
 
 ```bash
 cd extensions/observational-memory
-gofmt -l . && go vet ./... && go test ./...
+gofmt -l .          # must print nothing
+go vet ./...
+go test -race ./...
 ```
 
-`src/` (the TypeScript extension) is frozen pending its removal. It diverges from the Go port where the port cleared upstream issues; [`docs/pig.md`](docs/pig.md) lists the differences. Test it with `npm test` and typecheck it with `npm run typecheck`. To regenerate the prebuilt module after editing `src/`, run `npm run build`. CI fails when `dist/` is stale.
+The extension's `Name` must equal its directory name, `observational-memory`. [`docs/contributing.md`](docs/contributing.md) says where changes go and which checks a pull request must pass.
 
 ---
 
@@ -223,10 +214,12 @@ gofmt -l . && go vet ./... && go test ./...
 
 Settings live under the `observational-memory` namespace in either:
 
-* `~/.pi/agent/settings.json`
-* project-local `.pi/settings.json`
+* `settings.json` in PiG's agent directory, by default `~/.pig/agent/settings.json`
+* project-local `.pig/settings.json`
 
 Project settings override global settings.
+
+PiG's agent directory is `PIG_CODING_AGENT_DIR`, else `<config root>/agent`, where the config root is `PIG_HOME`, else `$XDG_CONFIG_HOME/pig`, else `~/.pig`. When PiG runs with `PIG_USE_PI_DIRS=1` it shares Pi's tree: `~/.pi/agent` (or `PI_CODING_AGENT_DIR`) and the project's `.pi/settings.json`. Pi's own `compaction.enabled` is read from the same files.
 
 `PI_OBSERVATIONAL_MEMORY_PASSIVE` can override only `passive`.
 
@@ -268,12 +261,11 @@ If your memory model is a local llama.cpp server, size `agentMaxTokens` so that 
 
 By default `compactAfterTokensMode` is `"calibrated"`, so the proactive
 compaction trigger uses the fixed `compactAfterTokens` estimated source-entry
-threshold (81,000 by default). This preserves the pre-PR #40 compaction metric
-for typical ~128K–200K context models.
+threshold (81,000 by default), which suits typical ~128K–200K context models.
 
 On a large-context model (e.g. 1M tokens) the calibrated default preempts
 compaction at ~81K, wasting most of the window. Switch to `"ratio"` mode to let
-the trigger scale with the active model's `contextWindow`:
+the trigger scale with the session model's `contextWindow`:
 
 ```json
 {
@@ -300,7 +292,7 @@ a lower ratio (e.g. `0.4`) to compact earlier on those, or a higher ratio
 
 `compactAfterTokens` is always retained as the fallback: in `"calibrated"`
 mode it is the threshold directly, and in `"ratio"` mode it is used whenever
-the active model's `contextWindow` is unavailable (undefined, 0, or negative),
+the session model's `contextWindow` is unknown (missing, 0, or negative),
 so compaction still triggers safely. `/om:status` shows the resolved threshold
 on the `Next compaction` line regardless of mode.
 
@@ -309,25 +301,25 @@ on the `Next compaction` line regardless of mode.
 | Setting                     | Default       | Meaning                                                                                           |
 | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------- |
 | `observeAfterTokens`        | `10000`       | Raw/source token threshold for observation runs.                                                  |
-| `observerChunkMaxTokens`    | derived       | Max estimated tokens serialized into one observer chunk (minimum `256`). Unset: `floor(contextWindow * 0.2)` of the resolved memory model, or `60000` when the window is unknown. Larger backlogs drain oldest-first; a single over-budget source is sent as a marked head/tail excerpt while the original source remains in the session ledger. |
-| `reflectAfterTokens`        | `20000`       | Raw/source token threshold for reflection runs; successful reflection creates dropper opportunities. |
-| `compactAfterTokens`        | `81000`       | Estimated source-entry threshold for proactive auto-compaction, counted after the latest compaction boundary and only up to the observation frontier. |
+| `observerChunkMaxTokens`    | derived       | Max estimated tokens serialized into one observer chunk (minimum `256`). Unset: `floor(contextWindow * 0.2)` of the resolved memory model (or of the `fallbackModel`, when its window is smaller), or `60000` when the window is unknown. Larger backlogs drain oldest-first; a single over-budget source is sent as a marked head/tail excerpt while the original source remains in the session. |
+| `reflectAfterTokens`        | `20000`       | Observed-source token threshold for reflection runs (source the observer covered since the last reflection); successful reflection creates dropper opportunities. |
+| `compactAfterTokens`        | `81000`       | Estimated source-entry threshold for proactive auto-compaction, counted after the latest compaction boundary and only up to the observation frontier (all source entries when Pi's `compaction.enabled` is `false`). |
 | `compactionMaxRetainedTokens` | derived     | Max estimated source tokens the compaction hook keeps in context when it retains entries the observer has not reached yet. Unset: half of the session model's context window, or `60000` when unknown. |
-| `compactAfterTokensMode`    | `"calibrated"`| `"calibrated"` uses `compactAfterTokens` directly. `"ratio"` scales the source-entry threshold by the active model's `contextWindow`. |
+| `compactAfterTokensMode`    | `"calibrated"`| `"calibrated"` uses `compactAfterTokens` directly. `"ratio"` scales the source-entry threshold by the session model's `contextWindow`. |
 | `compactAfterTokensRatio`   | `0.68`        | In `"ratio"` mode, the threshold is `floor(contextWindow * ratio)`. Tunable because large windows do not always mean strong long-range attention. Must be in `(0, 1)`. |
 | `observationsPoolMaxTokens` | `20000`       | Observation-token budget used for compaction full-fold pressure.                                  |
 | `observationsPoolTargetTokens` | half of max | Active observation target used by post-reflection dropper maintenance.                            |
 | `agentMaxTurns`             | `16`          | Shared turn cap for background memory-agent loops.                                                |
 | `agentMaxTokens`            | `32000`       | Maximum output tokens requested for memory-agent loops (observer/reflector/dropper), clamped to the model's own `maxTokens` when available. Lower it for local servers with a modest context window, e.g. `8192`. |
-| `model`                     | session model | Optional memory-worker model override: `{ provider, id, thinking }`.                              |
+| `model`                     | session model | Optional memory-worker model override: `{ provider, id, thinking }`. Without `provider`, `id` resolves against the session model's provider. |
 | `compactionSummaryMaxTokens` | derived      | Token budget for the rendered memory summary (observations get at least half, newest first; reflections the rest). Unset: one eighth of the session model's context window, or `8000`. |
 | `compactionCatchUpMaxChunks` | `2`          | Observer chunks the compaction hook runs synchronously to cover unobserved source before Pi's cut, so it can own the compaction instead of delegating. `0` disables. |
 | `workerMemoryMaxTokens`     | derived       | Token budget for the prior memory each memory-worker request carries (newest first; the dropper sees the oldest observations). Unset: a quarter of the memory model's context window, or `16000`. |
 | `consolidateWhenIdle`       | `false`       | Run memory workers only while the agent is idle and abort them when a new run starts. Use when the session model and the memory model share one context budget (e.g. one local llama.cpp server). |
-| `fallbackModel`             | unset         | Optional second memory-worker model: `{ provider, id, thinking }`. Used when the primary memory model fails to resolve, and to retry a worker stage once when its model call errors. |
+| `fallbackModel`             | unset         | Optional second memory-worker model: `{ provider, id, thinking }`, `provider` optional as for `model`. Used when the primary memory model fails to resolve, and to retry a worker stage once when its model call fails before it records anything. |
 | `showWorkerNotifications`   | `true`        | Shows routine observer, reflector, and dropper progress notifications. Warnings and errors are unaffected. |
 | `passive`                   | `false`       | Disables proactive background observation, reflection, maintenance, and auto-compaction triggers. |
-| `debugLog`                  | `false`       | Writes opt-in per-session extension debug events to Pi's agent directory.                         |
+| `debugLog`                  | `false`       | Writes opt-in per-session extension debug events to PiG's agent directory.                        |
 
 Valid `model.thinking` values are:
 
@@ -339,9 +331,9 @@ Valid `model.thinking` values are:
 * `xhigh`
 * `max`
 
-If no `model` is configured, memory workers use the session model, including custom `pi.registerProvider` APIs such as `cursor-sdk`. You do not need a second built-in provider (OpenAI, OpenRouter, …) for observational memory to run. Set `model` only when you want cheaper or faster workers than the coding agent.
+If no `model` is configured, memory workers use the session model, including models from custom providers that other extensions register. You do not need a second built-in provider (OpenAI, OpenRouter, …) for observational memory to run. Set `model` only when you want cheaper or faster workers than the coding agent.
 
-Set `fallbackModel` when the memory model may be unavailable: it is tried when the primary memory model cannot be resolved (unknown provider/model or no usable credentials), and a worker stage that errors mid-call is retried once with it. Once the fallback is used, it stays active for the rest of the consolidation pass. With no `fallbackModel` configured, a failed memory model skips or fails safely exactly as before.
+Set `fallbackModel` when the memory model may be unavailable: it is tried when the memory model cannot be resolved (no usable credentials, or no model at all; a configured `model` missing from the registry first falls back to the session model, with a warning), and a worker stage whose model call fails before it records anything is retried once with it (an observer call that fails after recording some observations keeps them and is not retried), including the compaction hook's catch-up observer. Once the fallback is used, it stays active for the rest of the consolidation pass. With no `fallbackModel` configured, a memory model that cannot be resolved skips that consolidation pass with a warning, and a failed model call fails that stage without a retry.
 
 Set `showWorkerNotifications` to `false` to hide routine worker start and completion messages (including deliberate-empty observer info messages). Model fallback/unavailability, worker failures (including observer stream errors), compaction notifications, and explicit `/om:*` command output remain visible.
 
@@ -349,7 +341,7 @@ Set `showWorkerNotifications` to `false` to hide routine worker start and comple
 
 Dropper pruning balances age, relevance, and reflection coverage. Relevance is importance/resistance, not a permanent active-memory pin: `critical` observations require the strongest evidence but can be dropped when they are older and safely represented by reflections, superseded by newer memory, redundant, or obsolete. Dropper input annotates each active observation with deterministic coverage evidence: `none`, `partial`, or `strong`; coverage guides model judgment and is not an automatic drop rule. Dropping removes observations from active memory, not ledger history.
 
-When `debugLog` is enabled, debug events are written as local NDJSON files under Pi's agent directory. Normal sessions write to `observational-memory/debug/<session-id>.ndjson`; contexts without a session id fall back to `observational-memory/debug.ndjson`. Debug rows include `sessionId` and per-consolidation `runId`, so a session file can still be filtered to one observer/reflector/dropper run.
+When `debugLog` is enabled, debug events are written as local NDJSON files under PiG's agent directory (by default `~/.pig/agent`). Normal sessions write to `observational-memory/debug/<session-id>.ndjson`; contexts without a session id fall back to `observational-memory/debug.ndjson`. Debug rows include `sessionId` and per-consolidation `runId`, so a session file can still be filtered to one observer/reflector/dropper run.
 
 For details and tuning guidance, see [`docs/configuration.md`](docs/configuration.md).
 
@@ -359,12 +351,12 @@ For details and tuning guidance, see [`docs/configuration.md`](docs/configuratio
 
 | Surface             | What it does                                                                                                                                    |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/om:status`        | Shows memory counts, plain `+N` / `-N` visible/full drift suffixes, progress clocks, visible and active observation pool pressure, passive/in-flight state, and last worker errors. |
+| `/om:status`        | Shows memory counts, plain `+N` / `-N` visible/full drift suffixes, progress clocks, visible and active observation pool pressure, observer/reflector/compaction backoffs, passive/in-flight state, and last worker errors. |
 | `/om:view`          | Shows current visible memory and attempts to copy the rendered memory text to the clipboard.                                                   |
 | `/om:view full`     | Shows the full current memory state for the branch and attempts to copy the rendered memory text to the clipboard.                             |
 | `recall` agent tool | Recovers source evidence for a 12-character observation/reflection id on the current branch. It is not semantic search or a transcript browser. |
 
-`/om:view` copies only the rendered memory content. The success/failure line shown in Pi is not included in the clipboard text. If clipboard support is unavailable, the command still prints the memory view and shows a warning. Before the first V3 compaction, visible memory can be empty because nothing has been folded into `om.folded` details; use `/om:view full` to inspect recorded branch memory.
+`/om:view` copies only the rendered memory content. The success/failure line shown in PiG is not included in the clipboard text. If clipboard support is unavailable, the command still prints the memory view and shows a warning. Visible memory is what the newest compaction's `om.folded` details carry, so it is empty before the first V3 compaction and after a compaction written by Pi's native summarizer; use `/om:view full` to inspect recorded branch memory.
 
 ---
 
@@ -382,7 +374,7 @@ flowchart TD
 
     Turn -->|observation due| Observe
     Turn -->|reflection due| Reflect
-    AgentSettled -->|compactAfterTokens and idle| Trigger --> Compact --> Summary
+    AgentSettled -->|observed source over threshold, idle| Trigger --> Compact --> Summary
 ```
 
 The high-level lifecycle:
@@ -398,7 +390,8 @@ The important part: compaction does not need to rethink the whole session from s
 The proactive compaction threshold counts observed source tokens: estimated
 source-entry tokens after the latest compaction boundary that the observer has
 already covered (raw estimated source tokens when Pi's `compaction.enabled` is
-`false`). It includes source entries retained by `firstKeptEntryId` and newer
+`false`; the setting is re-read on every check, so toggling it mid-session takes
+effect at once). It includes source entries retained by `firstKeptEntryId` and newer
 source entries, while memory ledger entries and compaction metadata contribute
 zero. The threshold is resolved by `compactAfterTokensMode`: `compactAfterTokens`
 in `"calibrated"` mode, or a share of the session model's context window in
@@ -416,8 +409,8 @@ Current behavior:
 * **Observation-centered memory.** The extension records useful session observations while you work.
 * **Durable reflections.** The extension distills stable facts that help the agent stay oriented over time.
 * **Fast compaction.** When prepared V3 memory exists, `session_before_compact` renders it without calling a summarization model or waiting for background workers; its only model calls are catch-up observer runs when the observer is behind (next point). An empty V3 projection delegates to Pi's native summarizer instead of replacing prior context with an empty summary.
-* **Bounded summaries, fewer native compactions.** The rendered memory summary respects `compactionSummaryMaxTokens`, and when the observer is behind the hook observes the gap synchronously (`compactionCatchUpMaxChunks`) so most compactions stay model-light and structured instead of falling back to Pi's growing prose summary.
-* **No unobserved context is discarded.** Proactive compaction counts only source tokens the observer has covered, and the compaction hook keeps entries the observer has not reached yet in context (within `compactionMaxRetainedTokens`) or delegates to Pi's native summarizer, instead of dropping them with no memory record.
+* **Bounded summaries, fewer native compactions.** The rendered memory summary respects `compactionSummaryMaxTokens`, and when the observer is behind (with some coverage recorded and no background run in flight) the hook observes the gap synchronously (`compactionCatchUpMaxChunks`) so most compactions stay model-light and structured instead of falling back to Pi's growing prose summary.
+* **No unobserved context is discarded.** While Pi's automatic compaction is enabled, proactive compaction counts only source tokens the observer has covered. Either way, the compaction hook keeps entries the observer has not reached yet in context (within `compactionMaxRetainedTokens`) or delegates to Pi's native summarizer, instead of dropping them with no memory record.
 * **Background memory work.** One consolidation pipeline runs observer, then reflector, then dropper. It launches from `agent_start` and `turn_end` (or from `agent_settled` with `consolidateWhenIdle`) when the observation or reflection clock is due; dropper work runs only after a successful reflection in the same run and prunes the folded active observation ledger toward `observationsPoolTargetTokens`.
 * **Source-backed recall.** Observations and reflections can be traced back through the `recall` tool.
 * **Visible/full views.** `/om:view` shows visible memory and `/om:view full` shows the full current memory state. Use `/om:status` for visible-vs-full drift and for the separate visible observation pool vs active observation pool.
@@ -497,7 +490,8 @@ V3 equivalent:
 * [`docs/concepts.md`](docs/concepts.md) — vocabulary and V3 mental model.
 * [`docs/how-it-works.md`](docs/how-it-works.md) — lifecycle, memory shapes, projections, and recall flow.
 * [`docs/configuration.md`](docs/configuration.md) — all V3 settings and migration notes.
-* [`docs/pig.md`](docs/pig.md) — the Go port for Pi in Go (PiG): install, layout, and what differs.
+* [`docs/pig.md`](docs/pig.md) — install details, package layout, and the list of behaviour changes.
+* [`docs/contributing.md`](docs/contributing.md) — where changes go and which checks a pull request must pass.
 
 ---
 
@@ -505,7 +499,7 @@ V3 equivalent:
 
 Inspired by [Mastra's Observational Memory](https://mastra.ai/blog/observational-memory) research.
 
-This is an independent implementation built for Pi's extension system.
+This is an independent implementation built for PiG's extension system.
 
 ---
 
