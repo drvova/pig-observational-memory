@@ -4,8 +4,7 @@
 
 **Long PiG sessions that keep the thread.**
 
-Observational memory for [PiG](https://github.com/MichaelKinsy/PiG), Pi in Go. It records what happens while you work,<br>
-distills what stays true, and makes compaction a quick render instead of a slow rewrite.
+A [PiG](https://github.com/MichaelKinsy/PiG) extension that gives the agent a lasting memory of the session. It records what happens while you work, distills what stays true, and makes compaction a quick render instead of a slow rewrite.
 
 [![CI](https://github.com/drvova/pi-observational-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/drvova/pi-observational-memory/actions/workflows/ci.yml)
 [![Go 1.26+](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](extensions/observational-memory/go.mod)
@@ -23,10 +22,10 @@ Compaction summarizes the session. The next compaction summarizes that summary. 
 
 This extension does the memory work while the session runs, so it is ready before compaction is needed.
 
-- **No summary chains.** Observations and reflections are kept in the session as ledger entries and folded into each compaction. They are never re-summarized.
-- **Fast compaction.** When memory is ready, compaction renders it without calling a summarization model. If the observer is behind, a short catch-up run covers the gap first.
-- **Traceable memory.** Every line carries an id. The agent can `recall` it to see the source entries it came from.
-- **Nothing unread is dropped.** Compaction keeps history the observer has not read yet in context, or hands that one compaction to PiG's native summarizer.
+- **No summary chains.** Observations and reflections are saved as entries in the session, and every compaction renders them as written. They are never re-summarized.
+- **Fast compaction.** When the observer has already read the history being compacted, the summary is rendered from memory without calling a summarization model. If it is behind, a catch-up run of up to two observer chunks tries to read the rest first.
+- **Traceable memory.** Every line carries an id, and the agent can pass it to the `recall` tool to see the conversation it came from.
+- **Unread history is never lost.** Compaction keeps history the observer has not read yet in context, or hands that one compaction to PiG's native summarizer.
 
 ## Quick start
 
@@ -36,16 +35,20 @@ You need the `pig` CLI and a Go 1.26 or newer toolchain: the `go` on your `PATH`
 pig install git:github.com/drvova/pi-observational-memory
 ```
 
-Start a session and work as usual. Memory builds in the background, and `/om:status` shows how far along it is.
+The first run compiles the extension, so it starts more slowly; later sessions reuse the build.
 
-The first run compiles the extension; later sessions reuse the build. Other ways to load it:
+Start `pig` and work as usual. Run `/om:status` to confirm the extension loaded: it prints memory counts and a line such as `Next observation: ~2,300 / 10,000 tokens (23%)`. The first observation is recorded after about 10k tokens of conversation. The workers call the session model in the background; [Configuration](#configuration) shows how to use a cheaper one.
+
+Other ways to load it:
 
 ```bash
 # this project only (writes .pig/settings.json)
 pig install git:github.com/drvova/pi-observational-memory -l
 
-# from a clone: one session without installing, or install
+# from a clone: load it for one session, without installing
 pig -e ./extensions/observational-memory
+
+# from a clone: install it
 pig install ./extensions/observational-memory
 
 # list the hooks, commands and tool it registers, without installing
@@ -54,28 +57,28 @@ pig install ./extensions/observational-memory --validate-only --json
 
 ## How it works
 
+Observations are what happened: a decision, a finished migration, a bug traced to a module, a constraint the user stated. Reflections are what stays true: the stack, a hard deadline, a preference for minimal abstractions.
+
 ```mermaid
 flowchart LR
-    S([session entries]) --> O[Observer]
+    S([session history]) --> O[Observer]
     O -->|observations| L[(memory ledger<br>in the session)]
     L --> R[Reflector]
     R -->|reflections| L
-    R -.->|pool over target| D[Dropper]
+    R -.->|observations over target| D[Dropper]
     D -->|retires observations| L
     L -->|rendered, no summarization model| C([compaction summary])
 ```
 
-Three memory workers run in one background pipeline. They use the session model unless you configure another.
+Three memory workers run in one background pipeline and save what they write as entries in the session: the memory ledger. They use the session model unless you configure another.
 
 | Worker | Runs when | Writes |
 | --- | --- | --- |
-| **Observer** | ~10k tokens of new source since its last coverage (`observeAfterTokens`) | Timestamped observations ranked `low` to `critical`, each citing the source entries it came from |
-| **Reflector** | ~20k tokens of newly observed source (`reflectAfterTokens`) | Durable reflections, each citing the observations it preserves |
-| **Dropper** | After a reflection, when active observations exceed `observationsPoolTargetTokens` | Retires observations from active memory, favouring ones reflections now cover. The ledger keeps them. |
+| **Observer** | ~10k tokens of history it has not read yet (`observeAfterTokens`) | Timestamped observations ranked `low` to `critical`, each citing the messages it came from |
+| **Reflector** | ~20k tokens of history the observer has read since the last reflection (`reflectAfterTokens`) | Durable reflections, each citing the observations it preserves |
+| **Dropper** | After a reflection, when active observations exceed `observationsPoolTargetTokens` | Retires observations from active memory, favoring ones reflections now cover. They stay in the session, and `recall` still finds them by id. |
 
-Observations are what happened: a decision, a finished migration, a bug traced to a module, a constraint the user stated. Reflections are what stays true: the stack, a hard deadline, a preference for minimal abstractions.
-
-Compaction comes either from the extension, once `compactAfterTokens` of observed source has built up since the last compaction, or from PiG itself. Either way the hook folds the ledger into a summary like this:
+Compaction starts either from the extension, after about 81k tokens of history the observer has read since the last compaction (`compactAfterTokens`; all history when PiG's automatic compaction is off), or from PiG itself (`/compact`, or a full context window). Either way the extension writes the summary from memory, like this:
 
 ```md
 These are condensed memories from earlier in this session.
@@ -90,18 +93,18 @@ These are condensed memories from earlier in this session.
 [e5f6a1b2c3d4] 2026-01-15 14:50 [medium] GraphQL migration completed; user confirmed queries working.
 ```
 
-When a line is too compressed to act on, the agent calls `recall` with its id and gets the original source back.
+When a line is too compressed to act on, the agent calls `recall` with its id and gets the original conversation back.
 
-The summary is budgeted (`compactionSummaryMaxTokens`), newest memory first. If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and the compaction cut in detail.
+The summary is capped at `compactionSummaryMaxTokens` (an eighth of the context window by default). When memory outgrows it, the oldest lines are left out and a closing line says how many. If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and how compaction decides what to keep.
 
 ## Commands
 
 | Command | Shows |
 | --- | --- |
-| `/om:status` | Memory counts, progress toward the next observation, reflection and compaction, pool sizes, active backoffs, and the last worker errors |
-| `/om:view` | The memory in the latest compaction summary, also copied to the clipboard |
-| `/om:view full` | Everything recorded on this branch, also copied to the clipboard |
-| `recall` (agent tool) | The source evidence behind one observation or reflection id. It is not a search tool. |
+| `/om:status` | Memory counts, progress toward the next observation, reflection and compaction, memory sizes, any worker or compaction holding off after an empty or failed run, and the last worker errors |
+| `/om:view` | The memory in the latest compaction summary (empty until the first compaction), also copied to the clipboard |
+| `/om:view full` | All memory recorded on this branch except dropped observations, also copied to the clipboard |
+| `recall` (agent tool) | The original conversation behind one observation or reflection id. It is not a search tool. |
 
 ## Configuration
 
@@ -110,7 +113,7 @@ The defaults suit most sessions. Settings go under the `observational-memory` ke
 - `~/.pig/agent/settings.json`, for every session
 - `<project>/.pig/settings.json`, for one project, overriding the global file
 
-With `PIG_USE_PI_DIRS=1`, PiG reads Pi's `~/.pi/agent` and `.pi` instead. [Where settings live](docs/configuration.md#where-settings-live) covers the overrides.
+With `PIG_USE_PI_DIRS=1`, PiG reads Pi's `~/.pi/agent` and `.pi` instead. Settings are read when the extension starts, so restart PiG after changing them. [Where settings live](docs/configuration.md#where-settings-live) covers the overrides.
 
 The most common change is running the workers on a cheaper model, with a second one to fall back on:
 
@@ -131,17 +134,26 @@ The most common change is running the workers on a cheaper model, with a second 
 | `reflectAfterTokens` | `20000` | Reflect more or less often |
 | `compactAfterTokens` | `81000` | Compact earlier or later |
 | `compactAfterTokensMode` | `"calibrated"` | Set `"ratio"` to scale the compaction point to the session model's context window (`compactAfterTokensRatio`, default `0.68`) |
-| `consolidateWhenIdle` | `false` | Run the workers only between turns, for one local server shared by the agent and the workers |
-| `passive` | `false` | Stop background work and auto-compaction (or set `PI_OBSERVATIONAL_MEMORY_PASSIVE=1`) |
-| `showWorkerNotifications` | `true` | Hide routine worker progress messages |
+| `consolidateWhenIdle` | `false` | Run the workers only while the agent is idle (see the local-server tip below) |
+| `passive` | `false` | Stop the background workers and the extension's own compaction trigger; PiG's compaction and the summary still work (or set `PI_OBSERVATIONAL_MEMORY_PASSIVE=1`) |
+| `showWorkerNotifications` | `true` | Set `false` to hide routine worker progress messages |
 | `debugLog` | `false` | Write NDJSON debug events to `~/.pig/agent/observational-memory/debug/` |
 
 Two tips:
 
-- **Large context windows.** On a 1M-token model the fixed 81k threshold compacts far too early. `"compactAfterTokensMode": "ratio"` with `"compactAfterTokensRatio": 0.5` compacts at about 500k instead.
-- **Local servers.** If the workers share a llama.cpp server with the agent, set `agentMaxTokens` (for example `8192`) and a lower `observerChunkMaxTokens`, so that a worker request fits in the server's context.
+- **Large context windows.** On a 1M-token model the default 81k threshold compacts long before the window fills. `"compactAfterTokensMode": "ratio"` with `"compactAfterTokensRatio": 0.5` compacts at about 500k instead.
+- **Local servers.** If the workers share a llama.cpp server with the agent, set `consolidateWhenIdle` to `true` so their requests never overlap the agent's, and set `agentMaxTokens` (for example `8192`) and a lower `observerChunkMaxTokens` so that a worker request fits in the server's context.
 
-[Configuration](docs/configuration.md) lists every setting with its validation, tuning advice and the V2 migration table.
+[Configuration](docs/configuration.md) lists every setting with its validation and tuning advice.
+
+## Coming from the TypeScript extension
+
+This is a Go port of [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3).
+
+- **Sessions carry over.** The ledger entries and compaction details have the same shape, so recorded memory keeps working.
+- **Settings carry over.** The keys are the same and are read from PiG's directories, as described above.
+- **Some behavior changed.** The port fixes several upstream issues, and [pig.md](docs/pig.md) lists each change.
+- **V2 data is not read.** Like the TypeScript V3 release, this ignores settings and memory from the older V2 format; [Migrating from V2](docs/configuration.md#migrating-from-v2) maps the old keys.
 
 ## Development
 
@@ -154,12 +166,14 @@ extensions/observational-memory/   the extension, a standalone Go module
     ├── ledger/                    memory model, projections, summary rendering
     ├── runtime/                   per-process state, model resolution
     ├── commands/, recall/         /om:status, /om:view, recall
-    ├── sdkhost/                   the only package that imports the PiG SDK
+    ├── host/                      host interfaces the packages run against
+    ├── sdkhost/                   adapts the PiG SDK's extension context to host
+    ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
     └── testfix/                   fake host and entry builders for tests
-docs/                              concepts, internals, settings, contributing
+docs/                              concepts, internals, settings, PiG port notes, contributing
 ```
 
-Run the checks CI runs from the module directory:
+From the module directory, run the same checks as CI:
 
 ```bash
 cd extensions/observational-memory
@@ -169,15 +183,6 @@ go test -race ./...
 ```
 
 [Contributing](docs/contributing.md) says what a pull request needs.
-
-## Coming from the TypeScript extension
-
-This is a Go port of [elpapi42/pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3).
-
-- **Sessions carry over.** The ledger entries and compaction details have the same shape, so recorded memory keeps working.
-- **Settings carry over.** The keys are the same and are read from PiG's directories, as described above.
-- **Some behaviour changed.** The port fixes several upstream issues, and [pig.md](docs/pig.md) lists each change.
-- **V2 is still not supported.** V2 settings and memory are ignored; [Migrating from V2](docs/configuration.md#migrating-from-v2) maps the old keys.
 
 ## Documentation
 

@@ -10,7 +10,8 @@ The extension is the standalone Go module `extensions/observational-memory/` (ow
 `github.com/MichaelKinsy/PiG/extensions/sdk`), a PiG extension ported from the TypeScript Pi extension
 elpapi42/pi-observational-memory; `docs/pig.md` lists where it deliberately differs. `sdk.New(Name)` must
 equal the factory directory name, so do not rename the directory or `Name` independently. Only
-`internal/sdkhost` touches the SDK; everything else runs against `internal/host` interfaces, and tests
+`internal/sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call only its
+static helpers); everything else runs against `internal/host` interfaces, and tests
 use the fakes in `internal/testfix`. Worker entry points are package variables in `internal/hooks`
 (`runObserver`, `runReflector`, `runDropper`) so tests script stages. Check: `cd extensions/observational-memory && gofmt -l . &&
 go vet ./... && go test -race ./...` (CI runs the same `go` job); registrations: `pig install

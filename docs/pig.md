@@ -34,7 +34,7 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 | `internal/runtime` | per-process state and model resolution (primary and fallback) |
 | `internal/commands`, `internal/recall` | `/om:status`, `/om:view`, `recall` |
 | `internal/config`, `internal/serialize`, `internal/tokens`, `internal/debuglog`, `internal/clipboard` | settings, source serialization, token estimates, debug log, clipboard |
-| `internal/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` imports the SDK |
+| `internal/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call its static helpers) |
 | `internal/testfix` | entry builders and fake host for tests |
 
 [contributing.md](contributing.md) lists the checks a change must pass.
