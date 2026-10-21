@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/drvova/pi-observational-memory/extensions/observational-memory/internal/agents"
@@ -300,8 +301,10 @@ func TestCatchUpPartialRunClaimsOnlyCitedCoverage(t *testing.T) {
 func TestCatchUpRetriesChunkOnFallback(t *testing.T) {
 	obs, _, _ := mockWorkers(t)
 	obs.reject(&agents.StreamError{Stage: "observer", StopReason: "error", ErrorMessage: "primary down"})
-	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("t1", "a2")}))
-	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch()})
+	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("t1")}))
+	obs.resolve(agents.Observed([]ledger.Observation{gapObservation("a2")}))
+	// t1 alone exceeds the minimum chunk budget, so t1 and a2 take two chunks.
+	fx := catchUpSetup(t, catchUpArgs{entries: laggingBranch(repeatX(4000)), chunkMaxTokens: 256})
 	cfg := fx.rt.Config()
 	cfg.FallbackModel = &config.ConfiguredModel{Provider: "opencode-go", ID: "deepseek-v4.1-flash"}
 	fx.rt.SetConfig(cfg)
@@ -309,10 +312,28 @@ func TestCatchUpRetriesChunkOnFallback(t *testing.T) {
 
 	result := compactionOf(t, fx.run("u2"))
 
-	if obs.count() != 2 || *obs.call(1).APIKey != "go-key" || len(fx.h.Appended) != 1 || result.FirstKeptEntryID != "u2" {
-		t.Fatalf("observer calls %d appended %d result %+v", obs.count(), len(fx.h.Appended), result)
+	// The second chunk goes straight to the fallback instead of re-paying the
+	// failed primary.
+	keys := []string{}
+	for i := 0; i < obs.count(); i++ {
+		keys = append(keys, *obs.call(i).APIKey)
 	}
-	if !hasNotificationContaining(fx.h, "retrying with fallback model", "warning") || hasNotificationContaining(fx.h, "catch-up observer failed", "") {
+	if !reflect.DeepEqual(keys, []string{"key", "go-key", "go-key"}) {
+		t.Fatalf("observer API keys %v", keys)
+	}
+	if !reflect.DeepEqual(obs.call(1).AllowedSourceEntryIDs, []string{"t1"}) || !reflect.DeepEqual(obs.call(2).AllowedSourceEntryIDs, []string{"a2"}) {
+		t.Fatalf("observer chunks %v %v", obs.call(1).AllowedSourceEntryIDs, obs.call(2).AllowedSourceEntryIDs)
+	}
+	if len(fx.h.Appended) != 2 || result.FirstKeptEntryID != "u2" {
+		t.Fatalf("appended %d result %+v", len(fx.h.Appended), result)
+	}
+	retries := 0
+	for _, n := range fx.h.Notifications {
+		if strings.Contains(n.Message, "retrying with fallback model") && n.Level == "warning" {
+			retries++
+		}
+	}
+	if retries != 1 || hasNotificationContaining(fx.h, "catch-up observer failed", "") {
 		t.Fatalf("notifications %+v", fx.h.Notifications)
 	}
 }
