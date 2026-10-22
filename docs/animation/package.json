@@ -2,11 +2,12 @@
   "name": "pig-observational-memory-animation",
   "private": true,
   "type": "module",
-  "description": "Clayzo sources for the README animations (docs/assets/*.svg).",
+  "description": "Clayzo sources for the README animations (docs/assets/*.svg) and the trailer video (npm run trailer, out/trailer.mp4).",
   "scripts": {
     "build": "node make.ts build",
     "check": "node make.ts check",
-    "export": "node make.ts export"
+    "export": "node make.ts export",
+    "trailer": "node make.ts trailer"
   },
   "dependencies": {
     "@clayzo/animation": "^0.3.17"

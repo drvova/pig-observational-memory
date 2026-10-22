@@ -16,6 +16,7 @@ The README's animated scenes are [Clayzo](https://www.npmjs.com/package/clayzo) 
 | `sprite.ts` | Spider-Ham, PiG's default pig and the `PiG.` wordmark pixels and colors, copied from PiG's sprite catalogue (MIT). |
 | `lib.ts` | Shared helpers: transforms, keyframe tracks, pixel art to paths, the card every scene sits on, webs, text. |
 | `make.ts` | Builds, checks and exports every scene; lists each scene's title and reduced-motion still. |
+| `trailer.ts` | A 49 s, 1920×1080 trailer for posting (Spider-Ham in wraparound shades, trailer only): reads the built scenes from `out/`, merges five of them at 1.5× between title cards, and writes `out/trailer.json`. |
 | `finish-svg.ts` | Adds a title, and a reduced-motion rule that holds one still frame, to an exported SVG. |
 | `fonts/` | Manrope, which the Clayzo CLI bundles (SIL Open Font License, `fonts/OFL.txt`). |
 
@@ -29,7 +30,10 @@ npm ci
 npx clayzo login        # once per machine; CI uses a CLAYZO_TOKEN from `clayzo token create`
 npm run check           # a sample sheet and a loop-seam check per scene in out/
 npm run export          # writes ../assets/<scene>.svg and banner.gif
+npm run trailer         # writes out/trailer.mp4 (not committed); about half an hour on 4 CPUs
 ```
+
+The trailer's encoder writes untagged BT.601 video, so `npm run trailer` tags its colours with a system `ffmpeg` (the bundled one cannot); without one it warns, and players shift the reds and cyans.
 
 Behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` so the CLI's requests use it.
 
