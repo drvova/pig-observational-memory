@@ -5,7 +5,9 @@
 // pixel wraparound sport shades throughout (trailer only, never in the README scenes).
 //
 // Reads out/<scene>.json (run `node make.ts build` first), writes out/trailer.json.
-// `npm run trailer` builds the scenes, runs this and exports out/trailer.mp4.
+// `npm run trailer` builds the scenes, runs this and exports out/trailer.mp4. Its markers
+// (beat-*, cap-*, wipe-*, cue-*, *-glint-*, *-ting-* and the merged scene markers) are the
+// sync points sound.ts reads to write out/trailer-sound.wav, the `soundtrack` audio node.
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   ANIMATION_DOCUMENT_VERSION,
@@ -154,6 +156,7 @@ function caption(id: string, children: string[], o: { at: number; out: number; p
     scale.push([o.out - 24, s3(1), ease.drain], [o.out, s3(0.96)]);
   }
   const [px, py] = o.pivot;
+  markers.push({ id: `cap-${id}`, name: `caption ${id}`, tick: o.at, durationTicks: o.out - o.at });
   return group(id, children, {
     inTick: o.at, outTick: o.out, isolation: true,
     opacity: opacity.length > 1 ? track(`${id}-o`, opacity) : constant(1),
@@ -187,10 +190,21 @@ const LENS_FROM = { x: 8, y: 6 };
 const LENS_TO = { x: 22, y: 17 };
 const BROW_HALF_CELLS: Array<[number, number, number, number]> = [[4, 7, 24, 1], [1, 7, 3, 1], [0, 8, 2, 1], [28, 7, 3, 1], [30, 8, 2, 1]];
 
+// The glint's steps across the lens (half-cells), one a frame.
+const GLINT_DX = [0, 3, 6, 9, 12, 15, 17];
+// The sparkle's pop starts this many ticks after the glint (first drawn a frame later).
+const SPARKLE_POP = 40;
+
 function shades(id: string, o: ShadesOptions, shift = 0): string {
   const h = o.px / 2;
   const R = (x: number, y: number, w: number, hh: number) => ({ x: o.x0 + x * h, y: o.y0 + y * h, w: w * h, h: hh * h });
   const at = (t: number) => t + shift;
+  // Sound cues: the sweep runs g..g+48 and the sparkle pops from g+SPARKLE_POP; the "ting" is
+  // when the sparkle is first drawn, which is also the sweep's last step.
+  if (FRAME_TICKS * (GLINT_DX.length - 1) !== SPARKLE_POP + FRAME_TICKS) throw new Error("the glint's last step and the sparkle's first frame no longer coincide");
+  o.glints.forEach((g, i) => markers.push({ id: `${id}-glint-${i}`, name: "shades glint", tick: at(g), durationTicks: 104 }));
+  o.glints.forEach((g, i) => markers.push({ id: `${id}-ting-${i}`, name: "shades glint ting", tick: at(g) + SPARKLE_POP + FRAME_TICKS, durationTicks: FRAME_TICKS }));
+  (o.gold ?? []).forEach((g, i) => markers.push({ id: `${id}-gold-${i}`, name: "shades gold flash", tick: at(g), durationTicks: 16 }));
   // The lens is drawn as one outline, not its rects: at fractional cell sizes the internal
   // edges of abutting rects anti-alias into hairlines that let the mask show through.
   const corner = ([x, y]: [number, number]) => ({ point: { x: o.x0 + x * h, y: o.y0 + y * h }, inTangent: { x: 0, y: 0 }, outTangent: { x: 0, y: 0 } });
@@ -209,7 +223,7 @@ function shades(id: string, o: ShadesOptions, shift = 0): string {
   kids.push(rects(`${id}-frame-hi`, [R(1, 7, 30, 0.25)], "#8B949E"));
   // The glint: two white pixels that step across the lens, one jump a frame.
   const sweep: Steps<V3> = [[0, p3(0, 0)]];
-  for (const g of o.glints) [0, 3, 6, 9, 12, 15, 17].forEach((dx, i) => sweep.push([at(g) + 8 * i, p3(dx * h, 0)]));
+  for (const g of o.glints) GLINT_DX.forEach((dx, i) => sweep.push([at(g) + FRAME_TICKS * i, p3(dx * h, 0)]));
   for (const g of o.glints) sweep.push([at(g) + 56, p3(0, 0)]);
   sweep.sort((a, b) => a[0] - b[0]);
   const glintPx = rects(`${id}-glint-px`, [R(8, 9, 1, 1), R(7, 10, 1, 1)], WHITE);
@@ -219,8 +233,8 @@ function shades(id: string, o: ShadesOptions, shift = 0): string {
   const size: Steps<V3> = [[0, s3(0)]];
   const turn: Steps<V3> = [[0, r3(0)]];
   for (const g of o.glints) {
-    size.push([at(g) + 40, s3(0), ease.pop], [at(g) + 56, s3(1.3), ease.settle], [at(g) + 72, s3(1), ease.drain], [at(g) + 104, s3(0)]);
-    turn.push([at(g) + 40, r3(0), linear], [at(g) + 104, r3(45)]);
+    size.push([at(g) + SPARKLE_POP, s3(0), ease.pop], [at(g) + 56, s3(1.3), ease.settle], [at(g) + 72, s3(1), ease.drain], [at(g) + 104, s3(0)]);
+    turn.push([at(g) + SPARKLE_POP, r3(0), linear], [at(g) + 104, r3(45)]);
   }
   kids.push(add({ ...pathNode(`${id}-sparkle`, D, rectsPath([{ x: -0.5 * k, y: -1.5 * k, w: k, h: 3 * k }, { x: -1.5 * k, y: -0.5 * k, w: 3 * k, h: k }]), solid(WHITE)),
     transform: tf(o.x0 + 27 * h, o.y0 + 7 * h, { scale: track(`${id}-sparkle-s`, size), rotation: track(`${id}-sparkle-r`, turn) }) } as SceneNode));
@@ -345,6 +359,7 @@ function installChip(id: string, top: number) {
 // A web-wipe overlay riding a corner clip: spokes and sagging threads scaling from the hub.
 function webWipe(id: string, hub: [number, number], fromDeg: number, toDeg: number, t0: number, t1: number) {
   const R = 4500;
+  markers.push({ id: `wipe-${id}`, name: "web-wipe", tick: t0, durationTicks: t1 - t0 });
   const web = add(pathNode(`${id}-path`, D, webPath(0, 0, fromDeg, toDeg, 2310, [0.18, 0.36, 0.56, 0.78, 1].map((f) => f * 2250), 8),
     { stroke: { color: constant(hex(INK)), opacity: track(`${id}-o`, [[0, 0.7], [t1, 0.7, ease.drain], [t1 + 48, 0]]), width: constant(3), lineCap: "round", lineJoin: "round", miterLimit: 4 } }));
   const rig = group(id, [web], { inTick: t0, outTick: t1 + 48,
@@ -368,15 +383,18 @@ root.push(field("bg-field"), dotGrid("bg-dots"));
   const card = group("po.card", backdrop, { transform: tf(0, 0, { scale: constant(s3(1.5)) }) });
 
   const PX = 30, X0 = 260, Y0 = 350, CX = 500, CY = 560;
+  // The rig dips as anticipation, then zips up out of frame by OUT.
+  const DIP = 360, ZIP = 376, OUT = 432;
+  markers.push({ id: "cue-poster-zip", name: "poster dip and zip", tick: DIP, durationTicks: OUT - DIP });
   const glow = add({ ...base("po.glow", CX, CY), type: "ellipse", size: constant({ width: 840, height: 720 }),
     style: { gradientFill: { kind: "radial", opacity: constant(1), start: constant({ x: 0, y: 0 }), end: constant({ x: 420, y: 0 }),
       stops: constant([{ position: 0, color: hex(logoPeriod, 0.3) }, { position: 0.6, color: hex(logoPeriod, 0.08) }, { position: 1, color: hex(logoPeriod, 0) }]) } } } as SceneNode);
   const line = box("po.line", CX - 1.65, -400, 3.3, 440 + 400, INK, constant(0.75), 1.6);
   const body = group("po.body", [...hamPaths("po.ham", X0, Y0, PX), shades("po.shades", { x0: X0, y0: Y0, px: PX, glints: [16] })]);
   const rig = group("po.rig", [glow, line, body], {
-    outTick: 432,
+    outTick: OUT,
     transform: tf(CX, 40, {
-      position: track("po.rig-p", [[0, p3(CX, 40)], [360, p3(CX, 40), ease.out], [376, p3(CX, 58), fall], [432, p3(CX, 40 - 1100)]]),
+      position: track("po.rig-p", [[0, p3(CX, 40)], [DIP, p3(CX, 40), ease.out], [ZIP, p3(CX, 58), fall], [OUT, p3(CX, 40 - 1100)]]),
       rotation: track("po.rig-r", [[0, r3(-5), ease.inOut], [96, r3(-3), ease.inOut], [192, r3(-5), ease.inOut], [280, r3(-3.5), ease.inOut], [360, r3(-5)]]),
     }, CX, 40),
   });
@@ -390,7 +408,7 @@ root.push(field("bg-field"), dotGrid("bg-dots"));
     rects("po.tagline-period", [{ x: 1751, y: 778, w: 12, h: 12 }], RED_SHAPE),
     text("po.billing", centreX("NOW PLAYING IN A TERMINAL NEAR YOU"), 962, "NOW PLAYING IN A TERMINAL NEAR YOU", 40, 800, CYAN),
   ];
-  group("po.poster", [card, rig, ...lockup], { outTick: 432 });
+  group("po.poster", [card, rig, ...lockup], { outTick: OUT });
   root.push("po.poster");
 }
 
@@ -429,12 +447,15 @@ const COMPACTIONS = [
   // whenever a compaction stalls the session.
   {
     const x0 = slotX(0), cx = x0 + 8 * CELL, feet = SLOT_Y + 13 * CELL;
+    // He drops in at DROP and lands at LAND (the line retracts and the body squashes there).
+    const DROP = 864, LAND = 960;
     const line = add({ ...base("pb.g0-line", cx, -900), type: "rect", size: constant({ width: 3, height: 1300 }), cornerRadius: constant(1.5),
       style: solid(INK, constant(0.75)),
-      transform: tf(cx, -900, { scale: track("pb.g0-line-s", [[0, s3(1)], [960, s3(1), ease.drain], [984, s3(1, 0.001)]]) }, 0, -650), outTick: 984 } as SceneNode);
+      transform: tf(cx, -900, { scale: track("pb.g0-line-s", [[0, s3(1)], [LAND, s3(1), ease.drain], [984, s3(1, 0.001)]]) }, 0, -650), outTick: 984 } as SceneNode);
     const body = group("pb.g0-body", [...hamPaths("pb.g0", x0, SLOT_Y, CELL), shades("pb.g0-shades", { x0, y0: SLOT_Y, px: CELL, glints: [984] })], {
-      transform: tf(cx, feet, { scale: track("pb.g0-squash", [[0, s3(1)], [960, s3(1.08, 0.92), ease.settle], [1000, s3(1)]]) }, cx, feet) });
-    const bob: Steps<V3> = [[0, p3(0, -780)], [864, p3(0, -780), fall], [960, p3(0, 0)]];
+      transform: tf(cx, feet, { scale: track("pb.g0-squash", [[0, s3(1)], [LAND, s3(1.08, 0.92), ease.settle], [1000, s3(1)]]) }, cx, feet) });
+    markers.push({ id: "cue-session-drop", name: "session drops in", tick: DROP, durationTicks: LAND - DROP });
+    const bob: Steps<V3> = [[0, p3(0, -780)], [DROP, p3(0, -780), fall], [LAND, p3(0, 0)]];
     for (const [a, b] of [[1000, 1088], [1232, 1488], [1632, 1920], [2016, 2880]]) {
       for (let t = a; t + 48 <= b; t += 96) bob.push([t, p3(0, -4)], [t + 48, p3(0, 0)]);
       bob.push([b, p3(0, 0)]);
@@ -478,6 +499,12 @@ const COMPACTIONS = [
   const HALF = CELL / 2;
   [[4, 0.25], [8, 0.5], [16, 0.7]].forEach(([k, fade], g) => {
     const i = g + 1, x0 = slotX(i), c = COMPACTIONS[g];
+    markers.push(
+      { id: `cue-compaction-${i}`, name: `compaction ${i} thwip`, tick: c.thwip, durationTicks: c.done - c.thwip },
+      { id: `cue-compaction-${i}-stall`, name: `compaction ${i} stall`, tick: c.stall, durationTicks: c.reveal - c.stall },
+      { id: `cue-compaction-${i}-reveal`, name: `compaction ${i} reveal`, tick: c.reveal, durationTicks: c.done - c.reveal },
+      { id: `cue-compaction-${i}-done`, name: `compaction ${i} done`, tick: c.done, durationTicks: 8 },
+    );
     const byColour = new Map<string, Array<{ x: number; y: number; w: number; h: number }>>();
     for (const b of generation(k, fade)) byColour.set(b.col, [...(byColour.get(b.col) ?? []), { x: x0 + b.x * HALF, y: SLOT_Y + b.y * HALF, w: b.w * HALF, h: b.h * HALF }]);
     const cells = [...byColour].map(([col, list], j) => rects(`pb.copy${i}-${j}`, list, col));
@@ -518,6 +545,7 @@ const COMPACTIONS = [
   ];
   const chipKids = chips.flatMap((c, n) => {
     const cx = c.x + c.w / 2;
+    markers.push({ id: `cue-chip-${n}`, name: `chip ${n} pops`, tick: c.at, durationTicks: 24 }, { id: `cue-strike-${n}`, name: `chip ${n} struck`, tick: c.strike, durationTicks: 48 });
     const chip = group(`pb.chip${n}`, [box(`pb.chip${n}-bg`, c.x, 828, c.w, 72, "#1A1F26", constant(1), 10), text(`pb.chip${n}-t`, c.tx, 882, c.label, 52, 700, INK)], {
       inTick: c.at, transform: tf(cx, 864, { scale: track(`pb.chip${n}-s`, [[0, s3(0)], [c.at, s3(0), ease.pop], [c.at + 24, s3(1)]]) }, cx, 864) });
     const strike = add({ ...base(`pb.strike${n}`), inTick: c.strike, type: "rect", size: constant({ width: c.w - 28, height: 6 }), cornerRadius: constant(0), style: solid(RED_SHAPE),
@@ -525,10 +553,12 @@ const COMPACTIONS = [
     return [chip, strike];
   });
   const chipGroup = group("pb.chips", chipKids, { inTick: 2064, outTick: 2784 });
+  const BLUR = 2712, GONE = 2784;
+  markers.push({ id: "cue-copies-blur", name: "the chips blur away", tick: BLUR, durationTicks: GONE - BLUR });
   const blur = (name: string) => ({ id: `pb.blur-${name}`, name, valueType: "number", minimum: 0, maximum: 64,
-    value: track(`pb.blur-${name}-v`, [[0, 0], [2712, 0, ease.drain], [2784, 12]]) });
-  kids.push(add({ ...base("pb.blur"), inTick: 2064, outTick: 2784, type: "effect", inputId: chipGroup, effect: "blur",
-    opacity: track("pb.blur-o", [[0, 1], [2712, 1, ease.drain], [2784, 0]]),
+    value: track(`pb.blur-${name}-v`, [[0, 0], [BLUR, 0, ease.drain], [GONE, 12]]) });
+  kids.push(add({ ...base("pb.blur"), inTick: 2064, outTick: GONE, type: "effect", inputId: chipGroup, effect: "blur",
+    opacity: track("pb.blur-o", [[0, 1], [BLUR, 1, ease.drain], [GONE, 0]]),
     parameters: [blur("sigmaX"), blur("sigmaY")], capability: effectCapability } as SceneNode));
   group("pb.stage", kids, { inTick: 864, outTick: 2880 });
   root.push("pb.stage");
@@ -569,21 +599,25 @@ const COMPACTIONS = [
 // =========================================================================================
 {
   const BASE = p3(1699.5, 537); // scene (0, 0) at (0, 252): the band 252-1032
-  // A camera hit on each stage as memory-web locks onto it: [tick, peak position, peak scale].
-  const hits: Array<[number, V3, number]> = [
-    [3872, p3(1747.02, 537), 1.56], // Observer
-    [4216, p3(1726.82, 527.88), 1.54], // Reflector
-    [4720, p3(1708.94, 527.88), 1.54], // Dropper
-    [5080, BASE, 1.56], // the compaction summary
+  // A camera hit on each stage as memory-web locks onto it: [name, tick, peak position, peak scale].
+  const hits: Array<[string, number, V3, number]> = [
+    ["observer", 3872, p3(1747.02, 537), 1.56],
+    ["reflector", 4216, p3(1726.82, 527.88), 1.54],
+    ["dropper", 4720, p3(1708.94, 527.88), 1.54],
+    ["summary", 5080, BASE, 1.56], // the compaction summary
   ];
   const pos: Steps<V3> = [[0, BASE]];
   const size: Steps<V3> = [[0, s3(1.5)]];
-  for (const [t, peak, s] of hits) {
+  for (const [name, t, peak, s] of hits) {
+    markers.push({ id: `cue-lock-${name}`, name: `${name} lock`, tick: t, durationTicks: 112 });
     pos.push([t - 8, BASE, ease.out], [t + 16, peak, ease.inOut], [t + 112, BASE]);
     size.push([t - 8, s3(1.5), ease.out], [t + 16, s3(s), ease.inOut], [t + 112, s3(1.5)]);
   }
-  pos.push([5320, BASE, ease.inOut], [5416, p3(960, 630)]);
-  size.push([5320, s3(1.5), ease.inOut], [5416, s3(4.5)]);
+  // The push into the summary, PUSH to the recall cut.
+  const PUSH = 5320, LANDED = 5416;
+  markers.push({ id: "cue-push", name: "push into the summary", tick: PUSH, durationTicks: LANDED - PUSH });
+  pos.push([PUSH, BASE, ease.inOut], [LANDED, p3(960, 630)]);
+  size.push([PUSH, s3(1.5), ease.inOut], [LANDED, s3(4.5)]);
   root.push(placeScene({ key: "mw", file: "memory-web", at: 3640, from: 840, to: 2616, anchor: [1133, 190],
     tracks: { position: track("mw.camera-p", pos), scale: track("mw.camera-s", size) },
     // The card's own gradient frame fades before the push (scene ticks 2520-2544, trailer
@@ -613,7 +647,21 @@ const COMPACTIONS = [
 // B6 Recall, 5416-6416: the summary the push landed on, every line at once; one id is
 // locked, the agent's recall call types out, and the source conversation comes back.
 // =========================================================================================
+// The recall drains into the B7 card, which comes in at RECALL_END.
+const RECALL_END = 6416;
 {
+  // The recall beats, shared with the sound cues: the id lock, the strand to the source
+  // card and the card, its two turns, the mini Spider-Ham's drop, and the drain.
+  const LOCK = 5816, STRAND = 6040, SOURCE = 6056, USER = 6104, ASSISTANT = 6152, HAM = 6112, HAM_LAND = 6160, DRAIN = 6392, END = RECALL_END;
+  markers.push(
+    { id: "cue-recall-lock", name: "id lock", tick: LOCK, durationTicks: 24 },
+    { id: "cue-recall-strand", name: "strand to the source", tick: STRAND, durationTicks: SOURCE - STRAND },
+    { id: "cue-recall-source", name: "source card", tick: SOURCE, durationTicks: USER - SOURCE },
+    { id: "cue-recall-user", name: "user turn", tick: USER, durationTicks: 48 },
+    { id: "cue-recall-ham", name: "mini Spider-Ham drops in", tick: HAM, durationTicks: HAM_LAND - HAM },
+    { id: "cue-recall-assistant", name: "assistant turn", tick: ASSISTANT, durationTicks: 48 },
+    { id: "cue-recall-drain", name: "recall drains", tick: DRAIN, durationTicks: END - DRAIN },
+  );
   const kids: string[] = [];
   // The panel opens out of the summary icon the push lands on (about 756 x 650 around
   // (960, 630), with a 9 px border) to its own 1600 x 600 over three frames.
@@ -647,8 +695,8 @@ const COMPACTIONS = [
   const arms = corners.map(([x, y, sx, sy], i) => rects(`rc.lock-${i}`, [
     { x: x + (sx > 0 ? -14 : 0), y: y + (sy > 0 ? -4 : 0), w: 14, h: 4 }, { x: x + (sx > 0 ? -4 : 0), y: y + (sy > 0 ? -14 : 0), w: 4, h: 14 }], WHITE));
   const lc = [(L + Rt) / 2, (T + B) / 2];
-  kids.push(group("rc.lock", arms, { inTick: 5816,
-    transform: tf(lc[0], lc[1], { scale: track("rc.lock-s", [[0, s3(1.25)], [5816, s3(1.25), ease.pop], [5832, s3(0.96), ease.settle], [5840, s3(1)]]) }, lc[0], lc[1]) }));
+  kids.push(group("rc.lock", arms, { inTick: LOCK,
+    transform: tf(lc[0], lc[1], { scale: track("rc.lock-s", [[0, s3(1.25)], [LOCK, s3(1.25), ease.pop], [LOCK + 16, s3(0.96), ease.settle], [LOCK + 24, s3(1)]]) }, lc[0], lc[1]) }));
 
   // The agent's tool call, typed one character a frame under a cover that steps right.
   const COVER_L = 222, COVER_R = 700;
@@ -667,18 +715,18 @@ const COMPACTIONS = [
   // strike), then the card with the original turns.
   const [sx, sy, ex, ey] = [717, 840, 960, 760];
   const dx = ex - sx, dy = ey - sy, len = Math.hypot(dx, dy);
-  kids.push(add({ ...base("rc.strand"), inTick: 6040, type: "rect", size: constant({ width: len, height: 3 }), cornerRadius: constant(1.5),
+  kids.push(add({ ...base("rc.strand"), inTick: STRAND, type: "rect", size: constant({ width: len, height: 3 }), cornerRadius: constant(1.5),
     style: solid(WHITE, track("rc.strand-o", [[0, 1], [6080, 1, ease.drain], [6120, 0.35]])),
-    transform: tf(sx, sy, { rotation: constant(r3((Math.atan2(dy, dx) * 180) / Math.PI)), scale: track("rc.strand-s", [[0, s3(0.001, 1)], [6040, s3(0.001, 1), ease.out], [6056, s3(1)]]) }, -len / 2, 0) } as SceneNode));
+    transform: tf(sx, sy, { rotation: constant(r3((Math.atan2(dy, dx) * 180) / Math.PI)), scale: track("rc.strand-s", [[0, s3(0.001, 1)], [STRAND, s3(0.001, 1), ease.out], [SOURCE, s3(1)]]) }, -len / 2, 0) } as SceneNode));
   const slideIn = (id: string, at: number, children: string[]) => group(id, children, { inTick: at, isolation: true,
     opacity: track(`${id}-o`, [[0, 0], [at, 0, ease.out], [at + 48, 1]]),
     transform: tf(0, 0, { position: track(`${id}-p`, [[0, p3(-14, 0)], [at, p3(-14, 0), ease.out], [at + 48, p3(0, 0)]]) }) });
   const bar = (id: string, x: number, y: number, w: number, color: string) => rects(id, [{ x, y, w, h: 12 }], color, constant(0.8));
   kids.push(group("rc.source", [
     panel("rc.source-card", 960, 560, 760, 236, PANEL, constant(hex(INK)), 2, 12),
-    slideIn("rc.user", 6104, [text("rc.user-t", 992, 624, "user", 32, 700, INK), bar("rc.user-b1", 1080, 604, 560, WHITE), bar("rc.user-b2", 1080, 632, 380, WHITE)]),
-    slideIn("rc.asst", 6152, [text("rc.asst-t", 992, 724, "assistant", 32, 700, CYAN), bar("rc.asst-b1", 1160, 704, 500, CYAN), bar("rc.asst-b2", 1160, 732, 320, CYAN)]),
-  ], { inTick: 6056, transform: tf(ex, ey, { scale: track("rc.source-s", [[0, s3(0.9)], [6056, s3(0.9), ease.out], [6080, s3(1.02), ease.settle], [6104, s3(1)]]) }, ex, ey) }));
+    slideIn("rc.user", USER, [text("rc.user-t", 992, 624, "user", 32, 700, INK), bar("rc.user-b1", 1080, 604, 560, WHITE), bar("rc.user-b2", 1080, 632, 380, WHITE)]),
+    slideIn("rc.asst", ASSISTANT, [text("rc.asst-t", 992, 724, "assistant", 32, 700, CYAN), bar("rc.asst-b1", 1160, 704, 500, CYAN), bar("rc.asst-b2", 1160, 732, 320, CYAN)]),
+  ], { inTick: SOURCE, transform: tf(ex, ey, { scale: track("rc.source-s", [[0, s3(0.9)], [SOURCE, s3(0.9), ease.out], [SOURCE + 24, s3(1.02), ease.settle], [USER, s3(1)]]) }, ex, ey) }));
 
   // A mini Spider-Ham drops onto the card and peers over his shades at the evidence.
   {
@@ -687,35 +735,39 @@ const COMPACTIONS = [
       transform: tf(cx, -820, { scale: track("rc.ham-line-s", [[0, s3(1)], [6176, s3(1), ease.drain], [6208, s3(1, 0.001)]]) }, 0, -630) } as SceneNode);
     const body = group("rc.ham-body", [...hamPaths("rc.ham", X0, Y0, PX),
       shades("rc.ham-shades", { x0: X0, y0: Y0, px: PX, dy: [[6208, 1.5], [6216, 2.5], [6376, 1], [6384, 0]], glints: [] })], {
-      transform: tf(cx, feet, { scale: track("rc.ham-squash", [[0, s3(1)], [6160, s3(1.12, 0.88), ease.settle], [6176, s3(0.96, 1.04), ease.settle], [6192, s3(1)]]) }, cx, feet) });
-    const ham = group("rc.ham", [line, body], { inTick: 6112,
-      transform: tf(0, 0, { position: track("rc.ham-p", [[0, p3(0, -620)], [6112, p3(0, -620), fall], [6160, p3(0, 0)]]) }) });
+      transform: tf(cx, feet, { scale: track("rc.ham-squash", [[0, s3(1)], [HAM_LAND, s3(1.12, 0.88), ease.settle], [6176, s3(0.96, 1.04), ease.settle], [6192, s3(1)]]) }, cx, feet) });
+    const ham = group("rc.ham", [line, body], { inTick: HAM,
+      transform: tf(0, 0, { position: track("rc.ham-p", [[0, p3(0, -620)], [HAM, p3(0, -620), fall], [HAM_LAND, p3(0, 0)]]) }) });
     add({ ...base("rc.ham-clip", W / 2, (296 + H) / 2), type: "rect", size: constant({ width: W, height: H - 296 }), cornerRadius: constant(0), style: solid(WHITE) } as SceneNode);
-    kids.push(group("rc.ham-band", [ham], { inTick: 6112, clipPathId: "rc.ham-clip" }));
+    kids.push(group("rc.ham-band", [ham], { inTick: HAM, clipPathId: "rc.ham-clip" }));
   }
   // The stage and its captions drain over the last 24 ticks into the B7 card.
-  root.push(group("rc.stage", kids, { inTick: 5416, outTick: 6416, isolation: true, opacity: track("rc.stage-o", [[0, 1], [6392, 1, ease.drain], [6416, 0]]) }));
+  root.push(group("rc.stage", kids, { inTick: 5416, outTick: END, isolation: true, opacity: track("rc.stage-o", [[0, 1], [DRAIN, 1, ease.drain], [END, 0]]) }));
 
-  root.push(caption("rc.r1", [text("rc.r1-t", centreX("Every line has an id."), 160, "Every line has an id.", 88, 800, INK)], { at: 5760, out: 6416, drain: true, pivot: [960, 160] }));
+  root.push(caption("rc.r1", [text("rc.r1-t", centreX("Every line has an id."), 160, "Every line has an id.", 88, 800, INK)], { at: 5760, out: END, drain: true, pivot: [960, 160] }));
   const x = centreX("The agent can ", "recall ", "the conversation behind it.");
   root.push(caption("rc.r2", [
     text("rc.r2-a", x, 250, "The agent can ", 64, 800, INK),
     text("rc.r2-b", x + adv("The agent can "), 250, "recall ", 64, 800, CYAN),
     text("rc.r2-c", x + adv("The agent can ") + adv("recall "), 250, "the conversation behind it.", 64, 800, INK),
-  ], { at: 5808, out: 6416, drain: true, pivot: [960, 250] }));
+  ], { at: 5808, out: END, drain: true, pivot: [960, 250] }));
 }
+
+// The whip-pan from the B7 card to the B8 install terminal, WHIP to WHIP_END.
+const WHIP = 7912, WHIP_END = 7976;
+markers.push({ id: "cue-whip", name: "whip-pan", tick: WHIP, durationTicks: WHIP_END - WHIP });
 
 // =========================================================================================
 // B7 Never lost, 6416-7976: what compaction does with read and unread history; then a
 // whip-pan to the install.
 // =========================================================================================
 {
-  const out = 7976;
+  const out = WHIP_END;
   const line = (id: string, y: number, t: string, size: number, weight: 500 | 700 | 800, color: string) => text(id, centreX(t), y, t, size, weight, color);
   const kids = [
     field("nl.field"), dotGrid("nl.dots"),
-    caption("nl.head", [line("nl.head-t", 220, "AT COMPACTION", 40, 800, RED)], { at: 6416, out, pivot: [960, 220] }),
-    caption("nl.q1", [line("nl.q1-t", 330, "Observer already read the history?", 56, 700, DIM)], { at: 6416, out, pivot: [960, 330] }),
+    caption("nl.head", [line("nl.head-t", 220, "AT COMPACTION", 40, 800, RED)], { at: RECALL_END, out, pivot: [960, 220] }),
+    caption("nl.q1", [line("nl.q1-t", 330, "Observer already read the history?", 56, 700, DIM)], { at: RECALL_END, out, pivot: [960, 330] }),
     caption("nl.a1", [line("nl.a1-t", 440, "No summarization model.", 96, 800, CYAN)], { at: 6480, out, pivot: [960, 440], motion: "slam" }),
     caption("nl.q2", [line("nl.q2-t", 580, "History not read yet?", 56, 700, DIM)], { at: 6656, out, pivot: [960, 580] }),
     caption("nl.a2", [line("nl.a2-t", 690, "Never lost", 96, 800, INK), period("nl.a2-period", centreX("Never lost") + adv("Never lost"), 690, 96)], { at: 6712, out, pivot: [960, 690], motion: "slam" }),
@@ -724,8 +776,8 @@ const COMPACTIONS = [
       line("nl.fine-2", 844, "goes to PiG's native summarizer.", 40, 500, DIM),
     ], { at: 6760, out, pivot: [960, 790] }),
   ];
-  root.push(group("nl.card", kids, { inTick: 6416, outTick: out,
-    transform: tf(0, 0, { position: track("nl.whip", [[0, p3(0, 0)], [7912, p3(0, 0), ease.inOut], [7976, p3(-W, 0)]]) }) }));
+  root.push(group("nl.card", kids, { inTick: RECALL_END, outTick: out,
+    transform: tf(0, 0, { position: track("nl.whip", [[0, p3(0, 0)], [WHIP, p3(0, 0), ease.inOut], [out, p3(-W, 0)]]) }) }));
 }
 
 // =========================================================================================
@@ -733,16 +785,16 @@ const COMPACTIONS = [
 // the new Spider-Ham, deal-with-it style.
 // =========================================================================================
 {
-  const scene = placeScene({ key: "su", file: "suit-up", at: 7912, from: 0, to: 1648, x: 0, y: 396, hide: ["spider-wink-lid", "spider-wink-arch"],
+  const scene = placeScene({ key: "su", file: "suit-up", at: WHIP, from: 0, to: 1648, x: 0, y: 396, hide: ["spider-wink-lid", "spider-wink-arch"],
     shades: { parent: "spider", after: "spider-lid-right", x0: 908, y0: 134, px: 12, inTick: 1432,
       dy: Array.from({ length: 13 }, (_, i) => [1432 + 8 * i, i - 12] as [number, number]), glints: [1536] } });
-  root.push(group("su.whip", [field("su.field"), dotGrid("su.dots"), scene], { inTick: 7912, outTick: 9560,
-    transform: tf(0, 0, { position: track("su.whip-p", [[0, p3(W, 0)], [7912, p3(W, 0), ease.inOut], [7976, p3(0, 0)]]) }) }));
+  root.push(group("su.whip", [field("su.field"), dotGrid("su.dots"), scene], { inTick: WHIP, outTick: 9560,
+    transform: tf(0, 0, { position: track("su.whip-p", [[0, p3(W, 0)], [WHIP, p3(W, 0), ease.inOut], [WHIP_END, p3(0, 0)]]) }) }));
   // Speed streaks across the pan, in the swing's speed-line language.
   const streaks = [[262, 900], [520, 1300], [730, 760], [900, 1100]].map(([y, len], i) =>
     add({ ...base(`wp.streak${i}`), type: "rect", size: constant({ width: len, height: 2 }), cornerRadius: constant(1), style: solid(INK, constant(0.5)),
-      transform: tf(0, y, { position: track(`wp.streak${i}-p`, [[0, p3(2400 + i * 160, y)], [7912, p3(2400 + i * 160, y), ease.inOut], [7976, p3(-1200 - i * 120, y)]]) }) } as SceneNode));
-  root.push(group("wp.streaks", streaks, { inTick: 7920, outTick: 7976 }));
+      transform: tf(0, y, { position: track(`wp.streak${i}-p`, [[0, p3(2400 + i * 160, y)], [WHIP, p3(2400 + i * 160, y), ease.inOut], [WHIP_END, p3(-1200 - i * 120, y)]]) }) } as SceneNode));
+  root.push(group("wp.streaks", streaks, { inTick: WHIP + 8, outTick: WHIP_END }));
 
   root.push(caption("in.i1", [
     text("in.i1-t", centreX("Install in one line."), 136, "Install in one line.", 88, 800, INK),
@@ -814,6 +866,13 @@ const COMPACTIONS = [
     ], { at: 10608, out: D, pivot: [960, 924] }),
   );
 }
+
+// The soundtrack (out/trailer-sound.wav, written by sound.ts from this file's output),
+// one audio node over the whole trailer. It draws nothing, and it is pushed last, after
+// every scene merge; a scene asset with the same id would be overwritten, so that throws.
+if (assets["trailer-sound"]) throw new Error("a scene already defines asset trailer-sound");
+assets["trailer-sound"] = { id: "trailer-sound", type: "audio", uri: "trailer-sound.wav", mimeType: "audio/wav" };
+root.push(add({ ...base("soundtrack"), type: "audio", assetId: "trailer-sound", volume: constant(1), playbackRate: constant(1), startOffsetTick: 0, loop: false } as SceneNode));
 
 // The trailer's own beats, for review samples.
 const BEATS: Array<[string, number]> = [["poster", 0], ["card", 432], ["problem", 864], ["title", 2800], ["how it works", 3640], ["recall", 5416],
