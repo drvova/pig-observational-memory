@@ -47,12 +47,16 @@ type settings struct {
 	MaxAttempts    int    `json:"maxAttempts"`
 	UserAgent      string `json:"userAgent,omitempty"`
 	SessionHeader  string `json:"sessionHeader,omitempty"`
+	Backend        string `json:"backend,omitempty"`
+	CodexAuth      string `json:"codexAuth,omitempty"`
 }
 
 func (s *settings) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.Mode, "mode", "om", `"om" (observational memory) or "full-context" (raw sessions baseline)`)
 	fs.StringVar(&s.Model, "model", "deepseek-v4.1-flash-uncensored", "model for every role (observer, reflector, dropper, actor, judge)")
-	fs.StringVar(&s.BaseURL, "base-url", "", "OpenAI-compatible chat-completions endpoint, e.g. https://api.example.com/v1 (required)")
+	fs.StringVar(&s.BaseURL, "base-url", "", "OpenAI-compatible chat-completions endpoint, e.g. https://api.example.com/v1 (required unless -backend codex)")
+	fs.StringVar(&s.Backend, "backend", "openai", `"openai" (chat completions, key from `+APIKeyEnv+`) or "codex" (a ChatGPT plan signed in with `+"`codex login`"+`)`)
+	fs.StringVar(&s.CodexAuth, "codex-auth", bench.DefaultCodexAuthPath(), "with -backend codex, the Codex CLI's auth.json")
 	fs.IntVar(&s.ContextWindow, "context-window", 128_000, "model context window (sizes observer chunks, worker memory, summary budget, full-context truncation)")
 	fs.IntVar(&s.ModelMaxTokens, "model-max-tokens", 32_000, "model output limit (clamps the workers' agentMaxTokens)")
 	fs.StringVar(&s.WorkerThinking, "worker-thinking", "", `worker thinking level ("" = extension default "low")`)
@@ -63,6 +67,42 @@ func (s *settings) register(fs *flag.FlagSet) {
 	fs.IntVar(&s.MaxAttempts, "max-attempts", 8, "HTTP attempts per model call (429/5xx/network)")
 	fs.StringVar(&s.UserAgent, "user-agent", "", "User-Agent sent on every model call")
 	fs.StringVar(&s.SessionHeader, "session-header", "", "header carrying a stable per-question session id, for providers that route or cache by session")
+}
+
+// resolveBackend checks -backend and fills the Codex backend's base URL.
+func (s *settings) resolveBackend() error {
+	switch s.Backend {
+	case "openai":
+	case "codex":
+		if s.BaseURL == "" {
+			s.BaseURL = bench.DefaultCodexBaseURL
+		}
+	default:
+		return fmt.Errorf("unknown -backend %q", s.Backend)
+	}
+	return nil
+}
+
+// client builds a worker's model client for the configured backend.
+func (s settings) client(meter *bench.Meter, questionID string) (*bench.Client, error) {
+	if s.Backend == "codex" {
+		auth, err := bench.NewCodexAuth(s.CodexAuth)
+		if err != nil {
+			return nil, err
+		}
+		client := bench.NewClient(s.BaseURL, "", meter)
+		client.Codex = auth
+		client.CacheKey = "longmemeval-" + questionID
+		client.OnLimit = func(reset time.Time) {
+			fmt.Fprintf(os.Stderr, "%s usage limit: waiting until %s\n", time.Now().UTC().Format(time.RFC3339), reset.UTC().Format(time.RFC3339))
+		}
+		return client, nil
+	}
+	key := os.Getenv(APIKeyEnv)
+	if key == "" {
+		return nil, fmt.Errorf("%s is not set", APIKeyEnv)
+	}
+	return bench.NewClient(s.BaseURL, key, meter), nil
 }
 
 func (s settings) spec() bench.ModelSpec {
@@ -110,14 +150,22 @@ func runCmd(args []string) error {
 	types := fs.String("types", "", "comma-separated question types")
 	workerAttempts := fs.Int("worker-attempts", 3, "worker process attempts per question (resuming from its checkpoint)")
 	_ = fs.Parse(args)
+	if err := s.resolveBackend(); err != nil {
+		return err
+	}
 	if *data == "" || *out == "" || s.BaseURL == "" {
 		return errors.New("-data, -out and -base-url are required")
 	}
 	if s.Mode != "om" && s.Mode != "full-context" {
 		return fmt.Errorf("unknown -mode %q", s.Mode)
 	}
-	if os.Getenv(APIKeyEnv) == "" {
+	if s.Backend == "openai" && os.Getenv(APIKeyEnv) == "" {
 		return fmt.Errorf("%s is not set", APIKeyEnv)
+	}
+	if s.Backend == "codex" {
+		if _, err := bench.NewCodexAuth(s.CodexAuth); err != nil {
+			return err
+		}
 	}
 	questions, err := bench.LoadDataset(*data)
 	if err != nil {
@@ -295,10 +343,6 @@ func workerCmd(args []string) error {
 	if err := json.Unmarshal([]byte(*raw), &s); err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
-	key := os.Getenv(APIKeyEnv)
-	if key == "" {
-		return fmt.Errorf("%s is not set", APIKeyEnv)
-	}
 	var q bench.Question
 	if err := readJSON(filepath.Join(*dir, "question.json"), &q); err != nil {
 		return err
@@ -306,7 +350,10 @@ func workerCmd(args []string) error {
 	var st state
 	_ = readJSON(filepath.Join(*dir, "state.json"), &st)
 	meter := bench.NewMeter(st.Usage)
-	client := bench.NewClient(s.BaseURL, key, meter)
+	client, err := s.client(meter, q.ID)
+	if err != nil {
+		return err
+	}
 	client.MaxAttempts = s.MaxAttempts
 	client.UserAgent = s.UserAgent
 	if s.SessionHeader != "" {

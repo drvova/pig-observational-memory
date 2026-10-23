@@ -56,6 +56,17 @@ To rebuild the report from finished questions:
 go run ./cmd/longmemeval report -out ~/bench-runs/om-full
 ```
 
+### On a ChatGPT plan (Codex)
+
+`-backend codex` sends every call to a ChatGPT plan's Codex backend instead of an API key's endpoint. Sign in once with the Codex CLI (`codex login`, or `codex login --device-auth` on a machine without a browser). The harness reads the CLI's `auth.json` (`-codex-auth`, default `$CODEX_HOME/auth.json` or `~/.codex/auth.json`) and renews its token when it nears expiry. Workers share the file under a lock, because refresh tokens rotate. `codex debug models` lists the plan's models.
+
+```bash
+go run ./cmd/longmemeval run -backend codex -model gpt-6-luna \
+  -data ~/bench-data/longmemeval_s.json -out ~/bench-runs/codex-luna -concurrency 8
+```
+
+When the plan's usage limit is reached, each call waits until the window resets and then goes on; the wait spends no retry attempt. A full run therefore takes as many windows as the plan needs, and stopping and rerunning the same command resumes it.
+
 ### Flags
 
 | Flag | Default | Meaning |
@@ -68,7 +79,9 @@ go run ./cmd/longmemeval report -out ~/bench-runs/om-full
 | `-limit N` | off | first N of the selection |
 | `-ids`, `-types` | off | comma-separated question ids or types |
 | `-model` | `deepseek-v4.1-flash-uncensored` | the model for every role: observer, reflector, dropper, actor and judge |
-| `-base-url` | (required) | OpenAI-compatible chat-completions endpoint |
+| `-base-url` | (required for `openai`) | OpenAI-compatible chat-completions endpoint |
+| `-backend` | `openai` | `openai` (chat completions, key from `LONGMEMEVAL_API_KEY`) or `codex` (a ChatGPT plan signed in with `codex login`) |
+| `-codex-auth` | `~/.codex/auth.json` | with `-backend codex`, the Codex CLI's sign-in file |
 | `-context-window` | `128000` | the window the extension sizes against: the observer chunk (20%), worker memory (25%) and summary budget (12.5%); also the full-context truncation |
 | `-model-max-tokens` | `32000` | model output limit, which clamps the workers' `agentMaxTokens` |
 | `-worker-thinking` | extension default (`low`) | worker thinking level, sent as `reasoning_effort` |

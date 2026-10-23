@@ -231,6 +231,13 @@ type Client struct {
 	UserAgent string
 	// Headers are extra request headers, e.g. a provider's session header.
 	Headers map[string]string
+	// Codex, when set, sends requests to a ChatGPT plan's Codex backend (BaseURL is
+	// then DefaultCodexBaseURL) instead of chat completions.
+	Codex *CodexAuth
+	// CacheKey, with Codex, is a stable per-question key for prompt caching.
+	CacheKey string
+	// OnLimit is told when a call waits out the plan's usage limit; may be nil.
+	OnLimit func(resetAt time.Time)
 	// Sleep waits between attempts; tests replace it.
 	Sleep func(ctx context.Context, d time.Duration) error
 }
@@ -302,6 +309,18 @@ func (c *Client) Chat(ctx context.Context, role string, req ChatRequest) (ChatRe
 			return resp, nil
 		}
 		lastErr = err
+		if limit := (*UsageLimitError)(nil); errors.As(err, &limit) && ctx.Err() == nil {
+			// The plan's window: wait for its reset and send again. The wait spends
+			// no attempt, so a run outlasts any number of windows.
+			if c.OnLimit != nil {
+				c.OnLimit(limit.ResetAt)
+			}
+			if err := c.Sleep(ctx, time.Until(limit.ResetAt)+30*time.Second); err != nil {
+				return ChatResponse{}, err
+			}
+			attempt--
+			continue
+		}
 		var re *retryableError
 		if ctx.Err() != nil || !errors.As(err, &re) {
 			break
@@ -321,6 +340,9 @@ func (c *Client) backoff(attempt int) time.Duration {
 }
 
 func (c *Client) once(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	if c.Codex != nil {
+		return c.codexOnce(ctx, req)
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return ChatResponse{}, err
