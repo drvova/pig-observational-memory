@@ -48,6 +48,8 @@ type settings struct {
 	UserAgent      string `json:"userAgent,omitempty"`
 	SessionHeader  string `json:"sessionHeader,omitempty"`
 	Backend        string `json:"backend,omitempty"`
+	ActorThinking  string `json:"actorThinking,omitempty"`
+	JudgeThinking  string `json:"judgeThinking,omitempty"`
 	CodexAuth      string `json:"codexAuth,omitempty"`
 }
 
@@ -56,6 +58,8 @@ func (s *settings) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.Model, "model", "deepseek-v4.1-flash-uncensored", "model for every role (observer, reflector, dropper, actor, judge)")
 	fs.StringVar(&s.BaseURL, "base-url", "", "OpenAI-compatible chat-completions endpoint, e.g. https://api.example.com/v1 (required unless -backend codex)")
 	fs.StringVar(&s.Backend, "backend", "openai", `"openai" (chat completions, key from `+APIKeyEnv+`) or "codex" (a ChatGPT plan signed in with `+"`codex login`"+`)`)
+	fs.StringVar(&s.ActorThinking, "actor-thinking", "", `actor thinking level ("" = provider default; "medium" with -backend codex)`)
+	fs.StringVar(&s.JudgeThinking, "judge-thinking", "", `judge thinking level ("" = provider default; "medium" with -backend codex)`)
 	fs.StringVar(&s.CodexAuth, "codex-auth", bench.DefaultCodexAuthPath(), "with -backend codex, the Codex CLI's auth.json")
 	fs.IntVar(&s.ContextWindow, "context-window", 128_000, "model context window (sizes observer chunks, worker memory, summary budget, full-context truncation)")
 	fs.IntVar(&s.ModelMaxTokens, "model-max-tokens", 32_000, "model output limit (clamps the workers' agentMaxTokens)")
@@ -76,6 +80,15 @@ func (s *settings) resolveBackend() error {
 	case "codex":
 		if s.BaseURL == "" {
 			s.BaseURL = bench.DefaultCodexBaseURL
+		}
+		// Sent no effort, the Codex backend answers with next to no reasoning,
+		// unlike chat-completions reasoning models, which reason by default; medium
+		// is the plan's catalog default for its models.
+		if s.ActorThinking == "" {
+			s.ActorThinking = "medium"
+		}
+		if s.JudgeThinking == "" {
+			s.JudgeThinking = "medium"
 		}
 	default:
 		return fmt.Errorf("unknown -backend %q", s.Backend)
@@ -395,7 +408,7 @@ func workerCmd(args []string) error {
 			return err
 		}
 		started := time.Now()
-		opts := bench.AnswerOptions{Model: s.Model, MaxTokens: s.ActorMaxTokens}
+		opts := bench.AnswerOptions{Model: s.Model, MaxTokens: s.ActorMaxTokens, ReasoningEffort: bench.ReasoningEffort(s.ActorThinking)}
 		if s.Mode == "om" && s.Recall {
 			var checkpoint bench.Checkpoint
 			if err := readJSON(filepath.Join(*dir, "checkpoint.json"), &checkpoint); err != nil {
@@ -416,7 +429,7 @@ func workerCmd(args []string) error {
 	}
 	result.Hypothesis, result.FinishReason, result.Recalls = answer.Hypothesis, answer.FinishReason, answer.Recalls
 	started := time.Now()
-	verdict, err := bench.Judge(ctx, client, s.Model, s.JudgeMaxTokens, q, answer.Hypothesis)
+	verdict, err := bench.Judge(ctx, client, s.Model, s.JudgeMaxTokens, bench.ReasoningEffort(s.JudgeThinking), q, answer.Hypothesis)
 	st.AnswerSeconds += time.Since(started).Seconds()
 	if err != nil {
 		return fmt.Errorf("judge: %w", err)

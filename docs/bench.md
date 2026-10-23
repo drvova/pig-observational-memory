@@ -65,6 +65,8 @@ go run ./cmd/longmemeval run -backend codex -model gpt-6-luna \
   -data ~/bench-data/longmemeval_s.json -out ~/bench-runs/codex-luna -concurrency 8
 ```
 
+Sent no reasoning effort, the Codex backend answers with next to no reasoning, while chat-completions reasoning models reason by default, so with `-backend codex` the actor and judge default to `medium` (`-actor-thinking`, `-judge-thinking`), the plan's catalog default. The workers keep the extension's own default (`-worker-thinking`).
+
 When the plan's usage limit is reached, each call waits until the window resets and then goes on; the wait spends no retry attempt. A full run therefore takes as many windows as the plan needs, and stopping and rerunning the same command resumes it.
 
 ### Flags
