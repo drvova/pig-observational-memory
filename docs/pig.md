@@ -36,6 +36,7 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 | `internal/config`, `internal/serialize`, `internal/tokens`, `internal/debuglog`, `internal/clipboard` | settings, source serialization, token estimates, debug log, clipboard |
 | `internal/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call its static helpers) |
 | `internal/testfix` | entry builders and fake host for tests |
+| `internal/bench`, `cmd/longmemeval` | the LongMemEval benchmark harness ([bench.md](bench.md)); the extension does not import them |
 
 [contributing.md](contributing.md) lists the checks a change must pass.
 
