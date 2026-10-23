@@ -29,3 +29,19 @@ Plain accuracy is 89.6% (448/500). Abstention questions, those with no answer in
 - **Mastra's observer differs.** Mastra ran gemini-2.5-flash as its observer and reflector, and its actor and judge were other models.
 - **Recall is off**, matching Mastra's runner. The actor sees only the rendered memory and the unobserved tail.
 - **Usage.** About 361M prompt tokens, 196M of them cache hits, and 22.5M completion tokens, over about 19k model calls.
+
+## Pilot: Claude Opus 5.5 as the answering model
+
+A separate, smaller measurement: 60 questions (10 per type, drawn with seed 1) answered by Claude Opus 5.5 from the **same memory** the DeepSeek run built, so only the answering model changes. Each answer came from a Claude Code subagent that read the question's saved actor prompt; a second subagent graded it with the same LongMemEval judge prompt.
+
+| Question type | Opus 5.5 answering | DeepSeek answering (same 60) |
+|---|---|---|
+| knowledge-update | 10/10 | 9/10 |
+| multi-session | 9/10 | 8/10 |
+| single-session-assistant | 9/10 | 9/10 |
+| single-session-preference | 10/10 | 10/10 |
+| single-session-user | 10/10 | 10/10 |
+| temporal-reasoning | 10/10 | 10/10 |
+| **Mean of the 6 types** | **96.7%** (58/60) | 93.3% (56/60) |
+
+Read it as a hint, not a score: 60 questions is a small sample (one question is about 1.7 points), Opus graded Opus while DeepSeek graded DeepSeek, and the subagents ran inside Claude Code with its own system prompt on top of the actor prompt. It does suggest the memory, not the answering model, sets most of the ceiling: on the same memory a stronger answerer gains about three points.
