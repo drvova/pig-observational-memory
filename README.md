@@ -165,6 +165,7 @@ If you used the TypeScript Pi extension [pi-observational-memory](https://github
 ```text
 extensions/observational-memory/   the extension, a standalone Go module
 ├── extension.go                   PiG factory: events, commands, recall tool
+├── cmd/longmemeval/               LongMemEval benchmark command (not part of the extension)
 └── internal/
     ├── hooks/                     consolidation pipeline, compaction trigger and hook
     ├── agents/                    observer, reflector and dropper loops and prompts
@@ -174,6 +175,7 @@ extensions/observational-memory/   the extension, a standalone Go module
     ├── host/                      host interfaces the packages run against
     ├── sdkhost/                   adapts the PiG SDK's extension context to host
     ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
+    ├── bench/                     LongMemEval harness over the real memory pipeline
     └── testfix/                   fake host and entry builders for tests
 docs/                              concepts, internals, settings, PiG port notes, contributing
 docs/animation/                    Clayzo sources for the README animations
@@ -199,6 +201,7 @@ go test -race ./...
 | [Configuration](docs/configuration.md) | Every setting, tuning, debugging and V2 migration |
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
+| [Benchmark](docs/bench.md) | Running LongMemEval against the memory pipeline, and how comparable the numbers are |
 
 ## Credits
 
