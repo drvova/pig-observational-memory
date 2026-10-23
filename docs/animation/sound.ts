@@ -14,12 +14,14 @@
 //
 // Signal flow: a MUSIC bus (with sub-buses: BASS, ducked under booms; PROBLEM, which blurs
 // with the copies; HIW, low-passed under the push; CHECKM, choked at the spider-sense peak;
-// NL_PEDAL, which joins after the recall drain; and a rewind splice), a CARD bus (crushed
-// and stuttered as the type pixelates), SFX and HITS buses, four FDN reverbs fed by sends (music 1.4 s, card
+// NL_PEDAL, which joins after the recall drain; ASKB, the ask-why section, faded under its drain;
+// and a rewind splice), an LCB bus (the Latent Configuration beat's strings, bell, drone and hits,
+// bit-crushed as the Summarizer pixelates away, and the post-credits sting's, played as they are), SFX
+// and HITS buses, four FDN reverbs fed by sends (music 1.4 s, LCB
 // 1.5 s, SFX 1.4 s, long 2.4 s); then the master: a 25 Hz high-pass and a 16 kHz low-pass
 // (an AAC encode then has nothing up there to strip, so its decoded peaks stay under the
 // ceiling), a gentle glue compressor, BS.1770-4 loudness normalization to -14 LUFS, a
-// 4x-oversampled true-peak limiter at -1.5 dBTP, fades, TPDF dither, and a 48 kHz 16-bit
+// 4x-oversampled true-peak limiter at -1.7 dBTP, fades, TPDF dither, and a 48 kHz 16-bit
 // stereo WAV the length of the video.
 //
 // Levels are dBr: peak dB relative to the title-drop hit (0 dBr). The master
@@ -154,27 +156,52 @@ const moveStart = (id: string, w: Win, path: string) => {
 
 // The scene windows, from the trailer's beat markers.
 const BEAT = {
-  poster: at("beat-poster"), card: at("beat-card"), problem: at("beat-problem"), title: at("beat-title"), hiw: at("beat-how-it-works"),
-  recall: at("beat-recall"), never: at("beat-never-lost"), install: at("beat-install"), check: at("beat-check"), end: at("beat-end-card"),
+  poster: at("beat-poster"), lc: at("beat-latent-configuration"), problem: at("beat-problem"), title: at("beat-title"), demo: at("beat-two-endings"), demoSplit: at("beat-two-endings-split"),
+  hiw: at("beat-how-it-works"), recall: at("beat-recall"), ask: at("beat-ask-why"), never: at("beat-never-lost"), install: at("beat-install"), check: at("beat-check"),
+  view: at("beat-om-view"), cfg: at("beat-config"), cfgIdle: at("beat-config-idle"), end: at("beat-end-card"), sting: at("beat-sting"),
 };
 const W = {
-  sw: [BEAT.title, BEAT.hiw] as Win, mw: [BEAT.hiw, BEAT.recall] as Win,
-  su: [BEAT.install, BEAT.check] as Win, ss: [BEAT.check, BEAT.end] as Win, cr: [BEAT.end, D] as Win,
+  sw: [BEAT.title, BEAT.demo] as Win, mw: [BEAT.hiw, BEAT.recall] as Win,
+  su: [BEAT.install, BEAT.check] as Win, ss: [BEAT.check, BEAT.view] as Win, cr: [BEAT.end, BEAT.sting] as Win,
 };
 
-// --- Poster and card --------------------------------------------------------------------
+// --- Poster --------------------------------------------------------------------------
 const PO = {
   dip: at("cue-poster-zip"), out: end("cue-poster-zip"), moved: moveStart("po.rig", [at("cue-poster-zip"), end("cue-poster-zip")], "transform.position"),
   zip: must(keys("po.rig", "transform.position").find((k) => k.tick > at("cue-poster-zip")), "po.rig: a key after the dip").tick,
 };
-const CD = {
-  // (l2 fades in from its key; l3 is a scale pop, first drawn a frame after its key)
-  l1: at("cap-cd.l1"), l2: at("cap-cd.l2"), l3: popStart("cd.l3", [BEAT.card, BEAT.problem]),
-  pixel: keys("cd.pixelate", "parameters.0.value").map((k) => [k.tick, k.value as number] as [number, number]),
-  stop: node("cd.pixelate").outTick as number,
-};
-const PIXEL_ON = CD.pixel[mustIndex(CD.pixel.findIndex(([, v], i) => i > 0 && v > 1), "cd.pixelate: a cell size above 1") - 1][0]; // the last key at cell size 1 before it grows
-const PIXEL_KEYS = expect(CD.pixel.filter(([t]) => t >= PIXEL_ON), 4, "cd.pixelate keys from the last cell size of 1");
+// The Latent Configuration (a horror-trailer parody, cut like one): the cube's three ratchet
+// twists are read from the lid's twist keys (`lc.twist`, one click a step), the chains' sway
+// from their rotation keys, the cuts to black and the silence from the cue markers, and the
+// dissolve's crush from the Summarizer's pixelation cell size.
+const LC = (() => {
+  const w: Win = [BEAT.lc, BEAT.problem];
+  const plate = keys("lc.twist", "transform.rotation");
+  const twists = [1, 2, 3].map((i) => {
+    const win: Win = [at(`cue-lc-twist-${i}`), end(`cue-lc-twist-${i}`)];
+    return expect(plate.filter((k, j) => j > 0 && k.tick >= win[0] && k.tick < win[1] && k.value.z !== plate[j - 1].value.z).map((k) => k.tick), 3, `lc.twist clicks in twist ${i}`);
+  });
+  const shut = at("cue-lc-shut"), land = end("cue-lc-chains");
+  const sway = keys("lc.chain-a", "transform.rotation").filter((k) => k.tick > land && k.tick < shut && k.value.z !== 0).map((k) => k.tick);
+  if (sway.length < 8) throw new Error(`lc.chain-a: expected at least 8 sway extremes, found ${sway.length}; the picture changed, so recheck the sound design`);
+  return {
+    twists, open: at("cue-lc-open"), summon: at("cue-lc-summon"), land, sway,
+    barsIn: at("cue-lc-bars-in"), barsOut: at("cue-lc-bars-out"), seams: at("cue-lc-seams"),
+    cut1: at("cue-lc-cut-1"), cut2: at("cue-lc-cut-2"), hamCu: at("cue-lc-cut-in-1"), ecu: at("cue-lc-cut-in-2"), wide: at("cue-lc-cut-in-3"),
+    cap1: at("cap-lc.v1"), cap2: at("cap-lc.v2"), forgets: popStart("lc.v3", w),
+    up: at("cue-lc-shades-up"), down: at("cue-lc-shades-down"), downEnd: end("cue-lc-shades-down"),
+    thwip: at("cue-lc-thwip"), shut, gone: end("cue-lc-dissolve"),
+    cell: keys("lc.villain-fx", "parameters.0.value"),
+    stop: node("lc.stage").outTick as number,
+  };
+})();
+if (LC.thwip >= LC.shut || LC.stop >= BEAT.problem) throw new Error("the Latent Configuration's slam or end is out of order");
+if (!(LC.cut1 < LC.open && LC.cut2 < LC.cap1 && LC.cap1 < LC.hamCu && LC.hamCu < LC.cap2 && LC.cap2 < LC.ecu && LC.ecu < LC.wide && LC.wide < LC.thwip)) throw new Error("the Latent Configuration's cuts are out of order");
+// The impact on the second cut to black rings this long, then the sound stops dead until the line slams.
+const LC_SILENCE: Win = [LC.cut2 + 16, LC.cap1];
+if (LC_SILENCE[1] - LC_SILENCE[0] < 32) throw new Error("the silence before the first line is under 133 ms");
+// The black cards and the silence: the music box and the chains keep out of them.
+const lcQuiet = (t: number) => (t >= LC.cut1 && t < LC.open) || (t >= LC.cut2 && t < LC.hamCu) || (t >= LC.cap2 && t < LC.ecu);
 
 // --- The problem ----------------------------------------------------------------------------
 const PB = (() => {
@@ -271,7 +298,7 @@ const MW = (() => {
 // --- Recall -------------------------------------------------------------------------------
 const RC = (() => {
   const cover = keys("rc.call-cover", "transform.scale");
-  const typed = expect(cover.slice(1).filter((k) => k.tick >= BEAT.recall && k.tick < BEAT.never), 19, "rc.call-cover keystrokes");
+  const typed = expect(cover.slice(1).filter((k) => k.tick >= BEAT.recall && k.tick < BEAT.ask), 19, "rc.call-cover keystrokes");
   const line = keys("rc.ham-line", "transform.scale");
   const gone = mustIndex(line.findIndex((k, i) => i > 0 && k.value.y < 0.01), "rc.ham-line: the retract");
   const shades = expect(keys("rc.ham-shades", "transform.position").filter((k) => k.tick > 0), 4, "rc.ham-shades steps");
@@ -279,7 +306,7 @@ const RC = (() => {
     open: BEAT.recall, lock: at("cue-recall-lock"), keys: typed.map((k) => k.tick),
     strand: at("cue-recall-strand"), source: at("cue-recall-source"), user: at("cue-recall-user"), assistant: at("cue-recall-assistant"),
     // the turns fade in from their markers, so each is first drawn a frame later
-    userShown: moveStart("rc.user", [at("cue-recall-user"), BEAT.never], "opacity"), assistantShown: moveStart("rc.asst", [at("cue-recall-assistant"), BEAT.never], "opacity"),
+    userShown: moveStart("rc.user", [at("cue-recall-user"), BEAT.ask], "opacity"), assistantShown: moveStart("rc.asst", [at("cue-recall-assistant"), BEAT.ask], "opacity"),
     ham: at("cue-recall-ham"), hamLand: end("cue-recall-ham"), retract: [line[gone - 1].tick, line[gone].tick] as Win,
     shades: shades.map((k) => k.tick), drain: at("cue-recall-drain"), end: end("cue-recall-drain"),
   };
@@ -370,6 +397,69 @@ const CR = (() => {
   };
 })();
 if (CR.legs[0] !== CR.thwip) throw new Error(`cr:web's first leg (${CR.legs[0]}) is not the cr:thwip marker (${CR.thwip})`);
+
+// --- The new beats: two endings, ask why, /om:view, config, the sting -------------------------
+// A typed line's keystrokes: its cover's scale keys inside the window.
+const coverKeys = (id: string, w: Win, n: number) => expect(inWin(keys(`${id}-cover`, "transform.scale"), w).filter((k) => k.tick > 0), n, `${id} keystrokes`).map((k) => k.tick);
+// A shades kit must glint exactly n times.
+const glints = (id: string, n: number) => expect(doc.markers.filter((m: any) => m.id.startsWith(`${id}-glint-`)), n, `${id} glints`);
+const DE = (() => {
+  const w: Win = [BEAT.demo, BEAT.hiw];
+  glints("de.ham-shades", 1); glints("de.hamR-shades", 1);
+  return {
+    c1: at("cap-de.c1"), type1: coverKeys("de.a1", w, 6), type2: coverKeys("de.a2", w, 4), enter1: at("cue-de-enter-1"),
+    reply: moveStart("de.a3", [at("cue-de-reply"), BEAT.hiw], "opacity"), scroll: [at("cue-de-scroll"), end("cue-de-scroll")] as Win,
+    notify: moveStart("de.notify", [at("cue-de-notify"), BEAT.hiw], "opacity"), spark: at("cue-de-spark"), sparkLand: end("cue-de-spark"),
+    comps: [1, 2, 3].map((i) => at(`cue-de-compaction-${i}`)), chips: [0, 1, 2].map((i) => popStart(`de.chip${i}`, w)),
+    c2: at("cap-de.c2"), thwip: at("cue-de-thwip"), split: at("cue-de-split"), splitEnd: end("cue-de-split"), labels: popStart("de.l-label", w),
+    typeL: coverKeys("de.lq-q", w, 4), typeR: coverKeys("de.rq-q", w, 4), enter2: at("cue-de-enter-2"), dots: [at("cue-de-dots"), end("cue-de-dots")] as Win,
+    wrong: moveStart("de.l-ans", [at("cue-de-wrong"), BEAT.hiw], "opacity"), gag: at("cue-de-wrong-gag"), q: popStart("de.hamL-q", w), ltag: popStart("de.l-tag", w),
+    lock: at("cue-de-lock"), right: at("cue-de-right"), rightShown: moveStart("de.r-ans", [at("cue-de-right"), BEAT.hiw], "opacity"), rtag: popStart("de.r-tag", w),
+    hop: at("cue-de-right-glint"), c3: at("cap-de.c3"), out: at("cue-de-out"),
+  };
+})();
+const AW = (() => {
+  const w: Win = [BEAT.ask, BEAT.never];
+  glints("aw.ham-shades", 1);
+  return {
+    type: coverKeys("aw.q", w, 3), enter: at("cue-aw-enter"), call: coverKeys("aw.call", w, 19),
+    header: moveStart("aw.header", w, "opacity"), rows: [0, 1, 2].map((i) => moveStart(`aw.row${i}`, w, "opacity")), footer: moveStart("aw.footer-in", w, "opacity"),
+    ham: at("cue-aw-ham"), key: at("cue-aw-key"), strand: moveStart("aw.strand", w, "transform.scale"),
+    user: moveStart("aw.user", w, "opacity"), assistant: moveStart("aw.asst", w, "opacity"), answer: moveStart("aw.answer", w, "opacity"),
+    c1: at("cap-aw.c1"), c2: popStart("aw.c2", w), drain: at("cue-aw-drain"),
+  };
+})();
+const OV = (() => {
+  const w: Win = [BEAT.view, BEAT.cfg];
+  glints("ov.ham-shades", 1);
+  return {
+    wipe: at("wipe-ov.web"), wipeEnd: end("wipe-ov.web"), keys: coverKeys("ov.cmd", w, 8), enter: at("cue-ov-enter"),
+    rows: [1, 2, 3, 4, 5, 6].map((i) => at(`cue-ov-row-${i}`)), copied: moveStart("ov.copied", w, "opacity"), thwip: at("cue-ov-thwip"), thwipEnd: end("cue-ov-thwip"),
+    locks: [1, 2, 3, 4].map((i) => at(`cue-ov-lock-${i}`)), swing: at("cue-ov-swing"), swingEnd: end("cue-ov-swing"),
+  };
+})();
+const CF = (() => {
+  const w: Win = [BEAT.cfg, BEAT.end];
+  glints("cf.agent-shades", 1);
+  const prints = expect(["cf.jl1", "cf.jl2", "cf.jl3", "cf.j4-hold", "cf.jl5", "cf.jl6"].map((id) => node(id).inTick as number).filter((t) => t >= w[0] && t < w[1]), 6, "cf settings lines printed");
+  const workers = expect([0, 1, 2].map((i) => must(keys(`cf.worker${i}`, "opacity").find((k) => k.value === 1), `cf.worker${i}: it lights`).tick).filter((t) => t >= w[0] && t < w[1]), 3, "cf worker chips lit");
+  return {
+    prints, fall: at("cue-cf-fall"), thwip: at("cue-cf-thwip"), catch: at("cue-cf-catch"), settled: end("cue-cf-catch"), cut: at("cue-cf-cut"), chip: popStart("cf.chip", w),
+    busy: [at("cue-cf-busy"), end("cue-cf-busy")] as Win, idle: at("cue-cf-idle"), workers, spark: at("cue-cf-spark"), sparkLand: end("cue-cf-spark"),
+  };
+})();
+const ST = (() => {
+  glints("st.ham-shades", 1);
+  return {
+    cut1: at("cue-st-cut-1"), heart: at("cue-st-heart"), in: at("cue-st-in"), flare: at("cue-st-flare"), windup: at("cue-st-windup"), thwip: at("cue-st-thwip"),
+    tug: at("cue-st-tug"), yank: at("cue-st-yank"), pull: end("cue-st-yank") - at("cue-st-yank"), slam: at("cue-st-slam"), confused: at("cue-st-confused"), cut2: at("cue-st-cut-2"), cut3: at("cue-st-cut-3"),
+    never: at("cue-st-nevermind"), url: at("cue-st-url"), c1: at("cap-st.c1"),
+  };
+})();
+if (!(BEAT.sting === ST.cut1 && ST.cut1 < ST.in && ST.in < ST.windup && ST.thwip < ST.tug && ST.tug < ST.yank && ST.yank < ST.slam && ST.thwip < ST.slam && ST.slam < ST.cut2 && ST.cut2 < ST.cut3 && ST.cut3 < ST.never)) throw new Error("the sting's cuts are out of order");
+// The sting's silence before "...NEVER MIND.", the Latent Configuration's idiom: the cut's hit rings, then nothing.
+const ST_SILENCE: Win = [ST.cut3 + 16, ST.never];
+if (ST_SILENCE[1] - ST_SILENCE[0] < 24) throw new Error("the sting's silence is under 100 ms");
 
 // =========================================================================================
 // Synth primitives
@@ -596,11 +686,11 @@ const PROBLEM = bus(); // part of MUSIC, blurred with the copies
 const HIW = bus(); // part of MUSIC, low-passed under the push
 const CHECKM = bus(); // part of MUSIC, choked at the peak
 const NL_PEDAL = bus(); // part of MUSIC, joins it after the recall drain
-const CARD = bus(); // the card: drone and hits, crushed as the type pixelates
-const CARD_DRONE = bus();
+const ASKB = bus(); // part of MUSIC: the ask-why section, faded out under its drain
+const LCB = bus(); // the Latent Configuration: bell, drone and hits, crushed as the Summarizer dissolves
 const SFX = bus();
 const HITS = bus();
-const sendMusic = buf(N), sendSfx = buf(N), sendLong = buf(N), sendCard = buf(N);
+const sendMusic = buf(N), sendSfx = buf(N), sendLong = buf(N), sendLc = buf(N);
 const booms: number[] = []; // boom ticks, for the bass duck
 
 // An effect: normalized to peak 1, placed at `level` dBr on a bus, registered as a cue.
@@ -610,9 +700,9 @@ function fx(name: string, tick: number, source: string, level: number, x: Float6
   const b = o.bus ?? SFX;
   const start = S(tick) + (o.offset ?? 0) - (o.align === "end" ? x.length : 0);
   const sends: Send[] = [];
-  const short = b === CARD ? sendCard : sendSfx;
+  const short = b === LCB ? sendLc : sendSfx;
   if (o.send) sends.push([short, o.send]);
-  if (o.long) sends.push([b === CARD ? sendCard : sendLong, o.long]);
+  if (o.long) sends.push([b === LCB ? sendLc : sendLong, o.long]);
   put(b, start, x, REF * db(level) * (o.gain ?? 1), o.pan ?? 0, sends);
   if (!o.quiet) cue(name, tick, source, level, o.kind ?? "transient");
 }
@@ -633,7 +723,7 @@ function subBoom(o: { soft?: boolean; dur?: number; tau?: number; body?: number 
   mix(x, body, 0, db(o.body ?? (o.soft ? -12 : -10)));
   return edges(biquad(x, "hp", 28), ms(1), ms(20));
 }
-// BOOM BRASS: what a phone hears of a boom that stands alone (the card's): a short 25%
+// BOOM BRASS: what a phone hears of a boom that stands alone (the Summarizer's lines): a short 25%
 // pulse hit on D3 A3 D4 (an open fifth, so it fits either mode), low-passed at 1.8 kHz, and
 // a thud of noise band-passed 250-900 Hz. Placed as its own layer, so the sub keeps its level.
 function boomBrass(r: Rng, tau: number) {
@@ -923,6 +1013,8 @@ const CH: Record<string, { arp: string[]; guide: string[]; root: string }> = {
   A: { root: "A2", arp: ["A4", "C#5", "E5", "A5"], guide: ["C#4", "E4"] },
   Bm: { root: "B1", arp: ["B4", "D5", "F#5", "B5"], guide: ["D4", "F#4"] },
   Asus4: { root: "A2", arp: ["A4", "D5", "E5", "A5"], guide: ["D4", "E4"] },
+  Dm: { root: "D2", arp: ["D4", "F4", "A4", "D5"], guide: ["F4", "A4"] },
+  Bb: { root: "Bb1", arp: ["Bb4", "D5", "F5", "Bb5"], guide: ["D4", "F4"] },
 };
 const span = (beat: number, beats: number, chord: string, root?: string): Span => [beat, beats, root ?? CH[chord].root, CH[chord].arp, CH[chord].guide];
 // THE HOOK (theme A): the session motif (1-5-3-2-1) in major, then a lift to 5; bar 2
@@ -932,9 +1024,9 @@ const HOOK_2: Note[] = [["G5", 4, 1.5], ["E5", 5.5, 0.5], ["C5", 6, 1], ["D5", 7
 const MOTIF_MINOR: Note[] = [["D5", 0, 1], ["A4", 1, 1], ["F5", 2, 1], ["E5", 3, 1], ["D5", 4, 4]]; // in 16ths of the drop (SIXTEENTH)
 
 // The anchored tempo map.
-const TITLE = section(SW.title, (BEAT.hiw - SW.title) / 8);
+const TITLE = section(SW.title, (BEAT.demo - SW.title) / 8);
 const HIWS = section(BEAT.hiw, (BEAT.recall - BEAT.hiw) / 19);
-const RECALL = section(BEAT.recall, (BEAT.never - BEAT.recall) / 10);
+const RECALL = section(BEAT.recall, (BEAT.ask - BEAT.recall) / 14);
 const INST_A = section(NL.whipEnd, (SU.shoot - NL.whipEnd) / 12);
 // The build runs at the install's tempo (12 beats ending on the whip's arrival), so the
 // V-I across the whip carries on without a lurch; "Never lost." rings until it enters.
@@ -946,10 +1038,10 @@ const CHECK = section(BEAT.check, (SS.catch - BEAT.check) / 16 * 4); // a beat i
 const END1 = section(CR.wipe, (CR.glint - CR.wipe) / 4);
 const END2 = section(CR.glint, (CR.lockup - CR.glint) / 4);
 
-// --- INTRO and CARD drones ---------------------------------------------------------------------
+// --- INTRO pad and the MUSIC BOX ------------------------------------------------------------------
 {
   // The intro pad: Dm, low-passed, with a slow tremolo, fading in from 0.
-  const n = S(BEAT.card + 24), fadeIn = S(120), fadeOut = S(24);
+  const n = S(BEAT.lc + 24), fadeIn = S(120), fadeOut = S(24);
   for (const note of ["D3", "A3", "F4"]) {
     const x = buf(n), f = hz(note);
     for (const c of [-7, 7]) mix(x, osc(n, "pulse", K(f * cents(c)), K(1), 0.5));
@@ -957,14 +1049,25 @@ const END2 = section(CR.glint, (CR.lockup - CR.glint) / 4);
     for (let i = 0; i < n; i++) x[i] *= Math.min(1, i / fadeIn) * Math.min(1, (n - i) / fadeOut) * db(1.5 * Math.sin((TAU * 0.5 * i) / SR));
     put(MUSIC, 0, normalize(x), REF * db(-35), 0.25, [[sendMusic, 0.25]]);
   }
-  // The card drone: D2 A2 D3 F3, the filter opening with the push (500 -> 1500 Hz, so a
-  // phone hears the D3 and F3) and the level rising 6 dB.
-  const a = S(CD.l1), b = S(CD.stop), push = S(PIXEL_ON);
-  const x = buf(b - a);
-  for (const note of ["D2", "A2", "D3", "F3"]) mix(x, osc(b - a, "pulse", K(hz(note)), K(1), 0.25), 0, note.endsWith("2") ? db(-6) : 1);
-  svf(x, (i) => lerp(500, 1500, i / (push - a)), 0.8, "lp");
-  for (let i = 0; i < x.length; i++) x[i] *= Math.min(1, i / S(24)) * db(lerp(0, 6, i / (push - a)));
-  put(CARD_DRONE, a, normalize(edges(x, 0, ms(5))), REF * db(-15), 0, [[sendCard, 0.2]]);
+  // The music box: the theme's motif in D minor two octaves up, plucked in 8ths (48 ticks)
+  // from the cut; the twists land on its downbeats. Once the cube opens it plays
+  // every other 8th, running down (each note flatter and slower to speak), until the slam.
+  const tine = (f: number, lenS: number) => {
+    const x = osc(len(lenS), "tri", K(f), ad(0.002, 0.35));
+    mix(x, osc(len(lenS), "sine", K(f * 4.03), ad(0.001, 0.06)), 0, 0.35);
+    mix(x, osc(len(lenS), "pulse", K(f), ad(0.001, 0.02), 0.125), 0, 0.15);
+    return edges(biquad(x, "lp", 7000), ms(1), ms(30));
+  };
+  const motif = ["D6", "A5", "F6", "E6", "D6", "A5", "C6", "A5"];
+  if ((at("cue-lc-twist-1") - BEAT.lc) % 48 !== 0) throw new Error("the music box's 8ths no longer meet the first twist");
+  let k = 0;
+  for (let t = BEAT.lc; t < LC.shut; t += t < LC.open ? 48 : 96, k++) {
+    if (lcQuiet(t)) continue;
+    const after = t >= LC.open ? (t - LC.open) / (LC.shut - LC.open) : 0;
+    const f = hz(motif[k % motif.length]) * cents(-150 * after - (after > 0 ? 25 * Math.sin(k * 2.1) : 0));
+    put(MUSIC, S(t) + Math.round(after * ms(30)), tine(f, 0.6), REF * db((k % 4 === 0 ? -19 : -22) - 3 * after), k % 2 ? 0.35 : -0.35, [[sendMusic, 0.45]]);
+  }
+  cue("music box (motif, then running down)", BEAT.lc, "beat-latent-configuration", -19, "music");
 }
 
 // --- PROBLEM: "copy of a copy" ------------------------------------------------------------------
@@ -1110,11 +1213,12 @@ const hiwChordAt = (tick: number) => HIW_SPANS.find(([beat, beats]) => tick >= H
 
 // --- RECALL: the motif in B minor, half-time -------------------------------------------------------
 {
-  const s = RECALL, trim = -4.5;
-  playLead(MUSIC, s, [["B4", 1, 0.25], ["F#4", 1.25, 0.25], ["D5", 1.5, 0.25], ["C#5", 1.75, 0.25], ["B4", 2, 1], ["C#5", 8, 1], ["E5", 9, 0.76]], trim);
-  playBed(MUSIC, s, [span(0, 4, "Bm", "B1"), span(4, 4, "G", "G1"), span(8, 2, "A", "A1")], { bass: "half", arp: 8, pad: true, trim, arpTrim: -4, padTrim: -4 });
-  for (const t of [0, 4, 8]) mus(MUSIC, s.at(t), punch(rng(`recall-kick-${t}`), true), LV.kick - 6);
-  for (let e = 0; e < 20; e++) mus(MUSIC, s.at(e / 2), hat(rng(`recall-clock-${e}`), false), -30, 0.15);
+  const s = RECALL, trim = -5;
+  // The bed repeats its G and D spans under the held captions (14 beats), ending on the A.
+  playLead(MUSIC, s, [["B4", 1, 0.25], ["F#4", 1.25, 0.25], ["D5", 1.5, 0.25], ["C#5", 1.75, 0.25], ["B4", 2, 1], ["A4", 8, 1], ["D5", 9, 1], ["F#5", 10, 1.5], ["C#5", 12, 1], ["E5", 13, 0.76]], trim);
+  playBed(MUSIC, s, [span(0, 4, "Bm", "B1"), span(4, 4, "G", "G1"), span(8, 4, "D", "D2"), span(12, 2, "A", "A1")], { bass: "half", arp: 8, pad: true, trim, arpTrim: -4, padTrim: -4 });
+  for (const t of [0, 4, 8, 12]) mus(MUSIC, s.at(t), punch(rng(`recall-kick-${t}`), true), LV.kick - 6);
+  for (let e = 0; e < 28; e++) mus(MUSIC, s.at(e / 2), hat(rng(`recall-clock-${e}`), false), -30, 0.15);
 }
 
 // --- NEVER LOST: stop-time, a pedal under the hits --------------------------------------------------
@@ -1183,12 +1287,12 @@ const hiwChordAt = (tick: number) => HIW_SPANS.find(([beat, beats]) => tick >= H
   const c = S(choke);
   for (const ch of [CHECKM.L, CHECKM.R]) for (let i = c; i < N; i++) ch[i] *= Math.max(0, 1 - (i - c) / ms(8));
   // after the catch: a soft D major bed, then the happy flourish
-  for (const note of ["D4", "F#4", "A4"]) mus(MUSIC, SS.catch, padNote(note, T(BEAT.end - SS.catch - 60)), LV.pad - 6, 0.25, 0.25);
+  for (const note of ["D4", "F#4", "A4"]) mus(MUSIC, SS.catch, padNote(note, T(BEAT.view - SS.catch - 60)), LV.pad - 6, 0.25, 0.25);
   mus(BASS, SS.catch, bassNote("D2", T(SS.happy - SS.catch), { gate: 0.95 }), LV.bass - 4);
   const happy: Array<[string, number, number]> = [["D5", SS.happy, 16], ["F#5", SS.happy + 16, 16], ["A5", SS.happy + 32, 16], ["D6", SS.happy + 48, 48]];
   for (const [note, t, l] of happy) mus(MUSIC, t, lead(note, T(l)), LV.lead - 1, 0, 0.12);
   for (const t of [SS.happy + 96, SS.happy + 112]) mus(MUSIC, t, snareCrack(rng(`happy-snare-${t}`)), LV.snare - 4);
-  mus(BASS, SS.happy, bassNote("D2", T(BEAT.end - SS.happy), { gate: 0.9 }), LV.bass - 2);
+  mus(BASS, SS.happy, bassNote("D2", T(BEAT.view - SS.happy), { gate: 0.9 }), LV.bass - 2);
 }
 
 // --- END: the motif in augmentation over IV-V | vi-Vsus4-V | I ------------------------------------------------
@@ -1211,11 +1315,111 @@ const hiwChordAt = (tick: number) => HIW_SPANS.find(([beat, beats]) => tick >= H
   ["D3", "A2", "F#2", "D2"].forEach((note, k) => mus(MUSIC, e2.at(3 + k / 4), tom(note), LV.tom - 3 + k, 0, 0.1));
 }
 
+// --- TWO ENDINGS: the call in D major, the compactions in D minor, the turn on the right answer -----------
+// Two sections on one tempo: the call and the compactions (16 beats to the split), then the
+// split, whose sixth beat is the right-hand answer: there the left's D minor turns to D major
+// and the hook comes in, and "Only one remembers why." lands on the hook's backbeat.
+const DEMO_A = section(BEAT.demo, (BEAT.demoSplit - BEAT.demo) / 16);
+const DEMO_B = section(BEAT.demoSplit, (DE.right - BEAT.demoSplit) / 6);
+if (Math.abs(DEMO_B.beat - DEMO_A.beat) > 0.03 * DEMO_A.beat) throw new Error(`the two endings' tempos differ by more than 3% (${DEMO_A.beat} vs ${DEMO_B.beat})`);
+if (Math.abs(DEMO_B.at(8) - DE.c3) > FRAME) throw new Error(`"Only one remembers why." (${DE.c3}) is not on the hook's backbeat (${DEMO_B.at(8)})`);
+{
+  const a = DEMO_A, trim = -4;
+  // the call: half-note bass and an 8th arp, no drums
+  // (the exchange holds before the session runs on, so the call bars run to compaction 1)
+  playBed(MUSIC, a, [span(0, 4, "D"), span(4, 2, "G"), span(6, 4, "D"), span(10, 1.5, "D")], { bass: "half", arp: 8, pad: true, trim, padTrim: -4, arpTrim: 2 });
+  // the observer records it: the session motif on the arp, from the notification
+  ["D5", "A4", "F#5", "E5", "D5"].forEach((note, k) => mus(MUSIC, DE.notify + k * a.beat / 2, arpNote(note, T(k === 4 ? a.beat : a.beat / 2)), LV.arp + 6, 0.2, 0.25));
+  cue("session motif (observation recorded)", DE.notify, "de.notify opacity", LV.arp + 6, "music");
+  // three compactions later: D minor from the first compaction, a pedal under a pad
+  if (Math.abs(a.at(11.5) - DE.comps[0]) > FRAME) throw new Error(`compaction 1 (${DE.comps[0]}) is not on the D minor turn (${a.at(11.5)})`);
+  playBed(MUSIC, a, [span(11.5, 4.5, "Dm")], { pad: true, trim: -5, padTrim: -1 });
+  mus(BASS, a.at(11.5), bassNote("D2", T(4.5 * a.beat), { gate: 0.97 }), LV.bass - 5);
+  const b = DEMO_B;
+  // the split: the full bed in D minor, kick on 1 and 3, hats; the left answer stays minor
+  playBed(MUSIC, b, [span(0, 4, "Dm"), span(4, 2, "Bb")], { bass: "8ths", arp: 16, pad: true, trim: -4.5, arpTrim: -2, padTrim: -4 });
+  playBar(MUSIC, b, 0, { kick: [0, 8], hats: range(0, 16, 2), trim: -4.5 }, "demo-split");
+  playBar(MUSIC, b, 4, { kick: [0], hats: range(0, 8, 2), trim: -4.5 }, "demo-split");
+  // the turn: D major, the hook on the lead, over D | C | D
+  playLead(MUSIC, section(DE.right, b.beat), [...HOOK_1, ...HOOK_2], -3);
+  playBed(MUSIC, b, [span(6, 4, "D"), span(10, 4, "C"), span(14, 2.5, "D")], { bass: "8ths", arp: 16, pad: true, trim: -4.5, padTrim: -4 });
+  playBar(MUSIC, b, 6, { kick: [0, 8, 10], snare: [4, 12], hats: range(0, 16, 2), trim: -4.5 }, "demo-turn");
+  playBar(MUSIC, b, 10, { kick: [0, 8, 10], snare: [4, 12], hats: range(0, 16, 2), open: [14], trim: -4.5 }, "demo-turn");
+  playBar(MUSIC, b, 14, { kick: [0], hats: range(0, 10, 2), trim: -4.5 }, "demo-turn");
+  cue("the turn to D major (hook)", DE.right, "cue-de-right", LV.lead - 1, "music");
+}
+
+// --- ASK WHY: a staccato D minor walk, a D major lift at the result, the hook's second bar ----------
+const ASK = section(BEAT.ask, (BEAT.never - BEAT.ask) / 18);
+if (Math.abs(ASK.at(7.5) - AW.answer) > FRAME) throw new Error(`the agent's answer (${AW.answer}) is not on the hook fragment (${ASK.at(7.5)})`);
+{
+  const s = ASK, trim = -4.5;
+  // (the music comes back from the recall drain on beat 1)
+  ["D2", "F2", "A2", "C3"].forEach((note, e) => mus(ASKB, s.at(1 + e / 2), bassNote(note, T(s.beat / 2), { gate: 0.45 }), LV.bass + trim));
+  const walk: Array<[number, string]> = [[3, "D2"], [3.5, "A2"], [4, "D3"], [4.5, "A2"], [5, "G2"], [5.5, "D3"], [6, "G2"], [6.5, "B2"], [7, "G2"], [7.5, "C3"], [8, "G2"], [8.5, "C3"]];
+  for (const [beat, note] of walk) mus(ASKB, s.at(beat), bassNote(note, T(s.beat / 2), { gate: 0.5 }), LV.bass + trim);
+  playBed(ASKB, s, [span(3, 2, "D"), span(5, 2.5, "G"), span(7.5, 1.5, "C")], { arp: 8, pad: true, trim, arpTrim: -2, padTrim: -4 });
+  for (let e = 2; e < 34; e++) mus(ASKB, s.at(e / 2), hat(rng(`ask-tick-${e}`), false), -30, 0.15);
+  // the answer: the hook's second bar, and a pad swelling into "The original messages come back."
+  playLead(ASKB, section(s.at(7.5), s.beat), [["G5", 0, 1.5], ["E5", 1.5, 0.5], ["C5", 2, 1]], trim + 1);
+  cue("hook fragment (the answer)", s.at(7.5), "cue-aw-answer", LV.lead + trim + 1, "music");
+  {
+    const a0 = s.at(7), n = S(AW.c2 - a0) + ms(400);
+    for (const note of ["D4", "F#4", "A4"]) {
+      const f = hz(note), x = osc(n, "pulse", K(f * cents(-7)), (t) => Math.min(1, (t / T(AW.c2 - a0)) ** 2) * Math.max(0, 1 - Math.max(0, t - T(AW.c2 - a0)) / 0.4), 0.5);
+      mix(x, osc(n, "pulse", K(f * cents(7)), (t) => Math.min(1, (t / T(AW.c2 - a0)) ** 2) * Math.max(0, 1 - Math.max(0, t - T(AW.c2 - a0)) / 0.4), 0.5));
+      mus(ASKB, a0, edges(biquad(biquad(x, "lp", 1200), "lp", 1200), ms(5), ms(20)), LV.pad - 2, 0.25, 0.3);
+    }
+    cue("pad swell into the original messages", a0, "cap-aw.c2", LV.pad - 2, "swell");
+  }
+  // under the messages and the line: D major, with the kick back
+  playBed(ASKB, s, [span(9, 4, "D"), span(13, 4, "G"), span(17, 1, "A")], { bass: "half", arp: 16, pad: true, trim, arpTrim: -3, padTrim: -4 });
+  for (const t of [9, 11, 13, 15, 17]) mus(ASKB, s.at(t), punch(rng(`ask-kick-${t}`), true), LV.kick - 4);
+}
+
+// --- /om:view: a 16th arp and half-time drums, on the check's tempo -----------------------------------
+const VIEW = section(OV.wipeEnd, CHECK.beat);
+{
+  const s = VIEW, beats = Math.floor((OV.swing - s.start) / s.beat), trim = -4;
+  const loop = ["D", "Bm", "G", "A"], spans: Span[] = [];
+  for (let b = 0; b < beats; b += 4) spans.push(span(b, Math.min(4, beats - b), loop[(b / 4) % 4], loop[(b / 4) % 4] === "Bm" ? "B1" : undefined));
+  playBed(MUSIC, s, spans, { bass: "half", arp: 16, pad: true, trim, arpTrim: -1, padTrim: -4 });
+  for (let b = 0; b + 4 <= beats; b += 4) playBar(MUSIC, s, b, { kick: [0], snare: [8], hats: range(0, 16, 4), trim }, "view");
+  cue("view groove", s.start, "wipe-ov.web end", LV.arp + trim, "music");
+}
+
+// --- CONFIG: a light groove under the settings, then busy and idle -------------------------------------
+const CFG = section(BEAT.cfg, (BEAT.cfgIdle - BEAT.cfg) / 12);
+const CFG2 = section(BEAT.cfgIdle, (BEAT.end - BEAT.cfgIdle) / 9);
+{
+  const s = CFG, trim = -4.5;
+  playBed(MUSIC, s, [span(0, 4, "G"), span(4, 4, "A"), span(8, 4, "D")], { bass: "8ths", arp: 16, pad: true, trim, arpTrim: -2, padTrim: -4 });
+  for (const bar of [0, 4, 8]) playBar(MUSIC, s, bar, { kick: [0, 8], snare: [4, 12], hats: range(0, 16, 2), hatTrim: -4, trim: trim - 1 }, "cfg");
+  // busy: a pedal, 16th hats and the processing hum; idle: the drums drop and the pad breathes
+  const b = CFG2, idleBeat = (CF.idle - b.start) / b.beat;
+  for (let e = 0; e < Math.floor(2 * idleBeat); e++) mus(BASS, b.at(e / 2), bassNote("D2", T(b.beat / 2), { gate: 0.6 }), LV.bass - 4);
+  for (let k = 0; k < Math.floor(4 * idleBeat); k++) mus(MUSIC, b.at(k / 4), hat(rng(`cfg-busy-hat-${k}`), false), LV.hat - 4 + (k % 4 ? -3 : 0), 0.15);
+  {
+    const len2 = S(CF.busy[1] - CF.busy[0]), x = osc(len2, "pulse", K(hz("A2")), (t) => Math.min(1, t / 0.05) * (1 - 0.3 * Math.sin(TAU * 0.8 * t)), 0.5);
+    put(MUSIC, S(CF.busy[0]), edges(normalize(biquad(biquad(x, "lp", 500), "lp", 500)), ms(10), ms(30)), REF * db(-28), 0);
+    cue("processing hum (agent busy)", CF.busy[0], "cue-cf-busy", -28, "music");
+  }
+  const idleSpan = 9 - Math.ceil(idleBeat);
+  for (const note of ["D4", "F#4", "A4"]) {
+    const n = S(BEAT.end - CF.idle) + ms(300), f = hz(note), breath = (t: number) => Math.min(1, t / 0.6) * (0.75 + 0.25 * Math.sin(TAU * 0.45 * t - Math.PI / 2));
+    const x = osc(n, "pulse", K(f * cents(-7)), breath, 0.5);
+    mix(x, osc(n, "pulse", K(f * cents(7)), breath, 0.5));
+    mus(MUSIC, CF.idle, edges(biquad(biquad(x, "lp", 900), "lp", 900), ms(5), ms(200)), LV.pad - 3, 0.25, 0.25);
+  }
+  mus(BASS, CF.idle, bassNote("D2", T(BEAT.end - CF.idle), { gate: 0.97 }), LV.bass - 6);
+  cue(`idle pad (${idleSpan} beats)`, CF.idle, "cue-cf-idle", LV.pad - 3, "music");
+}
+
 // --- CODA: the final chord ---------------------------------------------------------------------------------
 {
-  const t0 = CR.lockup, n = S(D - t0);
+  const t0 = CR.lockup, n = S(BEAT.sting - t0);
   const x = buf(n);
-  const tau = T(D - 16 - t0) / (40 / 8.686); // about -40 dB a frame or two before the end
+  const tau = T(BEAT.sting - 16 - t0) / (40 / 8.686); // about -40 dB a frame or two before the sting
   const env = ad(0.004, tau);
   ["D2", "A2", "D3", "A3", "D4", "F#4", "A4", "D5", "D6"].forEach((note, k) => {
     for (const c of [-6, 6]) mix(x, osc(n, "pulse", K(hz(note) * cents(c)), env, k % 2 ? 0.25 : 0.5), 0, note === "D6" ? 0.5 : 1);
@@ -1233,7 +1437,7 @@ const hiwChordAt = (tick: number) => HIW_SPANS.find(([beat, beats]) => tick >= H
 // The cues
 // =========================================================================================
 const r = (name: string) => rng(name);
-const card = { bus: CARD } as const;
+const lcb = { bus: LCB } as const;
 const hit = { bus: HITS } as const;
 
 // A glint: the shimmer from g and the ting at `ting`, placed at the ting's level.
@@ -1258,23 +1462,184 @@ fx("poster dip boing", PO.moved, "po.rig position (first moved frame)", -22, boi
   fx("poster zip-up", PO.zip, "cue-poster-zip", -18, edges(biquad(x, "lp", 8000), ms(2), ms(5)), { send: 0.15, kind: "swell" });
 }
 
-// --- Card ------------------------------------------------------------------------------------
-// The card booms' phone layers (dBr): the first is short, so the second lands on a drop.
+// --- The Latent Configuration -------------------------------------------------------------
+// The Summarizer's lines take the trailer's booms (dBr phone layers): BOOM-1 on the first
+// line, BOOM-2 and the braam on "...EVERY COMPACTION", the stab on "FORGETS".
 const BRASS = [-6, -4.5];
+// RATCHET: a gear tooth: a band-passed noise tick and two inharmonic metal partials.
+function ratchet(r: Rng, pitch: number, heavy: boolean) {
+  const x = biquad(noise(ms(30), r, ad(0.0003, 0.004)), "bp", 3200 * pitch, 1.4);
+  for (const [m, a] of [[1, 0.5], [1.63, 0.3]]) mix(x, osc(ms(30), "sine", K(2100 * pitch * m), ad(0.0005, 0.008)), 0, a);
+  if (heavy) { const c = osc(ms(90), "sine", glideExp(180, 90, 0.05), ad(0.001, 0.03)); mix(c, x); return edges(c, ms(0.5), ms(5)); }
+  return edges(x, ms(0.5), ms(5));
+}
+// BELL: a deep toll on D2, minor-third bell partials with longer decays for the lower ones.
+function bell(r: Rng) {
+  const n = len(4.5), f = hz("D2"), x = buf(n);
+  for (const [m, a, tau] of [[0.5, 0.6, 2.4], [1, 1, 1.8], [1.2, 0.55, 1.2], [1.5, 0.35, 1.0], [2, 0.5, 0.9], [2.5, 0.25, 0.5], [3.01, 0.2, 0.35], [4.17, 0.12, 0.2]])
+    mix(x, osc(n, "sine", K(f * m * cents(r() * 6 - 3)), (t) => ad(0.003, tau)(t) * (1 + 0.15 * Math.sin(TAU * (1.3 + m) * t))), 0, a);
+  mix(x, biquad(noise(ms(40), r, ad(0.0005, 0.008)), "bp", 1800, 0.9), 0, 0.5);
+  return edges(x, ms(1), ms(200));
+}
+// CLINK and RATTLE: chain links: three inharmonic partials, then a seeded cluster of them.
+function rattle(r: Rng, count: number, spreadS: number) {
+  const x = buf(len(spreadS + 0.15));
+  for (let i = 0; i < count; i++) {
+    const at0 = Math.floor(len(spreadS) * (i / count) ** 0.7 + r() * ms(12)), f = 2300 + r() * 1400, n = ms(80), c = buf(n);
+    for (const [m, a] of [[1, 1], [1.59, 0.6], [2.31, 0.35]]) mix(c, osc(n, "sine", K(f * m), ad(0.0005, 0.02 + r() * 0.03)), 0, a);
+    mix(c, biquad(noise(ms(4), r, ad(0.0003, 0.001)), "hp", 3000), 0, 0.5);
+    mix(x, c, at0, 0.5 + 0.5 * r());
+  }
+  return edges(x, ms(0.5), ms(20));
+}
+// STRINGS: a low bowed cluster for the horror build, additive saws (no samples): D2, Eb2
+// (a minor second to grind), A2 and D3, each three slightly detuned voices with a slow bow
+// vibrato, low-passed to sound like a section through a wall, plus a thin high harmonic pair.
+function stringCluster(r: Rng, n: number, gain: (t: number) => number) {
+  const x = buf(n);
+  const voice = (f0: number, amp: number, phase: number, rate: number) => {
+    const H = Math.max(1, Math.min(18, Math.floor(3200 / f0)));
+    let ph = r();
+    for (let i = 0; i < n; i++) {
+      const t = i / SR, f = f0 * (1 + 0.0025 * Math.sin(TAU * rate * t + phase));
+      ph += f / SR; if (ph >= 1) ph -= 1;
+      let v = 0;
+      for (let h = 1; h <= H; h++) v += Math.sin(TAU * h * ph) / h;
+      x[i] += v * amp;
+    }
+  };
+  for (const [note, amp] of [["D2", 1], ["Eb2", 0.7], ["A2", 0.6], ["D3", 0.45]] as Array<[string, number]>)
+    for (const c of [-9, 0, 8]) voice(hz(note) * cents(c), amp, r() * TAU, 4.6 + r());
+  biquad(biquad(x, "lp", 1400), "lp", 1400);
+  const hi = buf(n);
+  for (const note of ["D6", "Eb6"]) mix(hi, osc(n, "sine", (t) => hz(note) * (1 + 0.003 * Math.sin(TAU * 5.3 * t)), K(1)));
+  mix(normalize(x), normalize(hi), 0, db(-24));
+  for (let i = 0; i < n; i++) x[i] *= gain(i / SR) * (1 + 0.12 * Math.sin(TAU * 0.37 * (i / SR)));
+  return x;
+}
+// HEARTBEAT: lub-dub, a sine thump falling to 50 Hz with a 180 Hz body so a phone hears it.
+function heartbeat(r: Rng) {
+  const one = (hi: number, lo: number, tau: number) => {
+    const n = len(0.28), x = osc(n, "sine", pitchFall(lo, hi, 0.03), ad(0.004, tau));
+    mix(x, biquad(osc(n, "tri", pitchFall(160, 260, 0.02), ad(0.002, tau * 0.6)), "lp", 500), 0, 0.5);
+    mix(x, biquad(noise(ms(12), r, ad(0.001, 0.004)), "lp", 900), 0, 0.15);
+    return x;
+  };
+  const x = buf(len(0.6));
+  mix(x, normalize(one(95, 50, 0.07)));
+  mix(x, normalize(one(85, 46, 0.06)), ms(190), 0.7);
+  return edges(x, ms(1), ms(20));
+}
 {
-  fx("BOOM-1", CD.l1, "cap-cd.l1", -6, subBoom({ soft: true }), { ...card, send: 0.15 });
-  fx("BOOM-1 brass", CD.l1, "cap-cd.l1", BRASS[0], boomBrass(r("boom1 brass"), 0.12), { ...card, send: 0.15 });
-  booms.push(CD.l1);
-  // room for the braam's whole 1.6 s, so its release plays (it ends on the card's hard stop)
+  // The build: strings from the first frame, a heartbeat that quickens until the first cut
+  // to black, where both stop dead on a sub hit. They return when the lid blasts open, stop
+  // again on the impact before the first line, return with it, and are crushed with the rest
+  // of the LCB bus as the Summarizer pixelates away.
+  {
+    const a = LC.barsIn, n = S(LC.gone + 48) - S(a);
+    const T0 = (tick: number) => T(tick - a);
+    const env = (t: number) => {
+      const tick = a + t * TICKS_PER_SECOND;
+      if (tick < LC.cut1) return 0.25 + 0.75 * Math.min(1, t / T0(LC.cut1)) ** 1.5 * Math.min(1, t / 0.4);
+      if (tick < LC.open) return 0;
+      if (tick < LC.cut2) return 0.75 + 0.25 * Math.min(1, (t - T0(LC.open)) / 0.3);
+      if (tick < LC.cap1) return 0;
+      if (tick < LC.shut) return 0.85;
+      return 0.85 * Math.max(0, 1 - (tick - LC.shut) / 24); // the slam cuts the section off
+    };
+    fx("STRINGS cluster (the build)", a, "cue-lc-bars-in (cut on cue-lc-cut-1, -cut-2)", -21, edges(stringCluster(r("strings"), n, env), ms(30), ms(80)), { ...lcb, send: 0.35, pan: 0.1, kind: "swell" });
+  }
+  {
+    const from = LC.barsIn + 32, to = LC.cut1 - 12, beats: number[] = [];
+    for (let t = from, gap = 0.42; t < to; t += Math.round(gap * TICKS_PER_SECOND), gap = Math.max(0.3, gap * 0.88)) beats.push(t);
+    if (beats.length < 4) throw new Error("the heartbeat has fewer than four beats before the first cut");
+    beats.forEach((t, i) => fx(`heartbeat ${i + 1}`, t, "cue-lc-bars-in .. cue-lc-cut-1", -17 + Math.min(4, i * 0.8), heartbeat(r(`heart ${i}`)), { pan: 0, quiet: i > 0 }));
+    cue(`heartbeat x${beats.length} (quickening)`, beats[beats.length - 1], "cue-lc-cut-1 (stops before it)", -17 + Math.min(4, (beats.length - 1) * 0.8));
+  }
+  // the letterbox bars: a low breath of air as they slide in, and back out
+  for (const [name, t, src, up] of [["bars in", LC.barsIn, "cue-lc-bars-in", true], ["bars out", LC.barsOut, "cue-lc-bars-out", false]] as Array<[string, number, string, boolean]>) {
+    const n = S(56), x = sweep(r(name), n, (t) => logSweep(up ? 300 : 1200, up ? 1200 : 300, t / T(56)), (t) => Math.sin(Math.PI * Math.min(1, t / T(56))), 0.8, db(-30));
+    fx(`letterbox ${name}`, t, src, -26, edges(x, ms(5), ms(10)), { send: 0.2, kind: "swell" });
+  }
+  const [t1, t2, t3] = LC.twists;
+  [t1, t2, t3].forEach((clicks, i) => clicks.forEach((t, j) =>
+    fx(`ratchet ${i + 1}.${j + 1}`, t, `lc.twist rotation (twist ${i + 1})`, j === 2 ? -12 : -16, ratchet(r(`ratchet ${i} ${j}`), 2 ** ((2 * i + j) / 12), j === 2), { send: 0.2, pan: -0.15 })));
+  // the seams blaze: a rising shimmer that ends on the cut
+  {
+    const n = S(LC.cut1 - LC.seams), x = sweep(r("seams"), n, (t) => logSweep(2000, 11000, t / T(LC.cut1 - LC.seams)), (t) => (t / T(LC.cut1 - LC.seams)) ** 2, 2, db(-18));
+    fx("seams shimmer (into the cut)", LC.seams, "cue-lc-seams", -17, edges(x, ms(10), ms(2)), { send: 0.35, kind: "swell" });
+  }
+  // CUT 1: a sub hit on the cut to black
+  fx("SUB HIT cut 1", LC.cut1, "cue-lc-cut-1", -7, subBoom({ soft: true }), { ...lcb, send: 0.15 });
+  fx("SUB HIT cut 1 brass", LC.cut1, "cue-lc-cut-1", -11, boomBrass(r("cut1 brass"), 0.1), { ...lcb, send: 0.15 });
+  booms.push(LC.cut1);
+  fx("BELL toll", LC.open, "cue-lc-open", -5, bell(r("bell")), { ...lcb, send: 0.35 });
+  booms.push(LC.open);
+  {
+    const n = len(0.5), x = sweep(r("spill"), n, (t) => logSweep(1500, 9000, t / 0.5), (t) => Math.min(1, t / 0.03) * Math.exp(-t / 0.18), 1.5, db(-20));
+    fx("light spill", LC.open, "cue-lc-open", -20, edges(x, ms(2), ms(10)), { send: 0.3, kind: "swell" });
+  }
+  // The Summarizer's drone and growl, pitched down a semitone as he rises: a D1/A1 pulse
+  // pair low-passed at 320 Hz with a rough 23 Hz flutter, and a throat of band-passed noise
+  // whose formant wanders 220-600 Hz with a 31 Hz growl. No words. It drops out on the
+  // black cards and the silence.
+  {
+    const a = LC.summon, n = S(LC.gone + 48) - S(a);
+    const drop = (t: number) => cents(-100 * Math.min(1, t / T(96)));
+    const x = buf(n);
+    for (const [note, c] of [["D1", -6], ["D1", 6], ["A1", 0], ["D2", 3]] as Array<[string, number]>) mix(x, osc(n, "pulse", (t) => hz(note) * cents(c) * drop(t), K(1), 0.3), 0, note === "D2" ? 0.4 : 1);
+    biquad(biquad(x, "lp", 320), "lp", 320);
+    const rr = r("growl"), throat = svf(noise(n, rr, K(1)), (i) => 410 + 190 * Math.sin((TAU * 0.6 * i) / SR) * Math.sin((TAU * 0.23 * i) / SR), 3, "bp");
+    mix(normalize(x), normalize(throat), 0, db(-5));
+    for (let i = 0; i < n; i++) {
+      const t = i / SR, tick = a + i / SAMPLES_PER_TICK, card = tick >= LC.cut2 && tick < LC.hamCu ? 0.25 : 1;
+      x[i] *= Math.min(1, t / T(96)) * card * (1 - 0.35 * (0.5 + 0.5 * Math.sin(TAU * 23 * t)) * (0.5 + 0.5 * Math.sin(TAU * 31 * t + 1)));
+    }
+    fx("Summarizer drone and growl", a, "cue-lc-summon", -13, tanhDrive(normalize(edges(x, 0, ms(50))), 1.5), { ...lcb, send: 0.25, pan: 0.3, kind: "swell" });
+  }
+  fx("chains drop rattle", LC.land, "cue-lc-chains", -16, rattle(r("chains land"), 14, 0.22), { send: 0.3, pan: 0.65 });
+  const swayHeard = LC.sway.filter((t) => !lcQuiet(t));
+  swayHeard.forEach((t, i) => fx(`chain rattle ${i + 1}`, t, "lc.chain-a rotation (not on the black cards)", -27, rattle(r(`chain sway ${i}`), 4, 0.08), { send: 0.3, pan: i % 2 ? 0.75 : 0.55 }));
+  // CUT 2: an impact on the cut to black, then dead silence (a master silence window) until
+  // the first line slams in on BOOM-1.
+  {
+    const x = buf(len(0.8));
+    mix(x, normalize(subBoom({})));
+    mix(x, normalize(punch(r("cut2 punch"))), 0, 0.8);
+    mix(x, normalize(snareCrack(r("cut2 crack"), { tau: 0.04 })), 0, 0.5);
+    fx("IMPACT cut 2 (then silence)", LC.cut2, "cue-lc-cut-2", -3, x, { ...hit, send: 0.1 });
+    booms.push(LC.cut2);
+  }
+  fx("BOOM-1", LC.cap1, "cap-lc.v1", -6, subBoom({ soft: true }), { ...lcb, send: 0.15 });
+  fx("BOOM-1 brass", LC.cap1, "cap-lc.v1", BRASS[0], boomBrass(r("boom1 brass"), 0.12), { ...lcb, send: 0.15 });
+  booms.push(LC.cap1);
+  fx("shades up", LC.up, "cue-lc-shades-up", -20, boing(hz("E5"), hz("B5"), 0.07));
+  fx("shades slide down", LC.down, "cue-lc-shades-down", -22, boing(hz("B5"), hz("E5"), T(LC.downEnd - LC.down)), { kind: "swell" });
   const b2 = buf(len(1.6));
   mix(b2, subBoom({ body: -4 }));
   mix(b2, braam(), 0, 1.4);
-  fx("BOOM-2 + braam", CD.l2, "cap-cd.l2", -3.5, b2, { ...card, send: 0.25 });
-  fx("BOOM-2 brass", CD.l2, "cap-cd.l2", BRASS[1], boomBrass(r("boom2 brass"), 0.15), { ...card, send: 0.25 });
-  booms.push(CD.l2);
+  fx("BOOM-2 + braam (cut 3)", LC.cap2, "cap-lc.v2", -3.5, b2, { ...lcb, send: 0.25 });
+  fx("BOOM-2 brass", LC.cap2, "cap-lc.v2", BRASS[1], boomBrass(r("boom2 brass"), 0.15), { ...lcb, send: 0.25 });
+  booms.push(LC.cap2);
   const st = chordStab(["D4", "F4", "A4", "D5"], 0.25, { dur: 1.6 });
   mix(st, normalize(snareCrack(r("forgets crack"), { bits: 8 })), 0, 0.7);
-  fx("FORGETS stab", CD.l3, "cd.l3 scale pop", -4, st, { ...card, send: 0.45 });
+  fx("FORGETS stab", LC.forgets, "lc.v3 scale pop", -4, st, { ...lcb, send: 0.45 });
+  fx("web THWIP", LC.thwip, "cue-lc-thwip", -10, webThwip(r("lc thwip")), { send: 0.2, pan: -0.3 });
+  {
+    const x = buf(len(0.6));
+    mix(x, normalize(punch(r("slam punch"))));
+    mix(x, normalize(snareCrack(r("slam crack"), { tau: 0.05 })), 0, 0.7);
+    mix(x, normalize(ratchet(r("slam latch"), 0.7, true)), 0, 0.6);
+    mix(x, normalize(rattle(r("slam chains"), 8, 0.12)), ms(20), 0.25);
+    fx("SLAM shut", LC.shut, "cue-lc-shut", -2, x, { ...hit, send: 0.3 });
+    booms.push(LC.shut);
+  }
+  // The dissolve's fizz: noise falling 6 -> 0.8 kHz, crushed harder as the cells grow.
+  {
+    const n = S(LC.gone - LC.shut), x = sweep(r("fizz"), n, (t) => logSweep(6000, 800, t / T(LC.gone - LC.shut)), (t) => Math.exp(-t / 0.25), 2, db(-12));
+    fx("dissolve fizz", LC.shut, "cue-lc-dissolve", -18, edges(x, ms(2), ms(20)), { ...lcb, send: 0.2, pan: 0.3, kind: "swell" });
+  }
+  shadesGlint("lc", "lc.ham-shades", -16);
 }
 
 // --- Problem ---------------------------------------------------------------------------------
@@ -1339,7 +1704,7 @@ const BRASS = [-6, -4.5];
   mix(mis, normalize(snareCrack(r("title crack 2"))).slice(0, ms(30)));
   mix(h, edges(mis.slice(0, ms(30)), ms(1), ms(5)), S(8), db(-8) * 0.6);
   // a little saturation trims the composite's crest, so the limiter barely touches it
-  fx("TITLE DROP", SW.title, "cap-sw.title", 0, edges(tanhDrive(normalize(h), 1.4), ms(1), ms(50)), { ...hit, long: 0.25 });
+  fx("TITLE DROP", SW.title, "cap-sw.title", -0.6, edges(tanhDrive(normalize(h), 1.4), ms(1), ms(50)), { ...hit, long: 0.25 });
   booms.push(SW.title);
   // the first memory burst is the title's sparkle; the later ones are lost under the hook
   fx("memory burst 0", SW.burst, "sw:burst-0", -24, arpeggio(["A5", "E6"], 12, 0.25, 0.04));
@@ -1362,7 +1727,7 @@ const BRASS = [-6, -4.5];
   // glide has to clear the hook and the arpeggio (the limiter has room there)
   fx("swing thwip", SW.thwip, "sw:thwip-0", -3.5, webThwip(r("sw thwip"), { semis: 3 }), { send: 0.1 });
   fx("catch tug 2", SW.catch2, "sw:catch-1 + swing CYCLE", -12, webTug(r("tug2")));
-  fx("cut whoosh", BEAT.hiw - 48, "beat-how-it-works - 48", -14, whoosh(r("sw cut"), BEAT.hiw - 48, BEAT.hiw - 4, BEAT.hiw, 300, 2500, 2500), { kind: "swell" });
+  fx("cut whoosh", BEAT.demo - 48, "beat-two-endings - 48", -14, whoosh(r("sw cut"), BEAT.demo - 48, BEAT.demo - 4, BEAT.demo, 300, 2500, 2500), { kind: "swell" });
 }
 
 // --- How it works --------------------------------------------------------------------------------
@@ -1585,7 +1950,7 @@ const BRASS = [-6, -4.5];
   fx("memory spark", SS.sparkMem, "ss:spark-mem", -22, blip("D7", 0.25, 0.04));
   const n = S(64), dur = T(64);
   const x = biquad(biquad(noise(n, r("ss swell"), (t) => db(lerp(-40, 0, t / dur))), "hp", 3000), "lp", 12000);
-  fx("check reverse swell", BEAT.end, "beat-end-card - 64", -15, edges(x, ms(5), ms(1)), { align: "end", kind: "swell" });
+  fx("check reverse swell", BEAT.view, "beat-om-view - 64", -15, edges(x, ms(5), ms(1)), { align: "end", kind: "swell" });
 }
 
 // --- End card --------------------------------------------------------------------------------------
@@ -1603,6 +1968,233 @@ const BRASS = [-6, -4.5];
   });
   // the last glint: the ting alone, dry with a short reverb (no echo past the fade)
   glint("last", CR.ping, CR.ping, "cr:ping", -12, { dry: true, send: 0.25 });
+}
+
+// --- Two endings ----------------------------------------------------------------------------------
+{
+  // Word keys: one a step, a little lower and quieter on every other word.
+  const words = (tag: string, list: number[], src: string, pan = 0, pitch = 1, level = -20) => list.forEach((t, k) =>
+    fx(`${tag} key ${k}`, t, src, level + (k % 2 ? -1 : 0), keyClick(r(`${tag} key ${k}`), pitch * (k % 2 ? 0.85 : 1.1)), { pan }));
+  words("de call", DE.type1, "de.a1-cover");
+  words("de reason", DE.type2, "de.a2-cover");
+  fx("de Enter", DE.enter1, "cue-de-enter-1", -13, enterKey(r("de enter 1")));
+  fx("de reply", DE.reply, "de.a3 opacity (first drawn)", -16, blip("D6", 0.25, 0.04));
+  fx("de scroll", DE.scroll[0], "cue-de-scroll", -22, copierScan(r("de scroll"), DE.scroll[1] - DE.scroll[0]), { kind: "swell" });
+  {
+    const x = buf(len(0.12));
+    mix(x, normalize(popSound(r("de notify"))));
+    mix(x, blip("D7", 0.25, 0.03), ms(30), db(-2));
+    fx("observation recorded", DE.notify, "de.notify opacity (first drawn)", -20, x, { send: 0.2 });
+  }
+  {
+    const n = S(DE.sparkLand - DE.spark), dur = T(DE.sparkLand - DE.spark);
+    fx("memory pixel to Spider-Ham", DE.spark, "cue-de-spark", -22, edges(biquad(osc(n, "pulse", glideExp(hz("A5"), hz("D7"), dur), K(1), 0.125), "lp", 7000), ms(3), ms(5)), { kind: "swell", pan: (i) => lerp(-0.5, 0.5, i / n) });
+  }
+  shadesGlint("de", "de.ham-shades", -14);
+  DE.comps.forEach((c, i) => {
+    fx(`de compaction ${i + 1} scan`, c, `cue-de-compaction-${i + 1}`, -16, copierScan(r(`de comp scan ${i}`), 48), { kind: "swell" });
+    fx(`de compaction ${i + 1} ka-chunk`, c + 48, `cue-de-compaction-${i + 1} + 48`, -16, copierChunk(r(`de comp chunk ${i}`)));
+    fx(`de compaction ${i + 1} tick`, DE.chips[i], `de.chip${i} pop`, -18, slowTick(r(`de comp tick ${i}`), i, -2 * i));
+  });
+  fx("de c2 slam", DE.c2, "cap-de.c2", -12, normalize(punch(r("de c2 punch"))), { send: 0.1 });
+  {
+    const x = buf(len(0.35));
+    mix(x, normalize(webThwip(r("de tear thwip"))));
+    const w = whoosh(r("de tear whoosh"), DE.split, DE.split + 40, DE.splitEnd, 400, 3000, 1200);
+    mix(x, normalize(w), S(DE.split - DE.thwip), db(-4));
+    fx("de tear THWIP + whoosh", DE.thwip, "cue-de-thwip", -10, x, { pan: (i) => lerp(-0.4, 0.4, i / x.length), send: 0.15 });
+  }
+  fx("de labels pop", DE.labels, "de.l-label pop", -20, popSound(r("de labels")));
+  words("de left", DE.typeL, "de.lq-q-cover", -0.5, 1);
+  words("de right", DE.typeR, "de.rq-q-cover", 0.5, 1.06);
+  fx("de Enter, both", DE.enter2, "cue-de-enter-2", -13, enterKey(r("de enter 2")));
+  for (let k = 0; k < 3; k++) fx(`de thinking ${k}`, DE.dots[0] + 16 * k, "cue-de-dots", -24, blip(["A5", "D6", "F#6"][k], 0.125, 0.02), { quiet: k > 0 });
+  {
+    // the wrong answer: a falling pulse with vibrato, a boing as the shades slide, the "?" pop
+    const x = buf(len(0.6));
+    ["D5", "C#5", "A4"].forEach((note, k) => mix(x, osc(len(0.16), "pulse", (t) => hz(note) * cents(25 * Math.sin(TAU * 7 * t)), gate(0.003, 0.03, 0.16), 0.25), len(0.14 * k)));
+    fx("de wrong answer", DE.wrong, "de.l-ans opacity (first drawn)", -14, edges(biquad(x, "lp", 5000), ms(2), ms(10)), { pan: -0.4 });
+    fx("de crooked shades boing", DE.gag, "cue-de-wrong-gag", -20, boing(hz("B5"), hz("E5"), 0.12), { pan: -0.4 });
+    fx("de ? pop", DE.q, "de.hamL-q pop", -22, popSound(r("de q")), { pan: -0.4 });
+    fx("de left tag", DE.ltag, "de.l-tag pop", -22, blip("D5", 0.5, 0.05), { pan: -0.4 });
+  }
+  {
+    const lock = buf(S(8) + len(0.08));
+    mix(lock, blip("E6", 0.25, 0.03)); mix(lock, blip("B6", 0.25, 0.04), S(8));
+    mix(lock, normalize(keyClick(r("de lock click"))), 0, 0.5);
+    fx("de id lock", DE.lock, "cue-de-lock", -14, lock, { pan: 0.4 });
+  }
+  fx("de right answer", DE.rightShown, "de.r-ans opacity (first drawn)", -16, arpeggio(["D6", "F#6", "A6"], 8, 0.25, 0.03), { pan: 0.4, send: 0.2 });
+  shadesGlint("de.hamR", "de.hamR-shades", -12);
+  fx("de hop", DE.hop + FRAME, "cue-de-right-glint", -20, boing(hz("A4"), hz("A5"), 0.06), { pan: 0.4 });
+  fx("de right tag", DE.rtag, "de.r-tag pop", -22, blip("A5", 0.5, 0.05), { pan: 0.4 });
+  {
+    const x = buf(len(1.4));
+    mix(x, normalize(punch(r("de c3 punch"))));
+    mix(x, normalize(snareCrack(r("de c3 crack"))), 0, db(-2));
+    mix(x, normalize(chordStab(["D4", "F#4", "A4", "D5"], 0.25, { tau: 0.25 })), 0, db(-1));
+    mix(x, normalize(subBoom({ dur: 0.5, tau: 0.15 })), 0, db(-3));
+    fx("HIT Only one remembers why.", DE.c3, "cap-de.c3", -6, x, { ...hit, long: 0.2 });
+    booms.push(DE.c3);
+  }
+  fx("de cut whoosh", BEAT.hiw - 24, "beat-how-it-works - 24", -14, whoosh(r("de cut"), BEAT.hiw - 24, BEAT.hiw - 4, BEAT.hiw, 300, 2500, 2500), { kind: "swell" });
+}
+
+// --- Ask why ---------------------------------------------------------------------------------------
+{
+  AW.type.forEach((t, k) => fx(`aw key ${k}`, t, "aw.q-cover", -20 + (k % 2 ? -1 : 0), keyClick(r(`aw key ${k}`), k % 2 ? 0.85 : 1.1)));
+  fx("aw Enter", AW.enter, "cue-aw-enter", -13, enterKey(r("aw enter")));
+  AW.call.forEach((t, k) => fx(`aw recall key ${k}`, t, "aw.call-cover", -25 + (k % 2 ? -1 : 0), keyClick(r(`aw recall key ${k}`), k % 2 ? 0.8 : 1.15)));
+  fx("aw result header", AW.header, "aw.header opacity (first drawn)", -18, arpeggio(["F#6", "A6", "D7"], 8, 0.125, 0.04), { send: 0.2 });
+  AW.rows.forEach((t, k) => fx(`aw row ${k}`, t, `aw.row${k} opacity (first drawn)`, -22, blip(["D5", "F#5", "A5"][k], 0.25, 0.03)));
+  fx("aw footer tick", AW.footer, "aw.footer opacity (first drawn)", -26, slowTick(r("aw footer"), 0, 4));
+  {
+    const n = S(AW.key - AW.ham), dur = T(AW.key - AW.ham);
+    fx("aw ham whistle", AW.ham, "cue-aw-ham", -22, edges(biquad(osc(n, "pulse", glideExp(hz("B6"), hz("B5"), dur), K(1), 0.125), "lp", 6000), ms(5), ms(5)), { kind: "swell", pan: 0.3 });
+  }
+  {
+    const x = buf(len(0.3));
+    mix(x, normalize(enterKey(r("aw ctrl+o"))));
+    mix(x, normalize(boing(hz("A4"), hz("E5"), 0.08)), 0, db(-6));
+    fx("aw Ctrl+O", AW.key, "cue-aw-key", -12, x, { pan: 0.3 });
+  }
+  {
+    const n = S(AW.user - AW.strand), dur = T(AW.user - AW.strand);
+    const x = osc(n, "pulse", glideExp(400, 3000, dur), (t) => 0.5 + 0.5 * Math.sin(TAU * 40 * t), 0.125);
+    fx("aw rewind chirps", AW.strand, "aw.strand scale", -16, edges(biquad(x, "lp", 5000), ms(5), ms(5)), { kind: "swell" });
+  }
+  const play = buf(len(0.1));
+  mix(play, normalize(copierChunk(r("aw play"))), 0, db(-6));
+  mix(play, blip("B5", 0.25, 0.04), 0, 0.6);
+  fx("aw user line", AW.user, "aw.user opacity (first drawn)", -16, play);
+  fx("aw assistant line", AW.assistant, "aw.asst opacity (first drawn)", -16, blip("D6", 0.25, 0.04));
+  shadesGlint("aw", "aw.ham-shades", -14);
+  {
+    const x = buf(len(1.2));
+    mix(x, normalize(punch(r("aw c2 punch"))));
+    mix(x, normalize(chordStab(["D4", "F#4", "A4", "D5"], 0.25, { tau: 0.2 })), 0, db(-3));
+    fx("aw c2 punch + stab", AW.c2, "aw.c2 pop", -8, x, { ...hit, send: 0.15 });
+  }
+}
+
+// --- /om:view ----------------------------------------------------------------------------------------
+{
+  const w = whoosh(r("ov wipe"), OV.wipe, OV.wipe + 24, OV.wipeEnd, 400, 3500, 900);
+  mix(w, normalize(webThwip(r("ov wipe thwip"))), 0, 0.6);
+  fx("view web-wipe", OV.wipe, "wipe-ov.web", -8, w, { pan: (i) => lerp(-0.3, 0, i / w.length), send: 0.15 });
+  OV.keys.forEach((t, k) => fx(`ov key ${k}`, t, "ov.cmd-cover", -22 + (k % 2 ? -1 : 0), keyClick(r(`ov key ${k}`), k % 2 ? 0.85 : 1.1)));
+  fx("ov Enter", OV.enter, "cue-ov-enter", -13, enterKey(r("ov enter")));
+  OV.rows.forEach((t, k) => fx(`ov row ${k}`, t, `cue-ov-row-${k + 1}`, -22, blip(["D5", "E5", "F#5", "A5", "B5", "D6"][k], 0.25, 0.025)));
+  {
+    const x = buf(len(0.2));
+    mix(x, normalize(webThwip(r("ov copy thwip"), { mini: true })));
+    mix(x, normalize(popSound(r("ov copy pop"))), S(OV.thwipEnd - OV.thwip) - ms(20), db(-4));
+    fx("ov copied thwip", OV.thwip, "cue-ov-thwip", -14, x, { send: 0.15 });
+  }
+  fx("ov copied", OV.copied, "ov.copied opacity (first drawn)", -22, blip("A6", 0.125, 0.03));
+  shadesGlint("ov", "ov.ham-shades", -14);
+  OV.locks.forEach((t, k) => fx(`ov lock ${k}`, t, `cue-ov-lock-${k + 1}`, -18, blip(["E6", "F#6", "A6", "B6"][k], 0.25, 0.03)));
+  fx("ov swing", OV.swing, "cue-ov-swing", -12, swingWhoosh(r("ov swing"), OV.swing, OV.swingEnd), { kind: "swell", pan: (i) => lerp(-0.6, 0.6, i / S(OV.swingEnd - OV.swing)) });
+  fx("ov swing thwip", OV.swing, "cue-ov-swing", -10, webThwip(r("ov swing thwip")), { pan: -0.5, send: 0.1 });
+}
+
+// --- Config ------------------------------------------------------------------------------------------
+{
+  CF.prints.forEach((t, k) => fx(`cf print ${k}`, t, "cf settings line inTick", -24, blip(["D6", "E6", "F#6", "G6", "A6", "B6"][k], 0.25, 0.02)));
+  {
+    const n = S(CF.catch - CF.fall), dur = T(CF.catch - CF.fall);
+    fx("cf line falls", CF.fall, "cue-cf-fall", -20, edges(biquad(osc(n, "pulse", glideExp(hz("B6"), hz("B4"), dur), K(1), 0.125), "lp", 6000), ms(5), ms(5)), { kind: "swell" });
+  }
+  fx("cf THWIP", CF.thwip, "cue-cf-thwip", -10, webThwip(r("cf thwip")), { pan: 0.4, send: 0.1 });
+  {
+    const x = buf(len(0.5));
+    mix(x, normalize(webTug(r("cf tug"))));
+    mix(x, normalize(punch(r("cf catch punch"))), 0, db(-2));
+    mix(x, normalize(boing(hz("A4"), hz("A5"), 0.08)), ms(40), db(-6));
+    fx("cf catch", CF.catch, "cue-cf-catch", -10, x, { send: 0.15 });
+  }
+  fx("cf cut swish", CF.cut - 24, "cue-cf-cut - 24", -16, whoosh(r("cf cut"), CF.cut - 24, CF.cut - 2, CF.cut + 8, 400, 3000, 1500), { kind: "swell" });
+  fx("cf c2 slam", CF.cut, "cap-cf.c2", -12, normalize(punch(r("cf c2 punch"))), { send: 0.1 });
+  fx("cf chip pop", CF.chip, "cf.chip pop", -18, popSound(r("cf chip")));
+  for (let t = CF.busy[0], k = 0; t < CF.busy[1]; t += 24, k++) fx(`cf busy packet ${k}`, t, "cue-cf-busy", -26, blip("C5", 0.25, 0.015), { quiet: k > 0, pan: -0.3 });
+  shadesGlint("cf", "cf.agent-shades", -14);
+  CF.workers.forEach((t, k) => {
+    fx(`cf worker ${k + 1}`, t, `cf.worker${k} lights`, -12, chordStab([["D4", "F#4", "A4"], ["G4", "B4", "D5"], ["A4", "C#5", "E5"]][k], 0.25, { tau: 0.12, dur: 0.6 }), { send: 0.2, pan: 0.3 });
+    for (let j = 1; j <= 3; j++) fx(`cf worker ${k + 1} packet ${j}`, t + 24 * j, `cf.worker${k} lights`, -24, blip("A6", 0.125, 0.012), { quiet: true, pan: 0.4 });
+  });
+  {
+    const n = S(CF.sparkLand - CF.spark), dur = T(CF.sparkLand - CF.spark);
+    fx("cf memory pixel to the agent", CF.spark, "cue-cf-spark", -22, edges(biquad(osc(n, "pulse", glideExp(hz("A5"), hz("D7"), dur), K(1), 0.125), "lp", 7000), ms(3), ms(5)), { kind: "swell", pan: (i) => lerp(0, -0.5, i / n) });
+    fx("cf spark lands", CF.sparkLand, "cue-cf-spark end", -22, blip("D7", 0.25, 0.04));
+  }
+  // into the end card's web-wipe
+  const n = S(64), dur = T(64);
+  const x = biquad(biquad(noise(n, r("cf swell"), (t) => db(lerp(-40, 0, t / dur))), "hp", 3000), "lp", 12000);
+  fx("config reverse swell", BEAT.end, "beat-end-card - 64", -15, edges(x, ms(5), ms(1)), { align: "end", kind: "swell" });
+}
+
+// --- The post-credits sting (the LCB bus: crushed by nothing, it plays as it is) ------------------------
+{
+  for (const [k, t] of [ST.heart, ST.heart + 96].entries()) fx(`st heartbeat ${k + 1}`, t, "cue-st-heart", -17, heartbeat(r(`st heart ${k}`)), { ...lcb, quiet: k > 0 });
+  // the Summarizer's drone, while he is on screen, and faintly behind the eyes
+  const drone = (from: number, to: number, name: string) => {
+    const n = S(to - from), x = buf(n);
+    for (const [note, c] of [["D1", -6], ["D1", 6], ["A1", 0], ["D2", 3]] as Array<[string, number]>) mix(x, osc(n, "pulse", K(hz(note) * cents(c - 100)), K(1), 0.3), 0, note === "D2" ? 0.4 : 1);
+    biquad(biquad(x, "lp", 320), "lp", 320);
+    const throat = svf(noise(n, r(`${name} growl`), K(1)), (i) => 410 + 190 * Math.sin((TAU * 0.6 * i) / SR) * Math.sin((TAU * 0.23 * i) / SR), 3, "bp");
+    mix(normalize(x), normalize(throat), 0, db(-5));
+    for (let i = 0; i < n; i++) { const t = i / SR; x[i] *= Math.min(1, t / 0.2) * (1 - 0.35 * (0.5 + 0.5 * Math.sin(TAU * 23 * t)) * (0.5 + 0.5 * Math.sin(TAU * 31 * t + 1))); }
+    return tanhDrive(normalize(edges(x, ms(5), ms(30))), 1.5);
+  };
+  fx("st drone and growl", ST.in, "cue-st-in .. cue-st-cut-2", -15, drone(ST.in, ST.cut2, "st"), { ...lcb, send: 0.25, pan: 0.3, kind: "swell" });
+  // the music box, running down over the shot
+  {
+    const tine = (f: number, lenS: number) => {
+      const x = osc(len(lenS), "tri", K(f), ad(0.002, 0.35));
+      mix(x, osc(len(lenS), "sine", K(f * 4.03), ad(0.001, 0.06)), 0, 0.35);
+      return edges(biquad(x, "lp", 7000), ms(1), ms(30));
+    };
+    const motif = ["D6", "A5", "F6", "E6", "D6", "A5", "C6", "A5"];
+    let k = 0;
+    for (let t = ST.in; t < ST.thwip; t += 96, k++) {
+      const u = (t - ST.in) / (ST.thwip - ST.in);
+      put(LCB, S(t), tine(hz(motif[k % 8]) * cents(-150 * u), 0.6), REF * db(-22 - 3 * u), k % 2 ? 0.35 : -0.35, [[sendLc, 0.45]]);
+    }
+    cue("st music box (running down)", ST.in, "cue-st-in", -22, "music");
+  }
+  {
+    const a = ST.windup, n = S(ST.slam - a);
+    fx("st windup strings", a, "cue-st-windup", -21, edges(stringCluster(r("st strings"), n, (t) => Math.min(1, t / T(ST.thwip - a)) ** 2), ms(20), ms(10)), { ...lcb, send: 0.35, kind: "swell" });
+  }
+  fx("st THWIP", ST.thwip, "cue-st-thwip", -10, webThwip(r("st thwip")), { pan: -0.6 });
+  // the strand tugs at the card (three pulls on the web), then the yank, over the cue's length
+  [0, 16, 32].forEach((d, k) => fx(`st tug ${k + 1}`, ST.tug + d, "cue-st-tug", -20 - 2 * k, webTug(r(`st tug ${k}`)), { pan: -0.3, quiet: k > 0 }));
+  fx("st yank", ST.yank, "cue-st-yank", -14, whoosh(r("st yank"), ST.yank, ST.yank + ST.pull / 2, ST.yank + ST.pull, 500, 3500, 900), { kind: "swell", pan: (i) => lerp(0, -0.8, i / S(ST.pull)) });
+  {
+    const x = buf(len(0.6));
+    mix(x, normalize(punch(r("st slam punch"))));
+    mix(x, normalize(snareCrack(r("st slam crack"), { tau: 0.05 })), 0, 0.7);
+    mix(x, normalize(ratchet(r("st slam latch"), 0.7, true)), 0, 0.6);
+    fx("st SLAM", ST.slam, "cue-st-slam", -4, x, { ...hit, send: 0.3 });
+    fx("st SLAM sub", ST.slam, "cue-st-slam", -8, subBoom({}), { ...lcb, send: 0.15 });
+    fx("st SLAM brass", ST.slam, "cue-st-slam", -8, boomBrass(r("st slam brass"), 0.12), { ...lcb, send: 0.15 });
+    booms.push(ST.slam);
+  }
+  {
+    const n = S(ST.cut2 - ST.confused), x = biquad(biquad(noise(n, r("st flutter"), K(1)), "hp", 2000), "lp", 6000);
+    for (let i = 0; i < n; i++) x[i] *= 0.5 + 0.5 * Math.sin((TAU * 18 * i) / SR);
+    fx("st pages flutter", ST.confused, "cue-st-confused", -24, edges(x, ms(10), ms(10)), { ...lcb, kind: "swell" });
+  }
+  shadesGlint("st", "st.ham-shades", -10, { gold: true });
+  fx("st D-major blip chord", ST.c1, "cap-st.c1", -14, chordStab(["D5", "F#5", "A5", "D6"], 0.125, { tau: 0.2, dur: 0.8 }), { send: 0.25 });
+  // the cut to the eyes rings for 16 ticks, then nothing until the line
+  fx("st cut 3", ST.cut3, "cue-st-cut-3", -10, subBoom({ soft: true, dur: 0.4, tau: 0.08 }), { ...lcb });
+  {
+    const x = buf(len(1.2));
+    [["D5", 0, 0.16], ["A4", 0.2, 0.16], ["D5", 0.4, 0.5]].forEach(([note, t0, l]) => mix(x, lead(note as string, l as number, { vibrato: false }), len(t0 as number)));
+    fx("st ...NEVER MIND. tag", ST.never, "cap-st.nm", -12, x, { ...lcb, send: 0.3 });
+    fx("st bell toll", ST.never, "cap-st.nm", -10, bell(r("st bell")), { ...lcb, send: 0.35 });
+  }
 }
 
 // =========================================================================================
@@ -1651,6 +2243,8 @@ function automate(b: Bus, points: Array<[number, number]>) {
   }
 }
 automate(CHECKM, [[BEAT.check, -6], [SS.peak, 0]]);
+// The ask-why section fades out under its drain into the never-lost card.
+for (const ch of [ASKB.L, ASKB.R]) for (let i = S(AW.drain); i < N; i++) ch[i] *= i < S(BEAT.never) ? 1 - (i - S(AW.drain)) / (S(BEAT.never) - S(AW.drain)) : 0;
 // The bass ducks 3 dB for 200 ms under every boom, so the sub and the bass never stack.
 const bassDuck = buf(N).fill(1);
 for (const t of booms) {
@@ -1660,7 +2254,7 @@ for (const t of booms) {
     bassDuck[i] = Math.min(bassDuck[i], db(-3 * Math.max(0, Math.min(1, d))));
   }
 }
-for (const ch of ["L", "R"] as const) for (let i = 0; i < N; i++) MUSIC[ch][i] += BASS[ch][i] * bassDuck[i] + PROBLEM[ch][i] + HIW[ch][i] + CHECKM[ch][i];
+for (const ch of ["L", "R"] as const) for (let i = 0; i < N; i++) MUSIC[ch][i] += BASS[ch][i] * bassDuck[i] + PROBLEM[ch][i] + HIW[ch][i] + CHECKM[ch][i] + ASKB[ch][i];
 // The music's reverb return, then the rewind splice: from the strand the MUSIC bus plays
 // backwards, speeding up from -1x to -4x, a low-pass opening 1.5 -> 8 kHz; forward
 // playback resumes on the user line.
@@ -1698,6 +2292,7 @@ for (const ch of ["L", "R"] as const) for (let i = 0; i < N; i++) MUSIC[ch][i] +
 // take the deepest; 5 ms attack, the given hold and release.
 type Duck = [number, number, number, number]; // from tick, to tick (hold end), depth dB, release ms
 const ducks: Duck[] = [
+  [LC.open, LC.shut, -8, 300], // the music box runs down under the Summarizer
   [SW.title, SW.title + 0.12 * TICKS_PER_SECOND, -4, 400],
   ...MW.locks.map(({ tick }): Duck => [tick, tick + 0.25 * TICKS_PER_SECOND, -3, 200]),
   [MW.renders[0], MW.renders[4] + 16, -2, 150],
@@ -1716,6 +2311,15 @@ const ducks: Duck[] = [
   [SS.catch, SS.catch + 24, -4, 300],
   [CR.wipe, CR.wipe + 48, -2, 200],
   [CR.thwip, CR.thwip + 24, -2, 200],
+  ...DE.comps.map((t): Duck => [t, t + 0.3 * TICKS_PER_SECOND, -6, 150]), // each compaction pulls the music down
+  [DE.type1[0], DE.type2[DE.type2.length - 1] + 8, -2, 150],
+  [DE.typeL[0], DE.typeL[DE.typeL.length - 1] + 8, -2, 150],
+  [DE.c3, DE.c3 + 24, -4, 300],
+  [AW.call[0], AW.call[AW.call.length - 1] + 8, -2, 150],
+  [AW.c2, AW.c2 + 24, -3, 300],
+  [OV.keys[0], OV.keys[OV.keys.length - 1] + 8, -2, 150],
+  [CF.catch, CF.catch + 24, -3, 200],
+  ...CF.workers.map((t): Duck => [t, t + 24, -2, 150]),
 ];
 {
   const g = buf(N);
@@ -1729,59 +2333,32 @@ const ducks: Duck[] = [
   }
   for (let i = 0; i < N; i++) { const k = db(g[i]); MUSIC.L[i] *= k; MUSIC.R[i] *= k; }
 }
-// The CARD bus: the drone (ducked under the hits) plus the hits and their reverb, crushed by
-// the pixelation's cell size as the type forgets, stuttered, then a hard stop.
+// The LCB bus: the bell, drone, booms and their reverb, crushed and sample-held by the
+// Summarizer's pixelation cell size from the slam (its keys hold, so the crush steps with the
+// frames), then faded out by the stage's end.
 {
-  const gd = (i: number) => {
-    let v = 0;
-    for (const t of [CD.l1, CD.l2, CD.l3]) {
-      const u = i - S(t);
-      if (u >= 0) v = Math.min(v, u < ms(100) ? -3 : -3 * Math.exp(-(u - ms(100)) / ms(100)));
-    }
-    return db(v);
-  };
-  for (let i = 0; i < N; i++) { const k = gd(i); CARD.L[i] += CARD_DRONE.L[i] * k; CARD.R[i] += CARD_DRONE.R[i] * k; }
-  const verb = fdn(sendCard, 1.5, [2053, 2591, 3271, 3989]);
-  for (let i = 0; i < N; i++) { CARD.L[i] += verb.L[i] * db(-10) * 2; CARD.R[i] += verb.R[i] * db(-10) * 2; }
-  // the cell size the picture shows (its keys hold, so the crush steps with the frames)
-  const pixelTrack = keys("cd.pixelate", "parameters.0.value");
-  const cell = (tick: number) => sampleTrack(pixelTrack, tick);
-  const a = S(PIXEL_ON), stop = S(CD.stop), x = ms(5);
-  // the stutter starts on the first key at twice the first grown cell size, replaying the frame before it
-  const stutterFrom = must(PIXEL_KEYS.find(([, v]) => v >= 2 * PIXEL_KEYS[1][1]), "cd.pixelate: a key at twice the first grown cell size")[0];
-  expect(range(0, Math.ceil((CD.stop - stutterFrom) / FRAME)), 4, "card stutter slices");
-  for (const ch of [CARD.L, CARD.R]) {
-    const wet = buf(stop - a + 1);
+  const verb = fdn(sendLc, 1.5, [2053, 2591, 3271, 3989]);
+  for (let i = 0; i < N; i++) { LCB.L[i] += verb.L[i] * db(-10) * 2; LCB.R[i] += verb.R[i] * db(-10) * 2; }
+  const a = S(LC.shut), stop = S(LC.stop), x = ms(5);
+  if (sampleTrack(LC.cell, LC.shut) !== 1 || sampleTrack(LC.cell, LC.gone) < 32) throw new Error("lc.villain-fx: expected cell size 1 at the slam and 32+ by the end of the dissolve");
+  for (const ch of [LCB.L, LCB.R]) {
+    const wet = buf(stop - a);
     let held = 0, count = 0;
     for (let i = a; i < stop; i++) {
-      const c = cell(i / SAMPLES_PER_TICK), k = Math.max(1, Math.round(c)), q = 2 ** (Math.max(4, 16 - 2.5 * Math.log2(c)) - 1);
+      const c = sampleTrack(LC.cell, i / SAMPLES_PER_TICK), k = Math.max(1, Math.round(c / 2)), q = 2 ** (Math.max(3, 14 - 2.5 * Math.log2(c)) - 1);
       if (count <= 0) { held = ch[i]; count = k; }
       count--;
-      wet[i - a] = Math.round(held * q / REF) / q * REF;
+      wet[i - a] = Math.round((held * q) / REF) / q * REF;
     }
     biquad(wet, "lp", 6000);
-    for (let i = a; i < stop; i++) { const u = Math.min(1, (i - a) / x); ch[i] = ch[i] * (1 - u) + wet[i - a] * u; }
-    // the stutter: the slice before `stutterFrom`, replayed each frame, quieter and crunchier
-    const slice = ch.slice(S(stutterFrom - FRAME), S(stutterFrom));
-    for (let k = 0; S(stutterFrom + FRAME * k) < stop; k++) {
-      const s = Float64Array.from(slice);
-      sampleHold(s, 2 ** (k + 1));
-      const q = 2 ** (Math.max(4, 8 - k) - 1);
-      for (let i = 0; i < s.length; i++) s[i] = Math.round((s[i] / REF) * q) / q * REF;
-      biquad(s, "lp", Math.max(1500, 6000 - 1000 * k));
-      edges(s, ms(1), ms(1));
-      const at0 = S(stutterFrom + FRAME * k);
-      // the background drops to a quarter, ramped over 1 ms on the first slice (later ones start from it)
-      for (let i = 0; i < s.length && at0 + i < stop; i++) {
-        const bg = k === 0 && i < ms(1) ? lerp(1, 0.25, i / ms(1)) : 0.25;
-        ch[at0 + i] = s[i] * db(-3 * (k + 1)) + ch[at0 + i] * bg;
-      }
+    const fadeFrom = S(LC.gone), fadeTo = stop;
+    for (let i = a; i < stop; i++) {
+      const u = Math.min(1, (i - a) / x), g = i < fadeFrom ? 1 : Math.max(0, 1 - (i - fadeFrom) / (fadeTo - fadeFrom));
+      ch[i] = (ch[i] * (1 - u) + wet[i - a] * u) * g;
     }
-    for (let i = stop - x; i < stop; i++) ch[i] *= (stop - i) / x;
-    for (let i = stop; i < N; i++) ch[i] = 0;
+    for (let i = stop; i < S(BEAT.sting); i++) ch[i] = 0; // (the post-credits sting plays on this bus again)
   }
-  cue("GLITCH (card bus crushed)", PIXEL_ON, "cd.pixelate", null, "swell");
-  for (let k = 0; S(stutterFrom + FRAME * k) < S(CD.stop); k++) cue(`glitch stutter ${k}`, stutterFrom + FRAME * k, "cd.pixelate", null);
+  cue("DISSOLVE (LCB bus crushed)", LC.shut, "lc.villain-fx cellSize", null, "swell");
 }
 // The SFX and HITS reverbs.
 const sfxVerb = fdn(sendSfx, 1.4, [1499, 1889, 2381, 2909]);
@@ -1794,13 +2371,13 @@ const L = buf(N), R = buf(N);
 const sfxL = buf(N), sfxR = buf(N);
 for (let i = 0; i < N; i++) {
   const vl = db(-16) * 2 * (sfxVerb.L[i] + longVerb.L[i]), vr = db(-16) * 2 * (sfxVerb.R[i] + longVerb.R[i]);
-  sfxL[i] = SFX.L[i] + HITS.L[i] + CARD.L[i] + vl;
-  sfxR[i] = SFX.R[i] + HITS.R[i] + CARD.R[i] + vr;
+  sfxL[i] = SFX.L[i] + HITS.L[i] + LCB.L[i] + vl;
+  sfxR[i] = SFX.R[i] + HITS.R[i] + LCB.R[i] + vr;
   L[i] = MUSIC.L[i] + sfxL[i];
   R[i] = MUSIC.R[i] + sfxR[i];
 }
-// The 33 ms breath before the problem is digital silence.
-const silences: Win[] = [[CD.stop, PB.drop]];
+// The 33 ms breath before the problem, a frame at the sting's cut and its breath before "...NEVER MIND." are digital silence.
+const silences: Win[] = [LC_SILENCE, [LC.stop, PB.drop], [BEAT.sting, BEAT.sting + FRAME], ST_SILENCE];
 
 // --- Loudness (ITU-R BS.1770-4) ---------------------------------------------------------------
 const KW1 = { b: [1.53512485958697, -2.69169618940638, 1.19839281085285], a: [1, -1.69065929318241, 0.73248077421585] };
@@ -1911,7 +2488,8 @@ for (const x of [L, R]) { biquad(x, "hp", 25); biquad(biquad(x, "lp", 16000), "l
 const pre = db(-18.5 - integrated(L, R));
 for (let i = 0; i < N; i++) { L[i] *= pre; R[i] *= pre; }
 const glueGr = glue(L, R);
-const CEIL_DB = -1.5, CEIL = db(CEIL_DB);
+// (-1.7, not -1.5: the AAC encode overshoots by about half a dB, and X wants -1.0 or lower)
+const CEIL_DB = -1.7, CEIL = db(CEIL_DB);
 let gainTotal = pre, limGr = 0, I = integrated(L, R);
 const preLimit = { L: Float64Array.from(L), R: Float64Array.from(R) };
 let passes = 0;
@@ -1988,13 +2566,17 @@ if (REPORT) {
     return -0.691 + 10 * Math.log10(sel.reduce((s2, p) => s2 + p, 0) / sel.length) - I;
   };
   // The arc each section is mixed to (LU vs I); "!" marks a miss. The title, the "Never
-  // lost." hit, the build and the transformation are the peaks; the card and the problem
+  // lost." hit, the build and the transformation are the peaks; the Latent Configuration and the problem
   // sit under them, and the coda decays.
+  // (Re-derived for the 97 s cut: the new beats sit just under the explainer beats they join,
+  // so every older section reads about half a LU higher against I than in the 53 s cut.)
   const sections: Array<[string, number, number, [number, number] | null]> = [
-    ["poster", BEAT.poster, BEAT.card, [-12, -8]], ["card", BEAT.card, CD.stop, [-6, -2]], ["problem", BEAT.problem, PB.blur[1], [-8, -3]], ["title", SW.title, BEAT.hiw, [1, 3.5]],
-    ["how it works", BEAT.hiw, BEAT.recall, [-1, 1]], ["recall", BEAT.recall, RC.drain, [-5, -1]], ["nl between hits", NL.a1 + 48, NL.q2, [-8, -5]], ["nl hit a2", NL.a2, NL.a2 + 120, [0, 2]],
-    ["build", BUILD_START, NL.whip, [-1, 2]], ["install typing", NL.whipEnd, SU.enters[0], [-4, -1]], ["transformation", SU.shoot, SU.shades[12] + 48, [1, 2]],
-    ["check", BEAT.check, SS.peak, [-6, -1]], ["end", BEAT.end, CR.lockup, [-1, 1]], ["coda", CR.lockup, D - 48, null],
+    ["poster", BEAT.poster, BEAT.lc, [-12, -8]], ["box (twists, to the cut)", BEAT.lc, LC.cut1, [-10, -5]], ["summarizer", LC.open, LC.shut, [-5, -0.5]], ["slam, dissolve", LC.shut, LC.stop, [-10, -1.5]], ["problem", BEAT.problem, PB.blur[1], [-8, -2.5]], ["title", SW.title, BEAT.demo, [1, 4]],
+    ["demo", BEAT.demo, BEAT.demoSplit, [-3, 0]], ["demo split", BEAT.demoSplit, BEAT.hiw, [-1, 2]],
+    ["how it works", BEAT.hiw, BEAT.recall, [-1, 2]], ["recall", BEAT.recall, RC.drain, [-5, -0.5]], ["ask", BEAT.ask, BEAT.never, [-3, 0]], ["nl between hits", NL.a1 + 48, NL.q2, [-8, -4.5]], ["nl hit a2", NL.a2, NL.a2 + 120, [0, 2.5]],
+    ["build", BUILD_START, NL.whip, [-1, 2.5]], ["install typing", NL.whipEnd, SU.enters[0], [-4, -0.5]], ["transformation", SU.shoot, SU.shades[12] + 48, [1, 2.5]],
+    ["check", BEAT.check, SS.peak, [-6, -0.5]], ["view", BEAT.view, BEAT.cfg, [-3, 0]], ["cfg", BEAT.cfg, BEAT.cfgIdle, [-3, 0]], ["cfg idle", BEAT.cfgIdle, BEAT.end, [-3, 0]],
+    ["end", BEAT.end, CR.lockup, [-1, 2]], ["coda", CR.lockup, BEAT.sting, null], ["sting", BEAT.sting, D - 48, [-6, -2]],
   ];
   for (const c of cues.filter((c) => (c.level ?? -99) >= -8 && c.kind !== "swell")) {
     let m = 1, where = c.tick;

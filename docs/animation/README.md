@@ -16,8 +16,8 @@ The README's animated scenes are [Clayzo](https://www.npmjs.com/package/clayzo) 
 | `sprite.ts` | Spider-Ham, PiG's default pig and the `PiG.` wordmark pixels and colors, copied from PiG's sprite catalogue (MIT). |
 | `lib.ts` | Shared helpers: transforms, keyframe tracks, pixel art to paths, the card every scene sits on, webs, text. |
 | `make.ts` | Builds, checks and exports every scene; lists each scene's title and reduced-motion still. |
-| `trailer.ts` | A 49 s, 1920×1080 trailer for posting (Spider-Ham in wraparound shades, trailer only): reads the built scenes from `out/`, merges five of them at 1.5× between title cards, and writes `out/trailer.json`. |
-| `sound.ts` | The trailer's soundtrack: an original 8-bit hero theme with trailer sound design, synthesized from code (no samples) and synced to the markers in `out/trailer.json`; writes `out/trailer-sound.wav` at -14 LUFS, which `npm run trailer` muxes into the MP4 as AAC. |
+| `trailer.ts` | A 97 s, 1920×1080 trailer for posting (Spider-Ham in wraparound shades, trailer only), opening on a horror-trailer parody shot like a film (letterboxed, graded, hard cuts to black: a golden puzzle cube, the Latent Configuration, summons the Summarizer) and closing on a post-credits sting in which he returns and is foiled. Between them it tells one session two ways (a summary of a summary re-proposes what you rejected; observational memory keeps the decision), the agent recalling why by id, `/om:view` and the worker model settings, in pixel terminals: reads the built scenes from `out/`, merges five of them at 1.5× between title cards, and writes `out/trailer.json`. |
+| `sound.ts` | The trailer's soundtrack: an original 8-bit hero theme with trailer sound design, synthesized from code (no samples) and synced to the markers in `out/trailer.json`; writes `out/trailer-sound.wav` at -14 LUFS, which `npm run trailer` muxes into the MP4 as AAC-LC. |
 | `finish-svg.ts` | Adds a title, and a reduced-motion rule that holds one still frame, to an exported SVG. |
 | `fonts/` | Manrope, which the Clayzo CLI bundles (SIL Open Font License, `fonts/OFL.txt`). |
 
@@ -31,10 +31,15 @@ npm ci
 npx clayzo login        # once per machine; CI uses a CLAYZO_TOKEN from `clayzo token create`
 npm run check           # a sample sheet and a loop-seam check per scene in out/
 npm run export          # writes ../assets/<scene>.svg and banner.gif
-npm run trailer         # writes out/trailer.mp4 with sound (not committed); about half an hour on 4 CPUs
+npm run trailer         # writes out/trailer.mp4 with sound (not committed); about 11 minutes on 4 CPUs
+npm run trailer -- --master   # the same at twice the render size, downsampled; about four times as long
 ```
 
-The trailer's encoder writes untagged BT.601 video, so `npm run trailer` tags its colours with a system `ffmpeg` (the bundled one cannot); without one it warns, and players shift the reds and cyans.
+`npm run trailer` exports the video one beat at a time (the `beat-*` markers in `out/trailer.json`) into a cache, `out/segments/<key>.mp4`, two beats at once. A segment's key hashes everything its pixels can depend on: the export settings, the Clayzo, CanvasKit and ffmpeg versions, the canvas, timing and composition structure, the assets it draws (by content) and every root node drawn during it with everything that node references. Only beats whose drawing changed export again: after a change to one beat it takes about one to two minutes, and after a change that draws nothing (the soundtrack, say) about 50 seconds, most of it `sound.ts`. The segments are joined without re-encoding (each starts on an IDR frame), and in the same pass the video's colours are tagged and the WAV is encoded as AAC-LC; then the decoded audio's loudness and true peak are checked. That step needs a system `ffmpeg` and `ffprobe` (the bundled ffmpeg has neither the concat demuxer nor `h264_metadata`), and it fails if the soundtrack is missing. `rm -rf out/segments` empties the cache.
+
+The default renders at the output size. At twice the size (`--master`) the thinnest rotated lines, such as web strands and the cube's engravings, are a little smoother; text, the pixel art and the gold cube look the same at 1080p after encoding.
+
+The Latent Configuration beat is built to export at about the cost of the rest: the CPU renderer pays for every effect, blend mode and gradient over the whole frame, so its film look is prebuilt grain-and-vignette images (`out/lc-film-*.png`, written by `trailer.ts`) and one colour matrix, its glows are soft shapes, and nothing is drawn under its black cards.
 
 Behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` so the CLI's requests use it.
 
