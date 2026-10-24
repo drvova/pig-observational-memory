@@ -99,14 +99,11 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		for _, reflection := range memory.Reflections {
 			priorReflections = append(priorReflections, ledger.ReflectionToSummaryLine(reflection))
 		}
-		priorObservations := make([]string, 0, len(memory.Observations))
-		for _, observation := range memory.Observations {
-			priorObservations = append(priorObservations, ledger.ObservationToObserverLine(observation))
-		}
+		priorObservations := memory.ObserverLines()
 		used := current
 		outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, current, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
 			used = worker
-			return runObserver(ctx, observerArgs(ctx, cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
+			return runObserver(ctx, observerArgs(ctx, cfg, h, worker, priorReflections, priorObservations, memory.Subjects, serialized.Text, serialized.SourceEntryIDs))
 		})
 		if resolver.fallbackActive != nil && !current.FallbackUsed {
 			// Later chunks go straight to the fallback that worked, sized by its own
@@ -144,7 +141,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			// The same remedies as the background stage, with the same constraint: they act
 			// only on a chunk that recorded something, and keep-head only inside the coverage
 			// boundary, so the marker appended below stays a positional claim.
-			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, known: fullMemory.Observations}
+			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations}
 			observations, pass = applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 			data = ledger.BuildObservationsRecordedData(observations, coversUpToID)
 		}

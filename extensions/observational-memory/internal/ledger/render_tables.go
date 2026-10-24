@@ -184,9 +184,12 @@ func newTablesLayout(reflections []Reflection, observations []Observation, optio
 		}
 	}
 	plainFields := plainNoteFields
+	// Notes group under their canonical subject over every record of the memory, shown or
+	// not, so selection never changes which table a record is in.
+	canonical := ObservationSubjects(observations)
 	l.groups = make([]string, len(observations))
 	for i, observation := range observations {
-		l.groups[i] = SubjectTableName(observation.Subject)
+		l.groups[i] = SubjectTableName(canonical[observation.Subject].Subject)
 		if l.groups[i] == "" {
 			l.groups[i] = notesTable
 			if len(supersededBy[observation.ID]) > 0 {
@@ -209,7 +212,8 @@ func newTablesLayout(reflections []Reflection, observations []Observation, optio
 			}
 		} else {
 			l.fields[l.groups[i]] = subjectNoteFields
-			cells = []string{observation.ID, recordDate(observation.Timestamp), string(observation.Kind), observation.Scope, content, replacedBy}
+			scope := CanonicalScope(observation.Scope, canonical[observation.Subject])
+			cells = []string{observation.ID, recordDate(observation.Timestamp), string(observation.Kind), scope, content, replacedBy}
 		}
 		l.rows[i], l.absent[i] = cells, absentEmpty(cells)
 		if _, ok := l.headers[l.groups[i]]; !ok {

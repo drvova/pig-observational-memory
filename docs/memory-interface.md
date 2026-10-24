@@ -65,7 +65,7 @@ records interoperate and replays stay comparable.
 | Field | Meaning |
 |---|---|
 | `kind` | `fact`, `event`, `preference`, `plan`, `correction` or `assistant` (something the assistant produced: a list, a recommendation, a number, a name) |
-| `subject` | a short lowercase noun phrase grouping related records (`baking`, `gaming hours`, `online courses`) |
+| `subject` | a short lowercase noun phrase grouping related records (`baking`, `gaming hours`, `online courses`); views read it canonicalized (below) |
 | `scope` | the qualifier that tells two figures apart (`hard difficulty`, `on edX`); two records with different scopes never replace each other |
 | `supersedes` | ids of earlier records this one replaces; set only when the user explicitly corrects or replaces a fact; empty means it adds |
 
@@ -74,6 +74,33 @@ single `rows` string holding a table in the active codec with the same columns, 
 better than nested JSON. Both go through the same validation. A `supersedes` id must be a
 known observation id; unknown ids are dropped. Relative dates are never asked of the model:
 the renderer resolves them (section 3).
+
+**Canonical subjects.** Observers name one topic several ways (`running`, `running gear`,
+`running shoes`), so every view that groups or queries notes by subject reads the canonical
+subject, computed by the kernel over the subjects present (`ledger.CanonicalSubjects`) and
+never stored: records keep what the observer wrote. A subject is read as the set of its words
+(`ledger.SubjectKey`): lowercase, any character other than a letter, a digit or one of
+`' + # &` separates words (so `c++`, `c#` and `r&d` stay one word and differ from `c` and `r`),
+edge apostrophes are trimmed and a possessive `'s` is dropped (`user's dog` is `user dog`). A
+plural folds into a singular only when that singular is a word of some subject present, by
+suffix (`ies` to `y`, `ses` to `sis`, `es` after s, x, z, ch or sh, else a bare `s` leaving at
+least four letters): `shoes` matches `shoe` only when a subject says `shoe`, and `news` never
+matches `new`. Subjects with one word set are one subject, whatever their order, repetition,
+case or punctuation (`marathon training` and `training marathon`), spelled as the
+lexicographically smallest. A subject whose word set contains every word of a smaller present
+set groups under the smallest such set (fewest words, then the smallest key), and the words it
+adds become extra scope. It is containment, not similarity: there is no threshold to tune,
+the result depends only on the set of subjects, and canonical subjects map to themselves.
+`half marathon training` does not contain `running` and stays its own subject. Because the
+result depends on the set, a note's canonical subject changes when a shorter subject it
+contains first appears (`running shoes` moves to `running`). The observer's prompt shows each
+prior note with its canonical subject (the extra scope after the stored scope) and lists, within
+at most an eighth of its worker-memory budget, the canonical subjects with their note counts
+that the notes shown do not already make plain (two notes or more, or none shown), most used
+first; the kernel's observer rules ask it to reuse a subject that fits and put the qualifier in
+scope. The names `subject-key`, `canonical-subjects`, `raw_subject` and `subject_scope` are
+kernel-owned (`kernel.OwnerSubjects`), so no definition replaces the canonicalization or
+shadows its fields.
 
 ## 3. The memory view (compaction summary)
 
@@ -91,8 +118,11 @@ omitted[K]{from,to,count,first_id}:
   ...
 ```
 
-- Records with a subject are grouped into `notes.<subject>` tables, each chronological, the
-  groups ordered by their newest record. Records without a subject (all records written
+- Records with a subject are grouped into `notes.<subject>` tables by canonical subject
+  (section 2), computed over every record of the memory so selection never moves a record,
+  each chronological, the groups ordered by their newest record. A record whose subject
+  nests under another shows what its subject adds after its scope (`trail; shoes`). With no
+  nesting the layout is byte for byte what it was. Records without a subject (all records written
   before this change) go in one chronological `notes` table.
 - `when` is the record's date; a relative phrase in the content (`last Tuesday`, `two weeks
   ago`, `yesterday`) is resolved by code against the record's cited source timestamp and
@@ -144,7 +174,15 @@ feedback name=prefers-tabs outcome=helped quote="tabs please, like last time"
 define bake-count = notes | where subject=baking | count "How many times the user baked"
 ```
 
-- Sources: `notes` (active observations), `reflections`, `history` (raw user and assistant
+- Sources: `notes` (active observations; `subject` is the canonical subject of section 2,
+  `scope` the scope as stored, `subject_scope` what the written subject adds to the canonical
+  one, and `raw_subject` what the observer wrote, so `where subject=running` finds `running
+  shoes` and summaries a model defines group the same way; `where subject=` and `subject~` also
+  match `raw_subject`, so a definition filtering on a written subject keeps its rows when a
+  shorter subject appears, while `group by subject` follows the canonical subject and its
+  table names move with it; a field a schema added as `raw_subject` or `subject_scope` before
+  the kernel took the name reads as `schema_raw_subject` or `schema_subject_scope`),
+  `reflections`, `history` (raw user and assistant
   text on the branch, the way nodecode's `recall-log` scans its log, without the calls and
   results of the memory tool and the defined tools), `saved` (curated
   memories), and `recall <id>` (one record with its source, as the old recall tool did).
@@ -262,7 +300,7 @@ it cannot change, after nodecode's kernel floor (`organism/evolve.lisp`), held r
 **The kernel** (Go code, never data): storage and the `om.*` record kinds; the compaction
 invariants (never discard unobserved entries, valid cut points, positional coverage markers,
 the fold boundary); the query engine and its bounds; the `memory` tool; the event ledger and the
-kernel events it counts; the room ceiling; the evaluator; and the text that states these rules
+kernel events it counts; the room ceiling; the evaluator; subject canonicalization (section 2); and the text that states these rules
 in every worker prompt. One ownership predicate, `kernel.Owns(kind, name)`, names it. A
 definition that would replace, shadow or disable a kernel-owned name is refused when it is
 made and again when it is loaded, with the same predicate; the refusal names the owner. The

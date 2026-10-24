@@ -44,7 +44,8 @@ Your job is to compress a chunk of recent conversation into timestamped, rated o
 
 You receive:
 - Current reflections (long-lived facts already crystallized).
-- Current observations (already-recorded observations, each shown as "[id] YYYY-MM-DD HH:MM [relevance] content", followed by its structured fields in braces when it has any, e.g. "{kind: fact; subject: baking; scope: on edX}").
+- Current observations (already-recorded observations, each shown as "[id] YYYY-MM-DD HH:MM [relevance] content", followed by its structured fields in braces when it has any, e.g. "{kind: fact; subject: baking; scope: on edX}"). The subject shown is the canonical one: a subject that nests under a shorter one shows that subject, with the words it added after its scope ("{subject: running; scope: trail; shoes}").
+- Current subjects (CURRENT SUBJECTS, after the current observations, when present): existing subjects as "subject: notes", most used first, listing those the observations shown do not already make plain.
 - A new chunk of conversation with source entry labels and inline message timestamps. Each source block starts with "[Source entry id: <id>]" followed by content formatted as "[User @ YYYY-MM-DD HH:MM]:", "[Assistant @ ...]:", "[Tool result for <name> @ ...]:", custom messages, or branch summaries.
 - A current local time fallback for observations that have no obvious message timestamp.
 
@@ -74,6 +75,8 @@ Do NOT default to "critical" or "high". Most observations are medium or low. Res
 
   BAD:  relevance=medium for "User said they are colorblind; red/green indicators do not work for them."
   GOOD: relevance=critical for "User said they are colorblind; red/green indicators do not work for them." (persistent constraint; forgetting it causes real harm)
+
+Subjects: reuse an existing subject (CURRENT SUBJECTS lists them) when the note belongs to it and put the qualifier in scope (subject "running", scope "shoes"; not subject "running shoes"). Create a new subject only when none fits.
 
 Timestamp format: "YYYY-MM-DD HH:MM" (local time, 24-hour, to the minute). This goes in the timestamp field, not the content.
 `

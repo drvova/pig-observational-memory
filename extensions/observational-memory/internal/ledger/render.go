@@ -32,15 +32,23 @@ func ObservationToSummaryLine(observation Observation) string {
 // schema added (Observation.Fields) by name. Empty fields are left out, and a
 // record without any renders exactly as its summary line.
 func ObservationToObserverLine(observation Observation) string {
+	return ObservationToCanonicalObserverLine(observation, Canonical{Subject: observation.Subject})
+}
+
+// ObservationToCanonicalObserverLine is ObservationToObserverLine with the observation's
+// subject read as canonical (CanonicalSubjects over the memory): the braces show
+// canonical.Subject, and what the written subject adds joins the scope (CanonicalScope), the
+// form the observer's CURRENT SUBJECTS list and every view use.
+func ObservationToCanonicalObserverLine(observation Observation, canonical Canonical) string {
 	var fields []string
 	if observation.Kind != "" {
 		fields = append(fields, "kind: "+string(observation.Kind))
 	}
-	if observation.Subject != "" {
-		fields = append(fields, "subject: "+observation.Subject)
+	if canonical.Subject != "" {
+		fields = append(fields, "subject: "+canonical.Subject)
 	}
-	if observation.Scope != "" {
-		fields = append(fields, "scope: "+observation.Scope)
+	if scope := CanonicalScope(observation.Scope, canonical); scope != "" {
+		fields = append(fields, "scope: "+scope)
 	}
 	if len(observation.Supersedes) > 0 {
 		fields = append(fields, "supersedes: "+strings.Join(observation.Supersedes, " "))

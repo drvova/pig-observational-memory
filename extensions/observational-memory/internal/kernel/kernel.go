@@ -1,7 +1,7 @@
 // Package kernel is the part of the memory the model cannot change (docs/memory-interface.md,
 // section 8), after nodecode's kernel floor: storage and the om.* record kinds, the compaction
 // invariants, the query engine and its bounds, the memory tool, the event ledger and the
-// kernel events it counts, the room ceiling, and the text that states these rules in every
+// kernel events it counts, the room ceiling, subject canonicalization, and the text that states these rules in every
 // worker prompt.
 //
 // One ownership predicate, Owns, names it, and Check applies it to a definition. Every path that
@@ -51,6 +51,7 @@ const (
 	OwnerInvariant   = "the compaction invariants (a setting or boundary)"
 	OwnerPromptRules = "the kernel's fixed worker-prompt rules"
 	OwnerNoteSchema  = "the note schema's kernel fields"
+	OwnerSubjects    = "the kernel's subject canonicalization"
 )
 
 // entry is one kernel-owned name. Kinds limits it to definitions of those kinds; none means
@@ -97,6 +98,12 @@ var invariantSettings = []string{
 // noteKernelFields are the fields every note carries that a schema definition only adds to.
 var noteKernelFields = []string{"id", "timestamp", "content", "sources", "sourceEntryIds", "relevance"}
 
+// subjectNames are the names of the subject canonicalization every view that groups or queries
+// notes by subject reads (ledger.SubjectCanonicalizationNames): the matching key, the
+// canonical grouping and the notes source's raw subject and subject scope fields. Owned for
+// every kind, so no definition, and no field a schema adds, can replace or shadow it.
+var subjectNames = []string{"subject-key", "canonical-subjects", "raw_subject", "subject_scope"}
+
 // owned is the kernel's list, built once from the groups above.
 var owned = func() []entry {
 	out := []entry{{name: MemoryToolName, owner: OwnerMemoryTool}}
@@ -119,6 +126,7 @@ var owned = func() []entry {
 	add(invariantSettings, OwnerInvariant)
 	add(TextIDs(), OwnerPromptRules)
 	add(noteKernelFields, OwnerNoteSchema, kindSchema)
+	add(subjectNames, OwnerSubjects)
 	return out
 }()
 

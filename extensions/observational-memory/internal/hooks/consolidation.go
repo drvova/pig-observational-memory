@@ -665,18 +665,20 @@ func workerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runt
 	}
 }
 
-// observerArgs are an observer run's arguments for worker: the chunk and prior memory, the
+// observerArgs are an observer run's arguments for worker: the chunk and prior memory (with the
+// memory's canonical subjects), the
 // worker model's harness profile (docs/memory-interface.md, section 6): the codec its rows
 // parameter uses, the long spec when the profile carries it, and every rows decode counted in
 // the model's usage ledger; and the note schema of its layer (section 8), the seed's when it
 // defined none.
-func observerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runtime.ResolveResult, priorReflections, priorObservations []string, chunk string, allowed []string) agents.ObserverArgs {
+func observerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runtime.ResolveResult, priorReflections, priorObservations []string, subjects []ledger.SubjectCount, chunk string, allowed []string) agents.ObserverArgs {
 	active := layerFor(ctx, h, cfg, worker.Model)
 	schema := active.Schema()
 	args := agents.ObserverArgs{
 		WorkerArgs:            workerArgs(ctx, cfg, h, worker, rules.StageObserver),
 		PriorReflections:      priorReflections,
 		PriorObservations:     priorObservations,
+		Subjects:              subjects,
 		Chunk:                 chunk,
 		AllowedSourceEntryIDs: allowed,
 		Schema:                &schema,
@@ -781,10 +783,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	for _, reflection := range memory.Reflections {
 		priorReflections = append(priorReflections, ledger.ReflectionToSummaryLine(reflection))
 	}
-	priorObservations := make([]string, 0, len(memory.Observations))
-	for _, observation := range memory.Observations {
-		priorObservations = append(priorObservations, ledger.ObservationToObserverLine(observation))
-	}
+	priorObservations := memory.ObserverLines()
 
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer running on ~%s-token chunk", jsfmt.Locale(serialized.EstimatedTokens)))
 	debuglog.Log(ctx, "observer.start", map[string]any{
@@ -802,7 +801,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	used := *resolved
 	outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, *resolved, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
 		used = worker
-		return runObserver(ctx, observerArgs(ctx, cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
+		return runObserver(ctx, observerArgs(ctx, cfg, h, worker, priorReflections, priorObservations, memory.Subjects, serialized.Text, serialized.SourceEntryIDs))
 	})
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {
@@ -857,7 +856,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		coversUpToID = cited
 		notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer stopped early (%s); coverage advances to the last cited entry", reason))
 	}
-	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, known: fullMemory.Observations}
+	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations}
 	observations, pass := applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 
 	data := ledger.BuildObservationsRecordedData(observations, coversUpToID)

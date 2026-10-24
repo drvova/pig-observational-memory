@@ -19,7 +19,7 @@ const Label = "Memory"
 const grammar = `Query and update memory with one query: a source followed by stages joined with |, or one write.
 
 Sources (fields):
-  notes            active observations from this session's memory (id,when,kind,subject,scope,relevance,content,superseded_by)
+  notes            active observations from this session's memory (id,when,kind,subject,scope,relevance,content,superseded_by,raw_subject,subject_scope); subject is canonical (related subjects grouped), subject_scope what the written subject adds, raw_subject as written; where subject= also matches raw_subject
   reflections      durable conclusions drawn from notes (id,dates,content,supports)
   history          raw user, assistant and tool text on this branch, including what compaction condensed (id,when,role,content)
   saved            long-lived memories from earlier sessions, and defined queries (name,type,scope,updated,description,body)

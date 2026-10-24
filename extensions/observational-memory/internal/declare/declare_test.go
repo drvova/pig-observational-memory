@@ -325,3 +325,23 @@ func TestSchemaFieldsAreReadBack(t *testing.T) {
 		t.Fatal("a field no schema can add was accepted")
 	}
 }
+
+// A summary the model defines reads the canonical subject too: its group by subject puts the
+// running notes in one table whatever the observer named them, and it may show subject_scope
+// and raw_subject.
+func TestDefinedSummaryGroupsCanonicalSubjects(t *testing.T) {
+	observations := []ledger.Observation{}
+	for i, subject := range []string{"running", "running gear", "running shoes", "half marathon training"} {
+		observations = append(observations, ledger.Observation{ID: fmt.Sprintf("%012x", i+1), Timestamp: "2026-05-02 10:30", Relevance: "low", Subject: subject, Content: "note about " + subject})
+	}
+	s, err := declare.ParseSummary("summary[1]{table,query,fields}:\n  facts,notes | group by subject,id subject scope subject_scope raw_subject content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.Render(nil, observations, 0, ledger.RenderOptions{})
+	for _, want := range []string{"facts.running[3]{id,subject,scope,subject_scope,raw_subject,content}:", "facts.half_marathon_training[1]", ",running,,gear,running gear,"} {
+		if !strings.Contains(got.Text, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got.Text)
+		}
+	}
+}

@@ -193,6 +193,9 @@ type relation struct {
 	clip map[string]bool
 	// matched is the row count before the last limit that cut rows, 0 when none did.
 	matched int
+	// also maps a field to another whose value where also matches (the notes source's
+	// subject to raw_subject), so a filter written against the stored value keeps matching.
+	also map[string]string
 }
 
 func (r *relation) fieldIndex(field string, pos int) (int, error) {
@@ -363,12 +366,28 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 				return nil, nil, nil, err
 			}
 			value := stage.Value
+			columns := []int{c}
+			if other, ok := rel.also[stage.Field]; ok {
+				if d, err := rel.fieldIndex(other, stage.fieldPos); err == nil {
+					columns = append(columns, d)
+				}
+			}
+			match := func(i int, test func(string) bool) bool {
+				for _, col := range columns {
+					if test(rel.rows[i][col]) {
+						return true
+					}
+				}
+				return false
+			}
 			if stage.Op == '~' {
 				words = append(words, strings.Fields(strings.ToLower(value))...)
 				needle := strings.ToLower(value)
-				rel.keep(func(i int) bool { return strings.Contains(strings.ToLower(rel.rows[i][c]), needle) })
+				rel.keep(func(i int) bool {
+					return match(i, func(v string) bool { return strings.Contains(strings.ToLower(v), needle) })
+				})
 			} else {
-				rel.keep(func(i int) bool { return strings.EqualFold(rel.rows[i][c], value) })
+				rel.keep(func(i int) bool { return match(i, func(v string) bool { return strings.EqualFold(v, value) }) })
 			}
 		case StageSince, StageUntil:
 			if rel.from == nil {

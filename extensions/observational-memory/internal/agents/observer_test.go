@@ -13,6 +13,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -640,5 +641,29 @@ func TestWorkerSendsOwnInstructionsAfterKernelRules(t *testing.T) {
 	i, j := strings.Index(system, "Record every figure"), strings.Index(system, "Cite assistant lists.")
 	if i < len(kernelText) || j < i {
 		t.Fatalf("instructions at %d, rule at %d", i, j)
+	}
+}
+
+// The observer's user message lists the memory's canonical subjects with their note counts
+// after the current observations, and its system prompt carries the kernel's rule to reuse
+// them; with no subjects the list is left out.
+func TestObserverPromptListsSubjects(t *testing.T) {
+	rec := &tf.StreamRecorder{}
+	args := observerArgs(rec, tf.Model("p", "m"))
+	args.Subjects = []ledger.SubjectCount{{Subject: "running", Count: 4}, {Subject: "fitness routine", Count: 1}}
+	_, _ = agents.RunObserver(context.Background(), args)
+	user := fmt.Sprint(rec.Requests[0]["messages"])
+	want := "CURRENT SUBJECTS (subject: notes, most used first):\nrunning: 4\nfitness routine: 1"
+	if !strings.Contains(user, want) || strings.Index(user, want) < strings.Index(user, "CURRENT OBSERVATIONS:") {
+		t.Fatalf("user message does not list the subjects after the observations:\n%s", user)
+	}
+	system, _ := rec.Requests[0]["systemPrompt"].(string)
+	if !strings.Contains(system, "reuse an existing subject") || !strings.Contains(system, "- Current subjects (CURRENT SUBJECTS") || !strings.Contains(kernel.Text(kernel.TextObserverRules), "Create a new subject only when none fits") {
+		t.Fatal("the kernel's subject rule is missing")
+	}
+	rec = &tf.StreamRecorder{}
+	_, _ = agents.RunObserver(context.Background(), observerArgs(rec, tf.Model("p", "m")))
+	if strings.Contains(fmt.Sprint(rec.Requests[0]["messages"]), "CURRENT SUBJECTS") {
+		t.Fatal("an empty subject list is shown")
 	}
 }

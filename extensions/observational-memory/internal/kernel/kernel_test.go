@@ -29,6 +29,7 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 			curated.OutcomeOK, curated.OutcomeError, curated.OutcomeEmpty, curated.OutcomeShown, curated.OutcomeOmitted, curated.OutcomeColumns},
 		kernel.OwnerInvariant:   {"compactAfterTokens", "compactionMaxRetainedTokens", "compactionSummaryMaxTokens", "compactionCatchUpMaxChunks", "kernelFloor"},
 		kernel.OwnerPromptRules: kernel.TextIDs(),
+		kernel.OwnerSubjects:    ledger.SubjectCanonicalizationNames,
 	}
 	for owner, names := range groups {
 		for _, name := range names {
@@ -116,6 +117,17 @@ func TestCheckRefusesKernelNamesInText(t *testing.T) {
 		r, ok := kernel.AsRefusal(err)
 		if !ok || r.Owner != c.owner {
 			t.Errorf("%s %s: %v; want a refusal naming %q", c.def.Kind, c.def.Name, err, c.owner)
+		}
+	}
+	// A schema cannot add a field shadowing the notes source's raw subject, and a summary
+	// cannot take the canonicalization's name.
+	for _, def := range []kernel.Def{
+		{Kind: layer.KindSchema, Name: "my-notes", Text: enc("fields", []string{"name"}, ledger.RawSubjectField)},
+		{Kind: layer.KindSummary, Name: ledger.CanonicalSubjectsName, Text: "notes | group by raw_subject"},
+		{Kind: layer.KindTool, Name: "Subject_Key", Text: enc("definition", []string{"name", "query"}, "Subject_Key", "notes")},
+	} {
+		if r, ok := kernel.AsRefusal(kernel.Check(def)); !ok || r.Owner != kernel.OwnerSubjects {
+			t.Errorf("%s %s: %v; want a refusal naming %q", def.Kind, def.Name, r, kernel.OwnerSubjects)
 		}
 	}
 	// A schema with fields of its own passes.

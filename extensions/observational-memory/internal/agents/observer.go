@@ -83,8 +83,12 @@ type ObserverArgs struct {
 	WorkerArgs
 	PriorReflections []string
 	// PriorObservations are "[id] ..." lines, ideally with their structured
-	// fields (ledger.ObservationToObserverLine).
-	PriorObservations     []string
+	// fields and canonical subject (ledger.WorkerMemorySlice.ObserverLines).
+	PriorObservations []string
+	// Subjects are the memory's canonical subjects with their note counts, most used first
+	// (ledger.WorkerMemorySlice.Subjects), listed so the observer reuses a subject instead of
+	// coining a variant. None leaves the prompt without the list.
+	Subjects              []ledger.SubjectCount
 	Chunk                 string
 	AllowedSourceEntryIDs []string
 	// Codec is the table format of the rows parameter; nil uses RowsCodec.
@@ -502,6 +506,19 @@ func clipForAck(content string) string {
 	return strings.TrimSpace(string(runes[:ackClipRunes])) + "…"
 }
 
+// subjectsSection is the observer prompt's list of the memory's canonical subjects with their
+// note counts, after the current observations, or "" when there are none.
+func subjectsSection(subjects []ledger.SubjectCount) string {
+	if len(subjects) == 0 {
+		return ""
+	}
+	lines := make([]string, len(subjects))
+	for i, s := range subjects {
+		lines[i] = s.Line()
+	}
+	return "\n\n" + ledger.SubjectsHeader + "\n" + strings.Join(lines, "\n")
+}
+
 // RunObserverDetailed is RunObserver with the run's completeness.
 func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult, error) {
 	conversation := strings.TrimSpace(args.Chunk)
@@ -629,7 +646,7 @@ CURRENT REFLECTIONS:
 ` + joinOrEmpty(args.PriorReflections) + `
 
 CURRENT OBSERVATIONS:
-` + joinOrEmpty(args.PriorObservations) + `
+` + joinOrEmpty(args.PriorObservations) + subjectsSection(args.Subjects) + `
 
 Compress the following new conversation chunk into observations by calling record_observations one or more times. Do not restate facts already present in current reflections or current observations. Prefer inline conversation timestamps when assigning times; fall back to the current local time above only if no message timestamp applies. Stop calling the tool and reply with a short plain-text confirmation once the chunk is fully covered.` + instruction + `
 

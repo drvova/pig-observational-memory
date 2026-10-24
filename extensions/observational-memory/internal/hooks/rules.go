@@ -325,6 +325,8 @@ type observerChunk struct {
 	branch                              []ledger.Entry
 	serialized                          serialize.SourceAddressedSerialization
 	priorReflections, priorObservations []string
+	// subjects are the canonical subjects the chunk's observer prompt listed.
+	subjects []ledger.SubjectCount
 	// known are the observations in memory before the chunk.
 	known []ledger.Observation
 }
@@ -367,10 +369,11 @@ func applyObserverRules(ctx context.Context, cfg config.Config, h host.Host, wor
 	if kind, ok := active.RequiredKind(); ok && !partial && ctx.Err() == nil {
 		if flagged := rules.UncitedAssistantSpecifics(covered, observations); len(flagged) > 0 {
 			prior := append([]string(nil), chunk.priorObservations...)
+			canonical := ledger.ObservationSubjects(append(append([]ledger.Observation(nil), chunk.known...), observations...))
 			for _, o := range observations {
-				prior = append(prior, ledger.ObservationToObserverLine(o))
+				prior = append(prior, ledger.ObservationToCanonicalObserverLine(o, canonical[o.Subject]))
 			}
-			args := observerArgs(ctx, cfg, h, worker, chunk.priorReflections, prior, chunk.serialized.Text, flagged)
+			args := observerArgs(ctx, cfg, h, worker, chunk.priorReflections, prior, chunk.subjects, chunk.serialized.Text, flagged)
 			args.Instruction = rules.RequireInstruction(kind, flagged)
 			again, err := runObserver(ctx, args)
 			debuglog.Log(ctx, "rules.require_kind", map[string]any{"flagged": flagged, "recorded": len(again.Observations), "failed": err != nil})

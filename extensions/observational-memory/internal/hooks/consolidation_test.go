@@ -1198,6 +1198,34 @@ func TestBoundedWorkerMemorySendsNewestPriorMemoryThatFits(t *testing.T) {
 	}
 }
 
+// The observer is given the memory's canonical subjects with their note counts: those its
+// prior observations do not already show (a subject whose single note is shown is left out).
+func TestObserverGetsCanonicalSubjects(t *testing.T) {
+	old := []ledger.Observation{}
+	for i, subject := range []string{"running", "running shoes", "running gear", "fitness routine"} {
+		id := fmt.Sprintf("a%d", i+1)
+		id += strings.Repeat("a", 12-len(id))
+		old = append(old, testfix.Observation(id, func(o *ledger.Observation) {
+			o.SourceEntryIDs = []string{"raw-1"}
+			o.Subject = subject
+		}))
+	}
+	entries := []ledger.Entry{text("raw-1", "a"), testfix.ObservationsRecordedEntry("om-obs", old, "raw-1"), text("raw-2", "dddddddd")}
+	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999})
+	fx.obs.resolve(agents.Observed([]ledger.Observation{observationWith("cccccccccccc", []string{"raw-2"}, 10)}))
+
+	fx.run()
+
+	got := fx.obs.call(0).Subjects
+	if want := []ledger.SubjectCount{{Subject: "running", Count: 3}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("subjects %+v, want %+v", got, want)
+	}
+	// The prior observations show the canonical subject, the written qualifier after the scope.
+	if prior := strings.Join(fx.obs.call(0).PriorObservations, "\n"); !strings.Contains(prior, "subject: running; scope: shoes}") || strings.Contains(prior, "subject: running shoes") {
+		t.Fatalf("prior observations:\n%s", prior)
+	}
+}
+
 // A session that ends mid-run abandons the run quietly (upstream issue #22).
 func TestSessionEndAbortsInFlightRunQuietly(t *testing.T) {
 	fx := consSetup(t, consArgs{entries: dueEntries(), reflectAfterTokens: 999})
