@@ -226,7 +226,7 @@ type Memory struct {
 func RenderMemory(entries []session.Entry, cfg config.Config, contextWindow int) Memory {
 	full := ledger.FullProjection(entries, "")
 	folded := ledger.FoldLedger(entries, "")
-	rendered := ledger.RenderSummaryWithBudget(full.Reflections, full.Observations, config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow))
+	rendered := ledger.RenderSummaryWithOptions(full.Reflections, full.Observations, config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow), ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(folded)})
 	frontier := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
 	tail := []session.Entry{}
 	for i := frontier + 1; i < len(entries); i++ {

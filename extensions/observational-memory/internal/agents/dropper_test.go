@@ -276,3 +276,20 @@ func TestDropperGatesOnWholePool(t *testing.T) {
 		t.Fatal("model called while the pool sits under target")
 	}
 }
+
+func TestPreserveSpecificsKeepsDetailsNoReflectionCarries(t *testing.T) {
+	observations := []ledger.Observation{
+		{ID: "o1", Content: "User asked how to organize a closet.", Relevance: "low"},
+		{ID: "o2", Content: "User keeps old sneakers under the bed at the Oak Street flat.", Relevance: "low"},
+		{ID: "o3", Content: "User bought boots for $500 last month.", Relevance: "medium"},
+		{ID: "o4", Content: "User paid $30 for a candle.", Relevance: "low"},
+	}
+	reflections := []ledger.Reflection{
+		{ID: "r1", Content: "User is decluttering their closet.", SupportingObservationIDs: []string{"o1", "o2"}},
+		{ID: "r2", Content: "User bought boots for $500 last month.", SupportingObservationIDs: []string{"o3"}},
+	}
+	remaining, kept := agents.PreserveSpecifics([]string{"o1", "o2", "o3", "o4", "unknown"}, observations, reflections)
+	if !reflect.DeepEqual(remaining, []string{"o1", "o3", "unknown"}) || !reflect.DeepEqual(kept, []string{"o2", "o4"}) {
+		t.Fatalf("remaining %v, kept %v: o2's street name and o4's price are carried by no citing reflection", remaining, kept)
+	}
+}

@@ -133,6 +133,41 @@ func SelectDropCandidates(proposed []string, observations []ledger.Observation, 
 	return ids
 }
 
+// DropFloorMaxFullness is the pool fullness (active tokens over target) up to
+// which PreserveSpecifics holds. Above it, memory pressure wins and the
+// selected drops go through unfiltered, so the pool cannot grow without bound.
+const DropFloorMaxFullness = 2.0
+
+// PreserveSpecifics removes from dropped every observation whose specifics
+// (numbers, relative dates, names; see ledger.Specifics) are not all carried by
+// a reflection that cites it. Dropping such an observation would delete the
+// detail outright, since no reflection holds it. The check is textual, not a
+// model judgment, so the same ledger always keeps the same observations.
+// It returns the drops that remain and the ids it kept.
+func PreserveSpecifics(dropped []string, observations []ledger.Observation, reflections []ledger.Reflection) ([]string, []string) {
+	byID := map[string]ledger.Observation{}
+	for _, observation := range observations {
+		byID[observation.ID] = observation
+	}
+	citing := map[string][]string{}
+	for _, reflection := range reflections {
+		for _, id := range reflection.SupportingObservationIDs {
+			citing[id] = append(citing[id], reflection.Content)
+		}
+	}
+	remaining := []string{}
+	kept := []string{}
+	for _, id := range dropped {
+		observation, ok := byID[id]
+		if ok && len(ledger.MissingSpecifics(observation.Content, citing[id])) > 0 {
+			kept = append(kept, id)
+			continue
+		}
+		remaining = append(remaining, id)
+	}
+	return remaining, kept
+}
+
 // RunDropper asks the model which observations are safe to remove and returns
 // the selected ids, nil when none, or a *StreamError when the call failed.
 func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
@@ -251,12 +286,18 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 		return nil, err
 	}
 	dropped := SelectDropCandidates(proposedIDs, args.Observations, maxDrops, args.Reflections)
+	var preserved []string
+	if metrics.Fullness <= DropFloorMaxFullness {
+		dropped, preserved = PreserveSpecifics(dropped, args.Observations, args.Reflections)
+	}
 	if len(dropped) == 0 && result.StreamError != nil {
 		return nil, result.StreamError
 	}
 	reason := "selected_nonempty"
 	switch {
 	case len(dropped) > 0:
+	case len(preserved) > 0:
+		reason = "all_preserved"
 	case toolCalls == 0:
 		reason = "no_tool_call"
 	case len(proposedIDs) == 0:
@@ -281,6 +322,7 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 		"selectedDropTokens":                 selectedTokens,
 		"selectedCoverageSummaryByRelevance": SummarizeCoverageByRelevanceForIDs(dropped, args.Observations, coverage),
 		"maxDropsAllowed":                    maxDrops,
+		"preservedForSpecificsCount":         len(preserved),
 	})
 	if len(dropped) == 0 {
 		return nil, nil

@@ -88,6 +88,8 @@ The dropper runs only as post-reflection maintenance: after the reflector record
 
 The dropper is shown the oldest active observations that fit `workerMemoryMaxTokens` and can only drop ids it was shown. It cannot rewrite or merge observations. Relevance is treated as importance/resistance rather than an absolute lock: `critical` observations are the highest-resistance candidates, but they can be dropped when the model judges that age, reflection coverage, supersession, redundancy, and semantic safety make removal from active memory safe. Its maximum drop count is computed from tokens over target converted to an approximate observation count, capped at the number of observations it was shown, and the model may drop fewer or none.
 
+Code then applies a preservation floor to the model's choices: an observation is kept active when it carries a specific (a number, a relative date phrase such as "two weeks ago", or a capitalized name) that no reflection citing it contains, since dropping it would delete that detail outright. The check is textual (`ledger.Specifics`), so the same ledger always keeps the same observations. The floor holds while the active pool is at most twice `observationsPoolTargetTokens`; above that, memory pressure wins and the model's drops apply unfiltered.
+
 ### Compaction hook
 
 The compaction hook runs during `session_before_compact`. When V3 memory exists, it renders the summary deterministically, without a summarization model:
@@ -95,7 +97,7 @@ The compaction hook runs during `session_before_compact`. When V3 memory exists,
 - it does not run the reflector or dropper;
 - it does not call a summarization model;
 - it does not wait for background memory workers;
-- it folds/projects ledger state and renders the summary within `compactionSummaryMaxTokens`;
+- it folds/projects ledger state and renders the summary within `compactionSummaryMaxTokens`: each reflection line carries the date or date range of the observations it cites, and when observations do not all fit, the newest quarter of their budget is filled first, then observations carrying specifics, then the rest, so an old line with a price, date or name outlasts newer generic ones;
 - it appends any `customInstructions` passed to the compaction after a `---` separator; they share the summary budget with the memory, which keeps at least half of it.
 
 When the observer has not reached Pi's proposed cut, observation coverage exists, and no background consolidation run is in flight, the hook first runs the observer synchronously on the gap, up to `compactionCatchUpMaxChunks` chunks (default `2`), retrying a failed chunk once on `fallbackModel` when one is configured. It appends `om.observations.recorded` for each chunk that records observations and re-resolves the cut. Unobserved source that remains is kept in context by moving `firstKeptEntryId` back (the kept source plus the summary must fit `compactionMaxRetainedTokens`), or the hook delegates.

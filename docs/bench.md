@@ -114,6 +114,16 @@ A question with a `result.json` is skipped on rerun. A question without one resu
 
 The extrapolation scales each sampled type's per-question mean by that type's count in the dataset. Wall time assumes the run's concurrency and the same endpoint latency.
 
+## Replaying a finished run
+
+`replay` rebuilds every finished question's memory from its saved `checkpoint.json` with the current code, without calling a model: the dropper's preservation floor is applied to the drops the model recorded, and the summary is rendered by the current renderer. It writes each new `actor-prompt.md` and `memory.json` under `-out`, plus `replay.json` with whether each prompt changed, the drops the floor kept, observations omitted from the summary before and after, and, for short gold answers, whether the answer text appears in the prompt before and after.
+
+```bash
+go run ./cmd/longmemeval replay -from ~/bench-runs/om-full -out ~/bench-runs/replay
+```
+
+Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts.
+
 ## Cost
 
 The smoke run used three stratified questions (`-sample 3 -stratified -seed 1`: one knowledge-update, one multi-session and one temporal-reasoning abstention question) with `deepseek-v4.1-flash-uncensored`. Each question used about 0.8M prompt tokens (about half of them cache hits) and 50k completion tokens, over about 43 calls. The observer accounted for about 60% of the prompt tokens, and the reflector and dropper for most of the rest. Ingestion took 10 to 14 minutes per question. A ~123k-token haystack became about 170 active observations and 34 reflections, a ~14k-token summary plus a ~6k to 9k-token raw tail. Scaled to 500 questions, that is about 400M prompt and 26M completion tokens, and about 100 hours of sequential time, or roughly 13 hours at `-concurrency 8` if the endpoint keeps up. The full-context baseline costs about 112k prompt tokens per question.

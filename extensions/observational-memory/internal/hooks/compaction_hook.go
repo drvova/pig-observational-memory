@@ -249,7 +249,7 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			// not crowd the memory out of its own summary.
 			memoryBudget = max(summaryMaxTokens/2, summaryMaxTokens-tokens.EstimateStringTokens(instructionsBlock))
 		}
-		rendered := ledger.RenderSummaryWithBudget(projection.Reflections, projection.Observations, memoryBudget)
+		rendered := ledger.RenderSummaryWithOptions(projection.Reflections, projection.Observations, memoryBudget, ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, ""))})
 		summary = rendered.Text
 		// A summary that kept no record would replace older context with only
 		// instructions and an omission notice. Decline instead, so Pi's native

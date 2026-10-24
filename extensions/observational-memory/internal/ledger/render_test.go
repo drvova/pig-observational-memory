@@ -65,7 +65,7 @@ func TestRenderSummaryBudget(t *testing.T) {
 	if len(rendered.Reflections) != 3 || !reflect.DeepEqual(tf.IDs(rendered.Observations), []string{"a3aaaaaaaaaa", "a4aaaaaaaaaa"}) || rendered.OmittedReflections != 0 || rendered.OmittedObservations != 2 {
 		t.Fatalf("budgeted render %v omitted %d/%d", tf.IDs(rendered.Observations), rendered.OmittedReflections, rendered.OmittedObservations)
 	}
-	if !strings.Contains(rendered.Text, "(2 older observations omitted to fit the summary budget") || !strings.Contains(rendered.Text, "[a4aaaaaaaaaa]") || strings.Contains(rendered.Text, "[a1aaaaaaaaaa]") {
+	if !strings.Contains(rendered.Text, "(2 observations omitted to fit the summary budget") || !strings.Contains(rendered.Text, "[a4aaaaaaaaaa]") || strings.Contains(rendered.Text, "[a1aaaaaaaaaa]") {
 		t.Fatal("omission notice wrong")
 	}
 	verbose := []ledger.Reflection{}
@@ -101,9 +101,57 @@ func TestOmissionNoticeUsesPlainDigits(t *testing.T) {
 	for i := 0; i < 1200; i++ {
 		observations = append(observations, tf.Observation(fmt.Sprintf("%012x", i+1)))
 	}
-	rendered := ledger.RenderSummaryWithBudget(nil, observations, 400)
-	match := regexp.MustCompile(`\(([0-9,]+) older observations omitted`).FindStringSubmatch(rendered.Text)
+	rendered := ledger.RenderSummaryWithBudget(nil, observations, 390)
+	match := regexp.MustCompile(`\(([0-9,]+) observations omitted`).FindStringSubmatch(rendered.Text)
 	if match == nil || len(match[1]) < 4 || strings.Contains(match[1], ",") {
 		t.Fatalf("notice count %v in %q", match, rendered.Text)
+	}
+}
+
+func TestReflectionDateRangesAndDatedRender(t *testing.T) {
+	at := func(ts string) func(*ledger.Observation) { return func(o *ledger.Observation) { o.Timestamp = ts } }
+	o1 := tf.Observation(padID("a1", 'a'), at("2023-05-20 10:00"))
+	o2 := tf.Observation(padID("a2", 'a'), at("2023-06-02 18:30"))
+	o3 := tf.Observation(padID("a3", 'a'), at("2023-06-02 09:15"))
+	folded := ledger.FoldedLedger{
+		ObservationsByID: map[string]ledger.Observation{o1.ID: o1, o2.ID: o2, o3.ID: o3},
+		Reflections: []ledger.Reflection{
+			tf.Reflection(padID("e1", 'e'), []string{o1.ID, o2.ID}),
+			tf.Reflection(padID("e2", 'e'), []string{o2.ID, o3.ID}),
+			tf.Reflection(padID("e3", 'e'), []string{"unknownaaaaa"}),
+		},
+	}
+	dates := ledger.ReflectionDateRanges(folded)
+	want := map[string]string{padID("e1", 'e'): "2023-05-20 to 2023-06-02", padID("e2", 'e'): "2023-06-02"}
+	if !reflect.DeepEqual(dates, want) {
+		t.Fatalf("dates = %v, want %v", dates, want)
+	}
+	rendered := ledger.RenderSummaryWithOptions(folded.Reflections, nil, 0, ledger.RenderOptions{ReflectionDates: dates})
+	if !strings.Contains(rendered.Text, "["+padID("e1", 'e')+"] (2023-05-20 to 2023-06-02) ") || !strings.Contains(rendered.Text, ledger.DatedReflectionsNote) || !strings.Contains(rendered.Text, "["+padID("e3", 'e')+"] Reflection") {
+		t.Fatalf("dated render wrong:\n%s", rendered.Text)
+	}
+	if plain := ledger.RenderSummaryWithBudget(folded.Reflections, nil, 0); strings.Contains(plain.Text, ledger.DatedReflectionsNote) {
+		t.Fatal("an undated render must not carry the dated-reflections note")
+	}
+}
+
+func TestSummaryKeepsOlderSpecificsOverNewerChatter(t *testing.T) {
+	content := func(text string) func(*ledger.Observation) { return func(o *ledger.Observation) { o.Content = text } }
+	observations := []ledger.Observation{
+		tf.Observation(padID("a1", 'a'), content("User bought boots for $500 at Nordstrom.")),
+	}
+	for i, id := range []string{"a2", "a3", "a4", "a5", "a6"} {
+		observations = append(observations, tf.Observation(padID(id, 'a'), content("User chatted about general topics "+strings.Repeat("and more ", 3+i))))
+	}
+	rendered := ledger.RenderSummaryWithBudget(nil, observations, 390)
+	ids := tf.IDs(rendered.Observations)
+	if len(ids) == 0 || ids[0] != padID("a1", 'a') {
+		t.Fatalf("kept %v: the oldest observation, the only one with a price and a name, should outlast newer chatter", ids)
+	}
+	if ids[len(ids)-1] != padID("a6", 'a') {
+		t.Fatalf("kept %v: the recency share must still keep the newest observation", ids)
+	}
+	if rendered.OmittedObservations == 0 {
+		t.Fatal("the budget should force omissions in this fixture")
 	}
 }

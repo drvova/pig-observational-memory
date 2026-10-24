@@ -134,6 +134,8 @@ func main() {
 		err = reportCmd(os.Args[2:])
 	case "worker":
 		err = workerCmd(os.Args[2:])
+	case "replay":
+		err = replayCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -144,7 +146,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: longmemeval run|report [flags]; see -h of each")
+	fmt.Fprintln(os.Stderr, "usage: longmemeval run|report|replay [flags]; see -h of each")
 	os.Exit(2)
 }
 
@@ -338,6 +340,113 @@ func writeReport(out string) (bench.Summary, error) {
 		return summary, err
 	}
 	return summary, os.WriteFile(filepath.Join(out, "summary.md"), []byte(summary.Markdown()), 0o644)
+}
+
+// replayCmd rebuilds each finished question's memory from its saved
+// checkpoint with the current code: the drop floor is applied to the recorded
+// drops (bench.ApplyDropFloor) and the summary is rendered by the current
+// renderer. It makes no model calls. For each question it writes the new
+// actor prompt and memory and reports whether the prompt changed and whether a
+// short gold answer now appears in it, so a deterministic change can be
+// measured on exactly the memory a model built before.
+func replayCmd(args []string) error {
+	fs := flag.NewFlagSet("replay", flag.ExitOnError)
+	from := fs.String("from", "", "finished run directory to replay")
+	out := fs.String("out", "", "directory for the replayed prompts (created)")
+	floor := fs.Bool("drop-floor", true, "apply the drop floor to the recorded drops")
+	ids := fs.String("ids", "", "comma-separated question ids (default: all with a checkpoint)")
+	_ = fs.Parse(args)
+	if *from == "" || *out == "" {
+		return errors.New("-from and -out are required")
+	}
+	var info struct {
+		Settings settings `json:"settings"`
+	}
+	_ = readJSON(filepath.Join(*from, "run.json"), &info)
+	s := info.Settings
+	if s.ContextWindow == 0 {
+		s.ContextWindow = 128_000
+	}
+	cfg := bench.WorkerConfig(s.spec(), s.WorkerThinking)
+	dirs, _ := filepath.Glob(filepath.Join(*from, "questions", "*", "checkpoint.json"))
+	want := map[string]bool{}
+	for _, id := range split(*ids) {
+		want[id] = true
+	}
+	type row struct {
+		ID            string            `json:"id"`
+		Type          string            `json:"type"`
+		Changed       bool              `json:"promptChanged"`
+		GoldBefore    *bool             `json:"goldInPromptBefore,omitempty"`
+		GoldAfter     *bool             `json:"goldInPromptAfter,omitempty"`
+		Stats         bench.ReplayStats `json:"stats"`
+		OmittedBefore int               `json:"omittedObservationsBefore"`
+		OmittedAfter  int               `json:"omittedObservationsAfter"`
+	}
+	rows := []row{}
+	for _, path := range dirs {
+		dir := filepath.Dir(path)
+		id := filepath.Base(dir)
+		if len(want) > 0 && !want[id] {
+			continue
+		}
+		var q bench.Question
+		var cp bench.Checkpoint
+		if readJSON(filepath.Join(dir, "question.json"), &q) != nil || readJSON(path, &cp) != nil || cp.SessionsDone < len(q.HaystackSessions) {
+			continue
+		}
+		entries := session.FromMaps(cp.Entries)
+		r := row{ID: q.ID, Type: q.Type}
+		if *floor {
+			entries, r.Stats = bench.ApplyDropFloor(entries, cfg)
+		}
+		memory := bench.RenderMemory(entries, cfg, s.ContextWindow)
+		messages := bench.OMMessages(q, memory, s.Recall)
+		qdir := filepath.Join(*out, "questions", q.ID)
+		if err := os.MkdirAll(qdir, 0o755); err != nil {
+			return err
+		}
+		if err := writePrompt(filepath.Join(qdir, "actor-prompt.md"), messages); err != nil {
+			return err
+		}
+		if err := writeJSON(filepath.Join(qdir, "memory.json"), map[string]any{"memory": memory}); err != nil {
+			return err
+		}
+		before, _ := os.ReadFile(filepath.Join(dir, "actor-prompt.md"))
+		after, _ := os.ReadFile(filepath.Join(qdir, "actor-prompt.md"))
+		r.Changed = string(before) != string(after)
+		var old struct {
+			Memory bench.Memory `json:"memory"`
+		}
+		if readJSON(filepath.Join(dir, "memory.json"), &old) == nil {
+			r.OmittedBefore = old.Memory.OmittedObservations
+		}
+		r.OmittedAfter = memory.OmittedObservations
+		if gold := strings.ToLower(strings.TrimSpace(q.Answer())); gold != "" && len(gold) <= 40 && !q.Abstention() {
+			b := strings.Contains(strings.ToLower(string(before)), gold)
+			a := strings.Contains(strings.ToLower(string(after)), gold)
+			r.GoldBefore, r.GoldAfter = &b, &a
+		}
+		rows = append(rows, r)
+	}
+	changed, gb, ga, kept := 0, 0, 0, 0
+	for _, r := range rows {
+		if r.Changed {
+			changed++
+		}
+		if r.GoldBefore != nil && *r.GoldBefore {
+			gb++
+		}
+		if r.GoldAfter != nil && *r.GoldAfter {
+			ga++
+		}
+		kept += r.Stats.KeptDrops
+	}
+	if err := writeJSON(filepath.Join(*out, "replay.json"), rows); err != nil {
+		return err
+	}
+	fmt.Printf("replayed %d questions: %d prompts changed, %d drops kept by the floor; short gold answers in the prompt: %d before, %d after\n", len(rows), changed, kept, gb, ga)
+	return nil
 }
 
 // state is a worker's accumulated cost across attempts.
