@@ -22,4 +22,5 @@ v3_spec.md
 
 # Clayzo build output and scratch files
 docs/animation/out/
+/out/
 docs/animation/scratch/
