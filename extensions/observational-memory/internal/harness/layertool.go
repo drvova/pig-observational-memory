@@ -75,10 +75,7 @@ func (w layerWriter) Define(kind, name, text string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	what := "a new definition"
-	if held.Seed != "" {
-		what = "an override of the seed " + held.Seed
-	}
+	what := held.Relation()
 	w.notify(fmt.Sprintf("Observational memory: %s defined %s/%s (%s); held until its next pass is clean", model, kind, name, what))
 	return fmt.Sprintf("Held %s/%s for %s (%s). It applies to the next memory pass and is written to your layer once that pass completes with no kernel error, decode failure or invariant refusal; otherwise it is reverted and what stood before stands.", kind, name, model, what), nil
 }
@@ -164,6 +161,26 @@ func (w layerWriter) Listing() ([]memquery.HarnessRow, error) {
 	return out, nil
 }
 
+// The origins the harness source lists an instructions definition of a seed's name with:
+// OriginExtends for an addition appended after the seed, OriginReplaces for a replacement in
+// its place. Any other definition of a seed's name is an "override".
+const (
+	OriginExtends  = "extends"
+	OriginReplaces = "replaces"
+)
+
+// OriginOf is the origin of d, a definition of a seed's name: an instructions definition
+// extends the seed (also one recorded before modes) or replaces it; any other overrides it.
+func OriginOf(d layer.Definition) string {
+	switch {
+	case d.Replaces():
+		return OriginReplaces
+	case d.Kind == layer.KindInstructions:
+		return OriginExtends
+	}
+	return "override"
+}
+
 // The probation states a written definition is listed with.
 const (
 	stateProbation   = "probation"
@@ -172,8 +189,9 @@ const (
 
 // LayerRows lists model's layer: every seed and every effective definition (held or written,
 // kept for model or for every model) by kind and name, then every file its load skipped, a stale
-// override with the seed standing in its place. A written definition probation judges is listed
-// in its probation state.
+// override with the seed standing in its place. A written definition probation judges, and a
+// written instructions replacement of the seed until probation decides it, is listed in its
+// probation state.
 func LayerRows(store curated.Store, model string) ([]memquery.HarnessRow, error) {
 	ls := store.Layer()
 	h, reports, err := ls.Load(model)
@@ -193,7 +211,7 @@ func LayerRows(store curated.Store, model string) ([]memquery.HarnessRow, error)
 	for _, d := range h.List("") {
 		row := memquery.HarnessRow{Model: d.Model, Kind: d.Kind, Name: d.Name, State: d.State, Origin: "own"}
 		if _, ok := seeds[d.Key()]; ok {
-			row.Origin = "override"
+			row.Origin = OriginOf(d)
 		}
 		if d.State == layer.StateWritten {
 			if w, ok := history[d.Key()]; ok {
@@ -201,7 +219,7 @@ func LayerRows(store curated.Store, model string) ([]memquery.HarnessRow, error)
 				switch {
 				case w.Established:
 					row.State = stateEstablished
-				case !w.Decided && rules.JudgedKind(d.Kind, d.Name):
+				case !w.Decided && (rules.JudgedKind(d.Kind, d.Name) || d.Replaces()):
 					row.State = stateProbation
 				}
 			}
@@ -279,9 +297,32 @@ func LayerReportsFor(h host.Host, cfg config.Config, model host.Model) (declare.
 	if !ok {
 		return declare.SeedsOnly(ModelKey(model)), nil
 	}
+	MigrateInstructions(h, l.Store, l.Model)
 	loaded, reports, err := l.Store.Layer().Load(l.Model)
 	if err != nil {
 		return declare.SeedsOnly(l.Model), nil
 	}
 	return declare.Of(loaded), reports
+}
+
+// MigrateInstructions makes the instructions definitions recorded before modes, for model and
+// for every model (the layers model's harness loads), additions (layer.Store.MigrateInstructions:
+// each recorded as a generation with its reason), and tells the user of each. A failure is
+// logged by nothing and changes nothing: such a definition still reads as an addition.
+func MigrateInstructions(h host.Host, store curated.Store, model string) {
+	models := []string{layer.AllModels}
+	if model != layer.AllModels && model != "" {
+		models = append(models, model)
+	}
+	for _, m := range models {
+		migrated, err := store.Layer().MigrateInstructions(m)
+		if err != nil {
+			continue
+		}
+		for _, mg := range migrated {
+			if h.HasUI() {
+				h.Notify(mg.Message(), "info")
+			}
+		}
+	}
 }

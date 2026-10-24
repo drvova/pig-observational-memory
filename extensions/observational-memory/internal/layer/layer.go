@@ -43,7 +43,9 @@ const (
 	KindFormat = "format"
 	// KindSchema is the fields a model's notes carry beyond the kernel's.
 	KindSchema = "schema"
-	// KindInstructions is a worker stage's instructions, appended after the kernel's rules.
+	// KindInstructions is a worker stage's instructions, appended after the kernel's rules: an
+	// addition to the stage's seed instructions (ModeExtend, the default) or, explicitly, their
+	// replacement (ModeReplace).
 	KindInstructions = "instructions"
 	// KindSummary is the memory query that selects and groups what the summary shows.
 	KindSummary = "summary"
@@ -71,6 +73,39 @@ const (
 	StateSeed = "seed"
 )
 
+// The modes of an instructions definition (Definition.Mode). The kernel's fixed rules open the
+// worker prompt in either mode; the mode only says what follows them.
+const (
+	// ModeExtend appends the definition's text after the stage's seed instructions: kernel
+	// rules, then the seed, then the model's additions. It is the default.
+	ModeExtend = "extend"
+	// ModeReplace puts the definition's text in place of the seed instructions (never of the
+	// kernel's rules). The model asks for it explicitly, by opening the text with the line
+	// "mode: replace" (ModeLine).
+	ModeReplace = "replace"
+)
+
+// ModeLine is the line an instructions text may open with to name its mode ("mode: replace",
+// "mode: extend"); the store lifts it into Definition.Mode and the file header.
+const ModeLine = "mode:"
+
+// SplitMode splits an instructions text into the mode its opening line names (ModeLine) and
+// the text after that line; mode is "" when the text opens with no mode line. An opening mode
+// line naming neither ModeExtend nor ModeReplace is an error.
+func SplitMode(text string) (mode, body string, err error) {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	first, rest, _ := strings.Cut(trimmed, "\n")
+	key, value, ok := strings.Cut(strings.TrimSpace(first), ":")
+	if !ok || !strings.EqualFold(strings.TrimSpace(key), strings.TrimSuffix(ModeLine, ":")) {
+		return "", text, nil
+	}
+	switch mode = strings.ToLower(strings.TrimSpace(value)); mode {
+	case ModeExtend, ModeReplace:
+		return mode, strings.TrimLeft(rest, "\r\n"), nil
+	}
+	return "", text, fmt.Errorf("the opening line %q names mode %q; an instructions mode is %s (the default: your text is appended after the seed instructions) or %s (your text takes the seed instructions' place)", strings.TrimSpace(first), strings.TrimSpace(value), ModeExtend, ModeReplace)
+}
+
 // AllModels is the model a definition for every model is kept under. A model's own definition
 // of a name replaces the one kept for all models.
 const AllModels = "*"
@@ -86,6 +121,10 @@ type Definition struct {
 	Seed string
 	// SeedDigest is the Digest of that seed's text when the override was written.
 	SeedDigest string
+	// Mode is an instructions definition's mode, ModeExtend or ModeReplace (every other kind
+	// has none). It is "" only for an instructions file recorded before modes existed, which
+	// reads as ModeExtend until MigrateInstructions records it so.
+	Mode string
 	// Session is the session that wrote it.
 	Session string
 	Time    time.Time
@@ -94,6 +133,39 @@ type Definition struct {
 
 // Def is the definition as kernel.Check reads it.
 func (d Definition) Def() kernel.Def { return kernel.Def{Kind: d.Kind, Name: d.Name, Text: d.Text} }
+
+// Replaces reports whether d is an instructions definition that replaces its stage's seed
+// instructions (ModeReplace) rather than extending them.
+func (d Definition) Replaces() bool { return d.Kind == KindInstructions && d.Mode == ModeReplace }
+
+// Declared is d's text as the model writes it: an instructions definition's text opens with
+// its mode line (ModeLine; one recorded before modes reads as ModeExtend), every other kind's
+// is its text.
+func (d Definition) Declared() string {
+	if d.Kind != KindInstructions {
+		return d.Text
+	}
+	mode := d.Mode
+	if mode == "" {
+		mode = ModeExtend
+	}
+	return ModeLine + " " + mode + "\n" + d.Text
+}
+
+// Relation says how d stands to its seed, as notifications show it: a new definition, an
+// override of the seed, or, for instructions, an addition to the seed or its replacement
+// (which probation judges).
+func (d Definition) Relation() string {
+	switch {
+	case d.Seed == "":
+		return "a new definition"
+	case d.Replaces():
+		return "a replacement of the seed " + d.Seed + ", after the kernel's rules and on probation"
+	case d.Kind == KindInstructions:
+		return "an addition to the seed " + d.Seed + ", appended after it"
+	}
+	return "an override of the seed " + d.Seed
+}
 
 // Key is the definition's kind and name, the identity its file is the one home of.
 func (d Definition) Key() string { return SeedKey(d.Kind, d.Name) }
@@ -266,7 +338,7 @@ func (s Store) blobPath(model, digest string) string {
 // line and the definition's text follow it verbatim.
 const headerTable = "layer"
 
-var headerFields = []string{"kind", "name", "model", "time", "session", "overrides", "fallback"}
+var headerFields = []string{"kind", "name", "model", "time", "session", "overrides", "fallback", "mode"}
 
 // noFallback is a held file's fallback when nothing was written for its name before the first
 // hold: a revert leaves the seed (or nothing) standing.
@@ -279,7 +351,7 @@ func encodeFile(d Definition, fallback string) string {
 	if d.Seed != "" {
 		overrides = d.Seed + "@" + d.SeedDigest
 	}
-	row := []string{d.Kind, d.Name, d.Model, d.Time.UTC().Format(time.RFC3339Nano), d.Session, overrides, fallback}
+	row := []string{d.Kind, d.Name, d.Model, d.Time.UTC().Format(time.RFC3339Nano), d.Session, overrides, fallback, d.Mode}
 	absent := make([]bool, len(row))
 	for i, v := range row {
 		absent[i] = v == ""
@@ -303,7 +375,8 @@ func decodeFile(content string) (Definition, string, error) {
 	}
 	t := decoded[0]
 	cell := func(field string) string { v, _ := t.Cell(0, field); return v }
-	d := Definition{Kind: cell("kind"), Name: cell("name"), Model: cell("model"), Session: cell("session"), Text: strings.TrimRight(strings.TrimPrefix(parts[2], "\n"), "\n")}
+	// A file written before modes has no mode column: its Mode is "".
+	d := Definition{Kind: cell("kind"), Name: cell("name"), Model: cell("model"), Session: cell("session"), Mode: cell("mode"), Text: strings.TrimRight(strings.TrimPrefix(parts[2], "\n"), "\n")}
 	d.Time, _ = time.Parse(time.RFC3339Nano, cell("time"))
 	if overrides := cell("overrides"); overrides != "" {
 		seed, digest, ok := strings.Cut(overrides, "@")
@@ -354,11 +427,36 @@ func writeAtomic(path, content string) error {
 
 // Check is what a definition must pass to be made: a known kind, a model, the kernel (through
 // the store's floor), a valid name, a text, the store's Validate, and the validators the
-// kind's interpreter registered (RegisterValidator). It is run again on every file at load.
+// kind's interpreter registered (RegisterValidator). An instructions text may open with its
+// mode line (SplitMode), which is checked and lifted before the rest is; no other kind has a
+// mode. Every file is checked again at load, with its header's mode (checkStored).
 func (s Store) Check(d Definition) error {
 	if !ValidKind(d.Kind) {
 		return fmt.Errorf("unknown definition kind %q; kinds are %s", d.Kind, strings.Join(Kinds, ", "))
 	}
+	d, err := liftMode(d)
+	if err != nil {
+		return err
+	}
+	return s.checkLifted(d)
+}
+
+// checkStored is Check for a definition read from a layer file (or prepared from one): its
+// mode is the one its header records, and an instructions body is opaque text, never read for
+// a mode line. A text recorded before modes may open with a line such as "Mode: terse."; it
+// loaded then and loads now, as an addition.
+func (s Store) checkStored(d Definition) error {
+	if !ValidKind(d.Kind) {
+		return fmt.Errorf("unknown definition kind %q; kinds are %s", d.Kind, strings.Join(Kinds, ", "))
+	}
+	if err := checkMode(d); err != nil {
+		return err
+	}
+	return s.checkLifted(d)
+}
+
+// checkLifted is the rest of Check, once d's mode is settled.
+func (s Store) checkLifted(d Definition) error {
 	if strings.TrimSpace(d.Model) == "" {
 		return errors.New("a definition needs the model it applies to, or " + AllModels)
 	}
@@ -384,10 +482,72 @@ func (s Store) Check(d Definition) error {
 	return nil
 }
 
-// stamp prepares d to be written: checked, timed, and marked with the seed it overrides.
+// liftMode lifts an instructions text's opening mode line into d.Mode (SplitMode) and checks
+// the mode: an instructions definition's is ModeExtend, ModeReplace or "" (one recorded before
+// modes), named once (a mode line where d.Mode is already set is refused), and any other kind
+// has none.
+func liftMode(d Definition) (Definition, error) {
+	if d.Kind != KindInstructions {
+		if err := checkMode(d); err != nil {
+			return Definition{}, err
+		}
+		return d, nil
+	}
+	mode, body, err := SplitMode(d.Text)
+	if err != nil {
+		return Definition{}, err
+	}
+	if mode != "" {
+		if d.Mode != "" {
+			return Definition{}, fmt.Errorf("the instructions definition %q names its mode twice; open the text with one mode line", d.Name)
+		}
+		if again, _, _ := SplitMode(body); again != "" {
+			return Definition{}, fmt.Errorf("the instructions definition %q names its mode twice; open the text with one mode line", d.Name)
+		}
+		d.Mode, d.Text = mode, body
+	}
+	if err := checkMode(d); err != nil {
+		return Definition{}, err
+	}
+	return d, nil
+}
+
+// checkMode checks d's recorded mode: an instructions definition's is ModeExtend, ModeReplace
+// or "" (one recorded before modes), and any other kind has none.
+func checkMode(d Definition) error {
+	if d.Kind != KindInstructions {
+		if d.Mode != "" {
+			return fmt.Errorf("only an instructions definition has a mode, not the %s definition %q", d.Kind, d.Name)
+		}
+		return nil
+	}
+	if d.Mode != "" && d.Mode != ModeExtend && d.Mode != ModeReplace {
+		return fmt.Errorf("the instructions definition %q has mode %q; a mode is %s or %s", d.Name, d.Mode, ModeExtend, ModeReplace)
+	}
+	return nil
+}
+
+// stamp prepares d, a text the model wrote, to be written: its mode lifted (an instructions
+// definition without one is an addition, ModeExtend), checked, timed, and marked with the seed
+// it overrides.
 func (s Store) stamp(d Definition) (Definition, error) {
 	d.Text = strings.TrimRight(d.Text, "\n")
-	if err := s.Check(d); err != nil {
+	d, err := liftMode(d)
+	if err != nil {
+		return Definition{}, err
+	}
+	return s.stampLifted(d)
+}
+
+// stampLifted is stamp for a definition whose mode is settled: one stamp lifted, or one read
+// from a layer file (a held definition a clean pass writes), whose body is never read for a
+// mode line again.
+func (s Store) stampLifted(d Definition) (Definition, error) {
+	d.Text = strings.TrimRight(d.Text, "\n")
+	if d.Kind == KindInstructions && d.Mode == "" {
+		d.Mode = ModeExtend
+	}
+	if err := s.checkStored(d); err != nil {
 		return Definition{}, err
 	}
 	d.Time = s.now().UTC()
@@ -400,8 +560,12 @@ func (s Store) stamp(d Definition) (Definition, error) {
 
 // stale reports why d is a stale override, "" when it is not: the seed it overrides changed or
 // is gone since it was written, or a seed by its name ships since it was written as the
-// model's own.
+// model's own. An instructions addition (ModeExtend, or one recorded before modes) is never
+// stale: it extends whatever seed ships, so an upgraded seed stands with it appended.
 func (s Store) stale(d Definition) string {
+	if d.Kind == KindInstructions && !d.Replaces() {
+		return ""
+	}
 	text, shippedNow := s.seeds()[d.Key()]
 	switch {
 	case d.Seed == "" && shippedNow:
@@ -464,7 +628,7 @@ func (s Store) load(path, model, kind, name string, recorded map[string]string) 
 	if d.Kind != kind || d.Name != name || d.Model != model {
 		return Definition{}, "", report(false, "its header names %s/%s for %s, not the definition its path holds", d.Kind, d.Name, d.Model)
 	}
-	if err := s.Check(d); err != nil {
+	if err := s.checkStored(d); err != nil {
 		return Definition{}, "", report(false, "%v", err)
 	}
 	// Checked after the kernel, so a crafted file that touches it is refused naming its owner.
@@ -773,6 +937,11 @@ func (s Store) PutLocked(d Definition) (Definition, error) {
 	if err != nil {
 		return Definition{}, err
 	}
+	return s.putStamped(d)
+}
+
+// putStamped writes d, already stamped; the caller holds the store's lock.
+func (s Store) putStamped(d Definition) (Definition, error) {
 	path := s.Path(d.Model, d.Kind, d.Name)
 	recorded, err := s.current(d.Model)
 	if err != nil {
@@ -782,7 +951,7 @@ func (s Store) PutLocked(d Definition) (Definition, error) {
 	// text is written again, with its generation.
 	if data, err := os.ReadFile(path); err == nil && recorded[d.Key()] == Digest(string(data)) {
 		if old, _, err := decodeFile(string(data)); err == nil && old.Kind == d.Kind && old.Name == d.Name && old.Model == d.Model &&
-			old.Text == d.Text && old.Seed == d.Seed && old.SeedDigest == d.SeedDigest {
+			old.Text == d.Text && old.Seed == d.Seed && old.SeedDigest == d.SeedDigest && old.Mode == d.Mode {
 			old.State = StateWritten
 			return old, nil
 		}

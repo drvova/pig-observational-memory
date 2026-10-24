@@ -9,22 +9,18 @@ import (
 
 // The worker system prompts, carried over from the TypeScript extension and split in two
 // (docs/memory-interface.md, section 8): the kernel's fixed rules for the stage
-// (kernel.Text), which open every prompt, and the stage's instructions, a seed the model may
-// replace with its own instructions definition, appended after them.
+// (kernel.Text), which open every prompt and carry every rule the code relies on (the note
+// fields' contract among them), and the stage's instructions, a seed carrying the guidance a
+// model may restyle, appended after them. The model's own instructions definition extends the
+// seed by default and replaces it only when it says so (ComposeStage).
 
 // ObserverInstructions are the observer's seed instructions.
 const ObserverInstructions = `What to emit:
 - Produce NEW observations for the new chunk only. Do not restate facts already present in reflections or current observations unless something has materially changed.
 - Use the timestamp from the relevant conversation message. Fall back to current local time ONLY when no message timestamp applies.
-- Group repeated similar tool calls into a single observation rather than one per call.
 - Skip routine, low-information events. It is fine to emit zero observations if the chunk carries no new information — in that case, simply do not call the tool and end with a plain-text confirmation.
 
 Observation content rules:
-
-Format.
-- Single line of plain prose. No markdown, no bullets, no code fences, no XML/HTML tags, no emojis.
-- Do NOT include the timestamp or relevance inside the content string — those are separate fields.
-- No structured fields embedded in the text (no "key: value" lines, no JSON).
 
 Preserve user assertions exactly.
 When the user TELLS you something about themselves, their project, or their environment, capture it as an assertion. When the user ASKS something, capture it as a question. Assertions are authoritative — a later question on the same topic does not invalidate them.
@@ -72,7 +68,7 @@ Group repeated similar tool calls into a single observation rather than one per 
   BAD:  Agent viewed src/auth.ts. Agent viewed src/users.ts. Agent viewed src/routes.ts.
   GOOD: Agent surveyed auth-related files (src/auth.ts, src/users.ts, src/routes.ts) and located token validation in src/auth.ts:45.
 
-Detail preservation. When an observation references specific things, preserve the distinguishing details so future queries can still find them:
+Detail preservation, so future queries can still find them:
 
 - File/location: full path + line number when relevant (src/auth.ts:45, not "the auth file").
 - Identifiers and names: package names, function names, variable names, handles, ticket ids, commit SHAs, error codes. Keep them verbatim.
@@ -91,15 +87,6 @@ Detail preservation. When an observation references specific things, preserve th
     GOOD: User led the migration from MySQL to Postgres.
 
 If a detail is non-obvious from the code or git history, it belongs in the observation. If it is trivially re-derivable, it does not.
-
-Structured fields (optional, but fill them whenever they apply):
-- kind: fact, event, preference, plan, correction, or assistant. Record the assistant's concrete outputs (lists, names, numbers, recommendations) as kind=assistant, with the distinguishing details in the content.
-- subject: a short lowercase noun phrase grouping related observations ("baking", "gaming hours", "online courses"). Reuse the exact subject a current observation on the same topic shows in its braces.
-- scope: the qualifier that tells two figures apart ("hard difficulty", "on edX").
-- supersedes: ids of current observations, or ids the tool receipt reported for observations you recorded earlier this run, that this one replaces. Compare scopes in the braces first. Set it ONLY when the user explicitly corrects or replaces an earlier fact. A figure with a different scope is an addition, never a replacement; leave supersedes empty.
-  BAD:  "User finished the game in 40 hours on hard difficulty" supersedes "User finished the game in 25 hours on normal difficulty".
-  GOOD: both kept, scopes "hard difficulty" and "normal difficulty", no supersedes.
-- Instead of the observations array you may pass rows: one table, in the format the user message describes, with columns timestamp,relevance,kind,subject,scope,supersedes,sourceEntryIds,content, ids space-separated inside their field.
 
 Remember: these observations are the assistant's ONLY memory of this chunk once the raw messages fall out of context. Make them count.
 `
@@ -139,8 +126,6 @@ Focus on:
 User assertions are authoritative. If the observation pool contains both "User stated they use Postgres" and a later "User asked which db they are on", the assertion answers the question — crystallize the assertion, never the question, as the durable fact.
 
 Reflection content rules:
-- Single line of plain prose. No markdown, no bullets, no code fences, no XML/HTML tags, no emojis.
-- No timestamp, no priority marker, no bracketed tags, no "key: value" fields, no JSON.
 - Lead with the fact or pattern; include the reason or mechanism when known so future readers can judge edge cases.
 - Preserve user assertions exactly. Use the user's exact words when non-standard.
 - Preserve named identifiers, paths, commands, package names, error codes, dates, decisions, constraints, and rationale when those details are part of the durable meaning.
@@ -218,4 +203,25 @@ func Compose(textID, instructions string) string {
 		out += "\n\n" + instructions
 	}
 	return out + "\n"
+}
+
+// AdditionsHeading opens a model's own instructions appended after the seed instructions (an
+// instructions definition in layer.ModeExtend).
+const AdditionsHeading = "Additional instructions for this model:"
+
+// ComposeStage is a worker stage's system prompt (docs/memory-interface.md, section 8): the
+// kernel text textID names, always first and whole, then the stage's instructions. With no own
+// instructions they are the seed; an addition (the default) follows the seed under
+// AdditionsHeading, so the kernel rules, the seed and the model's additions appear in that
+// order; a replacement (replace, layer.ModeReplace) stands in the seed's place, never the
+// kernel's.
+func ComposeStage(textID, seed, own string, replace bool) string {
+	own = strings.TrimSpace(own)
+	switch {
+	case own == "":
+		return Compose(textID, seed)
+	case replace:
+		return Compose(textID, own)
+	}
+	return Compose(textID, strings.TrimRight(seed, "\n")+"\n\n"+AdditionsHeading+"\n"+own)
 }

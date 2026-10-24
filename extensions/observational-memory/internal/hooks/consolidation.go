@@ -649,11 +649,13 @@ func runConsolidationStages(ctx context.Context, rt *runtime.Runtime, h host.Hos
 }
 
 // workerArgs are a stage's worker call arguments for worker, with the prompt-line rules that
-// apply to the worker model for stage and the model's own instructions for it from its layer.
+// apply to the worker model for stage and the model's own instructions for it from its layer
+// (appended after the seed, or in its place for a replacement).
 func workerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runtime.ResolveResult, stage string) agents.WorkerArgs {
 	return agents.WorkerArgs{
 		SystemLines:     rulesFor(h, cfg, worker.Model).PromptLines(stage),
 		Instructions:    instructionsFor(ctx, h, cfg, worker.Model, stage),
+		ReplaceSeed:     replacesSeedFor(ctx, h, cfg, worker.Model, stage),
 		Model:           worker.Model,
 		APIKey:          worker.APIKey,
 		Headers:         worker.Headers,

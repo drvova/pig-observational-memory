@@ -79,8 +79,8 @@ func FloorStatus(store curated.Store) string {
 
 // Instructions are the model's own instructions for a worker stage from its layer (an
 // instructions definition named after the stage, held or written), "" when the seed stands. A
-// stale override is skipped, so the seed stands. The worker prompt appends them after the
-// kernel's fixed rules (agents.Compose).
+// stale replacement is skipped, so the seed stands. The worker prompt puts them after the
+// kernel's fixed rules (agents.ComposeStage): after the seed, or in its place for a replacement.
 func (l Ledger) Instructions(stage string) string {
 	return l.Layer().Instructions(stage)
 }
@@ -118,8 +118,13 @@ func layerStatusLines(store curated.Store, model string) []string {
 		if r.Generation != "" {
 			item += " gen " + r.Generation
 		}
-		if r.Origin == "override" {
+		switch r.Origin {
+		case "override":
 			item += ", overrides the seed"
+		case OriginExtends:
+			item += ", extends the seed"
+		case OriginReplaces:
+			item += ", replaces the seed (mode replace)"
 		}
 		if r.Model != model {
 			item += ", for all models"

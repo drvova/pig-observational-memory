@@ -143,7 +143,9 @@ func seedDefinitions() []agents.BuilderDefinition {
 	return out
 }
 
-// currentDefinitions are model's effective definitions (held or written) for a revision.
+// currentDefinitions are model's effective definitions (held or written) for a revision, each
+// as the model writes it: an instructions text opens with its mode line (layer.Definition.Declared),
+// so the model sees whether it extends or replaces the seed and keeps or changes that mode.
 func currentDefinitions(store curated.Store, model string) []agents.BuilderDefinition {
 	h, _, err := store.Layer().Load(model)
 	if err != nil {
@@ -151,7 +153,7 @@ func currentDefinitions(store curated.Store, model string) []agents.BuilderDefin
 	}
 	out := []agents.BuilderDefinition{}
 	for _, d := range h.List("") {
-		out = append(out, agents.BuilderDefinition{Kind: d.Kind, Name: d.Name, Text: d.Text, State: d.State})
+		out = append(out, agents.BuilderDefinition{Kind: d.Kind, Name: d.Name, Text: d.Declared(), State: d.State})
 	}
 	return out
 }
@@ -165,7 +167,14 @@ func builderCheck(h host.Host, store curated.Store, branch []ledger.Entry, model
 		if harness.DefinitionModel(d.Kind, session, model) != model {
 			return fmt.Errorf("the %s is read by the session model %s, so it is defined in its own harness, not %s's", d.Kind, session, model)
 		}
-		if seed, ok := layer.Shipped()[layer.SeedKey(d.Kind, d.Name)]; ok && strings.TrimSpace(seed) == strings.TrimSpace(d.Text) {
+		text := d.Text
+		if d.Kind == layer.KindInstructions {
+			// In either mode, the seed's own text changes nothing (an addition would repeat it).
+			if _, body, err := layer.SplitMode(text); err == nil {
+				text = body
+			}
+		}
+		if seed, ok := layer.Shipped()[layer.SeedKey(d.Kind, d.Name)]; ok && strings.TrimSpace(seed) == strings.TrimSpace(text) {
 			return errors.New("identical to the seed, which already stands; define only what you would change")
 		}
 		return harness.CheckModelDefinition(store, branch, layer.Definition{Kind: d.Kind, Name: d.Name, Model: model, Text: d.Text, Session: h.SessionID()})
@@ -272,10 +281,7 @@ func runHarnessPass(ctx context.Context, rt *runtime.Runtime, h host.Host, resol
 	}
 	held := len(heldDefs)
 	for _, def := range heldDefs {
-		what := "a new definition"
-		if def.Seed != "" {
-			what = "an override of the seed " + def.Seed
-		}
+		what := def.Relation()
 		notifyUI(h, fmt.Sprintf("Observational memory: %s defined %s/%s in its %s pass (%s); held until its next pass is clean", key, def.Kind, def.Name, stage, what), "info")
 	}
 	debuglog.Log(ctx, "harness."+stage, map[string]any{"model": key, "held": held, "refused": result.Refused})

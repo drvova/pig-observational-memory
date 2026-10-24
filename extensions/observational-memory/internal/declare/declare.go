@@ -237,13 +237,22 @@ func (a Active) Summary() (Summary, bool) {
 }
 
 // Instructions are the model's own instructions for a worker stage, "" while the seed stands.
-// The worker prompt appends them after the kernel's fixed rules (agents.Compose), never in
-// their place.
+// The worker prompt puts them after the kernel's fixed rules (agents.ComposeStage), never in
+// their place: after the seed instructions for an addition, in the seed's place for a
+// replacement (ReplacesSeed).
 func (a Active) Instructions(stage string) string {
 	if d, ok := a.h.Get(layer.KindInstructions, stage); ok {
 		return d.Text
 	}
 	return ""
+}
+
+// ReplacesSeed reports whether the model's own instructions for a worker stage replace the
+// seed instructions (layer.ModeReplace) instead of extending them; false while the seed stands,
+// for an addition, and for a definition recorded before modes.
+func (a Active) ReplacesSeed(stage string) bool {
+	d, ok := a.h.Get(layer.KindInstructions, stage)
+	return ok && d.Replaces()
 }
 
 // RenderSummary renders the compaction summary for this model (RenderSummaryReport without

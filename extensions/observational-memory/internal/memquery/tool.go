@@ -33,7 +33,7 @@ Writes:
   feedback name=<name> outcome=helped|harmed quote="words copied from a user or assistant message that show it"
   define <name> = <query> "what it returns"   query at most 200 characters, quoted texts at most 40
   propose detector=<detector> remedy=<remedy> [text="..."] [kind=...] [fullness=N]   a memory rule for your own model, on probation
-  harness kind=<kind> name=<name> text="..."   define or change a definition of your harness (format, schema, instructions, summary, detector, remedy); held until a clean pass proves it
+  harness kind=<kind> name=<name> text="..."   define or change a definition of your harness (format, schema, instructions, summary, detector, remedy); held until a clean pass proves it; instructions are added after the seed, or replace it when text opens with "mode: replace\n"
   harness forget kind=<kind> name=<name>       remove your definition; the seed stands again
   rollback <generation> [model="provider/id"]  make your harness what it was at that generation (0: seeds only)
 Examples:

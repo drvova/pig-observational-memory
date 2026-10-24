@@ -284,7 +284,7 @@ func (s Store) Claim(model string, clean bool, reason string) ([]Notice, error) 
 
 // ClaimHeld is Claim for the held definitions one pass ran with (held, from the pass's layer
 // snapshot), after nodecode's claim-batch: each is settled only while its held file still
-// holds the text the pass ran with, so a definition held again (or first) after the pass read
+// holds the text (and mode) the pass ran with, so a definition held again (or first) after the pass read
 // the layer waits for a pass of its own. Definitions not held are ignored.
 func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice, error) {
 	if strings.TrimSpace(reason) == "" {
@@ -303,7 +303,7 @@ func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice
 			if err != nil {
 				return err
 			}
-			if now, _, err := decodeFile(string(data)); err == nil && now.Text != strings.TrimRight(d.Text, "\n") {
+			if now, _, err := decodeFile(string(data)); err == nil && (now.Text != strings.TrimRight(d.Text, "\n") || now.Mode != d.Mode) {
 				continue
 			}
 			n, err := s.claimOne(d.Model, d.Kind, d.Name, clean, reason)
@@ -345,7 +345,13 @@ func (s Store) claimOne(model, kind, name string, clean bool, reason string) (No
 		}
 	}
 	if clean {
-		if _, err := s.PutLocked(d); err != nil {
+		// The held file's header records its mode: its body is written as it stands, never
+		// read for a mode line again.
+		stamped, err := s.stampLifted(d)
+		if err != nil {
+			return Notice{}, err
+		}
+		if _, err := s.putStamped(stamped); err != nil {
 			return Notice{}, err
 		}
 		if err := os.Remove(heldPath); err != nil && !errors.Is(err, os.ErrNotExist) {

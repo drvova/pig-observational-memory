@@ -116,7 +116,11 @@ func TestLayerInstructionsAndStatus(t *testing.T) {
 			t.Fatalf("status lacks %q:\n%s", want, status)
 		}
 	}
-	// A stale override (its seed changed) is skipped: the seed stands, and status says so.
+	// A stale replacement (its seed changed) is skipped: the seed stands, and status says so.
+	// An addition never goes stale.
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "observer", Model: "p/m", Text: "mode: replace\nRecord every figure with its unit.", Session: "s1"}); err != nil {
+		t.Fatal(err)
+	}
 	ls.Seeds = layer.Shipped()
 	ls.Seeds[layer.SeedKey(layer.KindInstructions, "observer")] = "a changed seed"
 	if h, reports, _ := ls.Load("p/m"); len(reports) != 1 || !reports[0].Stale || reports[0].Name != "observer" {

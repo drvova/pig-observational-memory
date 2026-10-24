@@ -375,7 +375,7 @@ is recorded with who asked and why, before it takes effect.
 |---|---|---|
 | `format` | a table format declared as data: delimiter, quote and escape characters, header form | a generic strict codec interprets it; it must round-trip the kernel's test tables before it is accepted |
 | `schema` | the fields its notes carry beyond the kernel's (id, timestamp, content, sources, relevance) | validated and stored with each note |
-| `instructions` | its own observer, reflector and dropper instructions | appended after the kernel's fixed rules, never in place of them |
+| `instructions` | its own observer, reflector and dropper instructions | always after the kernel's fixed rules, which carry every rule the code relies on (the note fields among them); by default an addition appended after the seed instructions (kernel rules, seed, the model's text); a text opening with `mode: replace` replaces the seed instructions only, is held, then on probation, and is shown so in `/om:status` |
 | `summary` | the memory query that selects and groups what the summary shows | run under the room budget; the kernel still discloses every omitted span |
 | `tool` | named queries (section 6) | registered, never shadowing `memory` |
 | `detector` | a query over its notes and the event ledger that counts a failure | flags problems; never judges a remedy written after it |
@@ -392,7 +392,37 @@ is recorded with who asked and why, before it takes effect.
   the seed) stands, and the user is told why. Re-holding a held name keeps the original fallback.
 - **Stale overrides.** An override records the digest of the seed it replaced. When an upgrade
   changes that seed, the override is skipped and reported, and the new seed stands until the
-  model defines it again. Forgetting an override restores the seed.
+  model defines it again. Forgetting an override restores the seed. An instructions addition
+  (below) is never stale: it extends whatever seed ships.
+- **Instructions modes.** An `instructions` definition is an addition (`extend`, the default)
+  or a replacement (`replace`), named by the text's opening line `mode: extend` or
+  `mode: replace`, which the store lifts into the layer file's header (`mode` column;
+  `layer.SplitMode`, `Definition.Mode`) and shows back as that line (`Definition.Declared`,
+  which the revision pass's current layer carries). The worker prompt is `agents.ComposeStage`:
+  the kernel text first and whole, then the seed, then an addition under "Additional
+  instructions for this model:", or a replacement in the seed's place. An unknown mode, a mode
+  named twice and a mode on another kind are refused. A written replacement is listed on
+  probation in `/om:status` until probation decides it (the reflector's and dropper's, which no
+  observer count judges, stay so listed). A file recorded before modes (no `mode` column) reads
+  as an addition, and `layer.Store.MigrateInstructions` (run when a pass reads the layer,
+  `harness.LayerReportsFor`) rewrites each tracked one the store's checks accept, written or
+  held, with `extend`, appends an `OpMigrate` generation with its reason (a written one's records
+  the new digest and starts a fresh probation from the migration, since its evidence so far ran
+  with the text in the seed's place, and retiring it restores what stood before the write it
+  migrated; one a revert put back stays decided; a held one's is marked `held`) and notifies the
+  user, naming a text that repeats most of its seed's lines (`layer.RepeatsSeedShare`) as a
+  near-copy that now doubles and may contradict the seed; no other kind is touched. A hold over
+  a migrated written definition has its fallback moved to the migrated content, so a failed pass
+  puts back what stood. Only a text the model writes is read for a mode line: a stored body is
+  opaque, so a legacy text opening with `Mode: terse.` still loads. The observer's note-field contract (kind with `kind=assistant`,
+  subject with its paths and reuse rule, scope, supersedes only on an explicit correction and
+  never across scopes with its BAD/GOOD example, the rows columns), its content form and the
+  rule to keep specifics exact are kernel text (`kernel-observer`); the seed keeps only guidance
+  a model may restyle (what to emit, examples of good specifics, tone). The seeds-only observer
+  prompt holds the same rules as before, reordered, in no more text. The reflector's content
+  form (one line of plain prose; no markdown, timestamp, priority marker, bracketed tags,
+  `key: value` fields or JSON) is likewise kernel text (`kernel-reflector`), so a reflector
+  replacement keeps it.
 - **Grading stays with the kernel.** After a held definition is written, probation (section 7)
   judges it only by kernel events and by detectors that existed before it, so the model never
   grades its own change.
@@ -413,8 +443,8 @@ is recorded with who asked and why, before it takes effect.
   text that is not a readable table is refused, since it cannot be checked), the floor (`Floor`:
   `Lower(requestedBy, reason)` records first and refuses without both; reached only through the
   user's global `kernelFloor` setting) and the fixed worker-prompt rules behind kernel text ids,
-  which open every worker prompt with the stage's instructions (seed or the model's own)
-  appended after them. `internal/layer` is the store: atomic layer files with the header above,
+  which open every worker prompt with the stage's instructions (the seed, the seed and the
+  model's addition, or the model's replacement) appended after them. `internal/layer` is the store: atomic layer files with the header above,
   one home per name (a header naming another kind, name or model than its path is refused at
   load), an append-only manifest of generations with content blobs and `Rollback(n)` (only names
   some generation wrote are touched), `Hold`/`Claim` (re-holding keeps the original fallback; a
@@ -499,7 +529,8 @@ is recorded with who asked and why, before it takes effect.
   pass) over the first `MinEvidence` observer passes after its put with the `MinEvidence` before
   it, retires it (`layer.Store.Settle` restores what stood before the generation that wrote it)
   when the rate rose, and establishes it otherwise. A rollback never brings a definition back
-  without proof: one that would restore content a revert took away is refused, and what it does
+  without proof: one that would restore content a revert took away (or the content that content
+  was migrated from, which the next layer read would migrate into it again) is refused, and what it does
   restore is on probation again from the rollback, while names it leaves alone keep theirs. Defined tools and rules keep their own
   probations. Only a pass that recorded its results (notes, reflections, drops, or a summary
   that became the compaction) proves a held definition: a worker pass that ran and recorded

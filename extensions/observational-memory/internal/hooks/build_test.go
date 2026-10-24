@@ -261,7 +261,7 @@ func TestRevisionPassRunsWhenEvidenceChanges(t *testing.T) {
 		t.Fatalf("revision ran %d times", builder.count())
 	}
 	args := builder.call(0)
-	if !args.Revision || !strings.Contains(args.Evidence, rules.DetectThinChunk) || len(args.Current) != 1 || args.Current[0].Text != ownInstructions {
+	if !args.Revision || !strings.Contains(args.Evidence, rules.DetectThinChunk) || len(args.Current) != 1 || args.Current[0].Text != "mode: extend\n"+ownInstructions {
 		t.Fatalf("revision args %+v", args)
 	}
 	if last, _, _ := ls.LastPass(model); last.Op != layer.OpRevise {

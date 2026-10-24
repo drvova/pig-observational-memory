@@ -254,6 +254,12 @@ func instructionsFor(ctx context.Context, h host.Host, cfg config.Config, model 
 	return layerFor(ctx, h, cfg, model).Instructions(stage)
 }
 
+// replacesSeedFor reports whether the worker model's own instructions for stage replace the
+// seed instructions (declare.Active.ReplacesSeed) instead of being appended after them.
+func replacesSeedFor(ctx context.Context, h host.Host, cfg config.Config, model host.Model, stage string) bool {
+	return layerFor(ctx, h, cfg, model).ReplacesSeed(stage)
+}
+
 // recordPass records one memory-worker pass of model, with what the detectors counted, in the
 // model's usage ledger, lets the rules lifecycle decide, and notifies the user of every rule
 // added, established, retired or made a default. A pass with results marks the pass ctx

@@ -35,6 +35,11 @@ const (
 	// OpEstablish records that probation established the definition its last put wrote; it
 	// changes no file.
 	OpEstablish = "establish"
+	// OpMigrate records an instructions definition recorded before modes made an addition
+	// (MigrateInstructions): a written one is rewritten with ModeExtend in its header (Digest,
+	// the new content), which probation judges afresh (its evidence so far ran with the text in
+	// the seed's place), a held one (Held) in its held file, which changes nothing written.
+	OpMigrate = "migrate"
 )
 
 // Generation is one change to a model's layer, a line of its append-only manifest.
@@ -54,6 +59,8 @@ type Generation struct {
 	// written content after it is what it was before it.
 	Keep   []string `json:"keep,omitempty"`
 	Reason string   `json:"reason,omitempty"`
+	// Held marks a migration of a held definition: its held file changed, nothing written.
+	Held bool `json:"held,omitempty"`
 	// Evidence is the digest of the counted evidence a build or revision pass was given, and
 	// Events the length of the model's usage ledger then: the next revision is due only once
 	// passes were counted after it and the evidence changed.
@@ -74,6 +81,12 @@ func (g Generation) Describe() string {
 		return fmt.Sprintf("%d: revision pass", g.N)
 	case OpEstablish:
 		return fmt.Sprintf("%d: establish %s/%s (%s)", g.N, g.Kind, g.Name, g.Reason)
+	case OpMigrate:
+		what := ""
+		if g.Held {
+			what = " held"
+		}
+		return fmt.Sprintf("%d: migrate%s %s/%s (%s)", g.N, what, g.Kind, g.Name, g.Reason)
 	}
 	return fmt.Sprintf("%d: %s %s/%s", g.N, g.Op, g.Kind, g.Name)
 }
@@ -163,20 +176,23 @@ func (s Store) LastPass(model string) (Generation, bool, error) {
 }
 
 // Undecided is a written definition probation has not decided yet: the generation that
-// wrote what stands for its name (its last put, or a rollback that restored it), with nothing
-// after it that decided or replaced it (an establish, a revert, a forget, or a later put or
-// rollback of that name).
+// wrote what stands for its name (its last put, a rollback that restored it, or the migration
+// that made it an addition), with nothing after it that decided or replaced it (an establish,
+// a revert, a forget, or a later put or rollback of that name).
 type Undecided struct {
 	Kind, Name string
-	// Put is the generation that wrote it: an OpPut, or the OpRollback that restored it, with
-	// Kind, Name and the Digest restored filled in.
+	// Put is the generation that wrote it: an OpPut, the OpRollback that restored it (with
+	// Kind, Name and the Digest restored filled in), or the OpMigrate that made it an addition.
 	Put Generation
 }
 
 // writer is the generation that wrote a name's written content, with whether probation has
-// decided it since and how.
+// decided it since and how. base is the generation whose prior state a retirement restores:
+// gen's own, but for a migration, the base of the write it migrated (retiring a migrated
+// definition restores what stood before it was first written, never its pre-migration text).
 type writer struct {
 	gen         Generation
+	base        int
 	decided     bool
 	established bool
 }
@@ -186,7 +202,10 @@ type writer struct {
 // content it changed: a name it restored is a new write probation judges again (a rollback
 // never brings back a definition without proof, not even one probation retired), and one it
 // removed has no writer; the names it left as they were keep theirs. A revert writes the
-// content it restored, already decided: what stood before is not judged again.
+// content it restored, already decided: what stood before is not judged again. A migration
+// writes the migrated content as a new write probation judges, with events since the
+// migration (what it was judged on before ran in the seed's place, a different prompt); a
+// definition a revert put back stays decided, as it was never judged.
 func writers(gens []Generation) (map[string]*writer, []string) {
 	all := states(gens)
 	out := map[string]*writer{}
@@ -201,18 +220,31 @@ func writers(gens []Generation) (map[string]*writer, []string) {
 		key := SeedKey(g.Kind, g.Name)
 		switch g.Op {
 		case OpPut:
-			write(key, &writer{gen: g})
+			write(key, &writer{gen: g, base: g.N})
 		case OpEstablish:
 			if w, ok := out[key]; ok {
 				w.decided, w.established = true, true
 			}
 		case OpForget:
 			delete(out, key)
+		case OpMigrate:
+			w, ok := out[key]
+			if !ok || g.Held {
+				break
+			}
+			if w.decided && !w.established {
+				// Put back by a revert, never judged: it stays so, now for the migrated content.
+				migrated := *w
+				migrated.gen.Digest = g.Digest
+				out[key] = &migrated
+				break
+			}
+			write(key, &writer{gen: g, base: w.base})
 		case OpRevert:
 			if g.Digest == "" {
 				delete(out, key)
 			} else {
-				write(key, &writer{gen: g, decided: true})
+				write(key, &writer{gen: g, base: g.N, decided: true})
 			}
 		case OpRollback:
 			before, after := all[i], all[i+1]
@@ -237,7 +269,7 @@ func writers(gens []Generation) (map[string]*writer, []string) {
 				kind, name := splitKey(k)
 				restored := g
 				restored.Kind, restored.Name, restored.Digest = kind, name, after[k]
-				write(k, &writer{gen: restored})
+				write(k, &writer{gen: restored, base: g.N})
 			}
 		}
 	}
@@ -295,7 +327,8 @@ func (s Store) WrittenBy(model string) (map[string]Written, error) {
 
 // Settle records probation's decision about model's written definition of kind named name
 // (Undecided): established, a generation saying so; retired, what stood before the generation
-// that wrote it is restored (the earlier definition, else the seed) as a revert with reason. A
+// that wrote it is restored (the earlier definition, else the seed; for a migrated one, what
+// stood before the write it migrated) as a revert with reason. A
 // name probation already decided, or whose file no longer holds what that generation wrote, is
 // left as it is (ErrNotFound).
 func (s Store) Settle(model, kind, name string, established bool, reason string) (Generation, error) {
@@ -309,14 +342,14 @@ func (s Store) Settle(model, kind, name string, established bool, reason string)
 		key := SeedKey(kind, name)
 		ws, _ := writers(gens)
 		w, ok := ws[key]
-		if !ok || w.decided || w.gen.N < 1 || all[len(all)-1][key] != w.gen.Digest {
+		if !ok || w.decided || w.base < 1 || all[len(all)-1][key] != w.gen.Digest {
 			return ErrNotFound
 		}
 		if established {
 			out, err = s.appendGeneration(model, Generation{Op: OpEstablish, Kind: kind, Name: name, Reason: reason})
 			return err
 		}
-		before := all[w.gen.N-1][key]
+		before := all[w.base-1][key]
 		change, err := s.restore(model, kind, name, before)
 		if err != nil {
 			return err
@@ -358,7 +391,7 @@ func states(gens []Generation) []map[string]string {
 			switch {
 			case g.Op == OpForget, g.Op == OpRevert && g.Digest == "":
 				delete(next, key)
-			case g.Op == OpPut, g.Op == OpRevert:
+			case g.Op == OpPut, g.Op == OpRevert, g.Op == OpMigrate && !g.Held:
 				next[key] = g.Digest
 			}
 		}
@@ -379,8 +412,9 @@ type Change struct {
 // stands), appends a generation saying so, and drops the model's held definitions, which were
 // held over the layer being rolled back. Only names some generation wrote are touched: a file
 // no generation recorded is left as it is. A rollback that would restore content a revert took
-// away is refused, and what it restores is judged by probation again (Undecided). It returns
-// the generation and what changed.
+// away is refused (also the content that content was migrated from, which the next layer read
+// would migrate into it again), and what it restores is judged by probation again
+// (Undecided). It returns the generation and what changed.
 func (s Store) Rollback(model string, n int, session string) (Generation, []Change, error) {
 	return s.RollbackKeeping(model, n, session, nil)
 }
@@ -410,9 +444,32 @@ func (s Store) RollbackKeeping(model string, n int, session string, keep func(ki
 		all := states(gens)
 		target := all[n]
 		current := all[len(all)-1]
+		// migratedFrom maps each kind/name's migrated content (an OpMigrate's digest) to the
+		// content it was migrated from: the same definition, which a layer read migrates again.
+		migratedFrom := map[string]map[string]string{}
+		for i, g := range gens {
+			if g.Op != OpMigrate || g.Held || g.Digest == "" {
+				continue
+			}
+			key := SeedKey(g.Kind, g.Name)
+			if migratedFrom[key] == nil {
+				migratedFrom[key] = map[string]string{}
+			}
+			migratedFrom[key][g.Digest] = all[i][key]
+		}
+		// covers reports whether digest is reverted or content reverted was migrated from.
+		covers := func(key, reverted, digest string) bool {
+			for x, steps := reverted, 0; x != "" && steps <= len(gens); x, steps = migratedFrom[key][x], steps+1 {
+				if x == digest {
+					return true
+				}
+			}
+			return false
+		}
 		// A rollback never brings back what a revert took away (probation retired it, or a
-		// held definition's failed pass put back what stood before): it would stand again
-		// with no proof. Defining it again holds it, and probation judges it afresh.
+		// held definition's failed pass put back what stood before), nor what it was migrated
+		// from: it would stand again with no proof. Defining it again holds it, and probation
+		// judges it afresh.
 		for i, g := range gens {
 			if g.Op != OpRevert {
 				continue
@@ -422,7 +479,7 @@ func (s Store) RollbackKeeping(model string, n int, session string, keep func(ki
 			if kept(key) {
 				continue
 			}
-			if reverted != "" && target[key] == reverted && current[key] != reverted {
+			if reverted != "" && target[key] != "" && covers(key, reverted, target[key]) && !covers(key, reverted, current[key]) {
 				return fmt.Errorf("refused: generation %d restores %s, which generation %d reverted (%s); roll back to a generation that does not restore it, or define it again so a clean pass and probation judge it", n, key, g.N, g.Reason)
 			}
 		}

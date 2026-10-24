@@ -362,12 +362,16 @@ func TestHoldClaimRevert(t *testing.T) {
 	}
 }
 
-// An override records its seed's digest; when the seed changes, the override is skipped and
-// reported and the new seed stands until it is defined again. Forgetting it restores the seed.
+// An override records its seed's digest; when the seed changes, the override (here an
+// instructions replacement) is skipped and reported and the new seed stands until it is defined
+// again. An instructions addition is never stale: it extends whatever seed ships. Forgetting an
+// override restores the seed.
 func TestStaleOverridesAndForget(t *testing.T) {
-	seeds := map[string]string{SeedKey(KindInstructions, "observer"): "seed v1"}
+	seeds := map[string]string{SeedKey(KindInstructions, "observer"): "seed v1", SeedKey(KindInstructions, "reflector"): "reflector v1"}
 	s := newStore(t, seeds)
-	mustPut(t, s, instr("observer", "mine"))
+	mustPut(t, s, instr("observer", "mode: replace\nmine"))
+	mustPut(t, s, instr("reflector", "my addition"))
+	seeds[SeedKey(KindInstructions, "reflector")] = "reflector v2"
 	seeds[SeedKey(KindInstructions, "observer")] = "seed v2"
 	h, reports, err := s.Load(model)
 	if err != nil {
@@ -376,6 +380,9 @@ func TestStaleOverridesAndForget(t *testing.T) {
 	if d, _ := h.Resolve(KindInstructions, "observer"); d.State != StateSeed || d.Text != "seed v2" {
 		t.Fatalf("a stale override stood: %+v", d)
 	}
+	if d, _ := h.Resolve(KindInstructions, "reflector"); d.State != StateWritten || d.Text != "my addition" || d.Mode != ModeExtend {
+		t.Fatalf("an addition went stale with its seed: %+v", d)
+	}
 	if len(reports) != 1 || !reports[0].Stale || !strings.Contains(reports[0].Message(), "stale override") {
 		t.Fatalf("reports %+v", reports)
 	}
@@ -383,7 +390,7 @@ func TestStaleOverridesAndForget(t *testing.T) {
 		t.Fatalf("get a stale override: %v", err)
 	}
 	// Defined again over the new seed, it stands.
-	mustPut(t, s, instr("observer", "mine again"))
+	mustPut(t, s, instr("observer", "mode: replace\nmine again"))
 	if h, reports, _ = s.Load(model); len(reports) != 0 {
 		t.Fatalf("reports %+v", reports)
 	}

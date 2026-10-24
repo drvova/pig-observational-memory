@@ -42,19 +42,20 @@ type WorkerArgs struct {
 	// (docs/memory-interface.md, section 7) that apply to the worker model for this stage.
 	SystemLines []string
 	// Instructions are the model's own instructions for this stage (an instructions
-	// definition in its layer, docs/memory-interface.md section 8); "" keeps the seed. They
-	// replace the seed instructions only: the kernel's fixed rules still open the prompt.
+	// definition in its layer, docs/memory-interface.md section 8); "" keeps the seed alone.
+	// They are appended after the seed instructions unless ReplaceSeed is set; the kernel's
+	// fixed rules open the prompt either way.
 	Instructions string
+	// ReplaceSeed puts Instructions in place of the seed instructions (an instructions
+	// definition in layer.ModeReplace) instead of after them.
+	ReplaceSeed bool
 }
 
 // system is the stage's system prompt: the kernel's fixed rules (textID), the stage's
-// instructions (the worker's own, else seed), and the worker's SystemLines appended.
+// instructions (ComposeStage: the seed, then the worker's own additions, or the worker's own
+// replacement), and the worker's SystemLines appended.
 func (a WorkerArgs) system(textID, seed string) string {
-	instructions := seed
-	if strings.TrimSpace(a.Instructions) != "" {
-		instructions = a.Instructions
-	}
-	base := Compose(textID, instructions)
+	base := ComposeStage(textID, seed, a.Instructions, a.ReplaceSeed)
 	if len(a.SystemLines) == 0 {
 		return base
 	}

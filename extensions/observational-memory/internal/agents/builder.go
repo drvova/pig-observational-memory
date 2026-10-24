@@ -54,7 +54,7 @@ type BuilderResult struct {
 const BuilderKinds = `Definition kinds (kind: what you define; how the kernel uses it):
 - format: a table format declared as data (header form, delimiter, quote, escape, the characters that force quoting, the indent); a generic strict codec interprets it, and it must round-trip the kernel's test tables before it is accepted.
 - schema: the fields your notes carry beyond the kernel's (id, timestamp, content, sources, relevance); validated and stored with each note.
-- instructions: your own observer, reflector or dropper instructions (names: observer, reflector, dropper); appended after the kernel's fixed rules, never in place of them.
+- instructions: your own observer, reflector or dropper instructions (names: observer, reflector, dropper); always after the kernel's fixed rules. By default an addition, appended after the seed instructions; a text opening with the line "mode: replace" replaces the seed instructions instead (held, then on probation).
 - summary: the memory query, or a declaration of up to eight sections, that selects and groups what the compaction summary shows; run under the room budget, and the kernel still discloses every omitted record.
 - detector: a kernel check or a memory query over your notes and the history a pass covered that counts a failure; it flags problems and never judges a remedy.
 - remedy: a catalogue named after a catalogue remedy (prompt-line, require-kind, keep-head, block-link, protect-kind, split-chunk, switch-codec, long-spec): the detectors it answers, the order the harness tries it, and its parameters. Rules are proposed with the memory tool's propose, not defined here.

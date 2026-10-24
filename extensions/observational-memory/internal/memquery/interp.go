@@ -53,7 +53,8 @@ type HarnessRow struct {
 	// Generation is the generation that wrote it, "" for a seed or a held definition.
 	Generation string
 	// Origin is seed (shipped and standing), override (the model's definition of a seed's
-	// name) or own (a name no seed has).
+	// name), extends or replaces (the model's instructions appended after the seed, or in its
+	// place: their mode) or own (a name no seed has).
 	Origin string
 	// Stale is why an override was skipped as stale, "" when it is not.
 	Stale string

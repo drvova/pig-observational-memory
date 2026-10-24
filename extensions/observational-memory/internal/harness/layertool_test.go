@@ -27,7 +27,7 @@ func TestMemoryToolHarnessWritesAndRollback(t *testing.T) {
 	ls := store.Layer()
 	first := `harness kind=instructions name=observer text="Write one note per figure the user gives, with its unit and its date."`
 	r := m.RunMemory(h, first)
-	if r.IsError || !strings.Contains(r.Text, "Held instructions/observer for p/m") || !strings.Contains(r.Text, "override of the seed") {
+	if r.IsError || !strings.Contains(r.Text, "Held instructions/observer for p/m") || !strings.Contains(r.Text, "an addition to the seed instructions/observer") {
 		t.Fatalf("define: %s", r.Text)
 	}
 	if !notified(h, "p/m defined instructions/observer") {
@@ -40,7 +40,7 @@ func TestMemoryToolHarnessWritesAndRollback(t *testing.T) {
 		t.Fatalf("a held definition wrote a generation: %+v", gens)
 	}
 	listing := m.RunMemory(h, `harness | where state=held`)
-	if listing.IsError || !strings.Contains(listing.Text, "observer") || !strings.Contains(listing.Text, "override") {
+	if listing.IsError || !strings.Contains(listing.Text, "observer") || !strings.Contains(listing.Text, harness.OriginExtends) {
 		t.Fatalf("listing: %s", listing.Text)
 	}
 	if _, err := ls.Claim("p/m", true, ""); err != nil {
@@ -141,14 +141,15 @@ func TestStatusShowsTheHarness(t *testing.T) {
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "observer", Model: "p/m", Text: "Write one note per figure."}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "reflector", Model: "p/m", Text: "Reflect only on stable facts."}); err != nil {
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "reflector", Model: "p/m", Text: "mode: replace\nReflect only on stable facts."}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ls.Hold(layer.Definition{Kind: layer.KindInstructions, Name: "dropper", Model: "p/m", Text: "Keep every plan."}); err != nil {
 		t.Fatal(err)
 	}
-	// The reflector seed changes after the override was written (an upgrade): the override
-	// recorded the old seed's digest, so it is stale. (A hand-edited file is untracked instead.)
+	// The reflector seed changes after the replacement was written (an upgrade): the replacement
+	// recorded the old seed's digest, so it is stale. (A hand-edited file is untracked instead;
+	// an addition, like the observer's and the dropper's, extends whatever seed ships.)
 	seed := layer.Shipped()[layer.SeedKey(layer.KindInstructions, "reflector")]
 	layer.Ship(layer.KindInstructions, "reflector", seed+"\nA sentence an upgrade added.")
 	t.Cleanup(func() { layer.Ship(layer.KindInstructions, "reflector", seed) })
@@ -156,7 +157,7 @@ func TestStatusShowsTheHarness(t *testing.T) {
 	for _, want := range []string{
 		"Kernel floor: engaged",
 		"Layer (p/m): generation 3, 2 definitions, built at generation 1, held: instructions/dropper",
-		"instructions: dropper held, overrides the seed; observer probation gen 2, overrides the seed",
+		"instructions: dropper held, extends the seed; observer probation gen 2, extends the seed",
 		"stale override skipped, the seed stands: instructions/reflector",
 	} {
 		if !strings.Contains(status, want) {
@@ -207,5 +208,54 @@ func TestHarnessForgetAndRollbackLeaveRules(t *testing.T) {
 	}
 	if d, err := ls.Get("p/m", layer.KindRemedy, "abc123"); err != nil || d.Text != rule {
 		t.Fatalf("the rollback touched the rule: %+v %v", d, err)
+	}
+}
+
+// An instructions definition extends its seed unless it opens with "mode: replace": the memory
+// tool says which, the harness source lists the mode as its origin, and /om:status shows a
+// replacement as such and on probation (the reflector's and dropper's too, which no kernel count
+// establishes), next to an addition.
+func TestStatusShowsInstructionsModes(t *testing.T) {
+	h, store, m := session(t)
+	ls := store.Layer()
+	r := m.RunMemory(h, `harness kind=instructions name=dropper text="mode: replace\nDrop only notes a reflection repeats word for word."`)
+	if r.IsError || !strings.Contains(r.Text, "a replacement of the seed instructions/dropper") {
+		t.Fatalf("define: %s", r.Text)
+	}
+	if r := m.RunMemory(h, `harness kind=instructions name=observer text="Write one note per figure."`); r.IsError || !strings.Contains(r.Text, "an addition to the seed") {
+		t.Fatalf("define: %s", r.Text)
+	}
+	if r := m.RunMemory(h, `harness kind=instructions name=reflector text="mode: rewrite\nReflect less."`); !r.IsError || !strings.Contains(r.Text, "an instructions mode is extend") {
+		t.Fatalf("an unknown mode: %s", r.Text)
+	}
+	listing := m.RunMemory(h, `harness | where kind=instructions`)
+	if listing.IsError || !strings.Contains(listing.Text, harness.OriginReplaces) || !strings.Contains(listing.Text, harness.OriginExtends) {
+		t.Fatalf("listing: %s", listing.Text)
+	}
+	status := strings.Join(harness.StatusLines(h, config.Defaults), "\n")
+	if !strings.Contains(status, "instructions: dropper held, replaces the seed (mode replace); observer held, extends the seed") {
+		t.Fatalf("held status:\n%s", status)
+	}
+	if _, err := ls.Claim("p/m", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	status = strings.Join(harness.StatusLines(h, config.Defaults), "\n")
+	if !strings.Contains(status, "instructions: dropper probation gen 1, replaces the seed (mode replace); observer probation gen 2, extends the seed") {
+		t.Fatalf("written status:\n%s", status)
+	}
+}
+
+// A pass's layer read migrates the instructions definitions recorded before modes into
+// additions, records each as a generation and tells the user once.
+func TestLayerReadMigratesInstructions(t *testing.T) {
+	h, store, _ := session(t)
+	ls := store.Layer()
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "observer", Model: "p/m", Text: "Record only short facts."}); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing recorded before modes: nothing to migrate.
+	harness.MigrateInstructions(h, store, "p/m")
+	if gens, _ := ls.Generations("p/m"); len(gens) != 1 || len(h.Notifications) != 0 {
+		t.Fatalf("migrated a definition with a mode: %+v %+v", gens, h.Notifications)
 	}
 }
