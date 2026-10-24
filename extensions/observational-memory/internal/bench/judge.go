@@ -59,13 +59,14 @@ type Verdict struct {
 
 // Judge grades a response with a single user message at temperature 0 and
 // no system prompt, as evaluate_qa.py does. maxTokens is far above its 10
-// because a reasoning model spends tokens before the verdict.
-func Judge(ctx context.Context, client *Client, model string, maxTokens int, q Question, response string) (Verdict, error) {
+// because a reasoning model spends tokens before the verdict. effort is sent as
+// reasoning_effort; "" leaves the provider default.
+func Judge(ctx context.Context, client *Client, model string, maxTokens int, effort string, q Question, response string) (Verdict, error) {
 	prompt, err := JudgePrompt(q, response)
 	if err != nil {
 		return Verdict{}, err
 	}
-	resp, err := chatWithContent(ctx, client, RoleJudge, ChatRequest{Model: model, Messages: []ChatMessage{{Role: "user", Content: Text(prompt)}}, MaxTokens: maxTokens, Temperature: &zero})
+	resp, err := chatWithContent(ctx, client, RoleJudge, ChatRequest{Model: model, Messages: []ChatMessage{{Role: "user", Content: Text(prompt)}}, MaxTokens: maxTokens, Temperature: &zero, ReasoningEffort: effort})
 	if err != nil {
 		return Verdict{}, err
 	}

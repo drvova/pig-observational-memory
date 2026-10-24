@@ -58,7 +58,7 @@ func TestDefaults(t *testing.T) {
 	want := config.Config{
 		ObserveAfterTokens: 10000, ReflectAfterTokens: 20000, CompactAfterTokens: 81000, CompactAfterTokensMode: "calibrated", CompactAfterTokensRatio: 0.68,
 		ObservationsPoolMaxTokens: 20000, ObservationsPoolTargetTokens: 10000, AgentMaxTurns: 16, AgentMaxTokens: 32000, CompactionCatchUpMaxChunks: 2,
-		ShowWorkerNotifications: true, PiAutoCompactionEnabled: true,
+		ShowWorkerNotifications: true, PiAutoCompactionEnabled: true, CuratedMemory: true, CuratedMemoryIndexTokens: 2000,
 	}
 	if !reflect.DeepEqual(config.Defaults, want) {
 		t.Fatalf("defaults %+v", config.Defaults)
@@ -264,5 +264,14 @@ func TestReadPiAutoCompaction(t *testing.T) {
 	f.writeJSON(t, f.project(), map[string]any{"compaction": map[string]any{"enabled": true}})
 	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); !ok || !enabled {
 		t.Fatalf("project %v %v", enabled, ok)
+	}
+}
+
+func TestCuratedMemorySettings(t *testing.T) {
+	f := setup(t)
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"curatedMemory": false, "curatedMemoryIndexTokens": 512}})
+	got := f.load(env{})
+	if got.CuratedMemory || got.CuratedMemoryIndexTokens != 512 {
+		t.Fatalf("curated settings not applied: %+v", got)
 	}
 }

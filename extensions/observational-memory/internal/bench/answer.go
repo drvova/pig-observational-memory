@@ -131,6 +131,8 @@ type Answer struct {
 type AnswerOptions struct {
 	Model     string
 	MaxTokens int
+	// ReasoningEffort is sent as reasoning_effort; "" leaves the provider default.
+	ReasoningEffort string
 }
 
 var zero = 0.0
@@ -167,7 +169,7 @@ func AskWithRecall(ctx context.Context, client *Client, messages []ChatMessage, 
 	messages = append([]ChatMessage{}, messages...)
 	recalls := 0
 	for turn := 0; ; turn++ {
-		req := ChatRequest{Model: opts.Model, Messages: messages, MaxTokens: opts.MaxTokens, Temperature: &zero}
+		req := ChatRequest{Model: opts.Model, Messages: messages, MaxTokens: opts.MaxTokens, Temperature: &zero, ReasoningEffort: opts.ReasoningEffort}
 		if turn < MaxRecallTurns {
 			req.Tools = []ToolSpec{RecallTool()}
 		}
@@ -200,7 +202,7 @@ func AskWithRecall(ctx context.Context, client *Client, messages []ChatMessage, 
 
 // Ask sends the actor messages at temperature 0, as Mastra does.
 func Ask(ctx context.Context, client *Client, messages []ChatMessage, opts AnswerOptions) (Answer, error) {
-	resp, err := chatWithContent(ctx, client, RoleActor, ChatRequest{Model: opts.Model, Messages: messages, MaxTokens: opts.MaxTokens, Temperature: &zero})
+	resp, err := chatWithContent(ctx, client, RoleActor, ChatRequest{Model: opts.Model, Messages: messages, MaxTokens: opts.MaxTokens, Temperature: &zero, ReasoningEffort: opts.ReasoningEffort})
 	if err != nil {
 		return Answer{}, err
 	}

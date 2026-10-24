@@ -93,6 +93,9 @@ func WorkerRole(request map[string]any) string {
 	return RoleWorker
 }
 
+// ReasoningEffort maps a Pi thinking level onto reasoning_effort ("" for off).
+func ReasoningEffort(level string) string { return reasoningEffort(level) }
+
 // reasoningEffort maps Pi thinking levels onto OpenAI reasoning_effort.
 func reasoningEffort(level string) string {
 	switch level {

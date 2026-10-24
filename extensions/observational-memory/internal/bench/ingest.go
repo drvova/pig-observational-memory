@@ -216,6 +216,7 @@ type Memory struct {
 	Reflections         int    `json:"reflections"`
 	OmittedObservations int    `json:"omittedObservations"`
 	OmittedReflections  int    `json:"omittedReflections"`
+	ClippedObservations int    `json:"clippedObservations,omitempty"`
 	SummaryTokens       int    `json:"summaryTokens"`
 	TailTokens          int    `json:"tailTokens"`
 	SourceTokens        int    `json:"sourceTokens"`
@@ -224,9 +225,16 @@ type Memory struct {
 // RenderMemory renders the branch's memory the way the compaction hook does
 // for a full fold at the tip: reflections and active observations, budgeted.
 func RenderMemory(entries []session.Entry, cfg config.Config, contextWindow int) Memory {
+	return RenderMemoryWithOptions(entries, cfg, contextWindow, ledger.RenderOptions{})
+}
+
+// RenderMemoryWithOptions is RenderMemory with extra render options; the
+// reflection dates are always set.
+func RenderMemoryWithOptions(entries []session.Entry, cfg config.Config, contextWindow int, options ledger.RenderOptions) Memory {
 	full := ledger.FullProjection(entries, "")
 	folded := ledger.FoldLedger(entries, "")
-	rendered := ledger.RenderSummaryWithBudget(full.Reflections, full.Observations, config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow))
+	options.ReflectionDates = ledger.ReflectionDateRanges(folded)
+	rendered := ledger.RenderSummaryWithOptions(full.Reflections, full.Observations, config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow), options)
 	frontier := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
 	tail := []session.Entry{}
 	for i := frontier + 1; i < len(entries); i++ {
@@ -243,6 +251,7 @@ func RenderMemory(entries []session.Entry, cfg config.Config, contextWindow int)
 		Reflections:         len(full.Reflections),
 		OmittedObservations: rendered.OmittedObservations,
 		OmittedReflections:  rendered.OmittedReflections,
+		ClippedObservations: rendered.ClippedObservations,
 		SummaryTokens:       EstimateTokens(rendered.Text),
 		TailTokens:          EstimateTokens(tailText),
 		SourceTokens:        ledger.RawTokensAfterIndexWhere(entries, -1, nil),

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/bench"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
@@ -47,12 +48,20 @@ type settings struct {
 	MaxAttempts    int    `json:"maxAttempts"`
 	UserAgent      string `json:"userAgent,omitempty"`
 	SessionHeader  string `json:"sessionHeader,omitempty"`
+	Backend        string `json:"backend,omitempty"`
+	ActorThinking  string `json:"actorThinking,omitempty"`
+	JudgeThinking  string `json:"judgeThinking,omitempty"`
+	CodexAuth      string `json:"codexAuth,omitempty"`
 }
 
 func (s *settings) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.Mode, "mode", "om", `"om" (observational memory) or "full-context" (raw sessions baseline)`)
 	fs.StringVar(&s.Model, "model", "deepseek-v4.1-flash-uncensored", "model for every role (observer, reflector, dropper, actor, judge)")
-	fs.StringVar(&s.BaseURL, "base-url", "", "OpenAI-compatible chat-completions endpoint, e.g. https://api.example.com/v1 (required)")
+	fs.StringVar(&s.BaseURL, "base-url", "", "OpenAI-compatible chat-completions endpoint, e.g. https://api.example.com/v1 (required unless -backend codex)")
+	fs.StringVar(&s.Backend, "backend", "openai", `"openai" (chat completions, key from `+APIKeyEnv+`) or "codex" (a ChatGPT plan signed in with `+"`codex login`"+`)`)
+	fs.StringVar(&s.ActorThinking, "actor-thinking", "", `actor thinking level ("" = provider default; "medium" with -backend codex)`)
+	fs.StringVar(&s.JudgeThinking, "judge-thinking", "", `judge thinking level ("" = provider default; "medium" with -backend codex)`)
+	fs.StringVar(&s.CodexAuth, "codex-auth", bench.DefaultCodexAuthPath(), "with -backend codex, the Codex CLI's auth.json")
 	fs.IntVar(&s.ContextWindow, "context-window", 128_000, "model context window (sizes observer chunks, worker memory, summary budget, full-context truncation)")
 	fs.IntVar(&s.ModelMaxTokens, "model-max-tokens", 32_000, "model output limit (clamps the workers' agentMaxTokens)")
 	fs.StringVar(&s.WorkerThinking, "worker-thinking", "", `worker thinking level ("" = extension default "low")`)
@@ -63,6 +72,51 @@ func (s *settings) register(fs *flag.FlagSet) {
 	fs.IntVar(&s.MaxAttempts, "max-attempts", 8, "HTTP attempts per model call (429/5xx/network)")
 	fs.StringVar(&s.UserAgent, "user-agent", "", "User-Agent sent on every model call")
 	fs.StringVar(&s.SessionHeader, "session-header", "", "header carrying a stable per-question session id, for providers that route or cache by session")
+}
+
+// resolveBackend checks -backend and fills the Codex backend's base URL.
+func (s *settings) resolveBackend() error {
+	switch s.Backend {
+	case "openai":
+	case "codex":
+		if s.BaseURL == "" {
+			s.BaseURL = bench.DefaultCodexBaseURL
+		}
+		// Sent no effort, the Codex backend answers with next to no reasoning,
+		// unlike chat-completions reasoning models, which reason by default; medium
+		// is the plan's catalog default for its models.
+		if s.ActorThinking == "" {
+			s.ActorThinking = "medium"
+		}
+		if s.JudgeThinking == "" {
+			s.JudgeThinking = "medium"
+		}
+	default:
+		return fmt.Errorf("unknown -backend %q", s.Backend)
+	}
+	return nil
+}
+
+// client builds a worker's model client for the configured backend.
+func (s settings) client(meter *bench.Meter, questionID string) (*bench.Client, error) {
+	if s.Backend == "codex" {
+		auth, err := bench.NewCodexAuth(s.CodexAuth)
+		if err != nil {
+			return nil, err
+		}
+		client := bench.NewClient(s.BaseURL, "", meter)
+		client.Codex = auth
+		client.CacheKey = "longmemeval-" + questionID
+		client.OnLimit = func(reset time.Time) {
+			fmt.Fprintf(os.Stderr, "%s usage limit: waiting until %s\n", time.Now().UTC().Format(time.RFC3339), reset.UTC().Format(time.RFC3339))
+		}
+		return client, nil
+	}
+	key := os.Getenv(APIKeyEnv)
+	if key == "" {
+		return nil, fmt.Errorf("%s is not set", APIKeyEnv)
+	}
+	return bench.NewClient(s.BaseURL, key, meter), nil
 }
 
 func (s settings) spec() bench.ModelSpec {
@@ -81,6 +135,8 @@ func main() {
 		err = reportCmd(os.Args[2:])
 	case "worker":
 		err = workerCmd(os.Args[2:])
+	case "replay":
+		err = replayCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -91,7 +147,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: longmemeval run|report [flags]; see -h of each")
+	fmt.Fprintln(os.Stderr, "usage: longmemeval run|report|replay [flags]; see -h of each")
 	os.Exit(2)
 }
 
@@ -110,14 +166,22 @@ func runCmd(args []string) error {
 	types := fs.String("types", "", "comma-separated question types")
 	workerAttempts := fs.Int("worker-attempts", 3, "worker process attempts per question (resuming from its checkpoint)")
 	_ = fs.Parse(args)
+	if err := s.resolveBackend(); err != nil {
+		return err
+	}
 	if *data == "" || *out == "" || s.BaseURL == "" {
 		return errors.New("-data, -out and -base-url are required")
 	}
 	if s.Mode != "om" && s.Mode != "full-context" {
 		return fmt.Errorf("unknown -mode %q", s.Mode)
 	}
-	if os.Getenv(APIKeyEnv) == "" {
+	if s.Backend == "openai" && os.Getenv(APIKeyEnv) == "" {
 		return fmt.Errorf("%s is not set", APIKeyEnv)
+	}
+	if s.Backend == "codex" {
+		if _, err := bench.NewCodexAuth(s.CodexAuth); err != nil {
+			return err
+		}
 	}
 	questions, err := bench.LoadDataset(*data)
 	if err != nil {
@@ -279,6 +343,118 @@ func writeReport(out string) (bench.Summary, error) {
 	return summary, os.WriteFile(filepath.Join(out, "summary.md"), []byte(summary.Markdown()), 0o644)
 }
 
+// replayCmd rebuilds each finished question's memory from its saved
+// checkpoint with the current code: the drop floor is applied to the recorded
+// drops (bench.ApplyDropFloor) and the summary is rendered by the current
+// renderer. It makes no model calls. For each question it writes the new
+// actor prompt and memory and reports whether the prompt changed and whether a
+// short gold answer now appears in it, so a deterministic change can be
+// measured on exactly the memory a model built before.
+func replayCmd(args []string) error {
+	fs := flag.NewFlagSet("replay", flag.ExitOnError)
+	from := fs.String("from", "", "finished run directory to replay")
+	out := fs.String("out", "", "directory for the replayed prompts (created)")
+	floor := fs.Bool("drop-floor", true, "apply the drop floor to the recorded drops")
+	ids := fs.String("ids", "", "comma-separated question ids (default: all with a checkpoint)")
+	clip := fs.Bool("clip-overflow", false, "list observations the summary cannot hold in full as clipped lines (ledger.RenderOptions.ClippedOverflow)")
+	summaryTokens := fs.Int("summary-tokens", 0, "compactionSummaryMaxTokens for the replayed summary (0: the run's setting)")
+	_ = fs.Parse(args)
+	if *from == "" || *out == "" {
+		return errors.New("-from and -out are required")
+	}
+	var info struct {
+		Settings settings `json:"settings"`
+	}
+	_ = readJSON(filepath.Join(*from, "run.json"), &info)
+	s := info.Settings
+	if s.ContextWindow == 0 {
+		s.ContextWindow = 128_000
+	}
+	cfg := bench.WorkerConfig(s.spec(), s.WorkerThinking)
+	if *summaryTokens > 0 {
+		cfg.CompactionSummaryMaxTokens = *summaryTokens
+	}
+	dirs, _ := filepath.Glob(filepath.Join(*from, "questions", "*", "checkpoint.json"))
+	want := map[string]bool{}
+	for _, id := range split(*ids) {
+		want[id] = true
+	}
+	type row struct {
+		ID            string            `json:"id"`
+		Type          string            `json:"type"`
+		Changed       bool              `json:"promptChanged"`
+		GoldBefore    *bool             `json:"goldInPromptBefore,omitempty"`
+		GoldAfter     *bool             `json:"goldInPromptAfter,omitempty"`
+		Stats         bench.ReplayStats `json:"stats"`
+		OmittedBefore int               `json:"omittedObservationsBefore"`
+		OmittedAfter  int               `json:"omittedObservationsAfter"`
+	}
+	rows := []row{}
+	for _, path := range dirs {
+		dir := filepath.Dir(path)
+		id := filepath.Base(dir)
+		if len(want) > 0 && !want[id] {
+			continue
+		}
+		var q bench.Question
+		var cp bench.Checkpoint
+		if readJSON(filepath.Join(dir, "question.json"), &q) != nil || readJSON(path, &cp) != nil || cp.SessionsDone < len(q.HaystackSessions) {
+			continue
+		}
+		entries := session.FromMaps(cp.Entries)
+		r := row{ID: q.ID, Type: q.Type}
+		if *floor {
+			entries, r.Stats = bench.ApplyDropFloor(entries, cfg)
+		}
+		memory := bench.RenderMemoryWithOptions(entries, cfg, s.ContextWindow, ledger.RenderOptions{ClippedOverflow: *clip})
+		messages := bench.OMMessages(q, memory, s.Recall)
+		qdir := filepath.Join(*out, "questions", q.ID)
+		if err := os.MkdirAll(qdir, 0o755); err != nil {
+			return err
+		}
+		if err := writePrompt(filepath.Join(qdir, "actor-prompt.md"), messages); err != nil {
+			return err
+		}
+		if err := writeJSON(filepath.Join(qdir, "memory.json"), map[string]any{"memory": memory}); err != nil {
+			return err
+		}
+		before, _ := os.ReadFile(filepath.Join(dir, "actor-prompt.md"))
+		after, _ := os.ReadFile(filepath.Join(qdir, "actor-prompt.md"))
+		r.Changed = string(before) != string(after)
+		var old struct {
+			Memory bench.Memory `json:"memory"`
+		}
+		if readJSON(filepath.Join(dir, "memory.json"), &old) == nil {
+			r.OmittedBefore = old.Memory.OmittedObservations
+		}
+		r.OmittedAfter = memory.OmittedObservations
+		if gold := strings.ToLower(strings.TrimSpace(q.Answer())); gold != "" && len(gold) <= 40 && !q.Abstention() {
+			b := strings.Contains(strings.ToLower(string(before)), gold)
+			a := strings.Contains(strings.ToLower(string(after)), gold)
+			r.GoldBefore, r.GoldAfter = &b, &a
+		}
+		rows = append(rows, r)
+	}
+	changed, gb, ga, kept := 0, 0, 0, 0
+	for _, r := range rows {
+		if r.Changed {
+			changed++
+		}
+		if r.GoldBefore != nil && *r.GoldBefore {
+			gb++
+		}
+		if r.GoldAfter != nil && *r.GoldAfter {
+			ga++
+		}
+		kept += r.Stats.KeptDrops
+	}
+	if err := writeJSON(filepath.Join(*out, "replay.json"), rows); err != nil {
+		return err
+	}
+	fmt.Printf("replayed %d questions: %d prompts changed, %d drops kept by the floor; short gold answers in the prompt: %d before, %d after\n", len(rows), changed, kept, gb, ga)
+	return nil
+}
+
 // state is a worker's accumulated cost across attempts.
 type state struct {
 	Usage         bench.Usage `json:"usage"`
@@ -295,10 +471,6 @@ func workerCmd(args []string) error {
 	if err := json.Unmarshal([]byte(*raw), &s); err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
-	key := os.Getenv(APIKeyEnv)
-	if key == "" {
-		return fmt.Errorf("%s is not set", APIKeyEnv)
-	}
 	var q bench.Question
 	if err := readJSON(filepath.Join(*dir, "question.json"), &q); err != nil {
 		return err
@@ -306,7 +478,10 @@ func workerCmd(args []string) error {
 	var st state
 	_ = readJSON(filepath.Join(*dir, "state.json"), &st)
 	meter := bench.NewMeter(st.Usage)
-	client := bench.NewClient(s.BaseURL, key, meter)
+	client, err := s.client(meter, q.ID)
+	if err != nil {
+		return err
+	}
 	client.MaxAttempts = s.MaxAttempts
 	client.UserAgent = s.UserAgent
 	if s.SessionHeader != "" {
@@ -348,7 +523,7 @@ func workerCmd(args []string) error {
 			return err
 		}
 		started := time.Now()
-		opts := bench.AnswerOptions{Model: s.Model, MaxTokens: s.ActorMaxTokens}
+		opts := bench.AnswerOptions{Model: s.Model, MaxTokens: s.ActorMaxTokens, ReasoningEffort: bench.ReasoningEffort(s.ActorThinking)}
 		if s.Mode == "om" && s.Recall {
 			var checkpoint bench.Checkpoint
 			if err := readJSON(filepath.Join(*dir, "checkpoint.json"), &checkpoint); err != nil {
@@ -369,7 +544,7 @@ func workerCmd(args []string) error {
 	}
 	result.Hypothesis, result.FinishReason, result.Recalls = answer.Hypothesis, answer.FinishReason, answer.Recalls
 	started := time.Now()
-	verdict, err := bench.Judge(ctx, client, s.Model, s.JudgeMaxTokens, q, answer.Hypothesis)
+	verdict, err := bench.Judge(ctx, client, s.Model, s.JudgeMaxTokens, bench.ReasoningEffort(s.JudgeThinking), q, answer.Hypothesis)
 	st.AnswerSeconds += time.Since(started).Seconds()
 	if err != nil {
 		return fmt.Errorf("judge: %w", err)

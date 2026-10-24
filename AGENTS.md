@@ -27,6 +27,15 @@ renders the posting video from the built scenes, with `sound.ts`'s synthesized s
 gitignored `out/trailer.mp4`.
 The Clayzo agent skills live in `.agents/skills/` (linked from `.claude/skills/`).
 
+## Curated memory and the bench module
+
+`internal/curated` is the agent-written memory (tools, store under PiG's config root, ranked index). The
+index goes into the system prompt as the `curated-memory` section (`systemPromptOptions.sections`), never as a
+returned `systemPrompt`, which PiG turns into a forced prompt that drops other extensions' sections. PiG keeps
+the extension process across sessions, so per-conversation state (the index `Pin`) resets on `session_start`.
+`cmd/longmemeval` is a nested module (own `go.mod` with a `replace`): `pig install` refuses a module holding
+both the factory and a standalone `main`, so the harness must stay outside the extension module's scan.
+
 ## Model auth (OAuth vs API key)
 
 `internal/runtime/runtime.go` `resolveCandidate` must accept auth that carries EITHER an API key OR

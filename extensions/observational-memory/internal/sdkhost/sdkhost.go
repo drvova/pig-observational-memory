@@ -175,3 +175,13 @@ func (m models) Refresh(_ context.Context, options host.RefreshOptions) error {
 func (m models) Stream(model host.Model, request map[string]any) host.ModelStream {
 	return m.registry.StreamSimple(model, request, nil)
 }
+
+// ConfigHome is PiG's config root (PIG_HOME, else XDG_CONFIG_HOME/pig, else
+// ~/.pig), "" when it cannot be found.
+func (h *Host) ConfigHome() string {
+	dir, err := h.ctx.ConfigHome()
+	if err != nil {
+		return ""
+	}
+	return dir
+}

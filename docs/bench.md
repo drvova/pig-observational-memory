@@ -2,9 +2,11 @@
 
 This page explains how to run [LongMemEval](https://github.com/xiaowu0162/LongMemEval) against the extension's memory pipeline, what the harness does at each step, and how far its numbers can be compared with [Mastra's published Observational Memory results](https://mastra.ai/research/observational-memory).
 
-The harness is `internal/bench` plus the `cmd/longmemeval` command. Both are part of the Go module, but the extension does not import them, so the PiG extension builds and behaves exactly as before.
+The harness is `internal/bench` plus the `cmd/longmemeval` command. The extension does not import either, so the PiG extension builds and behaves exactly as before.
 
 ## What it does
+
+The command is its own Go module (`cmd/longmemeval/go.mod`, pointing at the extension with a `replace`), so PiG, which refuses a module holding both an extension factory and a standalone `main` package, still installs the extension. Run it from `extensions/observational-memory/cmd/longmemeval`.
 
 The harness follows [Mastra's LongMemEval runner](https://github.com/mastra-ai/mastra/tree/main/explorations/longmemeval). It runs each question in three steps.
 
@@ -34,9 +36,9 @@ curl -L -o ~/bench-data/longmemeval_s.json \
 The API key is read only from the environment variable `LONGMEMEVAL_API_KEY`. The harness never writes it to a file, a log or a result. Worker processes inherit it from the environment, not from their arguments.
 
 ```bash
-cd extensions/observational-memory
+cd extensions/observational-memory/cmd/longmemeval
 export LONGMEMEVAL_API_KEY=...     # the endpoint's key
-go run ./cmd/longmemeval run \
+go run . run \
   -base-url https://api.example.com/v1 \
   -data ~/bench-data/longmemeval_s.json \
   -out ~/bench-runs/om-full \
@@ -46,15 +48,28 @@ go run ./cmd/longmemeval run \
 To run a quick stratified subset, such as one question from each of three types:
 
 ```bash
-go run ./cmd/longmemeval run -base-url https://api.example.com/v1 -data ~/bench-data/longmemeval_s.json \
+go run . run -base-url https://api.example.com/v1 -data ~/bench-data/longmemeval_s.json \
   -out ~/bench-runs/smoke -sample 3 -stratified -seed 1 -concurrency 3
 ```
 
 To rebuild the report from finished questions:
 
 ```bash
-go run ./cmd/longmemeval report -out ~/bench-runs/om-full
+go run . report -out ~/bench-runs/om-full
 ```
+
+### On a ChatGPT plan (Codex)
+
+`-backend codex` sends every call to a ChatGPT plan's Codex backend instead of an API key's endpoint. Sign in once with the Codex CLI (`codex login`, or `codex login --device-auth` on a machine without a browser). The harness reads the CLI's `auth.json` (`-codex-auth`, default `$CODEX_HOME/auth.json` or `~/.codex/auth.json`) and renews its token when it nears expiry. Workers share the file under a lock, because refresh tokens rotate. `codex debug models` lists the plan's models.
+
+```bash
+go run . run -backend codex -model gpt-6-luna \
+  -data ~/bench-data/longmemeval_s.json -out ~/bench-runs/codex-luna -concurrency 8
+```
+
+Sent no reasoning effort, the Codex backend answers with next to no reasoning, while chat-completions reasoning models reason by default, so with `-backend codex` the actor and judge default to `medium` (`-actor-thinking`, `-judge-thinking`), the plan's catalog default. The workers keep the extension's own default (`-worker-thinking`).
+
+When the plan's usage limit is reached, each call waits until the window resets and then goes on; the wait spends no retry attempt. A full run therefore takes as many windows as the plan needs, and stopping and rerunning the same command resumes it.
 
 ### Flags
 
@@ -68,7 +83,9 @@ go run ./cmd/longmemeval report -out ~/bench-runs/om-full
 | `-limit N` | off | first N of the selection |
 | `-ids`, `-types` | off | comma-separated question ids or types |
 | `-model` | `deepseek-v4.1-flash-uncensored` | the model for every role: observer, reflector, dropper, actor and judge |
-| `-base-url` | (required) | OpenAI-compatible chat-completions endpoint |
+| `-base-url` | (required for `openai`) | OpenAI-compatible chat-completions endpoint |
+| `-backend` | `openai` | `openai` (chat completions, key from `LONGMEMEVAL_API_KEY`) or `codex` (a ChatGPT plan signed in with `codex login`) |
+| `-codex-auth` | `~/.codex/auth.json` | with `-backend codex`, the Codex CLI's sign-in file |
 | `-context-window` | `128000` | the window the extension sizes against: the observer chunk (20%), worker memory (25%) and summary budget (12.5%); also the full-context truncation |
 | `-model-max-tokens` | `32000` | model output limit, which clamps the workers' `agentMaxTokens` |
 | `-worker-thinking` | extension default (`low`) | worker thinking level, sent as `reasoning_effort` |
@@ -98,6 +115,16 @@ The command writes everything under `-out`:
 A question with a `result.json` is skipped on rerun. A question without one resumes from its latest finished stage. Ingestion restarts after the last checkpointed session, and the actor is skipped when `answer.json` exists. The in-process backoffs of the observer and reflector are not checkpointed, so a resumed question may run one extra worker call.
 
 The extrapolation scales each sampled type's per-question mean by that type's count in the dataset. Wall time assumes the run's concurrency and the same endpoint latency.
+
+## Replaying a finished run
+
+`replay` rebuilds every finished question's memory from its saved `checkpoint.json` with the current code, without calling a model: the dropper's preservation floor is applied to the drops the model recorded, and the summary is rendered by the current renderer. It writes each new `actor-prompt.md` and `memory.json` under `-out`, plus `replay.json` with whether each prompt changed, the drops the floor kept, observations omitted from the summary before and after, and, for short gold answers, whether the answer text appears in the prompt before and after.
+
+```bash
+go run . replay -from ~/bench-runs/om-full -out ~/bench-runs/replay
+```
+
+Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts. `-summary-tokens N` renders the summary at another `compactionSummaryMaxTokens`, and `-clip-overflow` turns on the experimental nodecode-style layout (`ledger.RenderOptions.ClippedOverflow`): observations get full lines within half the budget and the rest are listed as clipped `[id] date first-80-characters…` lines while the whole fits, instead of being omitted.
 
 ## Cost
 

@@ -143,3 +143,24 @@ func TestAskRepeatsAReplyWithoutContent(t *testing.T) {
 		t.Fatalf("answer = %+v, err = %v, calls = %d", answer, err, calls.Load())
 	}
 }
+
+func TestActorAndJudgeSendTheirReasoningEffort(t *testing.T) {
+	var efforts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		efforts = append(efforts, req.ReasoningEffort)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"yes"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "", NewMeter(nil))
+	if _, err := Ask(context.Background(), client, []ChatMessage{{Role: "user", Content: Text("q")}}, AnswerOptions{Model: "m", ReasoningEffort: ReasoningEffort("medium")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Judge(context.Background(), client, "m", 100, ReasoningEffort("high"), testQuestion(), "Paris"); err != nil {
+		t.Fatal(err)
+	}
+	if len(efforts) != 2 || efforts[0] != "medium" || efforts[1] != "high" {
+		t.Fatalf("efforts = %v, want [medium high]", efforts)
+	}
+}

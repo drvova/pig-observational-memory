@@ -79,6 +79,8 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 		},
 	})
 
+	registerCuratedMemory(ext)
+
 	ext.RegisterTool(sdk.ToolDefinition{
 		Name:             recall.ToolName,
 		Label:            recall.Label,
