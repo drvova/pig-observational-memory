@@ -191,7 +191,7 @@ func RunReflector(ctx context.Context, args ReflectorArgs) ([]ledger.Reflection,
 	}
 	userText := "CURRENT REFLECTIONS:\n" + joinOrEmpty(reflectionLines) + "\n\nCURRENT OBSERVATIONS:\n" + joinOrEmpty(observationLines) + "\n\nCrystallize any missing durable facts or patterns into new reflections. If nothing is stable enough, do not call the tool."
 
-	result, err := RunLoop(ctx, args.Stream, args.loopConfig("reflector"), ReflectorSystem, userText, []Tool{recordReflections})
+	result, err := RunLoop(ctx, args.Stream, args.loopConfig("reflector"), args.system(ReflectorSystem), userText, []Tool{recordReflections})
 	if err != nil {
 		return nil, err
 	}

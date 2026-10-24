@@ -54,13 +54,24 @@ func linesGoldenFixture() ([]ledger.Reflection, []ledger.Observation, map[string
 	return reflections, observations, dates
 }
 
+// linesToolParagraph is the lines format's last instructions paragraph before
+// the memory tool replaced recall (docs/memory-interface.md, section 5); the
+// new one is no longer, so selection under a budget is unchanged.
+const linesToolParagraph = "When exact source context is needed for precision or traceability, use the recall tool with the relevant observation or reflection id. This is especially useful when a reflection materially affects a decision or is too compressed to continue confidently. Do not use recall as broad search or inject raw source unless it is needed."
+
 // The lines format renders byte for byte what it rendered before the tables
-// format was added (the goldens come from that renderer).
+// format was added (the goldens come from that renderer), except for the
+// paragraph naming the tool that reads records back.
 func TestLinesFormatUnchanged(t *testing.T) {
 	reflections, observations, dates := linesGoldenFixture()
+	newParagraph := ledger.ContextUsageInstructions[strings.Index(ledger.ContextUsageInstructions, "When exact source context"):]
+	if len(newParagraph) > len(linesToolParagraph) {
+		t.Fatalf("the tool paragraph grew to %d characters from %d", len(newParagraph), len(linesToolParagraph))
+	}
 	for _, budget := range []int{0, 400} {
 		got := ledger.RenderSummaryWithOptions(reflections, observations, budget, ledger.RenderOptions{ReflectionDates: dates, Format: ledger.FormatLines})
-		checkGolden(t, fmt.Sprintf("lines_%d.golden", budget), got.Text, false)
+		text := strings.Replace(got.Text, newParagraph, linesToolParagraph, 1)
+		checkGolden(t, fmt.Sprintf("lines_%d.golden", budget), text, false)
 	}
 }
 
@@ -256,5 +267,32 @@ func TestTablesFormatKeepsEverythingWhenFullRenderFits(t *testing.T) {
 	short := ledger.RenderSummaryWithOptions(nil, observations, estimate-1, ledger.RenderOptions{})
 	if short.OmittedObservations == 0 || !strings.Contains(short.Text, "\nomitted[") || (len(short.Text)+3)/4 > estimate-1 {
 		t.Fatalf("budget %d should omit records and fit:\n%s", estimate-1, short.Text)
+	}
+}
+
+// A summary in another codec opens with instructions that describe that codec, not rows, and
+// its tables are still found after them.
+func TestTablesFormatInstructionsFollowCodec(t *testing.T) {
+	reflections, observations, dates := mixedLedger()
+	rendered := ledger.RenderSummaryWithOptions(reflections, observations, 540, ledger.RenderOptions{ReflectionDates: dates, Codec: tables.JSONLines})
+	intro := ledger.TablesUsageInstructionsFor(tables.JSONLines)
+	if !strings.HasPrefix(rendered.Text, intro) || strings.Contains(intro, "name[rows]{fields}") || !strings.Contains(intro, "jsonl format") || !strings.Contains(intro, `{"table":"name"`) {
+		t.Fatalf("jsonl summary intro:\n%s", rendered.Text)
+	}
+	if !strings.HasSuffix(intro, ledger.TablesRecallParagraph) || !strings.HasPrefix(intro, ledger.TablesSummaryIntro) {
+		t.Fatalf("intro lost its shared parts:\n%s", intro)
+	}
+	body, ok := ledger.TablesSummaryBody(rendered.Text + "\n\n---\n\nappended")
+	if !ok {
+		t.Fatal("body not found")
+	}
+	if decoded, err := tables.JSONLines.Decode(body); err != nil || decoded[len(decoded)-1].Name != "omitted" {
+		t.Fatalf("decoded %v, %v", decoded, err)
+	}
+	if ledger.TablesUsageInstructionsFor(tables.Rows) != ledger.TablesUsageInstructions || ledger.TablesUsageInstructionsFor(nil) != ledger.TablesUsageInstructions {
+		t.Fatal("rows instructions changed")
+	}
+	if _, ok := ledger.TablesSummaryBody(ledger.ContextUsageInstructions); ok {
+		t.Fatal("a lines summary has a tables body")
 	}
 }

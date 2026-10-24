@@ -71,7 +71,7 @@ func (s *settings) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.WorkerThinking, "worker-thinking", "", `worker thinking level ("" = extension default "low")`)
 	fs.IntVar(&s.ActorMaxTokens, "actor-max-tokens", 16_000, "actor output budget (reasoning included)")
 	fs.IntVar(&s.JudgeMaxTokens, "judge-max-tokens", 4_000, "judge output budget (reasoning included)")
-	fs.BoolVar(&s.Recall, "recall", false, "give the actor the extension's recall tool (off matches Mastra, whose runner disables recall)")
+	fs.BoolVar(&s.Recall, "recall", false, "give the actor the extension's memory tool (off matches Mastra, whose runner disables recall)")
 	fs.BoolVar(&s.Flush, "flush", false, "observe the unobserved tail after the last session instead of showing it raw")
 	fs.IntVar(&s.MaxAttempts, "max-attempts", 8, "HTTP attempts per model call (429/5xx/network)")
 	fs.StringVar(&s.UserAgent, "user-agent", "", "User-Agent sent on every model call")

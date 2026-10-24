@@ -28,6 +28,15 @@ func (rowsCodec) Spec() string {
 		"Leave a value empty for none. Quote a value with \" when it is empty, starts or ends with a space, or has a comma, colon, quote, backslash, | or a line break; inside quotes write \\\" \\\\ \\n \\r \\t."
 }
 
+// LongSpec is Spec with examples, for a model that keeps making syntax errors.
+func (c rowsCodec) LongSpec() string {
+	return c.Spec() + "\n" + `Example with two rows, the second without a scope and with a quoted value:
+notes[2]{id,scope,content}:
+  a1b2c3d4e5f6,on edX,User finished three courses.
+  b2c3d4e5f6a1,,"User bakes: sourdough, rye and focaccia."
+Common mistakes: N not equal to the number of rows; a row with more or fewer values than fields (quote values that contain commas); a space after a comma; rows not indented exactly two spaces.`
+}
+
 // block is one top-level element of a rows text: a Table, a scalar or a list.
 type block interface {
 	isBlock()

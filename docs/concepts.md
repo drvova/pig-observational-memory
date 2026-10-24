@@ -195,30 +195,98 @@ V3 distinguishes visible memory, full memory, and the drift between them:
 
 Visible and full memory can differ intentionally. Background ledger work may happen after the latest compaction, and normal compactions may avoid re-folding reflection/drop effects until full-fold pressure requires it.
 
-## Recall
+## The memory tool
 
-`recall` is an agent-facing tool, not a search command. It takes a specific 12-character memory id and looks it up in V3 ledger history on the current branch.
+The agent reaches memory through one tool, `memory`, with one string parameter, `query` ([design](memory-interface.md#5-the-memory-tool)). A query is a source followed by stages joined with `|`, or one write:
 
-Recall can return:
+```text
+notes | search "sourdough" | where kind=event | count by subject
+history | search "india online store" | limit 5
+recall 3f9a2c1d7b4e
+saved | where type=feedback
+save type=user name=prefers-tabs description="The user indents with tabs."
+feedback name=prefers-tabs outcome=helped quote="tabs please, like last time"
+define bake-count = notes | where subject=baking | count "How many times the user baked"
+```
 
-- an observation, marked `active` or `dropped`, with its source entries;
-- a reflection plus supporting observations;
-- a mixed result if an id collision exists;
-- missing/non-source diagnostics when some source evidence is unavailable, beside the source entries that did resolve.
+| Source | Records (fields) |
+|---|---|
+| `notes` | The active observations folded from the branch's ledger, in recorded order (`id`, `when`, `kind`, `subject`, `scope`, `relevance`, `content`, `superseded_by`). A relative date in the content is resolved as in the summary. |
+| `reflections` | The reflections, dated by the observations they cite (`id`, `dates`, `content`, `supports`). |
+| `history` | The raw user, assistant and tool-result text on the current branch, compacted entries included (`id`, `when`, `role`, `content`). Thinking, the extension's `om.*` entries, `!!command` runs and the calls and results of the `memory` tool and of the tools the agent defined with it are not history, so a search never finds the queries already run. A long entry is clipped to 400 characters around the first searched word; `recall <id>` reads it whole. |
+| `saved` | The curated memories visible here (global and this project), ranked as the index ranks them, then the defined queries (`name`, `type`, `scope`, `updated`, `description`, `body`). |
+| `recall <id>` | One record in full: an observation or reflection id returns its source entries exactly as the old `recall` tool did (an observation marked `active` or `dropped` with its sources, a reflection with its supporting observations, collision and missing-source diagnostics); an entry id returns that entry's text; a saved name returns the memory or defined query. |
 
-Use recall when compacted memory matters and exact source evidence is needed before acting.
+Stages run in order: `search "words"` keeps rows holding every word (case-insensitive, literal), `where field=value` (case-insensitive equality; `""` matches an empty field) and `where field~"text"` (contains) filter, `since DATE` and `until DATE` (`YYYY-MM-DD`, inclusive) keep records dated in range, `sort field [desc]` orders (numerically when both values are whole numbers), `limit N` cuts (1 to 200), `count` and `count by field` replace the rows by counts that later stages can filter and sort, and `group by field`, which must come last, splits the result into one table per value. Without a `limit`, a result shows 20 rows; a cut result ends with `matched N, showing M`, which a filter after the cut drops, since it saw only the kept rows.
+
+Results are tables in the active codec, and errors name the character position and the fix, so the agent can correct the query. A query cannot loop or run code: every stage is one pass over at most the branch.
+
+Writes go to the curated store: `save`, `edit`, `forget` and `feedback` are described under [Curated memory](#curated-memory). `define <name> = <query> "description"` checks the query by running it once and stores it (a built-in tool's name, such as `read` or `bash`, and the query language's own words are refused, since the definition becomes a tool of that name) in the store's `definitions/` directory; `saved` lists it with type `query`, `recall <name>` shows it, and `forget name=<name>` removes it. The definition is also registered at once as a tool of its own name; see [The per-model harness](#the-per-model-harness). `propose detector=... remedy=... [text="..."]` proposes a rule for the agent's own model; see [Rules the harness writes](#rules-the-harness-writes).
 
 ## Curated memory
 
-Observational memory records what happened in one session. Curated memory is what the agent decides to keep across sessions, after nodecode's `define-memory`: when the user corrects it, states a preference, or it learns something about the project, the agent saves a memory itself with `memory_save`, and fixes or removes it with `memory_edit` and `memory_forget` when it goes stale.
+Observational memory records what happened in one session. Curated memory is what the agent decides to keep across sessions, after nodecode's `define-memory`: when the user corrects it, states a preference, or it learns something about the project, the agent saves a memory itself with the `memory` tool's `save` write, and fixes or removes it with `edit` and `forget` when it goes stale.
 
 - **A memory** is one file under `<PiG config root>/observational-memory/memories/` (`PIG_HOME`, else `XDG_CONFIG_HOME/pig`, else `~/.pig`): a type (`user`, `feedback`, `project`, `reference`, `lesson`), one declarative sentence, an optional body saying why and how to apply it, the sessions that wrote it, and a scope. A `global` memory applies everywhere; a `project` one only in the repository it was saved in (the nearest directory holding `.git` above the working directory, else the working directory), and other projects can neither see nor change it. A name has one home: saving a taken name is refused, so a changed fact is an edit, not a second memory.
-- **The index.** Before the first request of a conversation, the memories that apply are ranked and set as the `curated-memory` section of the system prompt: the operator's own word (`user`, `feedback`) first, then by evidence. Every memory is described when all fit `curatedMemoryIndexTokens`; otherwise the first ones are described within half of it and the next ones are named on one `also:` line, and `memory_search` finds the rest. The index is pinned for the conversation, so the system prompt stays byte-identical between turns and its cache holds; it is ranked again at every session start (PiG keeps the extension process across `/new`, `/resume`, `/fork` and `/reload`), after a compaction, and on `/om:memory reload`. A memory saved mid-conversation is already in that conversation, through the tool call.
-- **Evidence.** `usage.jsonl` beside the memories logs every read, save, edit, forget and every `memory_feedback` sighting (`helped` or `harmed`). A helped sighting raises a memory, a harmed one lowers it; age does not, so a memory never cools.
-
-- **Trust.** Memories are the assistant's own notes, and a file, web page or tool output could try to get one saved. The index frames them as context that may be stale and never overrides the user or authorizes an action, the agent is told not to save instructions that come from anywhere but the user, and every save and edit is shown to the user as a notification. Review or remove memories with `/om:memory` and `memory_forget`, or by deleting their files.
+- **The index.** Before the first request of a conversation, the memories that apply are ranked and set as the `curated-memory` section of the system prompt: the operator's own word (`user`, `feedback`) first, then by evidence. Every memory is described when all fit `curatedMemoryIndexTokens`; otherwise the first ones are described within half of it and the next ones are named on one `also:` line, and `saved | search "words"` finds the rest. The index is pinned for the conversation, so the system prompt stays byte-identical between turns and its cache holds; it is ranked again at every session start (PiG keeps the extension process across `/new`, `/resume`, `/fork` and `/reload`), and after a compaction. A memory saved mid-conversation is already in that conversation, through the tool call.
+- **Evidence.** `usage.jsonl` beside the memories logs every `recall <name>`, save, edit, forget and every `feedback` sighting (`helped` or `harmed`). A feedback needs `quote="..."`, at least 8 characters that show the outcome, copied from a user or assistant message on the branch (whitespace collapsed, case ignored); a quote found only in tool output or the calls of the `memory` tool and the defined tools, or nowhere, is refused. The ledger keeps it, clipped to 400. A helped sighting raises a memory, a harmed one lowers it; age does not, so a memory never cools.
+- **Trust.** Memories are the assistant's own notes, and a file, web page or tool output could try to get one saved. The index frames them as context that may be stale and never overrides the user or authorizes an action, the agent is told not to save instructions that come from anywhere but the user, and every save and edit is shown to the user as a notification. The agent reviews them with `saved` and removes one with `forget`; you can delete their files.
 
 Turn it off with `curatedMemory: false`.
+
+## The per-model harness
+
+Models differ in which formats, layouts, summary sizes and tools they handle well, so each model id (`provider/id`) gets a profile computed from what the extension counts it doing ([design](memory-interface.md#6-the-per-model-harness)). Nothing is tuned on a benchmark: a profile is a pure function of the model's usage ledger and is recomputed whenever it is needed.
+
+- **The usage ledger.** `<store>/models/<model id>.jsonl` beside the curated memories, append-only, written under the store's lock. One line per event: every `memory` call (`ok`, `error` with whether it failed to parse, `empty`, `shown` when every record it hit is one the current compaction summary or the pinned index already showed, `omitted` when it hit a record the summary left out to fit; a `recall <id>` of a shown record is `ok`, since it fetches the evidence the summary line leaves out, as the tool's guidelines ask), every rows table the observer was sent (`ok`, `error` when the codec could not parse it, `columns` when it parsed with the wrong columns), with the codec, and every call of a defined tool. The model counted is the one that acted: the session model for the `memory` tool and defined tools, the memory-worker model for observer rows.
+- **The minimum-evidence rule.** A setting switches only when at least 3 events of the kind it reacts to were counted since it last switched, and they outnumber the events that speak for keeping it: one event is chance and two can be one mistake and its retry. Each switch is recorded with the counts that made it.
+
+| Setting | Default | Switches when |
+|---|---|---|
+| codec | `rows` | rows decode errors in the current codec outnumber its parsed decodes: the next codec (`jsonl`, JSON lines); the last codec is kept |
+| layout | `tables` | rows that parsed with the wrong columns outnumber those with the right ones: `lines`, once (`memoryFormat: "lines"` always wins) |
+| summary size | the whole room | hits on records the summary showed outnumber hits on records it omitted: halve; the reverse: double back toward the room. Never below the summary floor (8,000 tokens, or the room when smaller), never above the room |
+| defined tools | all active | a defined tool's errors outnumber its calls without error for this model: deactivated for this model, until it is redefined |
+| instructions | the codec's short spec | syntax errors (queries that did not parse, rows the codec could not decode) outnumber valid queries and rows: the long spec with examples and the common query mistakes, from then on |
+
+The observer writes rows in the worker model's codec and spec; the `memory` tool answers in the session model's codec, and is registered again with the long spec or another codec's spec when the session model's profile changes them; the compaction hook renders the summary in the session model's codec and layout and gives it the profile's share of the room. Before each agent run the defined tools the session model's profile disables, and those retired or forgotten, are deactivated with the host's active tool list; tools of other extensions, the built-ins and the `memory` tool are never touched, and a tool the harness deactivated comes back when the session switches to a model without evidence against it. `/om:status` shows the profile of the session model (and of a configured memory-worker model) with every switch and its reason, and each defined tool's standing.
+
+**Defined tools.** `define <name> = <query> "description"` stores the query in the store's `definitions/` directory and registers it at once as a tool named `<name>` with one optional string parameter, `input`, which replaces `$input` in the query (inside quotes it is escaped; elsewhere it is one bare word or one quoted text, so an input never adds stages or a write). A name any other tool holds, the host's built-ins and other extensions' tools included, is refused, and a definition that cannot be registered is not kept. The definition's text reaches every later session's tool list, so it is bounded and framed: the description is one sentence of at most 200 characters, the query at most 200 characters with each quoted text at most 40 (checked when stored and again when read; a stored one past the bound is not registered, and `forget` still removes it), and the tool's description quotes both as context, not instructions. A defined tool adds no line to the system prompt. At every session start the stored definitions are registered again (once per process: PiG keeps the extension and its tools across sessions). A new definition is on **probation**; it is **established** after two calls that return results without error, and **retired** when its calls since its current state began meet the minimum-evidence rule with more errors than calls without error, or when `feedback name=<name> outcome=harmed` marks it harmed. A retired tool stays stored but is deactivated and refuses calls; forget and define it again to start over. The user is notified of every definition and every state change. With `curatedMemory: false`, or no PiG config root, there is no store: nothing is counted, every model keeps the default profile and defined tools are off.
+
+## Rules the harness writes
+
+The memory's behaviour rules (what a note must capture, when one record may replace another, what the dropper protects, how chunks are sized) are data the harness adds, tests and retires per model ([design](memory-interface.md#7-rules-the-harness-writes)), in `internal/rules`.
+
+- **A rule** is one file, `<store>/rules/<id>.rows`, in the `rows` codec like the defined queries (store files keep one format every process reads; the active codec is per model): its id, the detector it answers, the model ids it applies to (or `*` for all, minus the models it was retired for), a remedy and its parameters, its state (`probation`, `established`, `retired`), the counts that decided it, and who proposed it (`harness` or `model`).
+- **Detectors** are pure checks run after every memory-worker pass that advanced coverage: the observer (background and compaction catch-up) is judged on the source entries its marker covers and the notes it recorded, after any remedy, and the reflector and dropper passes are recorded too. Each pass is one `pass` line in the worker model's usage ledger, with the observed source tokens (the covered entries' estimated tokens; 0 for reflector and dropper passes) and the counts, so a detector's rate is events per observed source token. An empty observer verdict is not a pass: its chunk is read again.
+
+| Detector | Counts |
+|---|---|
+| `uncited-assistant-specifics` | covered assistant messages whose text has specifics (numbers, names, relative dates, as `ledger.Specifics` finds them) and that no note cites |
+| `cross-scope-supersede` | `supersedes` links between notes whose named scopes differ (an empty scope is no qualifier and conflicts with none) |
+| `unresolved-relative-date` | relative-date phrases in new notes the renderer resolves (`ledger.ResolveRelativeDates`) |
+| `thin-chunk` | chunks whose user and assistant text has specifics no note carries, with notes shorter than a bare list of those left-out specifics (tool output never counts) |
+| `dropped-then-queried` | records the dropper retired that a later `memory` call asked for (`recall <id>`, or a `search` whose words are all in the record), read from the calls in the covered entries, so each call is counted once; the records' kinds are kept for `protect-kind` |
+| `decode-failure` | observer rows the codec could not decode and `memory` queries that did not parse, counted in the model's ledger since its previous pass |
+
+- **Remedies** come from a closed catalogue, each applied where it belongs, and a rule naming anything else is refused:
+
+| Remedy | Answers | What it does |
+|---|---|---|
+| `prompt-line` | any | adds the rule's text (one line, at most 200 characters) under "Memory rules for this model" in the worker system prompt of the stage its detector judges (the dropper for `dropped-then-queried`, else the observer) |
+| `require-kind` | `uncited-assistant-specifics` | asks the observer once more over the same chunk, allowed to cite only the flagged entries, for a note of the rule's kind (default `assistant`); a failed re-ask keeps the first answer; not for a partial run |
+| `keep-head` | `uncited-assistant-specifics` | keeps the opening of each still-flagged assistant message (through its first paragraph with specifics, at most 400 characters) as a `low`, `kind=assistant` note citing it, only for entries at or before the chunk's final coverage boundary |
+| `block-link` | `cross-scope-supersede` | drops the flagged `supersedes` links; both records stay active |
+| `protect-kind` | `dropped-then-queried` | exempts a kind (or `unclassified`) from the dropper's selection while the pool's fullness is at or below the rule's (default and maximum 2.0, where memory pressure wins) |
+| `split-chunk` | `thin-chunk`, `uncited-assistant-specifics` | halves the model's observer chunk cap, once, never below one token |
+| `switch-codec` / `long-spec` | `decode-failure` | make the profile switches of the per-model harness: the next codec, the long spec. `switch-codec` is written and judged only on the rows the codec could not decode (a query that did not parse is a syntax error no codec fixes), so `memory` query typos alone lead to `long-spec` |
+
+- **The invariants stay out of reach.** No remedy can append a coverage marker or move one: `keep-head` and `require-kind` only add notes citing entries the marker already covers, and neither runs on an empty verdict, so an empty chunk stays empty and is read again. `block-link` and `protect-kind` only remove; `split-chunk` still takes the first entry. Nothing touches the `memory` tool, the cut or the room budget. A rule whose parameters would break one (a `protect-kind` fullness past 2.0) is refused, and `keep-head` refuses entries past the coverage boundary.
+- **The harness writes a rule** for a model when a detector counted events in each of the model's last 3 observer passes since its last rule for that detector was written or decided (the minimum-evidence rule over passes) and no rule for it is on probation: the first remedy the catalogue maps to the detector that no rule for the model tried yet (`require-kind`, then `keep-head`; `block-link`, then a catalogue `prompt-line`; a catalogue `prompt-line`; `split-chunk`, then a `prompt-line`; `protect-kind` for the most queried kind; `switch-codec`, then `long-spec`, skipping `switch-codec` while every failure in those passes was a query that did not parse). Its text, when it has one, is the catalogue's.
+- **A model proposes one** with `memory`: `propose detector=... remedy=... [text="..."] [kind=...] [fullness=N]`, for its own model id, on probation the same way. It is checked like a harness rule, and refused when the same rule already applies or was retired for that model, or when its text appears in a tool result, custom message or summary on the branch: rule text comes only from the model's own call or the catalogue, never from a file, a web page or tool output.
+- **Probation.** A rule applies to its model at once. After the model's next 3 observer passes it is **established** when its detector's rate over them is below its baseline (the rate over the 3 passes before it), and **retired** otherwise; a baseline without events cannot fall. The detectors count what reaches memory after the remedies, so a rule survives by keeping the behaviour it answers out of the memory. A retired rule stays stored and is never applied again for that model; when the count keeps rising afterwards, the catalogue's next remedy is tried.
+- **Defaults.** A rule established, with the same detector, remedy and parameters, for 3 models becomes a default for every model, established, except the models it was retired for.
+- The user is notified when a rule is added, established, retired or made a default, and of every proposal; `/om:status` lists the active rules with their counts and each model's detector counts over its last 3 passes. Without a store (`curatedMemory: false`, or no PiG config root) nothing is counted and no rule applies.
 
 ## Relevance tiers
 
@@ -231,7 +299,7 @@ Observation relevance is assigned by the observer:
 | `medium` | Useful task-level context and ordinary progress. |
 | `low` | Routine status, tool acknowledgements, or details likely re-derivable from nearby context. |
 
-The dropper uses relevance as part of its judgment, but it is not the only signal and it is not a permanent active-memory pin. User assertions, exact decisions, unique identifiers, dated events, errors, and rationale should be preserved unless safely represented by durable reflections or newer memory. Dropping removes observations from active memory, not from ledger history; recall can still recover dropped observations when their ids are known.
+The dropper uses relevance as part of its judgment, but it is not the only signal and it is not a permanent active-memory pin. User assertions, exact decisions, unique identifiers, dated events, errors, and rationale should be preserved unless safely represented by durable reflections or newer memory. Dropping removes observations from active memory, not from ledger history; `recall <id>` can still recover dropped observations when their ids are known.
 
 ## V2 compatibility model
 
@@ -255,7 +323,7 @@ When upgrading from V2, update settings and start a new clean session.
 | Observer | Background agent that records observations. |
 | Reflector | Background agent that records durable reflections. |
 | Dropper | Background agent that drops active observations by id. |
-| Recall | Agent tool for exact evidence behind a memory id. |
+| Memory tool | The agent's one tool over memory: queries over notes, reflections, raw history and saved memories, `recall <id>` for exact evidence, and writes to the curated store. |
 
 ## Where to go next
 

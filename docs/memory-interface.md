@@ -140,18 +140,22 @@ history | search "india online store" | limit 5
 recall 3f9a2c1d7b4e
 saved | where type=feedback
 save type=user name=prefers-tabs description="The user indents with tabs."
-feedback name=prefers-tabs outcome=helped quote="you asked for tabs again"
+feedback name=prefers-tabs outcome=helped quote="tabs please, like last time"
 define bake-count = notes | where subject=baking | count "How many times the user baked"
 ```
 
 - Sources: `notes` (active observations), `reflections`, `history` (raw user and assistant
-  text on the branch, the way nodecode's `recall-log` scans its log), `saved` (curated
+  text on the branch, the way nodecode's `recall-log` scans its log, without the calls and
+  results of the memory tool and the defined tools), `saved` (curated
   memories), and `recall <id>` (one record with its source, as the old recall tool did).
 - Stages: `search "words"` (all words, case-insensitive, literal), `where field=value`,
   `where field~"text"`, `since DATE`, `until DATE`, `sort field [desc]`, `limit N` (default 20,
   at most 200), `count [by field]`, `group by field`.
 - Writes: `save`, `edit`, `forget`, `feedback` (with an evidence `quote`, as nodecode's
-  experience cell requires), and `define`, which names a query as a new tool (section 6).
+  experience cell requires: words copied verbatim from a user or assistant message on the
+  branch, whitespace and case aside; a quote found only in tool output or in memory tool calls
+  is refused, since tool output may carry injected text), and `define`, which names a query as
+  a new tool (section 6).
 - Results are tables in the active codec with a `matched N, showing M` line when cut. Errors name the
   position and the fix. Queries cannot loop or run code; every query finishes.
 
@@ -166,13 +170,32 @@ benchmark scores:
 |---|---|---|
 | codec | `rows` | the model's rows or queries keep failing to decode: try the next codec |
 | layout | tables | its rows keep coming back with the wrong columns: `lines` |
-| summary size | the whole room | it queries for records the summary already showed (it did not use them): shrink; it queries for omitted records: grow back toward the room |
+| summary size | the whole room | it queries for records the summary already showed (it did not use them): shrink; it queries for omitted records: grow back toward the room. A `recall` of a shown record fetches the evidence its line leaves out and does not count toward shrinking |
 | tools | `memory` only | a defined tool errors more often than it succeeds for this model: deactivate it (`SetActiveTools`); one that returns results stays |
 | instructions | the codec's short spec | repeated syntax errors: carry the longer spec with examples |
 
+- Built deviation: a query that fails to parse is a syntax error in the query language, which
+  no codec switch can fix, so it counts toward the instructions switch (the long spec carries
+  the common query mistakes) and the codec switch counts only rows the codec could not decode.
+  The second codec is `jsonl` (JSON lines). The rules' `switch-codec` (section 7) follows the
+  same split: it is written and judged only on rows the codec could not decode, so query
+  syntax errors alone lead to `long-spec`.
+- Attribution: decode events (the codec and layout evidence) are counted for the model that
+  wrote the rows, the memory worker, while the surfaces the session model reads (the summary's
+  codec, layout and size, the memory tool's results and description, the defined tools) follow
+  the session model's profile. So codec and layout switches reach those surfaces only when the
+  session model is also the memory worker; a separate worker (config `model`) switches only
+  the codec and spec it writes with, and `/om:status` shows it only those. A summary in a codec
+  other than `rows` opens with instructions describing that codec.
+- Defined tools carry agent-written text into every later session, so a description is one
+  sentence of at most 200 characters, the query is at most 200 characters with each quoted
+  text at most 40 (checked when stored and again when read), the tool's description quotes
+  both as context rather than instructions, and a defined tool adds no line to the system
+  prompt.
 - Every memory tool call and every decode is recorded per model (ok, error, empty, already
   shown, omitted) in the store's usage ledger; the profile is a pure function of that ledger,
-  so it can be recomputed and inspected (`/om:status` shows it).
+  so it can be recomputed and inspected (`/om:status` shows it). The ledgers are append-only,
+  so each process parses only the lines appended since its last read.
 - A switch needs repeated evidence, not one event, and is recorded with its reason. The base
   `memory` tool and the room ceiling never change, so a bad profile cannot break the memory.
 - Tools the model defines: `define name = query "description"` stores a named query in the

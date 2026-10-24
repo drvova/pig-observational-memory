@@ -27,7 +27,7 @@ func TestRenderSummaryBasics(t *testing.T) {
 	}
 	ref := tf.Reflection("eeeeeeeeeeee", []string{"aaaaaaaaaaaa"}, func(r *ledger.Reflection) { r.Content = "User prefers source-backed memory." })
 	summary := linesSummary([]ledger.Reflection{ref}, nil, 0)
-	if !strings.Contains(summary, "These are condensed memories from earlier in this session.") || !strings.Contains(summary, "use the recall tool") {
+	if !strings.Contains(summary, "These are condensed memories from earlier in this session.") || !strings.Contains(summary, "use the memory tool") {
 		t.Fatal("usage instructions missing")
 	}
 	if !strings.Contains(summary, "## Reflections\n[eeeeeeeeeeee] User prefers source-backed memory.") {

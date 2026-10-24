@@ -7,7 +7,7 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 
 Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
-The recall tool reads any record back by its id with its exact source, omitted ones included; use it when precision needs the source, not as broad search.
+The memory tool reads any record back with its exact source, omitted ones included (recall <id>), and searches what these tables condensed (history | search "words"); use it when precision needs the source.
 
 reflections[2]{id,dates,content}:
   e1eeeeeeeeee,2023-05-12..2023-05-20,"User bakes at home: bread, every week."

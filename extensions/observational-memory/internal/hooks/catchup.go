@@ -10,6 +10,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
@@ -56,7 +57,10 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 	resolver := &modelResolver{rt: rt, h: h, cached: &resolved}
 	current := workerHeadersFor(h, resolved)
 	contextWindow := observerChunkContextWindow(cfg, h, current)
-	maxChunkTokens := config.ResolveObserverChunkMaxTokens(cfg, contextWindow)
+	// A split-chunk rule for the resolved worker halves the chunk, as in the background stage.
+	// A chunk retried on the fallback keeps the size the primary's rules gave it (re-sizing
+	// would change what its marker covers); its pass is still the fallback's, which ran it.
+	maxChunkTokens := rulesFor(h, cfg, current.Model).SplitChunk(config.ResolveObserverChunkMaxTokens(cfg, contextWindow))
 	entries := args.Entries
 	// Start at the global observation frontier, not at the gap: a coverage
 	// marker claims everything before it, so starting later would mark unread
@@ -97,18 +101,17 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		for _, observation := range memory.Observations {
 			priorObservations = append(priorObservations, ledger.ObservationToObserverLine(observation))
 		}
+		used := current
 		outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, current, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
-			return runObserver(ctx, agents.ObserverArgs{
-				WorkerArgs:            workerArgs(cfg, h, worker),
-				PriorReflections:      priorReflections,
-				PriorObservations:     priorObservations,
-				Chunk:                 serialized.Text,
-				AllowedSourceEntryIDs: serialized.SourceEntryIDs,
-			})
+			used = worker
+			return runObserver(ctx, observerArgs(cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
 		})
-		if resolver.fallbackActive != nil {
-			// Later chunks go straight to the fallback that worked.
+		if resolver.fallbackActive != nil && !current.FallbackUsed {
+			// Later chunks go straight to the fallback that worked, sized by its own
+			// context window and rules, as the background stage sizes them.
 			current = *resolver.fallbackActive
+			contextWindow = observerChunkContextWindow(cfg, h, current)
+			maxChunkTokens = rulesFor(h, cfg, current.Model).SplitChunk(config.ResolveObserverChunkMaxTokens(cfg, contextWindow))
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -133,7 +136,13 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			coversUpToID = cited
 		}
 		var data *ledger.ObservationsRecordedData
+		var pass rules.Pass
 		if len(observations) > 0 {
+			// The same remedies as the background stage, with the same constraint: they act
+			// only on a chunk that recorded something, and keep-head only inside the coverage
+			// boundary, so the marker appended below stays a positional claim.
+			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, known: fullMemory.Observations}
+			observations, pass = applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 			data = ledger.BuildObservationsRecordedData(observations, coversUpToID)
 		}
 		if data == nil {
@@ -148,6 +157,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			return result
 		}
 		result.ChunksRecorded++
+		recordPass(ctx, cfg, h, used.Model, pass)
 		debuglog.Log(ctx, "compaction.catch_up.recorded", map[string]any{"chunkIndex": chunkIndex, "count": len(observations), "coversUpToId": coversUpToID})
 
 		// Coverage is positional: everything at or before the marker counts as

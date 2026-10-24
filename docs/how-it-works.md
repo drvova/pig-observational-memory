@@ -17,7 +17,7 @@ V3 is ledger-centered: memory state is reconstructed by folding V3 ledger entrie
 | `session_before_compact` hook | Resolve the compaction cut, observe an unobserved gap synchronously when allowed, and build the V3 compaction payload. |
 | `/om:status` | Show ledger counts, drift, progress clocks, backoffs, and worker state. |
 | `/om:view` | Show visible or full memory content and attempt to copy the rendered memory text. |
-| `recall` tool | Recover source evidence for a memory id. |
+| `memory` tool | Query notes, reflections, raw history and saved memories, recover source evidence for a memory id (`recall <id>`), and write to the curated store. |
 
 ## Lifecycle overview
 
@@ -290,7 +290,7 @@ Diff projection compares visible memory with full memory. `/om:status` uses this
 
 ## Summary rendering
 
-The renderer returns an empty string when there are no visible observations or reflections. Otherwise it starts with deterministic usage instructions that tell the agent how to treat the memory, how to handle conflicts, and when to use `recall` for exact source context. It then renders reflection and observation sections when those entries exist:
+The renderer returns an empty string when there are no visible observations or reflections. Otherwise it starts with deterministic usage instructions that tell the agent how to treat the memory, how to handle conflicts, and when to use the `memory` tool's `recall <id>` for exact source context. It then renders reflection and observation sections when those entries exist:
 
 ```md
 These are condensed memories from earlier in this session.
@@ -300,7 +300,7 @@ These are condensed memories from earlier in this session.
 
 Treat these as past records. When entries conflict, the most recent observation reflects the latest known state. Work that prior observations describe as completed should not be redone unless the user explicitly asks to revisit it.
 
-When exact source context is needed for precision or traceability, use the recall tool with the relevant observation or reflection id. This is especially useful when a reflection materially affects a decision or is too compressed to continue confidently. Do not use recall as broad search or inject raw source unless it is needed.
+When exact source context is needed for precision or traceability, use the memory tool with recall <id> for the relevant observation or reflection. This is especially useful when a reflection materially affects a decision or is too compressed to continue confidently. Find source beyond these records via history | search "words".
 
 ## Reflections
 [id] durable reflection
@@ -343,7 +343,7 @@ Shows full V3 ledger truth at branch tip and attempts to copy the rendered memor
 
 ## Recall flow
 
-The agent-facing `recall` tool accepts a 12-character lowercase hex id.
+The `memory` tool's `recall <id>` query looks a 12-character lowercase hex id up first (an id it does not find falls through to an entry id on the branch, then a saved memory or defined query name; [The memory tool](concepts.md#the-memory-tool)).
 
 1. Validate id shape.
 2. Read the current branch.

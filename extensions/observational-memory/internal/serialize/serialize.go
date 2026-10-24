@@ -1,11 +1,12 @@
 // Package serialize renders session entries as the memory workers and the
-// recall tool read them.
+// memory tool read them.
 package serialize
 
 import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -219,12 +220,12 @@ func bashExcludedFromContext(msg map[string]any) bool {
 	return excluded
 }
 
-// bashExecutionText renders a `!command` run that reached the agent's context:
+// BashExecutionText renders a `!command` run that reached the agent's context:
 // the command, its output, and a note when it exited non-zero, was cancelled or
 // was truncated. Such messages carry command/output fields and no content, so
 // the generic tool-result rendering would show them as empty. Callers skip
 // `!!command` runs (bashExcludedFromContext) first.
-func bashExecutionText(msg map[string]any) string {
+func BashExecutionText(msg map[string]any) string {
 	command, _ := msg["command"].(string)
 	output, _ := msg["output"].(string)
 	text := "$ " + command
@@ -300,7 +301,7 @@ func SerializeConversation(messages []map[string]any) string {
 			if bashExcludedFromContext(msg) {
 				continue
 			}
-			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+bashExecutionText(msg))
+			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+BashExecutionText(msg))
 		default:
 			blocks = append(blocks, "[Tool result for "+jsString(msg["toolName"])+" @ "+timestamp+"]: "+textOnly(msg["content"]))
 		}
@@ -522,12 +523,12 @@ func renderRecallMessage(entry session.Entry) (string, bool) {
 		if bashExcludedFromContext(msg) {
 			return "", false
 		}
-		return "[Bash @ " + timestamp + "]: " + bashExecutionText(msg), true
+		return "[Bash @ " + timestamp + "]: " + BashExecutionText(msg), true
 	}
 	return "[Tool result: " + jsString(msg["toolName"]) + " @ " + timestamp + "]: " + textAndPlaceholders(msg["content"], placeholderOptions{}), true
 }
 
-// RenderRecallSourceEntry renders one source entry for the recall tool.
+// RenderRecallSourceEntry renders one source entry for recall <id>.
 func RenderRecallSourceEntry(entry session.Entry) (string, bool) {
 	switch entry.Type {
 	case "message":
@@ -553,4 +554,67 @@ func RenderRecallSourceEntries(entries []session.Entry) string {
 		blocks = append(blocks, rendered)
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+// History roles: who wrote a history entry (HistoryText).
+const (
+	HistoryUser      = "user"
+	HistoryAssistant = "assistant"
+	HistoryTool      = "tool"
+)
+
+// HistoryText is a branch entry's text as the memory tool's history source
+// reads it: user text, the assistant's text and tool calls (thinking left
+// out, as for the observer), and tool results and `!command` runs as text.
+// Custom entries, custom messages, summaries and `!!command` runs are not
+// history; ok is false for them and for a message with no text. Calls to the
+// tools named in skipTools and their results are left out too, so the memory
+// tool's own queries and answers (and those of the tools the agent defined
+// with it) never echo back as history; an assistant message holding nothing
+// else is not history.
+func HistoryText(entry session.Entry, skipTools ...string) (role, text string, ok bool) {
+	if entry.Type != "message" || entry.Message == nil {
+		return "", "", false
+	}
+	msg := entry.Message
+	switch msg["role"] {
+	case "user":
+		role, text = HistoryUser, textOnly(msg["content"])
+	case "assistant":
+		role, text = HistoryAssistant, nonEmptyLines(textAndPlaceholders(withoutToolCalls(msg["content"], skipTools), placeholderOptions{}))
+	case "toolResult":
+		if name, _ := msg["toolName"].(string); name != "" && slices.Contains(skipTools, name) {
+			return "", "", false
+		}
+		role, text = HistoryTool, textOnly(msg["content"])
+	case "bashExecution":
+		if bashExcludedFromContext(msg) {
+			return "", "", false
+		}
+		role, text = HistoryTool, BashExecutionText(msg)
+	default:
+		role, text = HistoryTool, textOnly(msg["content"])
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", "", false
+	}
+	return role, text, true
+}
+
+// withoutToolCalls is content minus its toolCall blocks naming one of tools (none keeps them all).
+func withoutToolCalls(content any, tools []string) any {
+	blocks, ok := content.([]any)
+	if !ok || len(tools) == 0 {
+		return content
+	}
+	kept := make([]any, 0, len(blocks))
+	for _, raw := range blocks {
+		if block, ok := raw.(map[string]any); ok && block["type"] == "toolCall" {
+			if name, _ := block["name"].(string); name != "" && slices.Contains(tools, name) {
+				continue
+			}
+		}
+		kept = append(kept, raw)
+	}
+	return kept
 }

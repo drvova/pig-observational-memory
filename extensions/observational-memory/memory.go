@@ -3,13 +3,15 @@ package observationalmemory
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
 )
 
@@ -45,28 +47,67 @@ func projectRoot(cwd string) string {
 	}
 }
 
-// curatedCall is the store, project and session a memory handler acts on, and
+// curatedCall is the store, project and session a memory query acts on, and
 // whether curated memory is on.
-func curatedCall(ctx sdk.Context) (curated.Call, config.Config, bool) {
-	h := sdkhost.New(ctx)
+func curatedCall(h host.Host) (curated.Call, config.Config, bool) {
 	cfg := config.Load(h.Cwd(), config.DefaultPaths(), nil)
-	home := h.ConfigHome()
-	if !cfg.CuratedMemory || home == "" {
+	store, on := harness.StoreOf(h, cfg)
+	if !on {
 		return curated.Call{}, cfg, false
 	}
-	return curated.Call{Store: curated.New(curated.DefaultDir(home)), Project: projectRoot(h.Cwd()), Source: h.SessionID()}, cfg, true
+	return curated.Call{Store: store, Project: projectRoot(h.Cwd()), Source: h.SessionID()}, cfg, true
 }
 
-// registerCuratedMemory wires the agent's own long-lived memory: the memory
-// tools, the index section of the system prompt and the /om:memory command.
-func registerCuratedMemory(ext *sdk.Extension) {
+// memoryToolSpec is the memory tool with description, run by the harness's manager.
+func memoryToolSpec(manager *harness.Manager, description string) host.ToolSpec {
+	return host.ToolSpec{
+		Name:             memquery.ToolName,
+		Label:            memquery.Label,
+		Description:      description,
+		PromptSnippet:    memquery.PromptSnippet,
+		PromptGuidelines: memquery.PromptGuidelines,
+		Parameters:       memquery.Parameters,
+		Execute: func(h host.ToolHost, params map[string]any) host.ToolResult {
+			query, _ := params["query"].(string)
+			result := manager.RunMemory(h, query)
+			return host.ToolResult{Text: result.Text, IsError: result.IsError, Details: result.Details}
+		},
+		RenderCall: func(args map[string]any) []string {
+			query, _ := args["query"].(string)
+			return []string{memquery.FormatCallForTui(query)}
+		},
+		RenderResult: func(details any, text string, expanded bool) []string {
+			return strings.Split(memquery.FormatRenderedResultForTui(memquery.DetailsFrom(details), text, expanded), "\n")
+		},
+	}
+}
+
+// registerMemory wires the memory tool (docs/memory-interface.md, section 5), the
+// per-model harness and the tools the agent defines (section 6), and the
+// curated memory index section of the system prompt.
+func registerMemory(ext *sdk.Extension) {
+	manager := harness.NewManager(func(h host.ToolHost) (curated.Call, bool) {
+		call, _, on := curatedCall(h)
+		return call, on
+	})
+	manager.MemoryTool = func(description string) host.ToolSpec { return memoryToolSpec(manager, description) }
+	manager.IndexShown = memoryPin.Shown
+	manager.Config = func(h host.ToolHost) config.Config {
+		_, cfg, _ := curatedCall(h)
+		return cfg
+	}
+
 	ext.OnEvent(sdk.EventBeforeAgentStart, func(ctx sdk.Context, data map[string]any) (any, error) {
+		h := sdkhost.New(ctx)
+		// The session model's profile: the memory tool's codec and spec, and the
+		// defined tools it keeps active.
+		manager.BeforeAgentStart(h)
 		options, _ := data["systemPromptOptions"].(map[string]any)
 		sections, _ := options["sections"].(*sdk.SystemPromptSections)
 		if sections == nil {
 			return nil, nil
 		}
-		call, cfg, on := curatedCall(ctx)
+		call, cfg, on := curatedCall(h)
 		if !on {
 			sections.Delete(memorySection)
 			return nil, nil
@@ -80,70 +121,17 @@ func registerCuratedMemory(ext *sdk.Extension) {
 		return nil, nil
 	})
 	// A new or resumed conversation, and one restarting from a compaction
-	// summary, take a freshly ranked index.
-	for _, event := range []string{sdk.EventSessionStart, sdk.EventSessionCompact} {
-		ext.OnEvent(event, func(sdk.Context, map[string]any) (any, error) {
-			memoryPin.Reset()
-			return nil, nil
-		})
-	}
-
-	for _, spec := range curated.Tools {
-		spec := spec
-		ext.RegisterTool(sdk.ToolDefinition{
-			Name:        spec.Name,
-			Label:       spec.Label,
-			Description: spec.Description,
-			Parameters:  spec.Parameters,
-			Execute: func(ctx sdk.Context, params map[string]any) (any, error) {
-				call, _, on := curatedCall(ctx)
-				if !on {
-					return sdk.ToolResult{Content: "Curated memory is off (curatedMemory: false), or PiG's config directory could not be found.", IsError: true}, nil
-				}
-				text, err := call.Run(spec.Name, params)
-				if err != nil {
-					return sdk.ToolResult{Content: "Error: " + err.Error(), IsError: true}, nil
-				}
-				// Saves outlive the session and reach every later system prompt,
-				// so the user sees each one, including any an injected
-				// instruction asked for.
-				if spec.Name == curated.ToolSave || spec.Name == curated.ToolEdit {
-					ctx.Notify(text, "info")
-				}
-				return sdk.ToolResult{Content: text}, nil
-			},
-		})
-	}
-
-	ext.RegisterCommand("om:memory", sdk.CommandOptions{
-		Description: "List curated memories, show one (/om:memory <name>), or re-rank the index (/om:memory reload)",
-		Handler: func(ctx sdk.Context, args string) error {
-			call, cfg, on := curatedCall(ctx)
-			if !on {
-				ctx.Notify("Curated memory is off (curatedMemory: false).", "info")
-				return nil
-			}
-			arg := strings.TrimSpace(args)
-			switch arg {
-			case "reload":
-				memoryPin.Reset()
-				ctx.Notify("The memory index will be re-ranked on the next request.", "info")
-				return nil
-			case "", "list":
-				text, shown := curated.IndexFor(call.Store, call.Project, 0)
-				if len(shown) == 0 {
-					text = "No curated memories yet. The agent saves them with memory_save."
-				}
-				ctx.Notify(text+"\n\nStore: "+call.Store.Dir+" (index budget ~"+strconv.Itoa(cfg.CuratedMemoryIndexTokens)+" tokens)", "info")
-				return nil
-			}
-			m, err := call.Store.GetIn(arg, call.Project)
-			if err != nil {
-				ctx.Notify("No memory named "+arg+" here.", "warning")
-				return nil
-			}
-			ctx.Notify(curated.Describe(m), "info")
-			return nil
-		},
+	// summary, take a freshly ranked index. A session start also registers the
+	// stored definitions as tools (once per process: the host keeps them).
+	ext.OnEvent(sdk.EventSessionStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
+		memoryPin.Reset()
+		manager.RegisterStored(sdkhost.New(ctx))
+		return nil, nil
 	})
+	ext.OnEvent(sdk.EventSessionCompact, func(sdk.Context, map[string]any) (any, error) {
+		memoryPin.Reset()
+		return nil, nil
+	})
+
+	ext.RegisterTool(sdkhost.Definition(memoryToolSpec(manager, memquery.Description(nil))))
 }

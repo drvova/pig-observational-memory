@@ -13,11 +13,14 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
@@ -622,8 +625,11 @@ func RunConsolidationPipeline(ctx context.Context, rt *runtime.Runtime, h host.H
 	return nil
 }
 
-func workerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult) agents.WorkerArgs {
+// workerArgs are a stage's worker call arguments for worker, with the prompt-line rules that
+// apply to the worker model for stage.
+func workerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult, stage string) agents.WorkerArgs {
 	return agents.WorkerArgs{
+		SystemLines:     rulesFor(h, cfg, worker.Model).PromptLines(stage),
 		Model:           worker.Model,
 		APIKey:          worker.APIKey,
 		Headers:         worker.Headers,
@@ -633,6 +639,40 @@ func workerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult) ag
 		ThinkingLevel:   workerThinkingLevel(cfg, worker),
 		Stream:          h.Models().Stream,
 	}
+}
+
+// observerArgs are an observer run's arguments for worker: the chunk and prior memory, and
+// the worker model's harness profile (docs/memory-interface.md, section 6): the codec its rows
+// parameter uses, the long spec when the profile carries it, and every rows decode counted in
+// the model's usage ledger.
+func observerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult, priorReflections, priorObservations []string, chunk string, allowed []string) agents.ObserverArgs {
+	args := agents.ObserverArgs{
+		WorkerArgs:            workerArgs(cfg, h, worker, rules.StageObserver),
+		PriorReflections:      priorReflections,
+		PriorObservations:     priorObservations,
+		Chunk:                 chunk,
+		AllowedSourceEntryIDs: allowed,
+	}
+	if l, ok := harness.For(h, cfg, worker.Model); ok {
+		profile := l.Profile()
+		codec := profile.CodecValue()
+		args.Codec, args.LongSpec = codec, profile.LongSpec
+		args.RecordDecode = func(outcome string) {
+			l.Record(curated.ModelEvent{Kind: curated.ModelKindDecode, Outcome: decodeOutcome(outcome), Codec: codec.Name()})
+		}
+	}
+	return args
+}
+
+// decodeOutcome is an observer decode outcome as the usage ledger records it.
+func decodeOutcome(outcome string) string {
+	switch outcome {
+	case agents.DecodeError:
+		return curated.OutcomeError
+	case agents.DecodeColumns:
+		return curated.OutcomeColumns
+	}
+	return curated.OutcomeOK
 }
 
 func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver) (stageOutcome, error) {
@@ -673,7 +713,11 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	lastCoverageIdx := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
 	backlog := sourceEntriesAfter(entries, lastCoverageIdx)
 	contextWindow := observerChunkContextWindow(cfg, h, *resolved)
-	maxChunkTokens := config.ResolveObserverChunkMaxTokens(cfg, contextWindow)
+	// A split-chunk rule for the resolved worker halves the chunk. A chunk retried on the
+	// fallback keeps that size (re-sizing would change what its marker covers) and is recorded
+	// as the fallback's pass, which ran it; later chunks in the pass resolve to the fallback and
+	// are sized by its rules.
+	maxChunkTokens := rulesFor(h, cfg, resolved.Model).SplitChunk(config.ResolveObserverChunkMaxTokens(cfg, contextWindow))
 	serialized := serialize.SerializeSourceAddressedBranchEntries(backlog, serialize.SourceAddressedOptions{MaxTokens: maxChunkTokens})
 	if trimmed(serialized.Text) == "" || len(serialized.SourceEntryIDs) == 0 {
 		return outcomeContinue, nil
@@ -714,14 +758,10 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		"omittedObservations": memory.OmittedObservations,
 	})
 
+	used := *resolved
 	outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, *resolved, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
-		return runObserver(ctx, agents.ObserverArgs{
-			WorkerArgs:            workerArgs(cfg, h, worker),
-			PriorReflections:      priorReflections,
-			PriorObservations:     priorObservations,
-			Chunk:                 serialized.Text,
-			AllowedSourceEntryIDs: serialized.SourceEntryIDs,
-		})
+		used = worker
+		return runObserver(ctx, observerArgs(cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
 	})
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {
@@ -770,6 +810,8 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		coversUpToID = cited
 		notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer stopped early (%s); coverage advances to the last cited entry", reason))
 	}
+	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, known: fullMemory.Observations}
+	observations, pass := applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 
 	data := ledger.BuildObservationsRecordedData(observations, coversUpToID)
 	if data == nil {
@@ -795,6 +837,7 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	}
 	debuglog.Log(ctx, "observer.appended", map[string]any{"count": len(observations), "coversUpToId": coversUpToID})
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: %d %s recorded", len(observations), jsfmt.Plural(len(observations), "observation")))
+	recordPass(ctx, cfg, h, used.Model, pass)
 	return outcomeContinue, nil
 }
 
@@ -849,7 +892,7 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	reflectWith := func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
 		judge = worker
 		memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), false)
-		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(cfg, h, worker), Reflections: memory.Reflections, Observations: memory.Observations})
+		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(cfg, h, worker, rules.StageReflector), Reflections: memory.Reflections, Observations: memory.Observations})
 	}
 	var reflections []ledger.Reflection
 	if primaryOwed {
@@ -898,6 +941,7 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	if err := h.AppendEntry(ledger.OMReflectionsRecorded, data); err != nil {
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, err
 	}
+	recordPass(ctx, cfg, h, judge.Model, rules.Pass{Stage: rules.StageReflector})
 	return reflectorStageResult{outcome: outcomeContinue, sameRunReflections: reflections, effectiveReflectionCoverageID: data.CoversUpToID}, nil
 }
 
@@ -953,10 +997,12 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		return outcomeAbort, nil
 	}
 	reflectionsForDropper := mergeReflections(folded.Reflections, sameRunReflections)
+	used := *resolved
 	droppedIDs, err := runStageWithFallback(ctx, h, runtime.PhaseDropper, *resolved, resolver, func(worker runtime.ResolveResult) ([]string, error) {
+		used = worker
 		// The dropper prunes old observations, so it sees the oldest ones that fit.
 		memory := ledger.BoundWorkerMemory(reflectionsForDropper, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), true)
-		return runDropper(ctx, agents.DropperArgs{WorkerArgs: workerArgs(cfg, h, worker), Reflections: memory.Reflections, Observations: memory.Observations, ActiveObservations: folded.ActiveObservations, TargetTokens: cfg.ObservationsPoolTargetTokens})
+		return runDropper(ctx, agents.DropperArgs{WorkerArgs: workerArgs(cfg, h, worker, rules.StageDropper), Reflections: memory.Reflections, Observations: memory.Observations, ActiveObservations: folded.ActiveObservations, TargetTokens: cfg.ObservationsPoolTargetTokens})
 	})
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {
@@ -969,6 +1015,7 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		debuglog.Log(ctx, "dropper.aborted", map[string]any{})
 		return outcomeAbort, nil
 	}
+	droppedIDs = protectDrops(ctx, cfg, h, used, droppedIDs, folded.ActiveObservations, metrics.Fullness)
 	coversUpToID := ledger.EarlierCoverageMarkerID(entries, observationCoverageID, sameRunReflectionCoverageID)
 	var data *ledger.ObservationsDroppedData
 	if coversUpToID != "" && len(droppedIDs) > 0 {
@@ -987,6 +1034,7 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		if err := h.AppendEntry(ledger.OMObservationsDropped, data); err != nil {
 			return outcomeAbort, err
 		}
+		recordPass(ctx, cfg, h, used.Model, rules.Pass{Stage: rules.StageDropper})
 	}
 	return outcomeContinue, nil
 }

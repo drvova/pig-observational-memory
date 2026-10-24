@@ -11,8 +11,19 @@ import (
 )
 
 // TablesUsageInstructions opens every memory summary rendered in the tables
-// format. Its last paragraph, TablesRecallParagraph, points at the recall tool.
-const TablesUsageInstructions = `These are condensed memories from earlier in this session, as tables: name[rows]{fields}: then one record per line, values in field order; an empty value means none.
+// format with the rows codec (TablesUsageInstructionsFor gives another codec's).
+// It starts with TablesSummaryIntro, and its last paragraph,
+// TablesRecallParagraph, points at the memory tool.
+const TablesUsageInstructions = TablesSummaryIntro + rowsFormatLine + tablesUsageBody
+
+// TablesSummaryIntro starts the instructions of every tables summary, whatever
+// its codec, so a reader can find a summary's tables without knowing the codec.
+const TablesSummaryIntro = "These are condensed memories from earlier in this session, as tables"
+
+// rowsFormatLine ends the instructions' first sentence for the rows codec.
+const rowsFormatLine = ": name[rows]{fields}: then one record per line, values in field order; an empty value means none."
+
+const tablesUsageBody = `
 
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their observations were recorded.
 - notes.<subject>: observations about one subject, oldest first. kind is fact, event, preference, plan, correction or assistant (something the assistant produced); scope tells two figures apart; superseded_by is the id of the record that replaced this one.
@@ -23,11 +34,37 @@ Treat these as past records. When records conflict, the most recent reflects the
 
 ` + TablesRecallParagraph
 
+// TablesUsageInstructionsFor is the instructions that open a tables summary
+// encoded with codec: TablesUsageInstructions for the rows codec (or nil), else
+// the same text with its first sentence naming the codec and carrying the first
+// line of the codec's spec, so the instructions describe the format below them.
+func TablesUsageInstructionsFor(codec tables.Codec) string {
+	if codec == nil || codec.Name() == tables.Rows.Name() {
+		return TablesUsageInstructions
+	}
+	format, _, _ := strings.Cut(codec.Spec(), "\n")
+	return TablesSummaryIntro + " in the " + codec.Name() + " format. " + strings.TrimSpace(format) + tablesUsageBody
+}
+
+// TablesSummaryBody is the encoded tables of a tables summary in any codec:
+// the text after its instructions, up to any appended section ("\n\n---\n\n").
+// False when summary is not a tables summary.
+func TablesSummaryBody(summary string) (string, bool) {
+	if !strings.HasPrefix(summary, TablesSummaryIntro) {
+		return "", false
+	}
+	_, body, ok := strings.Cut(summary, TablesRecallParagraph)
+	if !ok {
+		return "", false
+	}
+	body, _, _ = strings.Cut(body, "\n\n---\n\n")
+	return strings.TrimSpace(body), true
+}
+
 // TablesRecallParagraph is the last paragraph of TablesUsageInstructions. It
-// names the tool the extension registers (recall.ToolName, which this package
-// cannot import); it changes to the memory tool when that tool replaces recall
-// (docs/memory-interface.md, section 5).
-const TablesRecallParagraph = "The recall tool reads any record back by its id with its exact source, omitted ones included; use it when precision needs the source, not as broad search."
+// names the tool the extension registers and its queries (memquery.ToolName,
+// which this package cannot import; memquery's tests check the name).
+const TablesRecallParagraph = `The memory tool reads any record back with its exact source, omitted ones included (recall <id>), and searches what these tables condensed (history | search "words"); use it when precision needs the source.`
 
 // Table names and fields of the tables format.
 const (
@@ -321,7 +358,7 @@ func renderTablesSummary(reflections []Reflection, observations []Observation, m
 	}
 	var keptReflections []Reflection
 	var keptObservations []Observation
-	fixed := estimateTokens(TablesUsageInstructions) + 1
+	fixed := estimateTokens(TablesUsageInstructionsFor(l.codec)) + 1
 	reflectionHeader := l.headerCost(reflectionsTable, reflectionFields)
 	selectWith := func(reserve int) ([]Reflection, []Observation) {
 		budget := max(0, maxTokens-fixed-reserve)
@@ -401,7 +438,7 @@ func (l *tablesLayout) render(keptReflections []Reflection, keptObservations []O
 	if keptObservations == nil {
 		keptObservations = []Observation{}
 	}
-	text := TablesUsageInstructions
+	text := TablesUsageInstructionsFor(l.codec)
 	if len(out) > 0 {
 		text += "\n\n" + l.codec.Encode(out...)
 	}

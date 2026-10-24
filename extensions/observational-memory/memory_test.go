@@ -1,9 +1,18 @@
 package observationalmemory
 
 import (
+	"encoding/binary"
+	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
 func TestProjectRootIsTheEnclosingRepository(t *testing.T) {
@@ -24,5 +33,72 @@ func TestProjectRootIsTheEnclosingRepository(t *testing.T) {
 	plain, _ := filepath.EvalSymlinks(t.TempDir())
 	if got := projectRoot(plain); got != plain {
 		t.Fatalf("outside a repository the project is cwd itself, got %s", got)
+	}
+}
+
+// registration is the register message an extension sends when it connects:
+// the tools and commands PiG installs.
+type registration struct {
+	Tools []struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters"`
+	} `json:"tools"`
+	Commands []struct {
+		Name string `json:"name"`
+	} `json:"commands"`
+}
+
+// registered connects the factory's extension to an in-memory host and reads
+// its register message.
+func registered(t *testing.T) registration {
+	t.Helper()
+	hostSide, extSide := net.Pipe()
+	defer hostSide.Close()
+	done := make(chan error, 1)
+	go func() { done <- Extension().RunWithConn(extSide) }()
+	_ = hostSide.SetDeadline(time.Now().Add(10 * time.Second))
+	var header [4]byte
+	if _, err := io.ReadFull(hostSide, header[:]); err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, binary.BigEndian.Uint32(header[:]))
+	if _, err := io.ReadFull(hostSide, body); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Type     string       `json:"type"`
+		Register registration `json:"register"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Type != "register" {
+		t.Fatalf("first frame %s: %v", body, err)
+	}
+	_ = hostSide.Close()
+	<-done
+	return envelope.Register
+}
+
+// One memory tool replaces recall and the six curated tools; commands are
+// only the read-only views.
+func TestRegistersOneMemoryTool(t *testing.T) {
+	reg := registered(t)
+	if len(reg.Tools) != 1 || reg.Tools[0].Name != memquery.ToolName {
+		t.Fatalf("tools %+v, want exactly the memory tool", reg.Tools)
+	}
+	tool := reg.Tools[0]
+	if !strings.Contains(tool.Description, tables.Codecs()[0].Spec()) || !strings.Contains(tool.Description, "recall <id>") {
+		t.Fatalf("description lacks the grammar or the codec spec: %s", tool.Description)
+	}
+	properties, _ := tool.Parameters["properties"].(map[string]any)
+	required, _ := tool.Parameters["required"].([]any)
+	if len(properties) != 1 || properties["query"] == nil || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("parameters %+v, want one required query string", tool.Parameters)
+	}
+	commands := map[string]bool{}
+	for _, c := range reg.Commands {
+		commands[c.Name] = true
+	}
+	if !commands["om:status"] || !commands["om:view"] || commands["om:memory"] || len(commands) != 2 {
+		t.Fatalf("commands %v, want om:status and om:view only", commands)
 	}
 }

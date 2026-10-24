@@ -95,8 +95,9 @@ type Config struct {
 	DebugLog                bool
 	// PiAutoCompactionEnabled is Pi's own compaction.enabled setting.
 	PiAutoCompactionEnabled bool
-	// CuratedMemory gives the agent its own long-lived memory: the memory_*
-	// tools and an evidence-ranked index at the head of each conversation.
+	// CuratedMemory gives the agent its own long-lived memory: the memory
+	// tool's saved source and writes, and an evidence-ranked index at the head
+	// of each conversation.
 	CuratedMemory bool
 	// CuratedMemoryIndexTokens bounds the index's memory lines.
 	CuratedMemoryIndexTokens int

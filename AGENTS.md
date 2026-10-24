@@ -27,11 +27,18 @@ renders the posting video from the built scenes, with `sound.ts`'s synthesized s
 gitignored `out/trailer.mp4`.
 The Clayzo agent skills live in `.agents/skills/` (linked from `.claude/skills/`).
 
-## Curated memory and the bench module
+## The memory tool, curated memory and the bench module
 
-`internal/curated` is the agent-written memory (tools, store under PiG's config root, ranked index). The
-index goes into the system prompt as the `curated-memory` section (`systemPromptOptions.sections`), never as a
-returned `systemPrompt`, which PiG turns into a forced prompt that drops other extensions' sections. PiG keeps
+The extension registers one tool, `memory` (`internal/memquery`: one query string, parsed and interpreted over the
+folded ledger, the branch's raw text and the curated store; spec in `docs/memory-interface.md` section 5).
+Slash commands stay read-only views (`/om:status`, `/om:view`). `internal/curated` is the agent-written memory
+(store under PiG's config root, defined queries, ranked index); the `memory` tool's writes go through
+`curated.Call.Run`, and `define` through the `memquery.Definer` interface. `internal/harness` is the per-model harness (spec section 6):
+profiles are a pure function of `<store>/models/<model>.jsonl` (`harness.Compute`, `MinEvidence`), and it owns the
+memory tool's execution and the agent-defined tools, which it registers and (de)activates only through `host.Tools`
+(`host.ToolHost`); it never touches the `memory` tool's activation or a tool it did not register. `internal/rules` (spec section 7) keeps rules as `<store>/rules/<id>.rows`; detectors run after each pass that advanced coverage (`hooks.recordPass`), and remedies may only add notes citing entries the chunk's marker already covers, never on an empty verdict. The index goes into the system
+prompt as the `curated-memory` section (`systemPromptOptions.sections`), never as a returned `systemPrompt`,
+which PiG turns into a forced prompt that drops other extensions' sections. PiG keeps
 the extension process across sessions, so per-conversation state (the index `Pin`) resets on `session_start`.
 `cmd/longmemeval` is a nested module (own `go.mod` with a `replace`): `pig install` refuses a module holding
 both the factory and a standalone `main`, so the harness must stay outside the extension module's scan.

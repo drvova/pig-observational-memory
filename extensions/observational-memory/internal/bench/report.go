@@ -25,7 +25,7 @@ type Result struct {
 	Memory        *Memory `json:"memory,omitempty"`
 	// DroppedSessions counts haystack sessions a full-context prompt left out.
 	DroppedSessions int `json:"dropped_sessions,omitempty"`
-	// Recalls counts the actor's recall tool calls (with -recall).
+	// Recalls counts the actor's memory tool calls (with -recall).
 	Recalls       int      `json:"recalls,omitempty"`
 	IngestErrors  []string `json:"ingest_errors,omitempty"`
 	PipelineRuns  int      `json:"pipeline_runs,omitempty"`

@@ -11,6 +11,8 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
@@ -364,4 +366,38 @@ func TestStatusReflectionProgressWaitsForNewObservations(t *testing.T) {
 	)
 	output = statusOutput(t, statusRuntime(statusConfig()), withContextTokens(testfix.NewFakeHost(entries...), 5100))
 	expectContains(t, output, "Next reflection:  ~5,000 / 20 observed tokens")
+}
+
+// /om:status shows the session model's harness profile with the reasons for each switch, and
+// the defined tools' standing.
+func TestStatusShowsHarnessProfile(t *testing.T) {
+	h := testfix.NewFakeHost()
+	h.Model = testfix.Model("p", "m")
+	output := statusOutput(t, statusRuntime(statusConfig()), h)
+	expectLacks(t, output, "── Harness ──")
+
+	h.Home = t.TempDir()
+	store := curated.New(curated.DefaultDir(h.Home))
+	for i := 0; i < harness.MinEvidence; i++ {
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindMemory, Outcome: curated.OutcomeShown, Target: curated.TargetSummary})
+	}
+	if _, err := store.Define(curated.Definition{Name: "bakes", Query: "notes", Description: "Notes."}, "s"); err != nil {
+		t.Fatal(err)
+	}
+	output = statusOutput(t, statusRuntime(statusConfig()), h)
+	expectContains(t, output, "── Harness ──",
+		"Profile (session model p/m, 3 events): codec rows, layout tables, summary 1/2 of the room, short spec",
+		"summary → 1/2 of the room: 3 queries for records the summary showed",
+		"Defined tools: bakes probation (0 calls")
+
+	// A separate memory worker shows only what it writes with: its layout switch feeds no
+	// surface, so it is not listed.
+	for i := 0; i < harness.MinEvidence; i++ {
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/worker", Kind: curated.ModelKindDecode, Outcome: curated.OutcomeColumns, Codec: "rows"})
+	}
+	cfg := statusConfig()
+	cfg.Model = &config.ConfiguredModel{ID: "worker"}
+	output = statusOutput(t, statusRuntime(cfg), h)
+	expectContains(t, output, "Profile (memory worker p/worker, 3 events): codec rows, short spec")
+	expectLacks(t, output, "layout → lines")
 }

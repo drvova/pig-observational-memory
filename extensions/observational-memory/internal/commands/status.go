@@ -7,6 +7,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
@@ -162,6 +163,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		if state.LastDropperError != "" {
 			lines = append(lines, "Dropper: "+state.LastDropperError)
 		}
+	}
+	if harnessLines := harness.StatusLines(h, cfg); len(harnessLines) > 0 {
+		lines = append(append(lines, ""), harnessLines...)
 	}
 	return lines, nil
 }

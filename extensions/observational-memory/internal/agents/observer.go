@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -36,6 +37,17 @@ type WorkerArgs struct {
 	// ThinkingLevel is the reasoning level; "" means "low".
 	ThinkingLevel string
 	Stream        StreamFunc
+	// SystemLines are lines appended to the stage's system prompt: the prompt-line rules
+	// (docs/memory-interface.md, section 7) that apply to the worker model for this stage.
+	SystemLines []string
+}
+
+// system is the stage's system prompt base with the worker's SystemLines appended.
+func (a WorkerArgs) system(base string) string {
+	if len(a.SystemLines) == 0 {
+		return base
+	}
+	return strings.TrimRight(base, "\n") + "\n\nMemory rules for this model:\n- " + strings.Join(a.SystemLines, "\n- ") + "\n"
 }
 
 func (a WorkerArgs) loopConfig(stage string) LoopConfig {
@@ -66,6 +78,36 @@ type ObserverArgs struct {
 	AllowedSourceEntryIDs []string
 	// Codec is the table format of the rows parameter; nil uses RowsCodec.
 	Codec Codec
+	// LongSpec carries the codec's longer spec with examples (tables.LongSpec) instead of its
+	// short one: the per-model harness sets it for a model that keeps making syntax errors.
+	LongSpec bool
+	// RecordDecode, when set, is told the outcome of every rows table the model sends:
+	// DecodeOK, DecodeError (the codec could not parse it) or DecodeColumns (it parsed, but
+	// with the wrong columns or tables). The harness counts these per model.
+	RecordDecode func(outcome string)
+	// Instruction, when set, is a harness instruction the user message carries before the
+	// chunk: a require-kind rule's re-ask over the entries it flagged.
+	Instruction string
+}
+
+// The outcomes ObserverArgs.RecordDecode is told.
+const (
+	DecodeOK      = "ok"
+	DecodeError   = "error"
+	DecodeColumns = "columns"
+)
+
+func (a ObserverArgs) spec() string {
+	if a.LongSpec {
+		return tables.LongSpec(a.codec())
+	}
+	return a.codec().Spec()
+}
+
+func (a ObserverArgs) recordDecode(outcome string) {
+	if a.RecordDecode != nil {
+		a.RecordDecode(outcome)
+	}
 }
 
 func (a ObserverArgs) codec() Codec {
@@ -77,7 +119,7 @@ func (a ObserverArgs) codec() Codec {
 
 // recordObservationsSchema is the record_observations parameter schema, with
 // the rows example written in codec.
-func recordObservationsSchema(codec Codec) map[string]any {
+func recordObservationsSchema(codec Codec, spec string) map[string]any {
 	example := codec.Encode(Table{
 		Name:   "observations",
 		Fields: observationRowFields,
@@ -139,7 +181,7 @@ func recordObservationsSchema(codec Codec) map[string]any {
 			"rows": map[string]any{
 				"type": "string",
 				"description": "Alternative to observations: one table in the " + codec.Name() + " format, e.g.\n" + example + "\n" +
-					codec.Spec() + "\n" +
+					spec + "\n" +
 					"Separate several sourceEntryIds or supersedes ids with spaces; leave optional fields empty.",
 			},
 		},
@@ -249,11 +291,21 @@ func normalizeObservationContent(content string) (string, bool) {
 // item maps the observations parameter carries, so both share one validation
 // path. Absent cells are left out; sourceEntryIds and supersedes split on
 // white space. Unknown or missing required columns fail the whole table.
-func observationRowItems(codec Codec, text string) ([]any, error) {
+func observationRowItems(codec Codec, text string) ([]any, string, error) {
 	tables, err := codec.Decode(strings.TrimSpace(text))
 	if err != nil {
-		return nil, err
+		return nil, DecodeError, err
 	}
+	items, err := observationTableItems(tables)
+	if err != nil {
+		return nil, DecodeColumns, err
+	}
+	return items, DecodeOK, nil
+}
+
+// observationTableItems checks a decoded rows text's shape (one table, known columns, the
+// required ones present) and turns its rows into item maps.
+func observationTableItems(tables []Table) ([]any, error) {
 	if len(tables) != 1 {
 		return nil, fmt.Errorf("expected one table, found %d; send exactly one observations table", len(tables))
 	}
@@ -364,12 +416,13 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 		Description: "Record a batch of new observations distilled from the conversation chunk. " +
 			"Call this multiple times as you work through the chunk. Stop calling when coverage is complete, " +
 			"then emit a short plain-text confirmation to end the run.",
-		Parameters: recordObservationsSchema(codec),
+		Parameters: recordObservationsSchema(codec, args.spec()),
 		Execute: func(_ context.Context, params map[string]any) (ToolResult, error) {
 			added, duplicates, rejected, invalid, droppedSupersedes := 0, 0, 0, 0, 0
 			items, _ := params["observations"].([]any)
 			if rowsText, _ := params["rows"].(string); strings.TrimSpace(rowsText) != "" {
-				rowItems, err := observationRowItems(codec, rowsText)
+				rowItems, outcome, err := observationRowItems(codec, rowsText)
+				args.recordDecode(outcome)
 				if err != nil {
 					return ToolResult{Text: "rows not recorded: " + err.Error() + ". Nothing from this call was recorded; fix the table and call again.", Details: map[string]any{"added": 0, "total": len(accumulated)}}, nil
 				}
@@ -458,6 +511,10 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 		},
 	}
 
+	instruction := ""
+	if strings.TrimSpace(args.Instruction) != "" {
+		instruction = "\n\n" + strings.TrimSpace(args.Instruction)
+	}
 	userText := "Current local time: " + serialize.NowTimestamp() + `
 
 CURRENT REFLECTIONS:
@@ -466,15 +523,15 @@ CURRENT REFLECTIONS:
 CURRENT OBSERVATIONS:
 ` + joinOrEmpty(args.PriorObservations) + `
 
-Compress the following new conversation chunk into observations by calling record_observations one or more times. Do not restate facts already present in current reflections or current observations. Prefer inline conversation timestamps when assigning times; fall back to the current local time above only if no message timestamp applies. Stop calling the tool and reply with a short plain-text confirmation once the chunk is fully covered.
+Compress the following new conversation chunk into observations by calling record_observations one or more times. Do not restate facts already present in current reflections or current observations. Prefer inline conversation timestamps when assigning times; fall back to the current local time above only if no message timestamp applies. Stop calling the tool and reply with a short plain-text confirmation once the chunk is fully covered.` + instruction + `
 
 ROWS FORMAT (` + codec.Name() + `), for the rows parameter:
-` + codec.Spec() + `
+` + args.spec() + `
 
 NEW CONVERSATION CHUNK:
 ` + conversation
 
-	result, err := RunLoop(ctx, args.Stream, args.loopConfig("observer"), ObserverSystem, userText, []Tool{recordObservations})
+	result, err := RunLoop(ctx, args.Stream, args.loopConfig("observer"), args.system(ObserverSystem), userText, []Tool{recordObservations})
 	if err != nil {
 		return ObserverResult{}, err
 	}

@@ -12,7 +12,6 @@
 package curated
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,9 +166,12 @@ func (s Store) Save(m Memory, source string) (Memory, error) {
 			if !Visible(existing, m.Project) {
 				return fmt.Errorf("the name %q is taken by a memory scoped to another project; choose another name", m.Name)
 			}
-			return fmt.Errorf("a memory named %q already exists; edit it with memory_edit instead", m.Name)
+			return fmt.Errorf("a memory named %q already exists; change it with edit name=%s instead", m.Name, m.Name)
 		} else if _, statErr := os.Stat(s.path(m.Name)); statErr == nil {
 			return fmt.Errorf("the name %q is taken by an unreadable memory file; choose another name", m.Name)
+		}
+		if _, err := os.Stat(s.definitionPath(m.Name)); err == nil {
+			return fmt.Errorf("the name %q is taken by a defined query; choose another name", m.Name)
 		}
 		now := s.Now().UTC()
 		m.Description = oneLine(m.Description)
@@ -240,31 +242,6 @@ func (s Store) Forget(name, project string) error {
 	return s.Record(name, EventForget)
 }
 
-// Search returns the memories in project whose name, description or body
-// contains every word of query, case-insensitively.
-func (s Store) Search(project, query string) ([]Memory, error) {
-	all, err := s.List(project)
-	if err != nil {
-		return nil, err
-	}
-	words := strings.Fields(strings.ToLower(query))
-	out := []Memory{}
-	for _, m := range all {
-		hay := strings.ToLower(m.Name + "\n" + m.Description + "\n" + m.Body)
-		match := len(words) > 0
-		for _, w := range words {
-			if !strings.Contains(hay, w) {
-				match = false
-				break
-			}
-		}
-		if match {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
 // The usage ledger's events.
 const (
 	EventView    = "view"
@@ -280,16 +257,32 @@ type usageLine struct {
 	Time  string `json:"time"`
 	Name  string `json:"name"`
 	Event string `json:"event"`
+	// Quote is a helped or harmed event's evidence (NormalizeQuote).
+	Quote string `json:"quote,omitempty"`
 }
 
 func (s Store) usagePath() string { return filepath.Join(s.Dir, "usage.jsonl") }
 
 // Record appends one usage event for name.
 func (s Store) Record(name, event string) error {
+	return s.appendUsage(usageLine{Name: name, Event: event})
+}
+
+// RecordFeedback appends a helped or harmed event for name with the quote
+// that evidences it.
+func (s Store) RecordFeedback(name, outcome, quote string) error {
+	if outcome != EventHelped && outcome != EventHarmed {
+		return fmt.Errorf("outcome %q must be helped or harmed", outcome)
+	}
+	return s.appendUsage(usageLine{Name: name, Event: outcome, Quote: quote})
+}
+
+func (s Store) appendUsage(entry usageLine) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
-	line, _ := json.Marshal(usageLine{Time: s.Now().UTC().Format(time.RFC3339), Name: name, Event: event})
+	entry.Time = s.Now().UTC().Format(time.RFC3339)
+	line, _ := json.Marshal(entry)
 	f, err := os.OpenFile(s.usagePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
@@ -307,22 +300,12 @@ type Evidence struct {
 
 // Usage reads the ledger into per-memory evidence. A missing ledger is empty.
 func (s Store) Usage() (map[string]Evidence, error) {
-	out := map[string]Evidence{}
-	f, err := os.Open(s.usagePath())
-	if errors.Is(err, os.ErrNotExist) {
-		return out, nil
-	}
+	lines, err := s.readUsageLines()
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		var line usageLine
-		if json.Unmarshal(scanner.Bytes(), &line) != nil || line.Name == "" {
-			continue
-		}
+	out := map[string]Evidence{}
+	for _, line := range lines {
 		e := out[line.Name]
 		switch line.Event {
 		case EventView:
@@ -341,8 +324,13 @@ func (s Store) Usage() (map[string]Evidence, error) {
 		}
 		out[line.Name] = e
 	}
-	return out, scanner.Err()
+	return out, nil
 }
+
+// Locked runs fn holding the store's exclusive lock, the one every write to the store takes.
+// Packages that keep their own files in the store directory (the harness's rules) write them
+// under it. fn must not call a Store method that takes the lock itself.
+func (s Store) Locked(fn func() error) error { return s.locked(fn) }
 
 // --- files ---------------------------------------------------------------------
 

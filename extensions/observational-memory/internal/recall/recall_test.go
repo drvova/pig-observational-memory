@@ -26,9 +26,9 @@ func teaObservation() ledger.Observation {
 	})
 }
 
-func TestKeepsPublicToolNameAndCallRendering(t *testing.T) {
-	if recall.ToolName != "recall" || recall.Label != "Recall memory evidence" || recall.FormatCallForTui("aaaaaaaaaaaa") != "recall aaaaaaaaaaaa" {
-		t.Fatal("tool identity changed")
+func TestCallRendering(t *testing.T) {
+	if recall.FormatCallForTui("aaaaaaaaaaaa") != "recall aaaaaaaaaaaa" {
+		t.Fatal("call rendering changed")
 	}
 	if recall.FormatCallForTui("") != "recall ..." {
 		t.Fatalf("call rendering %q", recall.FormatCallForTui(""))

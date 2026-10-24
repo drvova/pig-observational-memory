@@ -189,3 +189,64 @@ type Host interface {
 	SessionModel() Model
 	Models() Models
 }
+
+// ConfigHomer is a host that knows PiG's config root, where the curated store and the
+// per-model usage ledgers live. A host without one runs with no store: curated memory, the
+// usage ledgers and defined tools are then off and every model gets the default profile.
+type ConfigHomer interface {
+	// ConfigHome is PiG's config root, "" when it cannot be found.
+	ConfigHome() string
+}
+
+// ToolInfo is one tool in the session's registry, active or not.
+type ToolInfo struct {
+	Name string
+	// Source is what registered it: "builtin", an extension's name, or a declared source.
+	Source string
+}
+
+// ToolResult is a tool call's result.
+type ToolResult struct {
+	// Text is what the model sees.
+	Text    string
+	IsError bool
+	// Details are structured details for the renderers; they must survive a JSON round trip.
+	Details any
+}
+
+// ToolSpec is a model-callable tool the extension registers: at load, or while a session runs
+// (a tool the agent defined with the memory tool, docs/memory-interface.md section 6).
+type ToolSpec struct {
+	Name, Label, Description string
+	// PromptSnippet is the tool's line in the system prompt's tool list; "" leaves it out.
+	PromptSnippet    string
+	PromptGuidelines []string
+	// Parameters is the JSON schema of the arguments.
+	Parameters map[string]any
+	// Execute runs one call against the live session.
+	Execute func(h ToolHost, params map[string]any) ToolResult
+	// RenderCall, when set, renders the call line in the TUI.
+	RenderCall func(args map[string]any) []string
+	// RenderResult, when set, renders the result in the TUI from the result's details (as
+	// decoded JSON, nil when none), its text, and whether the view is expanded.
+	RenderResult func(details any, text string, expanded bool) []string
+}
+
+// Tools reads and changes the session's tools.
+type Tools interface {
+	// AllTools lists every tool in the session's registry, active or not.
+	AllTools() ([]ToolInfo, error)
+	// ActiveTools lists the active tool names.
+	ActiveTools() ([]string, error)
+	// SetActiveTools replaces the active tool list.
+	SetActiveTools(names []string) error
+	// RegisterTool registers spec, or replaces the extension's earlier tool of its name.
+	RegisterTool(spec ToolSpec) error
+}
+
+// ToolHost is a host that also manages the session's tools: the memory tool and the tools
+// the agent defines run against one.
+type ToolHost interface {
+	Host
+	Tools
+}

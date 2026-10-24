@@ -32,7 +32,7 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 | `internal/agents` | observer, reflector, dropper agent loops and prompts |
 | `internal/hooks` | consolidation trigger, proactive compaction trigger, compaction hook, catch-up |
 | `internal/runtime` | per-process state and model resolution (primary and fallback) |
-| `internal/commands`, `internal/recall` | `/om:status`, `/om:view`, `recall` |
+| `internal/commands`, `internal/recall`, `internal/memquery` | `/om:status`, `/om:view`, the `memory` tool and its `recall <id>` evidence |
 | `internal/config`, `internal/serialize`, `internal/tokens`, `internal/debuglog`, `internal/clipboard` | settings, source serialization, token estimates, debug log, clipboard |
 | `internal/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call its static helpers) |
 | `internal/testfix` | entry builders and fake host for tests |

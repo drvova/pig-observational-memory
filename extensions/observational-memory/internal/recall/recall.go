@@ -1,4 +1,5 @@
-// Package recall implements the recall tool: exact evidence behind a memory id.
+// Package recall reads back the exact evidence behind a memory id: the
+// memory tool's recall <id> query (internal/memquery) and its TUI rendering.
 package recall
 
 import (
@@ -11,42 +12,6 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
-
-// ToolName is the tool's name.
-const ToolName = "recall"
-
-// Label is the tool's human-readable name.
-const Label = "Recall memory evidence"
-
-// Description is the tool description sent to the model.
-const Description = "Recover exact evidence and source context behind a compacted observational-memory observation or reflection id on the current branch. " +
-	"Use when compressed memory is important and original source context is needed before acting."
-
-// PromptSnippet is the tool's line in the system prompt's tool list.
-const PromptSnippet = "Use recall(<id>) to recover exact source context behind compacted memory observations/reflections when precision matters."
-
-// PromptGuidelines are the tool's system prompt guidelines.
-var PromptGuidelines = []string{
-	"Use recall before making an important decision that depends on a compacted observation or reflection whose details are unclear.",
-	"Use recall when you need exact wording, rationale, file paths, commands, errors, commits, user constraints, or provenance behind a remembered claim.",
-	"Use recall when a broad reflection is relevant but you need its supporting observations or raw sources to continue safely.",
-	"Use recall when the user asks why you believe something, what supports a memory, or what was decided earlier.",
-	"Do not use recall as semantic search or transcript browsing; you must already have a specific 12-character memory id.",
-	"Do not recall every id preemptively. Recall only when exact source context will materially improve the next action.",
-}
-
-// Parameters is the tool's JSON schema.
-var Parameters = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"id": map[string]any{
-			"type":        "string",
-			"pattern":     "^[a-f0-9]{12}$",
-			"description": "12-character lowercase hex observation or reflection id shown in compacted memory, /om:view, or a previous recall result. Must be a specific id; this tool does not search by topic.",
-		},
-	},
-	"required": []any{"id"},
-}
 
 var memoryIDPattern = regexp.MustCompile(`^[a-f0-9]{12}$`)
 
@@ -451,7 +416,7 @@ func isObservationOnly(details Details) bool {
 	return len(details.Reflections) == 0 && len(details.UnavailableSupportingObservations) == 0
 }
 
-// Execute runs the recall tool over the branch entries.
+// Execute reads the evidence behind memoryID from the branch entries.
 func Execute(entries []ledger.Entry, memoryID string) (text string, details Details) {
 	if !memoryIDPattern.MatchString(memoryID) {
 		message := "Memory id must be 12 lowercase hex characters. Received: " + memoryID

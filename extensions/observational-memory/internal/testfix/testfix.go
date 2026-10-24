@@ -430,6 +430,20 @@ type FakeHost struct {
 	BranchQueue    [][]session.Entry
 	branchIndex    int
 	GetBranchCalls int
+	// Home is PiG's config root ConfigHome reports; "" means none (no store).
+	Home string
+	// Tools is the session's tool registry, Active the active names; RegisterTool adds to
+	// both, as the host does for a tool that is active by default.
+	Tools  []host.ToolInfo
+	Active []string
+	// Registered are the RegisterTool calls' specs, SetActiveCalls the SetActiveTools calls.
+	Registered     []host.ToolSpec
+	SetActiveCalls [][]string
+	// ToolsErr fails AllTools and ActiveTools; RegisterErr fails RegisterTool; SetActiveErr
+	// fails SetActiveTools, leaving Active unchanged.
+	ToolsErr     error
+	RegisterErr  error
+	SetActiveErr error
 }
 
 // NewFakeHost creates a host with a UI, a cwd and the given entries.
@@ -537,4 +551,69 @@ func (h *FakeHost) AppendedTypes() []string {
 		out = append(out, a.CustomType)
 	}
 	return out
+}
+
+// ConfigHome is Home.
+func (h *FakeHost) ConfigHome() string { return h.Home }
+
+// AllTools lists Tools.
+func (h *FakeHost) AllTools() ([]host.ToolInfo, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ToolsErr != nil {
+		return nil, h.ToolsErr
+	}
+	return append([]host.ToolInfo{}, h.Tools...), nil
+}
+
+// ActiveTools lists Active.
+func (h *FakeHost) ActiveTools() ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ToolsErr != nil {
+		return nil, h.ToolsErr
+	}
+	return append([]string{}, h.Active...), nil
+}
+
+// SetActiveTools replaces Active and records the call.
+func (h *FakeHost) SetActiveTools(names []string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.SetActiveErr != nil {
+		return h.SetActiveErr
+	}
+	h.Active = append([]string{}, names...)
+	h.SetActiveCalls = append(h.SetActiveCalls, append([]string{}, names...))
+	return nil
+}
+
+// RegisterTool records spec and, for a new name, lists it in Tools and Active.
+func (h *FakeHost) RegisterTool(spec host.ToolSpec) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.RegisterErr != nil {
+		return h.RegisterErr
+	}
+	h.Registered = append(h.Registered, spec)
+	for _, t := range h.Tools {
+		if t.Name == spec.Name {
+			return nil
+		}
+	}
+	h.Tools = append(h.Tools, host.ToolInfo{Name: spec.Name, Source: "observational-memory"})
+	h.Active = append(h.Active, spec.Name)
+	return nil
+}
+
+// RegisteredSpec is the last spec registered under name.
+func (h *FakeHost) RegisteredSpec(name string) (host.ToolSpec, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := len(h.Registered) - 1; i >= 0; i-- {
+		if h.Registered[i].Name == name {
+			return h.Registered[i], true
+		}
+	}
+	return host.ToolSpec{}, false
 }

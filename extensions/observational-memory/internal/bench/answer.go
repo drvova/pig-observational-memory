@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
@@ -26,7 +26,7 @@ func UserPrompt(q Question) string {
 }
 
 // recallParagraphs are the paragraphs of the summary's usage instructions, one
-// per format, that point the agent at the tool reading records back by id.
+// per format, that point the agent at the memory tool.
 var recallParagraphs = func() []string {
 	paragraphs := []string{"\n\n" + ledger.TablesRecallParagraph}
 	if i := strings.Index(ledger.ContextUsageInstructions, "When exact source context is needed"); i >= 0 {
@@ -37,8 +37,8 @@ var recallParagraphs = func() []string {
 
 // MemoryMessage is the system message carrying the extension's memory: the
 // rendered summary, then the raw tail Pi would still hold in context. Without
-// the recall tool, the summary's paragraph about reading records back is left
-// out, since the actor could not follow it.
+// the memory tool, the summary's paragraph about it is left out, since the
+// actor could not follow it.
 func MemoryMessage(m Memory, withRecall bool) string {
 	parts := []string{}
 	if summary := m.Summary; strings.TrimSpace(summary) != "" {
@@ -55,11 +55,11 @@ func MemoryMessage(m Memory, withRecall bool) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// RecallPrompt is what Pi adds to the system prompt for the recall tool: its
+// RecallPrompt is what Pi adds to the system prompt for the memory tool: its
 // snippet and guidelines.
 func RecallPrompt() string {
-	lines := []string{recall.PromptSnippet}
-	for _, guideline := range recall.PromptGuidelines {
+	lines := []string{memquery.PromptSnippet}
+	for _, guideline := range memquery.PromptGuidelines {
 		lines = append(lines, "- "+guideline)
 	}
 	return strings.Join(lines, "\n")
@@ -68,7 +68,7 @@ func RecallPrompt() string {
 // OMMessages are the actor's messages in observational-memory mode, shaped
 // like Mastra's: the agent instructions, the memory system message (where
 // Mastra's OM processor injects its observations), and the dated question.
-// withRecall adds the recall tool's system prompt lines, as Pi does when the
+// withRecall adds the memory tool's system prompt lines, as Pi does when the
 // tool is registered.
 func OMMessages(q Question, m Memory, withRecall bool) []ChatMessage {
 	instructions := ActorInstructions
@@ -125,7 +125,7 @@ type Answer struct {
 	PromptTokens int    `json:"promptTokens"`
 	// DroppedSessions counts sessions the full-context prompt left out.
 	DroppedSessions int `json:"droppedSessions,omitempty"`
-	// Recalls counts recall tool calls.
+	// Recalls counts memory tool calls.
 	Recalls int `json:"recalls,omitempty"`
 }
 
@@ -156,17 +156,18 @@ func chatWithContent(ctx context.Context, client *Client, role string, req ChatR
 	return resp, nil
 }
 
-// RecallTool is the extension's recall tool as a chat-completions function.
+// RecallTool is the extension's memory tool as a chat-completions function.
 func RecallTool() ToolSpec {
-	return ToolSpec{Type: "function", Function: FunctionSpec{Name: recall.ToolName, Description: recall.Description, Parameters: recall.Parameters}}
+	return ToolSpec{Type: "function", Function: FunctionSpec{Name: memquery.ToolName, Description: memquery.Description(nil), Parameters: memquery.Parameters}}
 }
 
-// MaxRecallTurns bounds the actor's recall tool loop.
+// MaxRecallTurns bounds the actor's memory tool loop.
 const MaxRecallTurns = 8
 
-// AskWithRecall is Ask with the extension's recall tool, run against the
-// ingested branch exactly as the extension's tool runs against the session.
-// After MaxRecallTurns tool turns the last call is made without tools.
+// AskWithRecall is Ask with the extension's memory tool, run against the
+// ingested branch as the extension's tool runs against the session, without a
+// curated store (saved and writes report curated memory off). After
+// MaxRecallTurns tool turns the last call is made without tools.
 func AskWithRecall(ctx context.Context, client *Client, messages []ChatMessage, entries []session.Entry, opts AnswerOptions) (Answer, int, error) {
 	messages = append([]ChatMessage{}, messages...)
 	recalls := 0
@@ -189,12 +190,12 @@ func AskWithRecall(ctx context.Context, client *Client, messages []ChatMessage, 
 		messages = append(messages, choice.Message)
 		for _, call := range choice.Message.ToolCalls {
 			var args struct {
-				ID string `json:"id"`
+				Query string `json:"query"`
 			}
 			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 			text := "Tool " + call.Function.Name + " not found"
-			if call.Function.Name == recall.ToolName {
-				text, _ = recall.Execute(entries, args.ID)
+			if call.Function.Name == memquery.ToolName {
+				text = memquery.Run(memquery.Env{Entries: entries}, args.Query).Text
 				recalls++
 			}
 			messages = append(messages, ChatMessage{Role: "tool", ToolCallID: call.ID, Content: Text(text)})

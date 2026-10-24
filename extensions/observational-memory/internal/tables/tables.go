@@ -37,7 +37,7 @@ type Codec interface {
 }
 
 // codecs lists every codec in preference order; the first is the default.
-var codecs = []Codec{Rows}
+var codecs = []Codec{Rows, JSONLines}
 
 // Codecs returns every codec in preference order. The first is the default; a model that keeps
 // failing to write one can be switched to the next.

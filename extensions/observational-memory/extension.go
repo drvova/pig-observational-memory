@@ -4,14 +4,10 @@
 package observationalmemory
 
 import (
-	"encoding/json"
-	"strings"
-
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
@@ -28,7 +24,7 @@ func Extension() *sdk.Extension {
 	return ext
 }
 
-// Register wires the extension's hooks, commands and tool onto ext.
+// Register wires the extension's hooks, commands and memory tool onto ext.
 func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 	ext.OnEvent(sdk.EventAgentStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		hooks.OnAgentStart(rt, sdkhost.New(ctx))
@@ -79,51 +75,7 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 		},
 	})
 
-	registerCuratedMemory(ext)
-
-	ext.RegisterTool(sdk.ToolDefinition{
-		Name:             recall.ToolName,
-		Label:            recall.Label,
-		Description:      recall.Description,
-		PromptSnippet:    recall.PromptSnippet,
-		PromptGuidelines: recall.PromptGuidelines,
-		Parameters:       recall.Parameters,
-		Execute: func(ctx sdk.Context, params map[string]any) (any, error) {
-			id, _ := params["id"].(string)
-			entries, err := sdkhost.New(ctx).GetBranch()
-			if err != nil {
-				return nil, err
-			}
-			text, details := recall.Execute(entries, id)
-			return sdk.ToolResult{Content: text, Details: details}, nil
-		},
-		RenderCall: func(_ sdk.Context, args map[string]any, _ sdk.ToolRenderContext, _ int) ([]string, error) {
-			id, _ := args["id"].(string)
-			return []string{recall.FormatCallForTui(id)}, nil
-		},
-		RenderResult: func(_ sdk.Context, result sdk.ToolRenderResult, options sdk.ToolRenderResultOptions, _ sdk.ToolRenderContext, _ int) ([]string, error) {
-			var details *recall.Details
-			if result.Details != nil {
-				encoded, err := json.Marshal(result.Details)
-				if err == nil {
-					var decoded recall.Details
-					if json.Unmarshal(encoded, &decoded) == nil && decoded.MemoryID != "" {
-						details = &decoded
-					}
-				}
-			}
-			texts := []string{}
-			for _, block := range result.Content {
-				if block["type"] == "text" {
-					if text, ok := block["text"].(string); ok {
-						texts = append(texts, text)
-					}
-				}
-			}
-			rendered := recall.FormatRenderedResultForTui(details, strings.Join(texts, "\n"), options.Expanded)
-			return strings.Split(rendered, "\n"), nil
-		},
-	})
+	registerMemory(ext)
 }
 
 func decodeBeforeCompact(data map[string]any) hooks.BeforeCompactEvent {

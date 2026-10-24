@@ -8,6 +8,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
@@ -271,7 +272,14 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 	if resolution.Kind == "cut" {
 		built := ledger.BuildCompactionProjection(entries, resolution.Cut.FoldThroughEntryID, ledger.CompactionProjectionConfig{ObservationsPoolMaxTokens: observationsPoolMaxTokens(cfg)})
 		projection = &built
-		summaryMaxTokens := summaryBudget(cfg, contextWindow, event.TokensBefore, entries, resolution, maxRetainedTokens)
+		// The session model reads the summary: its harness profile picks the codec and
+		// layout, and may give the summary less than the room (never more).
+		profile := harness.ProfileFor(h, cfg, h.SessionModel())
+		room := summaryBudget(cfg, contextWindow, event.TokensBefore, entries, resolution, maxRetainedTokens)
+		summaryMaxTokens := profile.ApplySummary(room)
+		if summaryMaxTokens < room {
+			debuglog.Log(ctx, "compaction.summary_profile", map[string]any{"model": profile.Model, "roomTokens": room, "summaryMaxTokens": summaryMaxTokens, "summaryHalvings": profile.SummaryHalvings})
+		}
 		// Instructions attached to this compaction ride along after the
 		// memory, so the memory render gets the budget minus their share.
 		instructionsBlock := ""
@@ -283,7 +291,7 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			// not crowd the memory out of its own summary.
 			memoryBudget = max(summaryMaxTokens/2, summaryMaxTokens-tokens.EstimateStringTokens(instructionsBlock))
 		}
-		rendered := ledger.RenderSummaryWithOptions(projection.Reflections, projection.Observations, memoryBudget, ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: cfg.MemoryFormat})
+		rendered := ledger.RenderSummaryWithOptions(projection.Reflections, projection.Observations, memoryBudget, ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: profile.SummaryFormat(cfg), Codec: profile.CodecValue()})
 		summary = rendered.Text
 		// A summary that kept no record would replace older context with only
 		// instructions and an omission notice. Decline instead, so Pi's native

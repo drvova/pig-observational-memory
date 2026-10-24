@@ -17,7 +17,7 @@ const ContextUsageInstructions = `These are condensed memories from earlier in t
 
 Treat these as past records. When entries conflict, the most recent observation reflects the latest known state. Work that prior observations describe as completed should not be redone unless the user explicitly asks to revisit it.
 
-When exact source context is needed for precision or traceability, use the recall tool with the relevant observation or reflection id. This is especially useful when a reflection materially affects a decision or is too compressed to continue confidently. Do not use recall as broad search or inject raw source unless it is needed.`
+When exact source context is needed for precision or traceability, use the memory tool with recall <id> for the relevant observation or reflection. This is especially useful when a reflection materially affects a decision or is too compressed to continue confidently. Find source beyond these records via history | search "words".`
 
 // ObservationToSummaryLine renders "[id] YYYY-MM-DD HH:MM [relevance] content".
 func ObservationToSummaryLine(observation Observation) string {
@@ -273,7 +273,7 @@ func ClippedObservationLine(observation Observation) string {
 }
 
 // ClippedObservationsHeading opens the clipped observation lines.
-const ClippedObservationsHeading = "## Clipped observations\nLines cut to fit the budget; recall an id for the full record."
+const ClippedObservationsHeading = "## Clipped observations\nLines cut to fit the budget; read an id back with the memory tool (recall <id>) for the full record."
 
 // selectObservationTiers lays observations out the way nodecode lays out its
 // index: in full within half of budget (selectObservationsWithinBudget), then

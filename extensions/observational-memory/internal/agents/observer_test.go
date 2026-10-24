@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -537,6 +538,56 @@ func TestObserverRowsUseActiveCodec(t *testing.T) {
 	for _, text := range []string{system, schema, user} {
 		if strings.Contains(text, "TOON") {
 			t.Fatalf("prompt names a concrete format: %s", text)
+		}
+	}
+}
+
+// Every rows table is reported to RecordDecode: parsed, unparsable, or with the wrong columns.
+func TestObserverRecordsDecodeOutcomes(t *testing.T) {
+	good := "observations[1]{timestamp,relevance,sourceEntryIds,content}:\n  2026-05-02 10:30,high,entry-a,One row."
+	for name, tc := range map[string]struct{ rows, want string }{
+		"ok":      {good, agents.DecodeOK},
+		"error":   {"observations[2]{timestamp,relevance,sourceEntryIds,content}:\n  2026-05-02 10:30,high,entry-a,One row.", agents.DecodeError},
+		"columns": {"observations[1]{timestamp,relevance,content}:\n  2026-05-02 10:30,high,One row.", agents.DecodeColumns},
+		"tables":  {good + "\n" + good, agents.DecodeColumns},
+	} {
+		rec := &tf.StreamRecorder{Replies: []map[string]any{
+			tf.AssistantToolCall("tool-1", "record_observations", map[string]any{"rows": tc.rows}),
+			tf.AssistantText("done"),
+		}}
+		args := observerArgs(rec, tf.Model("p", "m"))
+		var got []string
+		args.RecordDecode = func(outcome string) { got = append(got, outcome) }
+		_, _ = agents.RunObserver(context.Background(), args)
+		if !reflect.DeepEqual(got, []string{tc.want}) {
+			t.Fatalf("%s: decodes %v, want [%s]", name, got, tc.want)
+		}
+	}
+	// JSON items alone decode nothing.
+	rec := &tf.StreamRecorder{Replies: []map[string]any{recordCall(map[string]any{"timestamp": "2026-05-02 10:30", "content": "x", "relevance": "low", "sourceEntryIds": []any{"entry-a"}}), tf.AssistantText("done")}}
+	args := observerArgs(rec, tf.Model("p", "m"))
+	calls := 0
+	args.RecordDecode = func(string) { calls++ }
+	_, _ = agents.RunObserver(context.Background(), args)
+	if calls != 0 {
+		t.Fatalf("JSON items reported %d decodes", calls)
+	}
+}
+
+// LongSpec carries the codec's longer spec with examples in the schema and the prompt.
+func TestObserverLongSpec(t *testing.T) {
+	for _, long := range []bool{false, true} {
+		rec := &tf.StreamRecorder{}
+		args := observerArgs(rec, tf.Model("p", "m"))
+		args.Codec = tables.JSONLines
+		args.LongSpec = long
+		_, _ = agents.RunObserver(context.Background(), args)
+		user := fmt.Sprint(rec.Requests[0]["messages"])
+		schema := fmt.Sprint(rec.Requests[0]["tools"])
+		for name, text := range map[string]string{"user": user, "schema": schema} {
+			if strings.Contains(text, "Common mistakes") != long || !strings.Contains(text, `{"table":"name"`) {
+				t.Fatalf("long=%v %s: %s", long, name, text)
+			}
 		}
 	}
 }

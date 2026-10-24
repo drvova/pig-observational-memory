@@ -6,98 +6,82 @@ import (
 	"strings"
 )
 
-// The agent's memory tools. Each handler takes the decoded tool parameters
-// and returns the text the agent sees; errors come back as text too, so the
-// agent can correct the call.
+// The writes the memory tool applies to the store (docs/memory-interface.md,
+// section 5). Each takes the write's key=value arguments and returns the text
+// the agent sees; errors come back as text too, so the agent can correct the
+// query.
 const (
-	ToolSave     = "memory_save"
-	ToolEdit     = "memory_edit"
-	ToolForget   = "memory_forget"
-	ToolRead     = "memory_read"
-	ToolSearch   = "memory_search"
-	ToolFeedback = "memory_feedback"
+	OpSave     = "save"
+	OpEdit     = "edit"
+	OpForget   = "forget"
+	OpFeedback = "feedback"
 )
 
-// ToolSpec describes one tool for registration.
-type ToolSpec struct {
-	Name, Label, Description string
-	Parameters               map[string]any
-}
-
-func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
-
-var nameParam = str("The memory's name: lowercase letters, digits and hyphens, e.g. prefers-tabs.")
-
-// Tools are the memory tools' specs.
-var Tools = []ToolSpec{
-	{Name: ToolSave, Label: "Save memory", Description: "Save a new long-lived memory that later sessions will see in their memory index. Use it when the user corrects you, states a preference, or you learn something about this project worth keeping. One memory per fact; a taken name is refused, so update an existing memory with memory_edit instead.",
-		Parameters: map[string]any{"type": "object", "required": []any{"name", "type", "description"}, "properties": map[string]any{
-			"name":        nameParam,
-			"type":        map[string]any{"type": "string", "enum": []any{TypeUser, TypeFeedback, TypeProject, TypeReference, TypeLesson}, "description": "user: who the user is and what they want; feedback: a correction or instruction from the user; project: a fact about this project; reference: where to find something; lesson: something you learned the hard way."},
-			"description": str("One declarative sentence stating the memory."),
-			"body":        str("Optional: why it matters and how to apply it."),
-			"scope":       map[string]any{"type": "string", "enum": []any{"global", "project"}, "description": "global (default) applies everywhere; project applies only in this project."},
-		}}},
-	{Name: ToolEdit, Label: "Edit memory", Description: "Change a memory that turned out stale, wrong or incomplete. Fields you omit stay as they are.",
-		Parameters: map[string]any{"type": "object", "required": []any{"name"}, "properties": map[string]any{
-			"name": nameParam, "type": map[string]any{"type": "string", "enum": []any{TypeUser, TypeFeedback, TypeProject, TypeReference, TypeLesson}},
-			"description": str("The new one-sentence statement."), "body": str("The new body; an empty string clears it."),
-		}}},
-	{Name: ToolForget, Label: "Forget memory", Description: "Remove a memory that no longer holds.",
-		Parameters: map[string]any{"type": "object", "required": []any{"name"}, "properties": map[string]any{"name": nameParam}}},
-	{Name: ToolRead, Label: "Read memory", Description: "Read a memory in full: its statement, body, scope and history.",
-		Parameters: map[string]any{"type": "object", "required": []any{"name"}, "properties": map[string]any{"name": nameParam}}},
-	{Name: ToolSearch, Label: "Search memories", Description: "Find memories beyond the index by words in their name, statement or body.",
-		Parameters: map[string]any{"type": "object", "required": []any{"query"}, "properties": map[string]any{"query": str("Words that must all appear.")}}},
-	{Name: ToolFeedback, Label: "Memory feedback", Description: "Record that a memory helped you or misled you. Helpful memories rise in the index; misleading ones sink, and should usually be edited or forgotten.",
-		Parameters: map[string]any{"type": "object", "required": []any{"name", "outcome"}, "properties": map[string]any{
-			"name": nameParam, "outcome": map[string]any{"type": "string", "enum": []any{"helped", "harmed"}},
-		}}},
-}
-
-// Call is one tool invocation's context.
+// Call is one write's context: the store, the project it is seen from and the
+// session that writes.
 type Call struct {
 	Store   Store
 	Project string
 	Source  string
+	// Evidence reports whether a feedback quote (normalized) appears in the conversation;
+	// a feedback whose quote it rejects is refused. Nil accepts any quote.
+	Evidence func(quote string) bool
 }
 
-func param(params map[string]any, key string) (string, bool) {
-	v, ok := params[key].(string)
-	return v, ok
+// The feedback quote's bounds, in characters after whitespace is collapsed.
+const (
+	MinQuoteChars = 8
+	MaxQuoteChars = 400
+)
+
+// NormalizeQuote is a feedback quote as the ledger stores it: whitespace
+// collapsed, at least MinQuoteChars characters, clipped to MaxQuoteChars. The
+// quote is the evidence for the outcome, so a feedback without one is refused.
+func NormalizeQuote(quote string) (string, error) {
+	quote = oneLine(quote)
+	runes := []rune(quote)
+	if len(runes) < MinQuoteChars {
+		return "", fmt.Errorf("feedback needs quote=\"...\": at least %d characters from this conversation that show the memory helped or misled you", MinQuoteChars)
+	}
+	if len(runes) > MaxQuoteChars {
+		quote = string(runes[:MaxQuoteChars])
+	}
+	return quote, nil
 }
 
-// Run executes tool with params and returns the agent-facing text.
-func (c Call) Run(tool string, params map[string]any) (string, error) {
-	name, _ := param(params, "name")
-	switch tool {
-	case ToolSave:
-		t, _ := param(params, "type")
-		desc, _ := param(params, "description")
-		body, _ := param(params, "body")
-		m := Memory{Name: name, Type: t, Description: desc, Body: strings.TrimSpace(body)}
-		if scope, _ := param(params, "scope"); scope == "project" {
+// Run applies the write op with its arguments and returns the agent-facing
+// text.
+func (c Call) Run(op string, args map[string]string) (string, error) {
+	name := args["name"]
+	switch op {
+	case OpSave:
+		m := Memory{Name: name, Type: args["type"], Description: args["description"], Body: strings.TrimSpace(args["body"])}
+		switch scope := args["scope"]; scope {
+		case "", "global":
+		case "project":
 			if c.Project == "" {
 				return "", errors.New("no project directory is known; save it as global instead")
 			}
 			m.Project = c.Project
+		default:
+			return "", fmt.Errorf("scope %q must be global or project", scope)
 		}
 		saved, err := c.Store.Save(m, c.Source)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Saved memory %s [%s]%s: %s", saved.Name, saved.Type, scopeNote(saved), saved.Description), nil
-	case ToolEdit:
+	case OpEdit:
 		edit := Edit{}
 		// Models often send every optional field, blank: only a body may be
 		// cleared with an empty string.
-		if v, ok := param(params, "type"); ok && strings.TrimSpace(v) != "" {
+		if v, ok := args["type"]; ok && strings.TrimSpace(v) != "" {
 			edit.Type = &v
 		}
-		if v, ok := param(params, "description"); ok && strings.TrimSpace(v) != "" {
+		if v, ok := args["description"]; ok && strings.TrimSpace(v) != "" {
 			edit.Description = &v
 		}
-		if v, ok := param(params, "body"); ok {
+		if v, ok := args["body"]; ok {
 			edit.Body = &v
 		}
 		if edit.Type == nil && edit.Description == nil && edit.Body == nil {
@@ -108,46 +92,47 @@ func (c Call) Run(tool string, params map[string]any) (string, error) {
 			return "", err
 		}
 		return fmt.Sprintf("Updated memory %s [%s]: %s", m.Name, m.Type, m.Description), nil
-	case ToolForget:
-		if err := c.Store.Forget(name, c.Project); err != nil {
+	case OpForget:
+		err := c.Store.Forget(name, c.Project)
+		if errors.Is(err, ErrNotFound) {
+			// A defined query is forgotten by the same write when no memory
+			// holds the name.
+			// ForgetDefinition removes one GetDefinition refuses to read too.
+			if defErr := c.Store.ForgetDefinition(name); defErr == nil {
+				return "Forgot defined query " + name + ".", nil
+			} else if !errors.Is(defErr, ErrNotFound) {
+				return "", defErr
+			}
+		}
+		if err != nil {
 			return "", err
 		}
 		return "Forgot memory " + name + ".", nil
-	case ToolRead:
-		m, err := c.Store.GetIn(name, c.Project)
-		if err != nil {
-			return "", err
-		}
-		_ = c.Store.Record(name, EventView)
-		return Describe(m), nil
-	case ToolSearch:
-		query, _ := param(params, "query")
-		found, err := c.Store.Search(c.Project, query)
-		if err != nil {
-			return "", err
-		}
-		if len(found) == 0 {
-			return "No memory matches " + fmt.Sprintf("%q", query) + ".", nil
-		}
-		lines := []string{}
-		for _, m := range found {
-			lines = append(lines, IndexLine(m))
-		}
-		return strings.Join(lines, "\n"), nil
-	case ToolFeedback:
-		outcome, _ := param(params, "outcome")
+	case OpFeedback:
+		outcome := args["outcome"]
 		if outcome != EventHelped && outcome != EventHarmed {
 			return "", errors.New(`outcome must be "helped" or "harmed"`)
 		}
+		quote, err := NormalizeQuote(args["quote"])
+		if err != nil {
+			return "", err
+		}
+		if c.Evidence != nil && !c.Evidence(quote) {
+			return "", errors.New("the quote is not in this conversation: copy words verbatim from a user or assistant message that show the memory helped or misled you")
+		}
+		key, what := name, "memory"
 		if _, err := c.Store.GetIn(name, c.Project); err != nil {
+			if _, defErr := c.Store.GetDefinition(name); !errors.Is(err, ErrNotFound) || defErr != nil {
+				return "", err
+			}
+			key, what = DefinitionUsageKey(name), "defined query"
+		}
+		if err := c.Store.RecordFeedback(key, outcome, quote); err != nil {
 			return "", err
 		}
-		if err := c.Store.Record(name, outcome); err != nil {
-			return "", err
-		}
-		return "Recorded that memory " + name + " " + outcome + ".", nil
+		return "Recorded that " + what + " " + name + " " + outcome + ".", nil
 	}
-	return "", fmt.Errorf("unknown memory tool %q", tool)
+	return "", fmt.Errorf("unknown memory write %q", op)
 }
 
 func scopeNote(m Memory) string {
@@ -157,7 +142,7 @@ func scopeNote(m Memory) string {
 	return ""
 }
 
-// Describe renders a memory in full for memory_read and /om:memory.
+// Describe renders a memory in full for the memory tool's recall <name>.
 func Describe(m Memory) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s [%s]%s: %s\n", m.Name, m.Type, scopeNote(m), m.Description)

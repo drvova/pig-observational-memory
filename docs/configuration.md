@@ -79,7 +79,7 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `model.id` | string | unset | Model id in Pi's model registry. Required when `model` is set. |
 | `model.thinking` | enum | unset; workers fall back to `low` | Optional reasoning/thinking level for memory workers. |
 | `compactionSummaryMaxTokens` | positive integer | unset | Optional cap on the memory summary the compaction hook renders. The budget itself is the room the next context has: the session model's context window minus the request overhead and the larger of the source Pi retains and the `compactAfterTokens` threshold, but at least `8000` or half of what the window has left after the retained source, whichever is smaller; `8000` (or this cap) when the window is unknown. Observations get at least half (the newest quarter first, then those carrying numbers, dates or names, then the rest); reflections take the rest. |
-| `memoryFormat` | enum | `"tables"` | Layout of the memory summary the compaction hook renders: `"tables"` lists reflections, notes grouped by subject and omitted spans as tables of records; `"lines"` keeps the earlier bracketed lines. See [Summary format](concepts.md#summary-format). |
+| `memoryFormat` | enum | `"tables"` | Layout of the memory summary the compaction hook renders: `"tables"` lists reflections, notes grouped by subject and omitted spans as tables of records; `"lines"` keeps the earlier bracketed lines. The per-model harness may switch a model that keeps writing rows with the wrong columns to `lines`; `"lines"` here applies to every model. See [Summary format](concepts.md#summary-format). |
 | `compactionCatchUpMaxChunks` | non-negative integer | `2` | Observer chunks the compaction hook may run synchronously to cover source entries the background observer has not reached before Pi's cut. `0` disables. |
 | `workerMemoryMaxTokens` | positive integer | derived | Estimated token budget for the prior memory each observer, reflector, and dropper request carries. Unset: a quarter of the memory model's context window, or `16000` when unknown. |
 | `consolidateWhenIdle` | boolean | `false` | Run memory workers only while the agent is idle (launch from `agent_settled`, abort when a new agent run starts). For hosts where the session model and the memory model share one context budget. |
@@ -90,12 +90,14 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `showWorkerNotifications` | boolean | `true` | Shows routine observer, reflector, and dropper progress notifications. |
 | `passive` | boolean | `false` | Disables proactive background memory and auto-compaction triggers. |
 | `debugLog` | boolean | `false` | Writes best-effort per-session extension debug events to PiG's agent directory. |
-| `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory_*` tools, the `/om:memory` command and an evidence-ranked index in the system prompt. See [Curated memory](concepts.md#curated-memory). |
+| `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory` tool's `saved` source and its `save`, `edit`, `forget`, `feedback` and `define` writes, an evidence-ranked index in the system prompt, the tools the agent defines, the per-model harness's usage ledgers, and the rules it writes (`<store>/rules/`; the `propose` write). Off, the tool still reads notes, reflections, history and `recall <id>`, every model keeps the default profile, and no rule is counted or applied. See [Curated memory](concepts.md#curated-memory), [The per-model harness](concepts.md#the-per-model-harness) and [Rules the harness writes](concepts.md#rules-the-harness-writes). |
 | `curatedMemoryIndexTokens` | positive integer | `2000` | Estimated token budget for the index's memory lines; past it, the first memories are described within half and the next named on one `also:` line. |
 
 Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`. Valid `memoryFormat` values are `tables` and `lines`; any other value is ignored.
 
 Invalid values are ignored. Positive-integer settings must be finite integers greater than zero. `compactAfterTokensRatio` must be a finite number strictly between `0` and `1`. `observationsPoolTargetTokens` must also be below `observationsPoolMaxTokens`; if omitted or invalid, it is derived as `floor(observationsPoolMaxTokens / 2)`.
+
+Rules the harness writes have no settings of their own: they are decided by counts, never tuned. A [`split-chunk` rule](concepts.md#rules-the-harness-writes) halves the resolved `observerChunkMaxTokens` cap for its model (background observer and catch-up alike), and a `protect-kind` rule never holds the pool past twice `observationsPoolTargetTokens`. To drop a rule, delete its file under `<PiG config root>/observational-memory/memories/rules/`.
 
 ## `observeAfterTokens`
 
@@ -265,6 +267,8 @@ When every record fits the room, every record is rendered. When the window is un
 
 The hook reserves at least half of the budget for the newest observations (the chronological record), gives reflections the rest (newest first), lets each side reclaim what the other leaves unused, and discloses what it left out: the tables format ends with an `omitted` table listing each left-out span's date range, count and first id, the lines format with a line stating how many older records were omitted. A record too large for the remaining budget is skipped rather than ending the selection, so a long newest record does not hide shorter older ones. If no record fits at all, the hook declines ownership and Pi's native summarizer runs, instead of writing a summary with instructions and no facts. Omitted records stay in the session ledger, count toward the full memory in `/om:status`, and are shown by `/om:view full`.
 
+The [per-model harness](concepts.md#the-per-model-harness) can give the session model less than this budget: when its memory queries keep asking for records the summary already showed, its profile halves the summary (and doubles it back when they keep asking for records it omitted). The share is applied after this budget is resolved, never goes above it, and never below `8000` (or the budget itself when smaller).
+
 Custom instructions passed with a compaction (by the user or another extension) are appended after the rendered memory, below a `---` separator. They count toward the summary budget, but the memory render always keeps at least half of it.
 
 ## `compactionCatchUpMaxChunks`
@@ -339,7 +343,7 @@ When `false`, the extension hides routine observer, reflector, and dropper progr
 
 Default: `false`.
 
-When `true`, the extension does not proactively run the consolidation pipeline (observer, reflector, dropper) or the auto-compaction trigger. Manual/Pi compaction hooks, `/om:status`, `/om:view`, and `recall` remain available. The compaction hook still runs its catch-up observer on unobserved source before a cut, so passive mode does not stop every model call.
+When `true`, the extension does not proactively run the consolidation pipeline (observer, reflector, dropper) or the auto-compaction trigger. Manual/Pi compaction hooks, `/om:status`, `/om:view`, and the `memory` tool remain available. The compaction hook still runs its catch-up observer on unobserved source before a cut, so passive mode does not stop every model call.
 
 Environment override:
 

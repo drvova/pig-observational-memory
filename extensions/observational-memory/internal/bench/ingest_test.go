@@ -114,18 +114,18 @@ func TestIngestRunsTheObserverOverChronologicalSessions(t *testing.T) {
 	if len(messages) != 3 || messages[0].Text() != ActorInstructions || messages[2].Text() != "Current Date: 2023/06/01 (Thu) 09:00\nQuestion: Where do I live?" {
 		t.Fatalf("actor messages = %+v", messages)
 	}
-	// Without the recall tool the summary's recall paragraph is left out, in
+	// Without the memory tool the summary's paragraph about it is left out, in
 	// either format.
-	if strings.Contains(messages[1].Text(), "recall tool") || !strings.Contains(MemoryMessage(memory, true), ledger.TablesRecallParagraph) {
+	if strings.Contains(messages[1].Text(), "memory tool") || !strings.Contains(MemoryMessage(memory, true), ledger.TablesRecallParagraph) {
 		t.Fatalf("recall paragraph handling: %q", messages[1].Text())
 	}
 	lines := opts.Config
 	lines.MemoryFormat = config.MemoryFormatLines
 	linesMemory := RenderMemory(result.Entries, lines, opts.Spec.ContextWindow)
-	if !strings.Contains(linesMemory.Summary, "## Observations") || strings.Contains(MemoryMessage(linesMemory, false), "recall tool") || !strings.Contains(MemoryMessage(linesMemory, true), "use the recall tool") {
+	if !strings.Contains(linesMemory.Summary, "## Observations") || strings.Contains(MemoryMessage(linesMemory, false), "memory tool") || !strings.Contains(MemoryMessage(linesMemory, true), "use the memory tool") {
 		t.Fatalf("lines recall paragraph handling: %q", MemoryMessage(linesMemory, false))
 	}
-	if withRecall := OMMessages(testQuestion(), memory, true); !strings.Contains(withRecall[0].Text(), "Use recall(<id>)") {
+	if withRecall := OMMessages(testQuestion(), memory, true); !strings.Contains(withRecall[0].Text(), "Use memory(query)") {
 		t.Fatalf("recall prompt missing: %q", withRecall[0].Text())
 	}
 }
@@ -232,10 +232,10 @@ func TestAskWithRecallRunsTheExtensionsRecallTool(t *testing.T) {
 		var req ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if calls.Add(1) == 1 {
-			if len(req.Tools) != 1 || req.Tools[0].Function.Name != "recall" {
+			if len(req.Tools) != 1 || req.Tools[0].Function.Name != "memory" {
 				t.Errorf("tools = %+v", req.Tools)
 			}
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"t1","type":"function","function":{"name":"recall","arguments":"{\"id\":\"`+id+`\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"t1","type":"function","function":{"name":"memory","arguments":"{\"query\":\"recall `+id+`\"}"}}]},"finish_reason":"tool_calls"}]}`)
 			return
 		}
 		toolText = req.Messages[len(req.Messages)-1].Text()

@@ -29,7 +29,7 @@ This extension does the memory work while the session runs, so it is ready befor
 
 - **No summary chains.** Observations and reflections are saved as entries in the session, and every compaction renders them as written. They are never re-summarized.
 - **Fast compaction.** When the observer has already read the history being compacted, the summary is rendered from memory without calling a summarization model. If it is behind, a catch-up run of up to two observer chunks tries to read the rest first.
-- **Traceable memory.** Every line carries an id, and the agent can pass it to the `recall` tool to see the conversation it came from.
+- **Traceable memory.** Every line carries an id, and the agent can read it back with the `memory` tool (`recall <id>`) to see the conversation it came from, or search the raw history behind the summary.
 - **Unread history is never lost.** Compaction keeps history the observer has not read yet in context, or hands that one compaction to PiG's native summarizer.
 
 ## Quick start
@@ -79,7 +79,7 @@ Three memory workers run in one background pipeline and save what they write as 
 | --- | --- | --- |
 | **Observer** | ~10k tokens of history it has not read yet (`observeAfterTokens`) | Timestamped observations ranked `low` to `critical`, each citing the messages it came from |
 | **Reflector** | ~20k tokens of history the observer has read since the last reflection (`reflectAfterTokens`) | Durable reflections, each citing the observations it preserves |
-| **Dropper** | After a reflection, when active observations exceed `observationsPoolTargetTokens` | Retires observations from active memory, favoring ones reflections now cover. They stay in the session, and `recall` still finds them by id. |
+| **Dropper** | After a reflection, when active observations exceed `observationsPoolTargetTokens` | Retires observations from active memory, favoring ones reflections now cover. They stay in the session, and the `memory` tool's `recall <id>` still finds them. |
 
 Compaction starts either from the extension, after about 81k tokens of history the observer has read since the last compaction (`compactAfterTokens`; all history when PiG's automatic compaction is off), or from PiG itself (`/compact`, or a full context window). Either way the extension writes the summary from memory, like this:
 
@@ -94,7 +94,7 @@ notes.graphql_migration[2]{id,when,kind,scope,content,superseded_by}:
   e5f6a1b2c3d4,2026-01-15,event,public API,GraphQL migration completed; user confirmed queries working.,
 ```
 
-When a record is too compressed to act on, the agent calls `recall` with its id and gets the original conversation back. The `memoryFormat` setting switches back to the older `## Reflections` / `## Observations` line layout; [Summary format](docs/concepts.md#summary-format) describes both.
+When a record is too compressed to act on, the agent queries the `memory` tool with `recall <id>` and gets the original conversation back. The `memoryFormat` setting switches back to the older `## Reflections` / `## Observations` line layout; [Summary format](docs/concepts.md#summary-format) describes both.
 
 The summary is sized to the room the next context has: the context window minus the request overhead and the larger of the retained source and the `compactAfterTokens` threshold, with a floor of up to 8,000 tokens on windows the threshold does not fit; `compactionSummaryMaxTokens` caps it. When memory outgrows it, older records are left out and the summary says which: an `omitted` table lists each left-out span's dates, count and first id (the lines layout ends with a line saying how many). If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and how compaction decides what to keep.
 
@@ -107,9 +107,15 @@ The summary is sized to the room the next context has: the context window minus 
 | `/om:status` | Memory counts, progress toward the next observation, reflection and compaction, memory sizes, any worker or compaction holding off after an empty or failed run, and the last worker errors |
 | `/om:view` | The memory in the latest compaction summary (empty until the first compaction), also copied to the clipboard |
 | `/om:view full` | All memory recorded on this branch except dropped observations, also copied to the clipboard |
-| `recall` (agent tool) | The original conversation behind one observation or reflection id. It is not a search tool. |
-| `/om:memory` | The agent's curated memories (all of them, ranked), `/om:memory <name>` for one in full, `/om:memory reload` to re-rank the index on the next request |
-| `memory_save`, `memory_edit`, `memory_forget`, `memory_read`, `memory_search`, `memory_feedback` (agent tools) | The agent's own long-lived memory across sessions; see [Curated memory](docs/concepts.md#curated-memory) |
+
+Commands only read state or settings. The agent reaches its memory through one tool, `memory`, which takes one query string: a source (`notes`, `reflections`, `history`, `saved`, or `recall <id>`) followed by stages, or one write (`save`, `edit`, `forget`, `feedback`, `define`). Results are tables. [The memory tool](docs/concepts.md#the-memory-tool) has the grammar.
+
+```text
+notes | search "sourdough" | where kind=event | count by subject
+history | search "india online store" | limit 5
+recall 3f9a2c1d7b4e
+save type=user name=prefers-tabs description="The user indents with tabs."
+```
 
 ## Configuration
 
@@ -164,14 +170,16 @@ If you used the TypeScript Pi extension [pi-observational-memory](https://github
 
 ```text
 extensions/observational-memory/   the extension, a standalone Go module
-├── extension.go                   PiG factory: events, commands, recall tool
+├── extension.go, memory.go        PiG factory: events, commands, the memory tool
 ├── cmd/longmemeval/               LongMemEval benchmark command (not part of the extension)
 └── internal/
     ├── hooks/                     consolidation pipeline, compaction trigger and hook
     ├── agents/                    observer, reflector and dropper loops and prompts
     ├── ledger/                    memory model, projections, summary rendering
     ├── runtime/                   per-process state, model resolution
-    ├── commands/, recall/         /om:status, /om:view, recall
+    ├── memquery/                  the memory tool's query language: parser and interpreter
+    ├── commands/, recall/         /om:status, /om:view, recall <id> evidence
+    ├── curated/                   long-lived memories, defined queries, the ranked index
     ├── host/                      host interfaces the packages run against
     ├── sdkhost/                   adapts the PiG SDK's extension context to host
     ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
