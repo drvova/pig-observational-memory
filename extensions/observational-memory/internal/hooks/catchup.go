@@ -86,7 +86,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 		coversUpToID := serialized.SourceEntryIDs[len(serialized.SourceEntryIDs)-1]
 		fullMemory := ledger.FullProjection(branch, "")
-		memory := ledger.BoundObserverMemory(fullMemory.Reflections, fullMemory.Observations, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
+		memory := ledger.BoundObserverMemoryWithAliases(fullMemory.Reflections, fullMemory.Observations, fullMemory.Aliases, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
 		if cfg.ShowWorkerNotifications && h.HasUI() {
 			noun := "entries"
 			if len(serialized.SourceEntryIDs) == 1 {
@@ -141,7 +141,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			// The same remedies as the background stage, with the same constraint: they act
 			// only on a chunk that recorded something, and keep-head only inside the coverage
 			// boundary, so the marker appended below stays a positional claim.
-			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations}
+			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations, aliases: fullMemory.Aliases}
 			observations, pass = applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 			data = ledger.BuildObservationsRecordedData(observations, coversUpToID)
 		}
@@ -149,7 +149,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			debuglog.Log(ctx, "compaction.catch_up.empty", map[string]any{"chunkIndex": chunkIndex, "coversUpToId": coversUpToID})
 			if len(observations) == 0 && ctx.Err() == nil {
 				// An empty chunk is counted like the background stage's, and proves nothing.
-				chunk := observerChunk{branch: branch, serialized: serialized, known: fullMemory.Observations}
+				chunk := observerChunk{branch: branch, serialized: serialized, known: fullMemory.Observations, aliases: fullMemory.Aliases}
 				recordEmptyPass(ctx, cfg, h, used.Model, emptyObserverPass(ctx, cfg, h, used.Model, chunk, coversUpToID))
 				settlePass(ctx, cfg, h, nil)
 			}

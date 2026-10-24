@@ -305,7 +305,7 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			// not crowd the memory out of its own summary.
 			memoryBudget = max(summaryMaxTokens/2, summaryMaxTokens-tokens.EstimateStringTokens(instructionsBlock))
 		}
-		options := ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: profile.SummaryFormat(cfg), Codec: profile.CodecValue()}
+		options := ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: profile.SummaryFormat(cfg), Codec: profile.CodecValue(), Aliases: projection.Aliases}
 		rendered, report := active.RenderSummaryReport(projection.Reflections, projection.Observations, memoryBudget, options)
 		if report != "" {
 			debuglog.Log(ctx, "compaction.summary_definition_fallback", map[string]any{"model": active.Model(), "report": report})

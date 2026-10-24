@@ -3,6 +3,7 @@ package agents_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -190,5 +192,81 @@ func TestReflectorEmptyAndErrors(t *testing.T) {
 	}
 	if result, err := agents.RunReflector(context.Background(), agents.ReflectorArgs{WorkerArgs: agents.WorkerArgs{Stream: rec.Stream}}); err != nil || result != nil {
 		t.Fatal("no observations should skip the model")
+	}
+}
+
+// With two or more subjects the reflector's prompt lists them, offers alias_subjects, and the
+// kernel's alias rule is in its system prompt; the aliases the kernel accepts reach
+// RecordAliases once, the refused ones are named in the receipt.
+func TestReflectorAliasesSubjects(t *testing.T) {
+	aliasCall := tf.AssistantToolCall("tool-1", "alias_subjects", map[string]any{"aliases": []any{
+		map[string]any{"from": "Half Marathon Training", "to": "running", "reason": "the user trains for a half marathon"},
+		map[string]any{"from": "running", "to": "running"},
+		map[string]any{"from": "cycling", "to": "running"},
+	}})
+	rec := &tf.StreamRecorder{Replies: []map[string]any{aliasCall, tf.AssistantText("done")}}
+	args := reflectorArgs(rec, tf.Model("p", "m"))
+	args.Subjects = []ledger.SubjectCount{{Subject: "running", Count: 4}, {Subject: "half marathon training", Count: 1}}
+	args.SubjectsPresent = []string{"running", "running shoes", "half marathon training"}
+	var recorded [][]ledger.SubjectAlias
+	args.RecordAliases = func(aliases []ledger.SubjectAlias) { recorded = append(recorded, aliases) }
+	if _, err := agents.RunReflector(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	want := []ledger.SubjectAlias{{From: "half marathon training", To: "running", Reason: "the user trains for a half marathon"}}
+	if len(recorded) != 1 || !reflect.DeepEqual(recorded[0], want) {
+		t.Fatalf("recorded %v", recorded)
+	}
+	text := userText(rec)
+	if !strings.Contains(text, "CURRENT SUBJECTS (subject: notes, most used first):\nrunning: 4\nhalf marathon training: 1") || !strings.Contains(text, "call alias_subjects") {
+		t.Fatalf("user text %s", text)
+	}
+	if tools := fmt.Sprint(rec.Requests[0]["tools"]); !strings.Contains(tools, "alias_subjects") {
+		t.Fatalf("tools %s", tools)
+	}
+	system, _ := rec.Requests[0]["systemPrompt"].(string)
+	for _, part := range []string{"Alias only subjects that name the same topic for this user", "never ones that are merely related", "Alias toward the subject with more notes"} {
+		if !strings.Contains(system, part) || !strings.Contains(kernel.Text(kernel.TextReflectorRules), part) {
+			t.Fatalf("kernel reflector rule missing %q", part)
+		}
+	}
+	receipt := fmt.Sprint(rec.Requests[1]["messages"])
+	if !strings.Contains(receipt, "Recorded 1 alias.") || !strings.Contains(receipt, "running -> running: "+ledger.AliasRefusedSelf) || !strings.Contains(receipt, "cycling -> running: "+ledger.AliasRefusedAbsent) {
+		t.Fatalf("receipt %s", receipt)
+	}
+
+	// With fewer than two subjects there is nothing to alias: no list, no tool, the prompt as
+	// it was.
+	rec = &tf.StreamRecorder{}
+	args = reflectorArgs(rec, tf.Model("p", "m"))
+	args.Subjects = []ledger.SubjectCount{{Subject: "running", Count: 4}}
+	_, _ = agents.RunReflector(context.Background(), args)
+	plain := &tf.StreamRecorder{}
+	_, _ = agents.RunReflector(context.Background(), reflectorArgs(plain, tf.Model("p", "m")))
+	if userText(rec) != userText(plain) || strings.Contains(fmt.Sprint(rec.Requests[0]["tools"]), "alias_subjects") {
+		t.Fatalf("one subject changed the prompt:\n%s", userText(rec))
+	}
+}
+
+// The aliases in force are listed after the subjects, so the reflector can correct or undo
+// one; with none in force the prompt carries no list.
+func TestReflectorListsAliasesInForce(t *testing.T) {
+	rec := &tf.StreamRecorder{}
+	args := reflectorArgs(rec, tf.Model("p", "m"))
+	args.Subjects = []ledger.SubjectCount{{Subject: "cooking", Count: 4}, {Subject: "fitness", Count: 2}}
+	args.AliasesInForce = []ledger.SubjectAlias{{From: "running", To: "cooking"}}
+	_, _ = agents.RunReflector(context.Background(), args)
+	if text := userText(rec); !strings.Contains(text, "fitness: 2\n\n"+ledger.AliasesHeader+"\nrunning -> cooking\n\n") {
+		t.Fatalf("user text %s", text)
+	}
+	rec = &tf.StreamRecorder{}
+	args = reflectorArgs(rec, tf.Model("p", "m"))
+	args.Subjects = []ledger.SubjectCount{{Subject: "cooking", Count: 4}, {Subject: "fitness", Count: 2}}
+	_, _ = agents.RunReflector(context.Background(), args)
+	if strings.Contains(userText(rec), ledger.AliasesHeader) {
+		t.Fatalf("aliases listed with none in force:\n%s", userText(rec))
+	}
+	if system, _ := rec.Requests[0]["systemPrompt"].(string); !strings.Contains(system, "alias its from to itself to undo it") {
+		t.Fatal("kernel reflector rule does not say how to undo an alias")
 	}
 }

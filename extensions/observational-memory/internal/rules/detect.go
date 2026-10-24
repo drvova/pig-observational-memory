@@ -96,6 +96,10 @@ type ObserverPass struct {
 	Notes []ledger.Observation
 	// Known are the notes in memory before the pass (a supersedes link may name one).
 	Known []ledger.Observation
+	// Aliases are the subject aliases recorded before the pass, in ledger order: a detector's
+	// query reads the pass's notes with them, as the memory tool reads notes
+	// (memquery.Records.Aliases).
+	Aliases []ledger.SubjectAlias
 	// Defined are the tools the agent defined, by name, with their stored queries: a call of
 	// one is a memory query too (MemoryQueries).
 	Defined map[string]string

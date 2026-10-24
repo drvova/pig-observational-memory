@@ -658,12 +658,42 @@ func TestObserverPromptListsSubjects(t *testing.T) {
 		t.Fatalf("user message does not list the subjects after the observations:\n%s", user)
 	}
 	system, _ := rec.Requests[0]["systemPrompt"].(string)
-	if !strings.Contains(system, "reuse an existing subject") || !strings.Contains(system, "- Current subjects (CURRENT SUBJECTS") || !strings.Contains(kernel.Text(kernel.TextObserverRules), "Create a new subject only when none fits") {
-		t.Fatal("the kernel's subject rule is missing")
+	rule := kernel.Text(kernel.TextObserverRules)
+	for _, part := range []string{"give the root topic first", "reuse an existing root (CURRENT SUBJECTS lists them)", `put the specific part after "/" (subject "running/half marathon"`, "Create a new root only when none fits"} {
+		if !strings.Contains(system, part) || !strings.Contains(rule, part) {
+			t.Fatalf("the kernel's subject rule is missing %q", part)
+		}
+	}
+	if !strings.Contains(system, "- Current subjects (CURRENT SUBJECTS") {
+		t.Fatal("the prompt does not describe the subject list")
 	}
 	rec = &tf.StreamRecorder{}
 	_, _ = agents.RunObserver(context.Background(), observerArgs(rec, tf.Model("p", "m")))
 	if strings.Contains(fmt.Sprint(rec.Requests[0]["messages"]), "CURRENT SUBJECTS") {
 		t.Fatal("an empty subject list is shown")
+	}
+}
+
+// A subject path is recorded tidied; one the kernel refuses (too deep, or spelling a kernel
+// name through "/") is recorded as one plain subject and the receipt says so.
+func TestObserverSubjectPaths(t *testing.T) {
+	rec := &tf.StreamRecorder{Replies: []map[string]any{recordCall(
+		map[string]any{"timestamp": "2026-05-02 10:30", "content": "User runs a half marathon in June.", "relevance": "high", "sourceEntryIds": []any{"raw-1"}, "subject": " Running / Half Marathon /"},
+		map[string]any{"timestamp": "2026-05-02 10:31", "content": "User tracks folded memory.", "relevance": "low", "sourceEntryIds": []any{"raw-1"}, "subject": "om/folded"},
+		map[string]any{"timestamp": "2026-05-02 10:32", "content": "User paces at five minutes.", "relevance": "low", "sourceEntryIds": []any{"raw-1"}, "subject": "running/half marathon/pace/june"},
+	), tf.AssistantText("done")}}
+	observations, err := agents.RunObserver(context.Background(), detailedArgs(rec))
+	if err != nil || len(observations) != 3 {
+		t.Fatalf("observations %+v err %v", observations, err)
+	}
+	got := []string{observations[0].Subject, observations[1].Subject, observations[2].Subject}
+	if !reflect.DeepEqual(got, []string{"running/half marathon", "om folded", "running half marathon pace june"}) {
+		t.Fatalf("subjects %q", got)
+	}
+	if text := lastToolResultText(t, rec); !strings.Contains(text, "2 subject paths recorded as plain subjects") {
+		t.Fatalf("ack %q", text)
+	}
+	if schema := fmt.Sprint(rec.Requests[0]["tools"]); !strings.Contains(schema, "put the specific part after '/'") {
+		t.Fatalf("subject description %s", schema)
 	}
 }

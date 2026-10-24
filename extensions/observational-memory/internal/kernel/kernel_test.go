@@ -24,7 +24,7 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 		kernel.OwnerQuerySource: memquery.Sources,
 		kernel.OwnerQueryStage:  memquery.Stages,
 		kernel.OwnerQueryWrite:  memquery.Writes,
-		kernel.OwnerStorage:     {ledger.OMObservationsRecorded, ledger.OMReflectionsRecorded, ledger.OMObservationsDropped, ledger.OMFolded},
+		kernel.OwnerStorage:     {ledger.OMObservationsRecorded, ledger.OMReflectionsRecorded, ledger.OMObservationsDropped, ledger.OMFolded, ledger.OMSubjectsAliased},
 		kernel.OwnerEventLedger: {curated.ModelKindMemory, curated.ModelKindDecode, curated.ModelKindDefined, curated.ModelKindPass,
 			curated.OutcomeOK, curated.OutcomeError, curated.OutcomeEmpty, curated.OutcomeShown, curated.OutcomeOmitted, curated.OutcomeColumns},
 		kernel.OwnerInvariant:   {"compactAfterTokens", "compactionMaxRetainedTokens", "compactionSummaryMaxTokens", "compactionCatchUpMaxChunks", "kernelFloor"},
@@ -214,4 +214,21 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// OwnsForEveryKind names only what no definition of any kind may take, whatever its spelling,
+// the path separator included: subject canonicalization refuses subject paths and aliases
+// that spell one.
+func TestOwnsForEveryKind(t *testing.T) {
+	for _, name := range []string{"om/subjects/aliased", "om.subjects.aliased", "raw/subject", "memory", "notes", "canonical/subjects"} {
+		if _, ok := kernel.OwnsForEveryKind(name); !ok {
+			t.Errorf("%q is not owned for every kind", name)
+		}
+	}
+	// "room" is owned only for the ledger kinds, "relevance" only for schemas.
+	for _, name := range []string{"room", "relevance", "running", ""} {
+		if owner, ok := kernel.OwnsForEveryKind(name); ok {
+			t.Errorf("%q is owned for every kind by %s", name, owner)
+		}
+	}
 }

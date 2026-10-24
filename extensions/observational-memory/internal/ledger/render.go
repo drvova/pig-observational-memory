@@ -277,6 +277,9 @@ type RenderOptions struct {
 	Format string
 	// Codec encodes the tables format; nil means tables.Rows.
 	Codec tables.Codec
+	// Aliases are the subject aliases the notes are grouped with
+	// (CanonicalSubjectsWithAliases): the projection's (Projection.Aliases).
+	Aliases []SubjectAlias
 }
 
 // ClippedObservationRunes is the content length of a clipped observation line.

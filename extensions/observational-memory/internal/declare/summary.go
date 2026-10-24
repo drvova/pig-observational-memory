@@ -153,7 +153,7 @@ func parseSection(table, query, fields string) (SummarySection, error) {
 // section whose query fails at render time shows nothing; its records are still disclosed as
 // omitted.
 func (s Summary) Render(reflections []ledger.Reflection, observations []ledger.Observation, maxTokens int, options ledger.RenderOptions) ledger.RenderedSummary {
-	env := memquery.Env{Records: &memquery.Records{Observations: observations, Reflections: reflections, ReflectionDates: options.ReflectionDates}}
+	env := memquery.Env{Records: &memquery.Records{Observations: observations, Reflections: reflections, ReflectionDates: options.ReflectionDates, Aliases: options.Aliases}}
 	sections := []ledger.SummarySection{}
 	for _, section := range s.Sections {
 		sel, err := memquery.Select(env, section.Query, summarySources...)

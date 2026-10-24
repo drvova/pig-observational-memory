@@ -66,6 +66,10 @@ A drop is a tombstone for observation ids that should no longer be active memory
 
 Dropping does not delete history. Dropped observations remain recallable from ledger history, but they are not active observations in projections.
 
+### Subject aliases
+
+A subject alias says that notes under one subject are about the same topic as notes under another (`half marathon training` → `running`), which word containment cannot tell. The reflector writes them into `om.subjects.aliased` ledger entries. An alias rewrites no record and carries no coverage marker; views apply it when they group notes, and only while both subjects have active notes.
+
 ## Actors
 
 ### Observer
@@ -119,7 +123,7 @@ omitted[1]{from,to,count,first_id}:
   2023-05-08,2023-05-08,1,a1aaaaaaaaaa
 ```
 
-- Observations with a subject go in a `notes.<subject>` table (the subject lowercased, other characters turned into `_`), oldest first; the subject tables are ordered by their newest record. The subject is the canonical one: subjects with the same words (order, case, punctuation, and a plural whose singular another subject uses, aside) are one subject, and a subject whose words contain every word of a shorter subject present is grouped under the shortest such subject, the words it adds shown after the note's `scope` (`running shoes` shows in `notes.running` with scope `shoes`). Symbols inside a word count (`c++` is not `c`). The rule is containment, not similarity, so nothing is tuned; it is kernel code, the same for every model and layer, and stored records keep what the observer wrote. Observations without a subject, including every record written before subjects existed, go in one chronological `notes` table.
+- Observations with a subject go in a `notes.<subject>` table (the subject lowercased, other characters turned into `_`), oldest first; the subject tables are ordered by their newest record. The subject is the canonical one: subjects with the same words (order, case, punctuation, and a plural whose singular another subject uses, aside) are one subject, and a subject whose words contain every word of a shorter subject present is grouped under the shortest such subject, the words it adds shown after the note's `scope` (`running shoes` shows in `notes.running` with scope `shoes`). Symbols inside a word count (`c++` is not `c`). The rule is containment, not similarity, so nothing is tuned; it is kernel code, the same for every model and layer, and stored records keep what the observer wrote. Two rules let the model supply meaning words cannot: the observer may write a subject as a path, root first (`running/half marathon` groups under `running` with scope `half marathon`; at most three segments), and the reflector may record that one subject names the same topic as another (an `om.subjects.aliased` alias, `half marathon training` → `running`). The kernel checks each alias when it is recorded and whenever it is read (both subjects present, the target not a narrower subject containing every word of the source, no cycle; the latest alias of a subject wins, and an alias of a subject to itself undoes its alias), and the compaction keeps the aliases in its details. Observations without a subject, including every record written before subjects existed, go in one chronological `notes` table.
 - `when` is the record's date. A relative phrase in the content (`yesterday`, `last Tuesday`, `two weeks ago`) is followed by the date it refers to, `[=YYYY-MM-DD]`, resolved by code against the record's date; the stored content is unchanged.
 - A superseded record stays listed, with the id of the record that replaced it in `superseded_by`.
 - Records that do not fit are listed as `omitted` spans (consecutive records left out: date range, count, first id) instead of a prose note. Selection is the same as before, but each record costs its encoded row and each table its header once, and the omitted table's cost is reserved before records are chosen, so the whole summary stays within the budget.
@@ -162,6 +166,7 @@ type MemoryDetails struct {
 	Observations       []Observation `json:"observations"`
 	Reflections        []Reflection  `json:"reflections"`
 	FoldThroughEntryID string        `json:"foldThroughEntryId,omitempty"` // entry the ledger was folded through
+	Aliases            []SubjectAlias `json:"aliases,omitempty"`           // subject aliases folded through the boundary
 }
 ```
 

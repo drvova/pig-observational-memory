@@ -186,7 +186,7 @@ func newTablesLayout(reflections []Reflection, observations []Observation, optio
 	plainFields := plainNoteFields
 	// Notes group under their canonical subject over every record of the memory, shown or
 	// not, so selection never changes which table a record is in.
-	canonical := ObservationSubjects(observations)
+	canonical := ObservationSubjectsWithAliases(observations, options.Aliases)
 	l.groups = make([]string, len(observations))
 	for i, observation := range observations {
 		l.groups[i] = SubjectTableName(canonical[observation.Subject].Subject)

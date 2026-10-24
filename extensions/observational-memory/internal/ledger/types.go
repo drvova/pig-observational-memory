@@ -15,6 +15,9 @@ const (
 	OMReflectionsRecorded  = "om.reflections.recorded"
 	OMObservationsDropped  = "om.observations.dropped"
 	OMFolded               = "om.folded"
+	// OMSubjectsAliased records subject aliases the reflector declared (SubjectsAliasedData). It
+	// carries no coverage marker.
+	OMSubjectsAliased = "om.subjects.aliased"
 )
 
 // Entry is a session entry.
@@ -105,6 +108,9 @@ type MemoryDetails struct {
 	// when a model declared it, so the summary decodes in the codec that wrote
 	// it whatever the layer holds later; "" for a native codec.
 	SummaryFormat string `json:"summaryFormat,omitempty"`
+	// Aliases are the subject aliases folded through the boundary (Projection.Aliases), so
+	// the compacted memory keeps grouping as the ledger did; none for a memory without any.
+	Aliases []SubjectAlias `json:"aliases,omitempty"`
 }
 
 // IsRelevance reports whether v is a relevance level.
@@ -136,9 +142,33 @@ func IsObservationKind(v any) bool {
 }
 
 // NormalizeSubject trims and lowercases a subject and folds runs of
-// whitespace, so records about one subject group together.
+// whitespace, so records about one subject group together. It is how a stored
+// subject is read, so a subject recorded before subject paths reads back as it
+// was written ("ci / cd" stays "ci / cd"); the observer's record normalizes a
+// written path further (NormalizeSubjectPath, RecordableSubject).
 func NormalizeSubject(subject string) string {
-	return strings.ToLower(strings.Join(strings.Fields(subject), " "))
+	return normalizeSubjectSegment(subject)
+}
+
+// NormalizeSubjectPath is NormalizeSubject for a subject written as a path
+// (SubjectPathSeparator): each segment is normalized and empty segments are
+// dropped ("Running / half  marathon/" is "running/half marathon"). A subject
+// without a separator normalizes as NormalizeSubject does.
+func NormalizeSubjectPath(subject string) string {
+	if !strings.Contains(subject, SubjectPathSeparator) {
+		return normalizeSubjectSegment(subject)
+	}
+	segments := []string{}
+	for _, segment := range strings.Split(subject, SubjectPathSeparator) {
+		if segment = normalizeSubjectSegment(segment); segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+	return strings.Join(segments, SubjectPathSeparator)
+}
+
+func normalizeSubjectSegment(segment string) string {
+	return strings.ToLower(strings.Join(strings.Fields(segment), " "))
 }
 
 // NormalizeScope trims a scope and folds runs of whitespace, so scopes compare
@@ -423,7 +453,10 @@ func MemoryDetailsFrom(v any) (MemoryDetails, bool) {
 	}
 	summaryCodec, _ := m["summaryCodec"].(string)
 	summaryFormat, _ := m["summaryFormat"].(string)
-	return MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID, SummaryCodec: summaryCodec, SummaryFormat: summaryFormat}, true
+	// Aliases are read leniently, like the structured fields: a malformed one is skipped
+	// rather than discarding the memory it groups.
+	aliases := subjectAliasList(m["aliases"])
+	return MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID, SummaryCodec: summaryCodec, SummaryFormat: summaryFormat, Aliases: aliases}, true
 }
 
 // IsMemoryDetails reports valid decoded memory details.

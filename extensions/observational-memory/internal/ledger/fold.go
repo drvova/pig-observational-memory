@@ -12,6 +12,9 @@ type FoldedLedger struct {
 	Reflections      []Reflection
 	ObservationsByID map[string]Observation
 	ReflectionsByID  map[string]Reflection
+	// Aliases are the subject aliases recorded through the fold boundary, in ledger order;
+	// whether each applies is decided when it is read (CheckSubjectAliases). nil when none.
+	Aliases []SubjectAlias
 }
 
 func foldEndIndex(entries []Entry, upToEntryID string) int {
@@ -30,7 +33,8 @@ func foldEndIndex(entries []Entry, upToEntryID string) int {
 // upToEntryID (inclusive; "" means the tip). Unknown custom entries, old V2
 // entries, invalid data and compaction details are ignored. Observations and
 // reflections use first-valid-record-wins; drops are tombstones kept even when
-// the dropped id is unknown at fold time.
+// the dropped id is unknown at fold time; subject aliases are kept in ledger
+// order.
 func FoldLedger(entries []Entry, upToEntryID string) FoldedLedger {
 	folded := FoldedLedger{
 		DroppedObservationIDs: map[string]bool{},
@@ -73,6 +77,10 @@ func FoldLedger(entries []Entry, upToEntryID string) FoldedLedger {
 			}
 			for _, id := range data.ObservationIDs {
 				folded.DroppedObservationIDs[id] = true
+			}
+		case OMSubjectsAliased:
+			if data, ok := SubjectsAliasedDataFrom(entry.Data); ok {
+				folded.Aliases = append(folded.Aliases, data.Aliases...)
 			}
 		}
 	}

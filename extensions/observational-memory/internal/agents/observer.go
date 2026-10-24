@@ -114,7 +114,7 @@ type ObserverArgs struct {
 // 2's kind, subject, scope and supersedes, as the seed schema declares them.
 var defaultSchemaFields = []ledger.SchemaField{
 	{Name: ledger.NoteFieldKind, Type: ledger.FieldEnum, Values: kindStrings()},
-	{Name: ledger.NoteFieldSubject, Type: ledger.FieldText, Description: "Short lowercase noun phrase grouping related observations, e.g. 'baking', 'gaming hours'."},
+	{Name: ledger.NoteFieldSubject, Type: ledger.FieldText, Description: "Short lowercase noun phrase grouping related notes, root topic first: reuse a root from CURRENT SUBJECTS and put the specific part after '/', e.g. 'baking', 'running/half marathon'."},
 	{Name: ledger.NoteFieldScope, Type: ledger.FieldText, Description: "Qualifier that tells two figures apart, e.g. 'hard difficulty', 'on edX'."},
 	{Name: ledger.NoteFieldSupersedes, Type: ledger.FieldIDs, Description: "Ids of earlier observations this one replaces. Only when the user explicitly corrects or replaces them."},
 }
@@ -435,11 +435,13 @@ func observationTableItems(tables []Table, rowFields []string) ([]any, error) {
 }
 
 // applyObservationStructure copies an item's optional structured fields offered (fields) onto
-// observation: a kind outside the declared values is cleared, the subject is normalized,
+// observation: a kind outside the declared values is cleared, the subject is normalized and a
+// subject path the kernel refuses is stored as one plain subject (ledger.RecordableSubject),
 // supersedes keeps only ids isKnown accepts (never the record's own), and a field the schema
 // adds is stored when its declaration accepts the value (ledger.SchemaField.Normalize). A
-// field not offered is ignored. It returns how many supersedes ids it dropped.
-func applyObservationStructure(observation *ledger.Observation, item map[string]any, isKnown func(string) bool, fields []ledger.SchemaField) int {
+// field not offered is ignored. It returns how many supersedes ids it dropped and whether the
+// subject's path was refused.
+func applyObservationStructure(observation *ledger.Observation, item map[string]any, isKnown func(string) bool, fields []ledger.SchemaField) (int, bool) {
 	offered := map[string]ledger.SchemaField{}
 	for _, f := range fields {
 		offered[f.Name] = f
@@ -459,9 +461,10 @@ func applyObservationStructure(observation *ledger.Observation, item map[string]
 			observation.Kind = ledger.ObservationKind(kind)
 		}
 	}
+	refusedPath := false
 	if _, ok := offered[ledger.NoteFieldSubject]; ok {
 		if subject, ok := item["subject"].(string); ok {
-			observation.Subject = ledger.NormalizeSubject(subject)
+			observation.Subject, refusedPath = ledger.RecordableSubject(subject)
 		}
 	}
 	if _, ok := offered[ledger.NoteFieldScope]; ok {
@@ -470,7 +473,7 @@ func applyObservationStructure(observation *ledger.Observation, item map[string]
 		}
 	}
 	if _, ok := offered[ledger.NoteFieldSupersedes]; !ok {
-		return 0
+		return 0, refusedPath
 	}
 	proposed, _ := StringList(item["supersedes"])
 	if text, ok := item["supersedes"].(string); ok {
@@ -490,7 +493,7 @@ func applyObservationStructure(observation *ledger.Observation, item map[string]
 		}
 		observation.Supersedes = append(observation.Supersedes, id)
 	}
-	return dropped
+	return dropped, refusedPath
 }
 
 // ackClipRunes bounds the content echoed next to each id in the tool receipt.
@@ -543,7 +546,7 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			"then emit a short plain-text confirmation to end the run.",
 		Parameters: recordObservationsSchema(codec, args.spec(), fields),
 		Execute: func(_ context.Context, params map[string]any) (ToolResult, error) {
-			added, duplicates, rejected, invalid, droppedSupersedes := 0, 0, 0, 0, 0
+			added, duplicates, rejected, invalid, droppedSupersedes, refusedPaths := 0, 0, 0, 0, 0, 0
 			items, _ := params["observations"].([]any)
 			if rowsText, _ := params["rows"].(string); strings.TrimSpace(rowsText) != "" {
 				rowItems, outcome, err := observationRowItems(codec, rowsText, fields)
@@ -605,7 +608,11 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			recordedIDs := make([]string, 0, len(candidates))
 			for _, c := range candidates {
 				observation := c.observation
-				droppedSupersedes += applyObservationStructure(&observation, c.item, isKnown, fields)
+				dropped, refusedPath := applyObservationStructure(&observation, c.item, isKnown, fields)
+				droppedSupersedes += dropped
+				if refusedPath {
+					refusedPaths++
+				}
 				accumulated[observation.ID] = observation
 				order = append(order, observation.ID)
 				recordedIDs = append(recordedIDs, observation.ID+" ("+clipForAck(observation.Content)+")")
@@ -624,6 +631,9 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			}
 			if droppedSupersedes > 0 {
 				rejectedPart += fmt.Sprintf(" %d supersedes %s dropped: not the id of a current or newly recorded observation.", droppedSupersedes, jsfmt.Plural(droppedSupersedes, "id"))
+			}
+			if refusedPaths > 0 {
+				rejectedPart += fmt.Sprintf(" %d subject %s recorded as plain %s: a path has at most %d segments and may not spell a kernel-owned name.", refusedPaths, jsfmt.Plural(refusedPaths, "path"), jsfmt.Plural(refusedPaths, "subject"), ledger.MaxSubjectPathDepth)
 			}
 			idsPart := ""
 			if len(recordedIDs) > 0 {

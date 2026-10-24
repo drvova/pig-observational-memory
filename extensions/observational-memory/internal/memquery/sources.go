@@ -57,18 +57,21 @@ func dayOf(timestamp string) string {
 
 // notesRelation lists the folded ledger's active observations. A relative date in the content
 // is resolved against the record's date, as the memory view writes it. subject is the canonical
-// subject over the active notes (ledger.CanonicalSubjects), scope is the scope as stored,
+// subject over the active notes (and Records.SubjectContext) and the recorded subject aliases
+// (ledger.CanonicalSubjectsWithAliases), scope is the scope as stored,
 // subject_scope is what the note's own subject adds to the canonical one, and raw_subject is
 // the subject the observer wrote, so a query by subject finds every related note, where
 // subject= and subject~ also match the written subject (a definition written against it keeps
 // its rows), and the stored record stays readable.
 func notesRelation(env Env) *relation {
 	var all, active []ledger.Observation
+	var aliases []ledger.SubjectAlias
+	var contextSubjects []string
 	if env.Records != nil {
-		all, active = env.Records.Observations, env.Records.Observations
+		all, active, aliases, contextSubjects = env.Records.Observations, env.Records.Observations, env.Records.Aliases, env.Records.SubjectContext
 	} else {
 		folded := ledger.FoldLedger(env.Entries, "")
-		all, active = folded.Observations, folded.ActiveObservations
+		all, active, aliases = folded.Observations, folded.ActiveObservations, folded.Aliases
 	}
 	supersededBy := map[string][]string{}
 	for _, o := range all {
@@ -101,7 +104,7 @@ func notesRelation(env Env) *relation {
 	if len(added) > 0 {
 		fields = append(append([]string{}, NoteFields...), added...)
 	}
-	canonical := ledger.ObservationSubjects(active)
+	canonical := ledger.CanonicalSubjectsWithAliases(append(ledger.SubjectsOf(active), contextSubjects...), aliases)
 	rel := &relation{name: SourceNotes, fields: fields, rows: [][]string{}, from: []string{}, to: []string{}, also: map[string]string{"subject": ledger.RawSubjectField}}
 	for _, o := range active {
 		day := dayOf(o.Timestamp)

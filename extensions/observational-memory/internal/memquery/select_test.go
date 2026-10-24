@@ -1,6 +1,7 @@
 package memquery
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -133,4 +134,44 @@ func TestShadowedSchemaFieldStaysReadable(t *testing.T) {
 	if raw != "running shoes" || !ok || schema != "what the user called it" {
 		t.Fatalf("raw_subject %q, schema_raw_subject %q (%v)", raw, schema, ok)
 	}
+}
+
+// The notes source reads subjects under the recorded aliases, from the records given (a
+// model summary's projection) or folded from the branch: the aliased note queries as running,
+// with what it wrote in subject_scope and raw_subject.
+func TestNotesReadSubjectAliases(t *testing.T) {
+	observations := []ledger.Observation{
+		{ID: "000000000001", Timestamp: "2026-05-02 10:30", Relevance: "low", Subject: "running", Content: "note about running", SourceEntryIDs: []string{"raw-1"}},
+		{ID: "000000000002", Timestamp: "2026-05-02 10:31", Relevance: "low", Subject: "half marathon training", Content: "note about the race", SourceEntryIDs: []string{"raw-1"}},
+		{ID: "000000000003", Timestamp: "2026-05-02 10:32", Relevance: "low", Subject: "running/pace", Content: "note about pace", SourceEntryIDs: []string{"raw-1"}},
+	}
+	aliases := []ledger.SubjectAlias{{From: "half marathon training", To: "running"}}
+	branch := []ledger.Entry{
+		{Type: "message", ID: "raw-1"},
+		{Type: "custom", ID: "om-obs", CustomType: ledger.OMObservationsRecorded, Data: toJSON(map[string]any{"observations": observations, "coversUpToId": "raw-1"})},
+		{Type: "custom", ID: "om-alias", CustomType: ledger.OMSubjectsAliased, Data: toJSON(map[string]any{"aliases": aliases})},
+	}
+	for name, env := range map[string]Env{"records": {Records: &Records{Observations: observations, Aliases: aliases}}, "branch": {Entries: branch}} {
+		sel, err := Select(env, "notes | where subject=running", SourceNotes)
+		if err != nil || sel.Count != 3 {
+			t.Fatalf("%s: matched %d (%v)", name, sel.Count, err)
+		}
+		got := []string{}
+		for r := range sel.Tables[0].Rows {
+			extra, _ := sel.Tables[0].Cell(r, ledger.SubjectScopeField)
+			raw, _ := sel.Tables[0].Cell(r, ledger.RawSubjectField)
+			got = append(got, extra+"="+raw)
+		}
+		if want := "=running|half marathon training=half marathon training|pace=running/pace"; strings.Join(got, "|") != want {
+			t.Fatalf("%s: rows %q, want %q", name, strings.Join(got, "|"), want)
+		}
+	}
+}
+
+// toJSON round-trips v through JSON, as a session entry's data reads.
+func toJSON(v any) any {
+	data, _ := json.Marshal(v)
+	var out any
+	_ = json.Unmarshal(data, &out)
+	return out
 }

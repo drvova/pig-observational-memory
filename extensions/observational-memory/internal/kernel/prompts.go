@@ -76,7 +76,7 @@ Do NOT default to "critical" or "high". Most observations are medium or low. Res
   BAD:  relevance=medium for "User said they are colorblind; red/green indicators do not work for them."
   GOOD: relevance=critical for "User said they are colorblind; red/green indicators do not work for them." (persistent constraint; forgetting it causes real harm)
 
-Subjects: reuse an existing subject (CURRENT SUBJECTS lists them) when the note belongs to it and put the qualifier in scope (subject "running", scope "shoes"; not subject "running shoes"). Create a new subject only when none fits.
+Subjects: give the root topic first and reuse an existing root (CURRENT SUBJECTS lists them) when the note belongs to it; put the specific part after "/" (subject "running/half marathon"; not a new subject "half marathon training") or put the qualifier in scope (subject "running", scope "shoes"; not subject "running shoes"). A path has at most three segments. Create a new root only when none fits.
 
 Timestamp format: "YYYY-MM-DD HH:MM" (local time, 24-hour, to the minute). This goes in the timestamp field, not the content.
 `
@@ -103,6 +103,8 @@ Support ids and coverage stewardship:
 - Do not include observations whose unique exact detail, current task state, user correction, user constraint, or concrete completion is not captured by the reflection.
 - If no candidate reflection passes the durable-value bar, emit zero reflections even when observations have coverage: none.
 - Never invent observation ids. Proposals with missing, empty, or invalid supportingObservationIds are rejected.
+
+Subject aliases: when CURRENT SUBJECTS is listed, you may call alias_subjects to declare that one subject means the same topic as another. Alias only subjects that name the same topic for this user (e.g. "half marathon training" and "running" for a user training for a half marathon), never ones that are merely related. Alias toward the subject with more notes: from is the one with fewer, to the one with more. Use subjects exactly as listed; the kernel ignores an alias to a subject not listed, an alias to a subject that already contains every word of from (e.g. "running" to "running shoes"), and one that would close a cycle. CURRENT ALIASES, when listed, are the aliases in force: to correct a wrong one, alias its from to the right subject (the latest alias of a subject replaces the earlier one), or alias its from to itself to undo it.
 `
 
 const dropperRules = `You are the dropper agent for a coding assistant.

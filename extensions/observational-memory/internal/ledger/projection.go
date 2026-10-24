@@ -6,6 +6,9 @@ import "math"
 type Projection struct {
 	Observations []Observation
 	Reflections  []Reflection
+	// Aliases are the subject aliases the projection's subjects are read with
+	// (CanonicalSubjectsWithAliases), in ledger order; nil when none.
+	Aliases []SubjectAlias
 }
 
 // ProjectionDiff is what the full ledger has that the visible summary lacks.
@@ -67,6 +70,15 @@ func isCoveredAtOrBefore(coversUpToID string, index map[string]int, boundaryIdx 
 	return covered >= 0 && boundaryIdx >= 0 && covered <= boundaryIdx
 }
 
+// aliasFolds reports whether the alias entry data at position i folds through the observations
+// boundary: by its claim (ObservationsThroughID) when that entry is on the branch, else by i.
+func aliasFolds(data SubjectsAliasedData, i int, index map[string]int, observationsBoundary int) bool {
+	if _, ok := index[data.ObservationsThroughID]; ok {
+		return isCoveredAtOrBefore(data.ObservationsThroughID, index, observationsBoundary)
+	}
+	return observationsBoundary >= 0 && i <= observationsBoundary
+}
+
 type foldOptions struct {
 	observations projectionBoundary
 	reflections  projectionBoundary
@@ -83,7 +95,8 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 	seenObservations := map[string]bool{}
 	seenReflections := map[string]bool{}
 	dropped := map[string]bool{}
-	for _, entry := range entries {
+	var aliases []SubjectAlias
+	for i, entry := range entries {
 		if data, ok := ObservationsRecordedEntry(entry); ok && isCoveredAtOrBefore(data.CoversUpToID, index, observationsBoundary) {
 			for _, observation := range data.Observations {
 				if seenObservations[observation.ID] {
@@ -108,6 +121,14 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 			for _, id := range data.ObservationIDs {
 				dropped[id] = true
 			}
+			continue
+		}
+		// An alias entry groups the subjects of the observations it was checked against, so it
+		// folds with them: when the observations it claims (ObservationsThroughID) fold, though
+		// the reflector appended it after them. It moves no coverage marker. One without the
+		// claim folds by its own position, through the observations' boundary.
+		if data, ok := SubjectsAliasedEntry(entry); ok && aliasFolds(data, i, index, observationsBoundary) {
+			aliases = append(aliases, data.Aliases...)
 		}
 	}
 	active := []Observation{}
@@ -116,7 +137,7 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 			active = append(active, observation)
 		}
 	}
-	return Projection{Observations: active, Reflections: reflections}
+	return Projection{Observations: active, Reflections: reflections, Aliases: aliases}
 }
 
 // latestV3CompactionDetails is the om.folded details of the newest compaction
@@ -151,6 +172,7 @@ func VisibleProjection(entries []Entry, upToEntryID string) Projection {
 			return Projection{
 				Observations: append([]Observation{}, details.Observations...),
 				Reflections:  append([]Reflection{}, details.Reflections...),
+				Aliases:      append([]SubjectAlias(nil), details.Aliases...),
 			}
 		}
 		return Projection{Observations: []Observation{}, Reflections: []Reflection{}}
@@ -218,6 +240,7 @@ func BuildCompactionProjection(entries []Entry, firstKeptEntryID string, cfg Com
 		Observations:       projection.Observations,
 		Reflections:        projection.Reflections,
 		FoldThroughEntryID: firstKeptEntryID,
+		Aliases:            projection.Aliases,
 	}
 	return CompactionProjection{Projection: projection, FullFold: fullFold, Details: details}
 }

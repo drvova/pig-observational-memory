@@ -95,6 +95,13 @@ type Records struct {
 	Reflections  []ledger.Reflection
 	// ReflectionDates are the reflections' date ranges (ledger.ReflectionDateRanges).
 	ReflectionDates map[string]string
+	// Aliases are the subject aliases the notes source reads subjects with
+	// (ledger.CanonicalSubjectsWithAliases).
+	Aliases []ledger.SubjectAlias
+	// SubjectContext are subjects of notes outside Observations that the canonical subjects
+	// are computed over beside the records' own, so a slice of the memory (one pass's notes)
+	// groups as the whole memory does; nil for none.
+	SubjectContext []string
 }
 
 // memoryTools are the tools whose calls are memory queries: the memory tool and the defined

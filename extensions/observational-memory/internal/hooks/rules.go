@@ -314,7 +314,7 @@ func recordEmptyPass(ctx context.Context, cfg config.Config, h host.Host, model 
 // left unnoted). Detection only: no remedy acts on an empty verdict.
 func emptyObserverPass(ctx context.Context, cfg config.Config, h host.Host, model host.Model, chunk observerChunk, coversUpToID string) rules.Pass {
 	covered := chunk.covered(coversUpToID)
-	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Known: chunk.known, Defined: harness.DefinedQueries(h, cfg),
+	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Known: chunk.known, Aliases: chunk.aliases, Defined: harness.DefinedQueries(h, cfg),
 		Detectors: rules.ModelDetectors(layerFor(ctx, h, cfg, model).Harness())})
 	return rules.Pass{Stage: rules.StageObserver, Tokens: rules.SourceTokens(covered), Findings: &findings}
 }
@@ -329,6 +329,8 @@ type observerChunk struct {
 	subjects []ledger.SubjectCount
 	// known are the observations in memory before the chunk.
 	known []ledger.Observation
+	// aliases are the memory's subject aliases, which the chunk's prompt read subjects with.
+	aliases []ledger.SubjectAlias
 }
 
 // covered are the chunk's source entries at or before coversUpToID: what a marker there covers.
@@ -369,7 +371,7 @@ func applyObserverRules(ctx context.Context, cfg config.Config, h host.Host, wor
 	if kind, ok := active.RequiredKind(); ok && !partial && ctx.Err() == nil {
 		if flagged := rules.UncitedAssistantSpecifics(covered, observations); len(flagged) > 0 {
 			prior := append([]string(nil), chunk.priorObservations...)
-			canonical := ledger.ObservationSubjects(append(append([]ledger.Observation(nil), chunk.known...), observations...))
+			canonical := ledger.ObservationSubjectsWithAliases(append(append([]ledger.Observation(nil), chunk.known...), observations...), chunk.aliases)
 			for _, o := range observations {
 				prior = append(prior, ledger.ObservationToCanonicalObserverLine(o, canonical[o.Subject]))
 			}
@@ -391,7 +393,7 @@ func applyObserverRules(ctx context.Context, cfg config.Config, h host.Host, wor
 			}
 		}
 	}
-	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Notes: observations, Known: chunk.known, Defined: harness.DefinedQueries(h, cfg),
+	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Notes: observations, Known: chunk.known, Aliases: chunk.aliases, Defined: harness.DefinedQueries(h, cfg),
 		Detectors: rules.ModelDetectors(layerFor(ctx, h, cfg, worker.Model).Harness())})
 	if active.Has(rules.RemedyKeepHead) {
 		kept, refused := rules.KeepHead(chunk.branch, findings.Uncited, chunk.serialized.SourceEntryIDs, coversUpToID, observations)

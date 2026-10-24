@@ -111,12 +111,14 @@ func ParseDetector(name, text string) (DetectorDef, error) {
 
 // Count is what d counts in one observer pass: its kernel check's count (kernel, from
 // DetectObserverPass), or its query's selection over the pass's notes and covered history.
-// A query that fails counts nothing.
+// The notes' subjects are canonical over the memory before the pass and the pass's notes,
+// under the pass's aliases (ObserverPass.Known, Aliases), as the memory tool reads them. A
+// query that fails counts nothing.
 func (d DetectorDef) Count(p ObserverPass, kernel map[string]int) int {
 	if d.Check != "" {
 		return kernel[d.Check]
 	}
-	env := memquery.Env{Entries: p.Covered, Records: &memquery.Records{Observations: p.Notes, Reflections: []ledger.Reflection{}}}
+	env := memquery.Env{Entries: p.Covered, Records: &memquery.Records{Observations: p.Notes, Reflections: []ledger.Reflection{}, Aliases: p.Aliases, SubjectContext: ledger.SubjectsOf(p.Known)}}
 	sel, err := memquery.Select(env, d.Query, detectorSources...)
 	if err != nil {
 		return 0

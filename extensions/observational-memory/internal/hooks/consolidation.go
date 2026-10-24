@@ -778,7 +778,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	}
 
 	fullMemory := ledger.FullProjection(entries, "")
-	memory := ledger.BoundObserverMemory(fullMemory.Reflections, fullMemory.Observations, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
+	memory := ledger.BoundObserverMemoryWithAliases(fullMemory.Reflections, fullMemory.Observations, fullMemory.Aliases, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
 	priorReflections := make([]string, 0, len(memory.Reflections))
 	for _, reflection := range memory.Reflections {
 		priorReflections = append(priorReflections, ledger.ReflectionToSummaryLine(reflection))
@@ -829,7 +829,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		notifyWorker(cfg, h, "Observational memory: observer found nothing new in this chunk (coverage unchanged; will retry later)")
 		// Counted, never proof: a held definition that makes the observer record nothing is
 		// not written by it (settlePass), and a written one is judged by it.
-		chunk := observerChunk{branch: entries, serialized: serialized, known: fullMemory.Observations}
+		chunk := observerChunk{branch: entries, serialized: serialized, known: fullMemory.Observations, aliases: fullMemory.Aliases}
 		recordEmptyPass(ctx, cfg, h, used.Model, emptyObserverPass(ctx, cfg, h, used.Model, chunk, coversUpToID))
 		return outcomeContinue, nil
 	}
@@ -856,7 +856,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		coversUpToID = cited
 		notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer stopped early (%s); coverage advances to the last cited entry", reason))
 	}
-	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations}
+	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations, aliases: fullMemory.Aliases}
 	observations, pass := applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 
 	data := ledger.BuildObservationsRecordedData(observations, coversUpToID)
@@ -945,10 +945,15 @@ func runReflectorPass(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: reflector running (~%s tokens)", jsfmt.Locale(reflectionTokens)))
 	folded := ledger.FoldLedger(entries, "")
 	var judge runtime.ResolveResult
+	// aliases are the subject aliases the run that produced the result accepted: a failed
+	// primary's are discarded with its result.
+	var aliases []ledger.SubjectAlias
 	reflectWith := func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
 		judge = worker
-		memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), false)
-		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(ctx, cfg, h, worker, rules.StageReflector), Reflections: memory.Reflections, Observations: memory.Observations})
+		aliases = nil
+		args := reflectorArgs(ctx, cfg, h, worker, folded)
+		args.RecordAliases = func(accepted []ledger.SubjectAlias) { aliases = accepted }
+		return runReflector(ctx, args)
 	}
 	var reflections []ledger.Reflection
 	if primaryOwed {
@@ -980,6 +985,9 @@ func runReflectorPass(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		rt.SetReflectorEmptyBackoff(settled)
 		debuglog.Log(ctx, "reflector.empty", map[string]any{"primaryOwed": settled.PrimaryOwed})
 		recordEmptyPass(ctx, cfg, h, judge.Model, rules.Pass{Stage: rules.StageReflector})
+		if len(aliases) > 0 && branchStillCurrent(h, sessionIdentity, leafID) && ctx.Err() == nil {
+			recordSubjectAliases(ctx, h, aliases)
+		}
 		return none, nil
 	}
 	rt.SetReflectorEmptyBackoff(nil)
@@ -999,8 +1007,71 @@ func runReflectorPass(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	if err := h.AppendEntry(ledger.OMReflectionsRecorded, data); err != nil {
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, err
 	}
+	recordSubjectAliases(ctx, h, aliases)
 	recordPass(ctx, cfg, h, judge.Model, rules.Pass{Stage: rules.StageReflector})
 	return reflectorStageResult{outcome: outcomeContinue, sameRunReflections: reflections, effectiveReflectionCoverageID: data.CoversUpToID}, nil
+}
+
+// reflectorArgs are a reflector run's arguments for worker over the folded memory: the bounded
+// memory, and the canonical subjects (under the recorded aliases) the prompt lists when there
+// are two or more, within their share of the worker-memory budget (ledger.BoundSubjectList),
+// the memory taking the rest; with the aliases in force within what the subject list leaves
+// of that share (ledger.BoundAliasList), and the subjects present and the recorded aliases the
+// kernel checks a proposed alias against.
+func reflectorArgs(ctx context.Context, cfg config.Config, h host.Host, worker runtime.ResolveResult, folded ledger.FoldedLedger) agents.ReflectorArgs {
+	budget := config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model))
+	var subjects []ledger.SubjectCount
+	var inForce []ledger.SubjectAlias
+	subjectTokens := 0
+	present := ledger.SubjectsOf(folded.ActiveObservations)
+	if all := ledger.CountCanonicalSubjectsWithAliases(folded.ActiveObservations, folded.Aliases); len(all) >= 2 {
+		subjects, subjectTokens = ledger.BoundSubjectList(all, budget)
+		if len(subjects) < 2 {
+			subjects, subjectTokens = nil, 0
+		} else {
+			applying, _ := ledger.CheckSubjectAliases(present, folded.Aliases)
+			var aliasTokens int
+			inForce, aliasTokens = ledger.BoundAliasList(applying, budget, subjectTokens)
+			subjectTokens += aliasTokens
+		}
+	}
+	memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, budget-subjectTokens, false)
+	return agents.ReflectorArgs{
+		WorkerArgs:      workerArgs(ctx, cfg, h, worker, rules.StageReflector),
+		Reflections:     memory.Reflections,
+		Observations:    memory.Observations,
+		Subjects:        subjects,
+		SubjectsPresent: present,
+		Aliases:         folded.Aliases,
+		AliasesInForce:  inForce,
+	}
+}
+
+// recordSubjectAliases appends the aliases a reflector run accepted as one om.subjects.aliased
+// entry, after the kernel checks them again against a fresh branch (ledger.AcceptNewSubjectAliases
+// over the active notes' subjects and the recorded aliases); refused ones are logged and left
+// out. The entry carries no coverage marker; it claims the observation coverage of that branch
+// (ObservationsThroughID), so it folds with the notes it groups. A failure is logged: aliases
+// are optional, and the pass's reflections stand without them.
+func recordSubjectAliases(ctx context.Context, h host.Host, proposed []ledger.SubjectAlias) {
+	if len(proposed) == 0 {
+		return
+	}
+	entries, err := h.GetBranch()
+	if err != nil {
+		debuglog.Log(ctx, "reflector.aliases_error", map[string]any{"errorMessage": err.Error()})
+		return
+	}
+	folded := ledger.FoldLedger(entries, "")
+	accepted, refused := ledger.AcceptNewSubjectAliases(ledger.SubjectsOf(folded.ActiveObservations), folded.Aliases, proposed)
+	data := ledger.BuildSubjectsAliasedData(accepted, ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded))
+	debuglog.Log(ctx, "reflector.aliases", map[string]any{"accepted": len(accepted), "refused": len(refused)})
+	if data == nil {
+		return
+	}
+	if err := h.AppendEntry(ledger.OMSubjectsAliased, data); err != nil {
+		debuglog.Log(ctx, "reflector.aliases_error", map[string]any{"errorMessage": err.Error()})
+	}
 }
 
 // runDropperStage runs one dropper pass with one layer snapshot (layerFor), then settles the

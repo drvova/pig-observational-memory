@@ -53,7 +53,7 @@ var SchemaSeed = tables.Rows.Encode(tables.Table{
 	Fields: ledger.SchemaColumns,
 	Rows: [][]string{
 		{ledger.NoteFieldKind, ledger.FieldEnum, kindValues(), "", ""},
-		{ledger.NoteFieldSubject, ledger.FieldText, "", "", "Short lowercase noun phrase grouping related observations, e.g. 'baking', 'gaming hours'."},
+		{ledger.NoteFieldSubject, ledger.FieldText, "", "", "Short lowercase noun phrase grouping related notes, root topic first: reuse a root from CURRENT SUBJECTS and put the specific part after '/', e.g. 'baking', 'running/half marathon'."},
 		{ledger.NoteFieldScope, ledger.FieldText, "", "", "Qualifier that tells two figures apart, e.g. 'hard difficulty', 'on edX'."},
 		{ledger.NoteFieldSupersedes, ledger.FieldIDs, "", "", "Ids of earlier observations this one replaces. Only when the user explicitly corrects or replaces them."},
 	},

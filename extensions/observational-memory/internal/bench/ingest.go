@@ -260,6 +260,7 @@ func RenderMemoryWithBudget(entries []session.Entry, cfg config.Config, budget i
 	full := ledger.FullProjection(entries, "")
 	folded := ledger.FoldLedger(entries, "")
 	options.ReflectionDates = ledger.ReflectionDateRanges(folded)
+	options.Aliases = full.Aliases
 	frontier := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
 	rendered := ledger.RenderSummaryWithOptions(full.Reflections, full.Observations, budget, options)
 	tail := []session.Entry{}

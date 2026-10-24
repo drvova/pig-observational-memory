@@ -136,6 +136,21 @@ func TestDetectorDeclarations(t *testing.T) {
 	if f.Defined["plans"] != 2 || f.Defined["thin-chunk"] != f.Counts[DetectThinChunk] {
 		t.Fatalf("defined %+v counts %+v", f.Defined, f.Counts)
 	}
+	// A query by subject reads the pass's notes grouped as the memory tool groups them: over
+	// the memory before the pass, under the recorded aliases.
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "running-notes", Model: "p/m", Text: "detector[1]{query,description}:\n  \"notes | where subject=running\",running notes"}); err != nil {
+		t.Fatal(err)
+	}
+	h, _, _ = ls.Load("p/m")
+	running := []ledger.Observation{{ID: "dddddddddddd", Content: "User ran 10k.", Kind: "event", Subject: "half marathon training", Timestamp: "2026-05-02 10:33", Relevance: "low"}}
+	known := []ledger.Observation{{ID: "eeeeeeeeeeee", Content: "User runs weekly.", Kind: "fact", Subject: "running", Timestamp: "2026-05-01 10:00", Relevance: "low"}}
+	aliased := DetectObserverPass(ObserverPass{Notes: running, Known: known, Aliases: []ledger.SubjectAlias{{From: "half marathon training", To: "running"}}, Detectors: ModelDetectors(h)})
+	if aliased.Defined["running-notes"] != 1 {
+		t.Fatalf("aliased detector counted %+v", aliased.Defined)
+	}
+	if plain := DetectObserverPass(ObserverPass{Notes: running, Known: known, Detectors: ModelDetectors(h)}); plain.Defined["running-notes"] != 0 {
+		t.Fatalf("unaliased detector counted %+v", plain.Defined)
+	}
 	if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 10, Findings: &f}); err != nil {
 		t.Fatal(err)
 	}

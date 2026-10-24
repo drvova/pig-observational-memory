@@ -19,7 +19,7 @@ type WorkerMemorySlice struct {
 	Subjects        []SubjectCount
 	OmittedSubjects int
 	// Canonical maps each observation's subject to its Canonical over the whole memory
-	// (ObservationSubjects); set by BoundObserverMemory, nil otherwise.
+	// (ObservationSubjectsWithAliases); set by BoundObserverMemory, nil otherwise.
 	Canonical map[string]Canonical
 }
 
@@ -67,6 +67,42 @@ func BoundWorkerMemory(reflections []Reflection, observations []Observation, max
 // (WorkerMemorySlice.Subjects), after a blank line.
 const SubjectsHeader = "CURRENT SUBJECTS (subject: notes, most used first):"
 
+// AliasesHeader heads the reflector prompt's list of the subject aliases in force
+// (BoundAliasList), after the subject list and a blank line.
+const AliasesHeader = "CURRENT ALIASES (from -> to, in force; alias a from to itself to undo it):"
+
+// Line renders "from -> to", the form the reflector's prompt lists.
+func (a SubjectAlias) Line() string {
+	return a.From + " -> " + a.To
+}
+
+// BoundAliasList keeps the aliases in force (CheckSubjectAliases, in ledger order) while their
+// lines fit within what the subject list leaves of its share of maxTokens (an eighth, less
+// used, the subject list's tokens), the newest first, header and blank line included; it
+// returns them in ledger order with the tokens they take. With no budget every alias is kept
+// at no counted cost; nil and 0 when none fits, or none is in force.
+func BoundAliasList(aliases []SubjectAlias, maxTokens, used int) ([]SubjectAlias, int) {
+	if len(aliases) == 0 {
+		return nil, 0
+	}
+	if maxTokens <= 0 {
+		return aliases, 0
+	}
+	header := lineTokens(AliasesHeader) + 1
+	newest := make([]SubjectAlias, 0, len(aliases))
+	for i := len(aliases) - 1; i >= 0; i-- {
+		newest = append(newest, aliases[i])
+	}
+	kept, tokens := pickRanked(newest, SubjectAlias.Line, maxTokens/subjectsBudgetShare-used-header)
+	if len(kept) == 0 {
+		return nil, 0
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept, tokens + header
+}
+
 // subjectsBudgetShare is the share of the worker-memory budget the subject list may take
 // at most (1/subjectsBudgetShare), so it never crowds out reflections or observations.
 const subjectsBudgetShare = 8
@@ -84,10 +120,16 @@ const subjectsBudgetShare = 8
 // the rest as in BoundWorkerMemory, so the whole stays within maxTokens. With
 // no budget every subject is listed.
 func BoundObserverMemory(reflections []Reflection, observations []Observation, maxTokens int) WorkerMemorySlice {
-	canonical := ObservationSubjects(observations)
+	return BoundObserverMemoryWithAliases(reflections, observations, nil, maxTokens)
+}
+
+// BoundObserverMemoryWithAliases is BoundObserverMemory with the subjects canonical under
+// aliases (CanonicalSubjectsWithAliases): the memory's (Projection.Aliases).
+func BoundObserverMemoryWithAliases(reflections []Reflection, observations []Observation, aliases []SubjectAlias, maxTokens int) WorkerMemorySlice {
+	canonical := ObservationSubjectsWithAliases(observations, aliases)
 	line := func(o Observation) string { return ObservationToCanonicalObserverLine(o, canonical[o.Subject]) }
 	slice := boundWorkerMemory(reflections, observations, maxTokens, false, line, func(reserved []Observation) ([]SubjectCount, int, int) {
-		all := CountCanonicalSubjects(observations)
+		all := CountCanonicalSubjectsWithAliases(observations, aliases)
 		if maxTokens <= 0 {
 			return all, 0, 0
 		}
@@ -111,6 +153,23 @@ func BoundObserverMemory(reflections []Reflection, observations []Observation, m
 	})
 	slice.Canonical = canonical
 	return slice
+}
+
+// BoundSubjectList keeps subjects (a ranking, most used first) while their lines fit within
+// the share of maxTokens the observer's list may take (an eighth, its header and the blank
+// line before it included), and returns the tokens the kept list takes, header included. With
+// no budget every subject is kept at no counted cost; nil and 0 when none fits. The reflector's
+// prompt lists subjects this way and gives its memory the rest of the budget.
+func BoundSubjectList(subjects []SubjectCount, maxTokens int) ([]SubjectCount, int) {
+	if maxTokens <= 0 {
+		return subjects, 0
+	}
+	header := lineTokens(SubjectsHeader) + 1
+	kept, tokens := pickRanked(subjects, SubjectCount.Line, maxTokens/subjectsBudgetShare-header)
+	if len(kept) == 0 {
+		return nil, 0
+	}
+	return kept, tokens + header
 }
 
 // ObserverLines are the slice's observations as the observer reads them

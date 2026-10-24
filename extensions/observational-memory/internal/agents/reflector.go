@@ -20,6 +20,97 @@ type ReflectorArgs struct {
 	WorkerArgs
 	Reflections  []ledger.Reflection
 	Observations []ledger.Observation
+	// Subjects are the memory's canonical subjects with their note counts, most used first
+	// (ledger.CountCanonicalSubjectsWithAliases). With two or more the prompt lists them and
+	// the run offers alias_subjects; with fewer the prompt is as it was without subjects.
+	Subjects []ledger.SubjectCount
+	// SubjectsPresent are the subjects of the memory's active notes as written, which the
+	// kernel checks a proposed alias against (ledger.AcceptNewSubjectAliases).
+	SubjectsPresent []string
+	// Aliases are the subject aliases already recorded, in ledger order.
+	Aliases []ledger.SubjectAlias
+	// AliasesInForce are the recorded aliases that apply (ledger.CheckSubjectAliases), within
+	// what the subject list leaves of its budget share (ledger.BoundAliasList). With Subjects
+	// listed, the prompt lists them after the subjects so the run can correct or undo one.
+	AliasesInForce []ledger.SubjectAlias
+	// RecordAliases, when set, receives the aliases the run's alias_subjects calls had
+	// accepted, once, when the run ends without failing; it is not called when none was.
+	RecordAliases func([]ledger.SubjectAlias)
+}
+
+// aliasSubjectsSchema is the alias_subjects parameter schema.
+var aliasSubjectsSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"aliases": map[string]any{
+			"type":     "array",
+			"minItems": 1,
+			"maxItems": ledger.MaxSubjectAliasesPerEntry,
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"from":   map[string]any{"type": "string", "minLength": 1, "description": "A subject from CURRENT SUBJECTS, the one with fewer notes, or the from of an alias in CURRENT ALIASES to correct or undo it."},
+					"to":     map[string]any{"type": "string", "minLength": 1, "description": "The subject from CURRENT SUBJECTS that names the same topic, the one with more notes; from itself undoes the alias in force for from."},
+					"reason": map[string]any{"type": "string", "description": "Why both name the same topic for this user, in a few words."},
+				},
+				"required": []any{"from", "to"},
+			},
+		},
+	},
+	"required": []any{"aliases"},
+}
+
+// aliasSubjectsTool is the reflector's alias_subjects tool: each call's aliases are checked by
+// the kernel after the recorded ones and those accepted earlier this run
+// (ledger.AcceptNewSubjectAliases), and the accepted ones are appended to *accepted.
+func aliasSubjectsTool(args ReflectorArgs, accepted *[]ledger.SubjectAlias) Tool {
+	return Tool{
+		Name:        "alias_subjects",
+		Label:       "Alias subjects",
+		Description: "Declare that a subject names the same topic as another subject for this user, so their notes group together.",
+		Parameters:  aliasSubjectsSchema,
+		Execute: func(_ context.Context, params map[string]any) (ToolResult, error) {
+			items, _ := params["aliases"].([]any)
+			proposed := []ledger.SubjectAlias{}
+			malformed := 0
+			for _, raw := range items {
+				m, _ := raw.(map[string]any)
+				from, _ := m["from"].(string)
+				to, _ := m["to"].(string)
+				reason, _ := m["reason"].(string)
+				alias := ledger.SubjectAlias{From: ledger.NormalizeSubject(from), To: ledger.NormalizeSubject(to), Reason: strings.Join(strings.Fields(reason), " ")}
+				if alias.From == "" || alias.To == "" || len(*accepted)+len(proposed) >= ledger.MaxSubjectAliasesPerEntry {
+					malformed++
+					continue
+				}
+				proposed = append(proposed, alias)
+			}
+			recorded := append(append([]ledger.SubjectAlias(nil), args.Aliases...), *accepted...)
+			added, refused := ledger.AcceptNewSubjectAliases(args.SubjectsPresent, recorded, proposed)
+			*accepted = append(*accepted, added...)
+			parts := []string{fmt.Sprintf("Recorded %d %s.", len(added), jsfmt.Plural(len(added), "alias"))}
+			for _, r := range refused {
+				parts = append(parts, fmt.Sprintf("Ignored %s -> %s: %s.", r.Alias.From, r.Alias.To, r.Reason))
+			}
+			if malformed > 0 {
+				parts = append(parts, fmt.Sprintf("Ignored %d %s without from and to, or over the limit of %d this run.", malformed, jsfmt.Plural(malformed, "alias"), ledger.MaxSubjectAliasesPerEntry))
+			}
+			return ToolResult{Text: strings.Join(parts, " "), Details: map[string]any{"added": len(added), "refused": len(refused) + malformed, "total": len(*accepted)}}, nil
+		},
+	}
+}
+
+// aliasesSection is the reflector prompt's list of the aliases in force, after a blank line;
+// "" when none is.
+func aliasesSection(aliases []ledger.SubjectAlias) string {
+	if len(aliases) == 0 {
+		return ""
+	}
+	lines := make([]string, len(aliases))
+	for i, a := range aliases {
+		lines[i] = a.Line()
+	}
+	return "\n\n" + ledger.AliasesHeader + "\n" + strings.Join(lines, "\n")
 }
 
 var recordReflectionsSchema = map[string]any{
@@ -190,9 +281,17 @@ func RunReflector(ctx context.Context, args ReflectorArgs) ([]ledger.Reflection,
 	for _, observation := range args.Observations {
 		observationLines = append(observationLines, ObservationToReflectorLine(observation, CoverageTierForObservation(observation, coverage)))
 	}
-	userText := "CURRENT REFLECTIONS:\n" + joinOrEmpty(reflectionLines) + "\n\nCURRENT OBSERVATIONS:\n" + joinOrEmpty(observationLines) + "\n\nCrystallize any missing durable facts or patterns into new reflections. If nothing is stable enough, do not call the tool."
+	tools := []Tool{recordReflections}
+	subjects, closing := "", ""
+	var aliases []ledger.SubjectAlias
+	if len(args.Subjects) >= 2 {
+		subjects = subjectsSection(args.Subjects) + aliasesSection(args.AliasesInForce)
+		closing = " If two current subjects name the same topic for this user, call alias_subjects."
+		tools = append(tools, aliasSubjectsTool(args, &aliases))
+	}
+	userText := "CURRENT REFLECTIONS:\n" + joinOrEmpty(reflectionLines) + "\n\nCURRENT OBSERVATIONS:\n" + joinOrEmpty(observationLines) + subjects + "\n\nCrystallize any missing durable facts or patterns into new reflections. If nothing is stable enough, do not call the tool." + closing
 
-	result, err := RunLoop(ctx, args.Stream, args.loopConfig("reflector"), args.system(kernel.TextReflectorRules, ReflectorInstructions), userText, []Tool{recordReflections})
+	result, err := RunLoop(ctx, args.Stream, args.loopConfig("reflector"), args.system(kernel.TextReflectorRules, ReflectorInstructions), userText, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +301,9 @@ func RunReflector(ctx context.Context, args ReflectorArgs) ([]ledger.Reflection,
 	}
 	if len(acceptedReflections) == 0 && result.StreamError != nil {
 		return nil, result.StreamError
+	}
+	if len(aliases) > 0 && args.RecordAliases != nil {
+		args.RecordAliases(aliases)
 	}
 	after := ReflectionCoverageMap(args.Observations, append(append([]ledger.Reflection{}, args.Reflections...), acceptedReflections...))
 	reason := "accepted_nonempty"
@@ -220,6 +322,7 @@ func RunReflector(ctx context.Context, args ReflectorArgs) ([]ledger.Reflection,
 		"duplicateReflectionCount":       duplicateCount,
 		"rejectedReflectionCount":        rejectedCount,
 		"acceptedSupportIdCounts":        SummarizeSupportIDCounts(acceptedReflections),
+		"acceptedAliasCount":             len(aliases),
 		"coverageTransitionsByRelevance": SummarizeCoverageTransitionsByRelevance(args.Observations, coverage, after),
 	})
 	if len(acceptedReflections) == 0 {

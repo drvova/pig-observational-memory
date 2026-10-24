@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 )
 
 // Subject canonicalization (docs/memory-interface.md, sections 2, 3 and 5). The observer names
@@ -14,8 +16,12 @@ import (
 // canonical subject instead, derived here from the subjects present; the stored records are
 // never rewritten, so what the observer wrote stays readable (the notes source's raw_subject).
 //
-// The rule is containment, not similarity: a subject whose words contain every word of a
-// shorter subject present belongs to it, and the words it adds become scope. Nothing is
+// Two rules let the model supply meaning that words cannot: a subject written as a path
+// ("running/half marathon") groups under its root, and an alias the reflector recorded
+// (om.subjects.aliased, aliases.go) groups one subject, and what nests under it, under another
+// (CanonicalSubjectsWithAliases). Between them is containment, not similarity: a subject whose
+// words contain every word of a shorter subject present belongs to it, and the words it adds
+// become scope. Nothing is
 // scored, so there is no threshold to tune, the result does not depend on the order the
 // subjects arrive in, and canonicalizing the canonical subjects again changes nothing. It is
 // kernel-owned (kernel.Owns names it), so no definition in the model-built layer can replace
@@ -42,12 +48,76 @@ var SubjectCanonicalizationNames = []string{SubjectKeyName, CanonicalSubjectsNam
 
 // Canonical is the subject a note groups under and the qualifier its own subject adds.
 type Canonical struct {
-	// Subject is the canonical subject: the shortest present subject the note's subject
-	// contains, or the note's subject itself.
+	// Subject is the canonical subject: the note's subject resolved through its path root, the
+	// shortest present subject it contains, and any alias of either
+	// (CanonicalSubjectsWithAliases); the note's subject itself when none applies.
 	Subject string
 	// ExtraScope is the words the note's subject adds to Subject, lowercased, in their
-	// original order ("" when it adds none).
+	// original order: an aliased subject's words, then the containment words, then the path
+	// segments after the root ("" when it adds none).
 	ExtraScope string
+}
+
+// SubjectPathSeparator separates the segments of a subject written as a path, root topic first
+// ("running/half marathon").
+const SubjectPathSeparator = "/"
+
+// MaxSubjectPathDepth is the most segments a subject path may have: a root topic and two
+// qualifiers ("running/half marathon/pace"). Deeper nesting is what scope is for.
+const MaxSubjectPathDepth = 3
+
+// SubjectPath reads subject as a path: its segments, root first, each normalized
+// (NormalizeSubjectPath), empty ones dropped. A subject without a separator is one segment. ok
+// is false when the kernel refuses the path: more than MaxSubjectPathDepth segments, or two or
+// more leading segments that together spell a kernel-owned name (kernel.OwnsForEveryKind
+// ignores the separator, so "om/folded" spells om.folded and "raw/subject" raw_subject). A
+// root alone never refuses a path: the plain subject "search" is accepted, so "search/indexing"
+// is too. A refused path reads as one plain subject, its segments its words.
+func SubjectPath(subject string) (segments []string, ok bool) {
+	normalized := NormalizeSubjectPath(subject)
+	if normalized == "" {
+		return nil, true
+	}
+	segments = strings.Split(normalized, SubjectPathSeparator)
+	if len(segments) == 1 {
+		return segments, true
+	}
+	if len(segments) > MaxSubjectPathDepth {
+		return segments, false
+	}
+	for i := 2; i <= len(segments); i++ {
+		if _, owned := kernel.OwnsForEveryKind(strings.Join(segments[:i], SubjectPathSeparator)); owned {
+			return segments, false
+		}
+	}
+	return segments, true
+}
+
+// RecordableSubject is the subject the observer's record stores for a written subject: the
+// normalized subject (NormalizeSubjectPath), or, when the kernel refuses it as a path
+// (SubjectPath), its segments joined by spaces, with refused true so the receipt can say so.
+// Either way the words written are kept.
+func RecordableSubject(subject string) (stored string, refused bool) {
+	normalized := NormalizeSubjectPath(subject)
+	if segments, ok := SubjectPath(normalized); !ok {
+		return strings.Join(segments, " "), true
+	}
+	return normalized, false
+}
+
+// pathBase is a subject's base for canonicalization: the root of a subject path the kernel
+// accepts, with the words of the rest, else the subject itself.
+type pathBase struct {
+	root, rest string
+}
+
+// subjectBase is subject's pathBase.
+func subjectBase(subject string) pathBase {
+	segments, ok := SubjectPath(subject)
+	if !ok || len(segments) < 2 {
+		return pathBase{root: subject}
+	}
+	return pathBase{root: segments[0], rest: SubjectKey(strings.Join(segments[1:], " "))}
 }
 
 // inWordSymbol reports whether r stays inside a word: an apostrophe ("user's", "o'brien") or
@@ -129,8 +199,135 @@ type subjectGroup struct {
 	words map[string]bool
 }
 
-// CanonicalSubjects maps each subject present (empty ones aside) to its Canonical over the
-// whole set. Each subject is read as the set of its words (subjectWords), a word that is a
+// CanonicalSubjects is CanonicalSubjectsWithAliases with no aliases: subject paths, then
+// containment.
+func CanonicalSubjects(subjects []string) map[string]Canonical {
+	return CanonicalSubjectsWithAliases(subjects, nil)
+}
+
+// CanonicalSubjectsWithAliases maps each subject present (empty ones aside) to its Canonical
+// over the whole set, resolving in a fixed order:
+//
+//  1. Base: a subject path the kernel accepts (SubjectPath) reads as its root, the remaining
+//     segments' words becoming scope; any other subject is its own base.
+//  2. Containment: every base, aliased or not, is grouped by containmentSubjects.
+//  3. Alias: a base an accepted alias maps (CheckSubjectAliases over subjects), or whose
+//     containment subject one maps, reads as the alias's final target: the aliases are
+//     followed transitively, and a target that nests under a shorter subject goes on to it
+//     (and on through that subject's alias, if it has one). The words of the aliased subject
+//     that the canonical subject lacks become scope, so nothing written is lost; a base that
+//     moved with its containment subject keeps its containment words after them, so the
+//     subjects grouped under an aliased subject follow it to its target.
+//
+// ExtraScope joins the alias's words, the containment words and the path words, in that order.
+// With no path and no alias the result is containmentSubjects' exactly. The result depends on
+// the subjects only as a set and on the aliases only through CheckSubjectAliases, and
+// canonicalizing the canonical subjects again (with the same aliases) maps each to itself: a
+// canonical subject is never a path, and no alias's from is canonical.
+func CanonicalSubjectsWithAliases(subjects []string, aliases []SubjectAlias) map[string]Canonical {
+	set := readBases(subjects)
+	g := newAliasGraph(set)
+	for _, a := range aliases {
+		g.apply(a)
+	}
+	out := make(map[string]Canonical, len(set.bases))
+	for s, b := range set.bases {
+		k := SubjectKey(b.root)
+		c := set.contained[b.root]
+		aliased, carried := "", ""
+		if _, ok := g.edges[k]; ok {
+			aliased = b.root
+		} else if p := set.parent(k); p != k {
+			if _, ok := g.edges[p]; ok {
+				aliased, carried = c.Subject, c.ExtraScope
+			}
+		}
+		if aliased == "" {
+			out[s] = Canonical{Subject: c.Subject, ExtraScope: joinWords(c.ExtraScope, b.rest)}
+			continue
+		}
+		target := set.contained[set.spelling[g.resolve(k)]].Subject
+		have := map[string]bool{}
+		for _, w := range subjectWords(target) {
+			have[w] = true
+		}
+		kept := []string{}
+		for _, w := range subjectWords(aliased) {
+			if !have[w] {
+				kept = append(kept, w)
+			}
+		}
+		out[s] = Canonical{Subject: target, ExtraScope: joinWords(strings.Join(kept, " "), carried, b.rest)}
+	}
+	return out
+}
+
+// baseSet is a set of subjects read for canonicalization: each subject's base, the spelling of
+// each base key, and every base root's containment Canonical over all the roots.
+type baseSet struct {
+	// bases maps each non-empty subject to its pathBase.
+	bases map[string]pathBase
+	// spelling maps each base key (SubjectKey of a root) to the smallest root with it.
+	spelling map[string]string
+	// contained is containmentSubjects over every root, aliased ones included.
+	contained map[string]Canonical
+}
+
+// readBases reads subjects' bases (empty subjects aside).
+func readBases(subjects []string) baseSet {
+	set := baseSet{bases: map[string]pathBase{}, spelling: map[string]string{}}
+	roots := []string{}
+	for _, s := range subjects {
+		if s == "" {
+			continue
+		}
+		if _, seen := set.bases[s]; seen {
+			continue
+		}
+		b := subjectBase(s)
+		set.bases[s] = b
+		roots = append(roots, b.root)
+		k := SubjectKey(b.root)
+		if current, ok := set.spelling[k]; k != "" && (!ok || b.root < current) {
+			set.spelling[k] = b.root
+		}
+	}
+	set.contained = containmentSubjects(roots)
+	return set
+}
+
+// present reports whether k is the key of a base in the set.
+func (set baseSet) present(k string) bool {
+	_, ok := set.spelling[k]
+	return ok
+}
+
+// parent is the key of the containment subject of the base keyed k: k itself when that base
+// nests under no shorter subject, or when k is no base key. A parent is its own parent.
+func (set baseSet) parent(k string) string {
+	root, ok := set.spelling[k]
+	if !ok {
+		return k
+	}
+	if p := SubjectKey(set.contained[root].Subject); p != "" {
+		return p
+	}
+	return k
+}
+
+// joinWords joins the non-empty parts with one space.
+func joinWords(parts ...string) string {
+	kept := parts[:0:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
+// containmentSubjects maps each subject present (empty ones aside) to its Canonical over the
+// whole set by word containment. Each subject is read as the set of its words (subjectWords), a word that is a
 // plural of another word present (singularCandidates) read as that word, so "shoes" matches
 // "shoe" only when some subject says "shoe". Subjects with one word set are one subject,
 // whatever their order, repetition, case or punctuation ("marathon training" and "training
@@ -138,9 +335,9 @@ type subjectGroup struct {
 // subject whose word set contains all the words of a smaller present set groups under the
 // smallest such set, fewest words first, then the lexicographically smallest key, and the
 // words it adds become ExtraScope. A subject that contains no smaller set stays itself. The
-// result depends only on the set of subjects, and CanonicalSubjects of the canonical subjects
-// maps each to itself.
-func CanonicalSubjects(subjects []string) map[string]Canonical {
+// result depends only on the set of subjects, and containmentSubjects of the canonical
+// subjects maps each to itself.
+func containmentSubjects(subjects []string) map[string]Canonical {
 	out := map[string]Canonical{}
 	vocabulary := map[string]bool{}
 	for _, s := range subjects {
@@ -242,11 +439,13 @@ func containsWords(whole, part map[string]bool) bool {
 
 // ObservationSubjects is CanonicalSubjects over the subjects of observations.
 func ObservationSubjects(observations []Observation) map[string]Canonical {
-	subjects := make([]string, 0, len(observations))
-	for _, o := range observations {
-		subjects = append(subjects, o.Subject)
-	}
-	return CanonicalSubjects(subjects)
+	return ObservationSubjectsWithAliases(observations, nil)
+}
+
+// ObservationSubjectsWithAliases is CanonicalSubjectsWithAliases over the subjects of
+// observations.
+func ObservationSubjectsWithAliases(observations []Observation, aliases []SubjectAlias) map[string]Canonical {
+	return CanonicalSubjectsWithAliases(SubjectsOf(observations), aliases)
 }
 
 // CanonicalScope is a note's scope with the qualifier its subject adds to its canonical
@@ -275,7 +474,13 @@ func (s SubjectCount) Line() string {
 // CountCanonicalSubjects counts observations per canonical subject, most used first, then by
 // subject; observations without a subject are not counted.
 func CountCanonicalSubjects(observations []Observation) []SubjectCount {
-	canonical := ObservationSubjects(observations)
+	return CountCanonicalSubjectsWithAliases(observations, nil)
+}
+
+// CountCanonicalSubjectsWithAliases is CountCanonicalSubjects with the subjects canonical
+// under aliases (CanonicalSubjectsWithAliases).
+func CountCanonicalSubjectsWithAliases(observations []Observation, aliases []SubjectAlias) []SubjectCount {
+	canonical := ObservationSubjectsWithAliases(observations, aliases)
 	counts := map[string]int{}
 	for _, o := range observations {
 		if c, ok := canonical[o.Subject]; ok {

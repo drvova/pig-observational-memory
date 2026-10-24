@@ -75,7 +75,7 @@ var (
 )
 
 // recordKinds are the om.* custom entry types (ledger.OM*).
-var recordKinds = []string{"om.observations.recorded", "om.reflections.recorded", "om.observations.dropped", "om.folded"}
+var recordKinds = []string{"om.observations.recorded", "om.reflections.recorded", "om.observations.dropped", "om.folded", "om.subjects.aliased"}
 
 // kernelEvents are the event kinds and outcomes the usage ledger counts (curated.ModelKind*,
 // curated.Outcome*): the evidence grading reads, which no definition may redefine.
@@ -168,6 +168,24 @@ func Owns(kind, name string) (owner string, ok bool) {
 			continue
 		}
 		if len(e.kinds) == 0 || contains(e.kinds, kind) {
+			return e.owner, true
+		}
+	}
+	return "", false
+}
+
+// OwnsForEveryKind reports whether name is owned for every definition kind, and names the
+// owner: the names nothing may take, whatever reads them. Subject canonicalization refuses a
+// subject path whose joined segments spell one (ledger.SubjectPath), so "om/folded" or
+// "raw/subject" cannot spell a kernel name through the path separator, and a subject alias
+// naming one of the notes source's subject fields (OwnerSubjects; ledger.CheckSubjectAliases).
+func OwnsForEveryKind(name string) (owner string, ok bool) {
+	key := normalize(name)
+	if key == "" {
+		return "", false
+	}
+	for _, e := range owned {
+		if len(e.kinds) == 0 && normalize(e.name) == key {
 			return e.owner, true
 		}
 	}

@@ -65,7 +65,7 @@ records interoperate and replays stay comparable.
 | Field | Meaning |
 |---|---|
 | `kind` | `fact`, `event`, `preference`, `plan`, `correction` or `assistant` (something the assistant produced: a list, a recommendation, a number, a name) |
-| `subject` | a short lowercase noun phrase grouping related records (`baking`, `gaming hours`, `online courses`); views read it canonicalized (below) |
+| `subject` | a short lowercase noun phrase grouping related records (`baking`, `gaming hours`, `online courses`), optionally a path, root topic first (`running/half marathon`); views read it canonicalized (below) |
 | `scope` | the qualifier that tells two figures apart (`hard difficulty`, `on edX`); two records with different scopes never replace each other |
 | `supersedes` | ids of earlier records this one replaces; set only when the user explicitly corrects or replaces a fact; empty means it adds |
 
@@ -91,7 +91,8 @@ lexicographically smallest. A subject whose word set contains every word of a sm
 set groups under the smallest such set (fewest words, then the smallest key), and the words it
 adds become extra scope. It is containment, not similarity: there is no threshold to tune,
 the result depends only on the set of subjects, and canonical subjects map to themselves.
-`half marathon training` does not contain `running` and stays its own subject. Because the
+`half marathon training` does not contain `running` and stays its own subject under
+containment; the two rules below let the model supply that meaning. Because the
 result depends on the set, a note's canonical subject changes when a shorter subject it
 contains first appears (`running shoes` moves to `running`). The observer's prompt shows each
 prior note with its canonical subject (the extra scope after the stored scope) and lists, within
@@ -101,6 +102,65 @@ first; the kernel's observer rules ask it to reuse a subject that fits and put t
 scope. The names `subject-key`, `canonical-subjects`, `raw_subject` and `subject_scope` are
 kernel-owned (`kernel.OwnerSubjects`), so no definition replaces the canonicalization or
 shadows its fields.
+
+**Subject paths and aliases.** Word containment cannot group synonyms (`half marathon
+training` and `running` share no word), so the model supplies the meaning and code applies it
+the same way for every model, never rewriting a stored record:
+
+- *Paths.* The observer may write a subject as a path, root first, separated by `/`
+  (`running/half marathon`); its field description and the kernel observer rule ask it to give
+  the root topic first, reuse a root from CURRENT SUBJECTS and put the specific part after `/`.
+  Segments are trimmed and empty ones dropped when the observer records the subject
+  (`ledger.NormalizeSubjectPath`); a stored subject is read back as written
+  (`ledger.NormalizeSubject`, so `ci / cd` keeps its `raw_subject` spelling, though it groups
+  as the path `ci/cd` does). A path has at most three segments (`ledger.MaxSubjectPathDepth`),
+  and one whose two or more leading segments together spell a name the kernel owns for every
+  kind (`om/folded`, `raw/subject`; `kernel.OwnsForEveryKind` ignores the separator) is
+  refused: the observer records it as one plain subject, its segments joined by spaces, and
+  the receipt says so (`ledger.RecordableSubject`). A root alone never refuses a path: `search`
+  is a plain subject the observer may write, so `search/indexing` is accepted too. A refused
+  path read back is a plain subject too. An accepted path groups under its root, and the
+  other segments' words become extra scope.
+- *Aliases.* The reflector sees the canonical subjects with their note counts (CURRENT
+  SUBJECTS, within an eighth of its worker-memory budget) and, with two or more, has an
+  `alias_subjects` tool to declare "`from` means the same topic as `to`"; the kernel reflector
+  rule asks it to alias only subjects that name the same topic for this user, not merely
+  related ones, and toward the subject with more notes. Accepted aliases are recorded as one
+  `om.subjects.aliased` entry (`{aliases: [{from, to, reason?}]}`, at most
+  `ledger.MaxSubjectAliasesPerEntry`, no coverage marker; `observationsThroughId` names the
+  observation coverage the aliases were checked against), a kernel-owned record kind. The
+  kernel checks every alias when it is recorded (against a fresh branch) and again whenever it
+  is read (`ledger.CheckSubjectAliases`, over the subjects being canonicalized, each alias
+  against those in force before it in ledger order): `from` and `to` must each be the base of
+  a subject present (by `SubjectKey`; a path subject is present by its root), neither a path
+  nor one of the notes source's subject fields (`raw_subject`, `subject_scope`, `subject-key`,
+  `canonical-subjects`); `to` must not already contain every word of `from` (`running` →
+  `running shoes` would show every general running note as one about shoes; containment
+  already relates them); an alias that repeats the one in force, or that would close a cycle
+  through the aliases and containment, is ignored. An accepted alias replaces the one in force
+  for its `from`: the latest alias that applies wins, so a wrong alias is corrected by a later
+  one, and an earlier alias that stopped applying never comes back over a later one. An alias
+  of a subject to itself is a retraction that undoes the alias in force for it. The aliases
+  in force form a forest. An alias stops applying once either subject has no active note. The
+  reflector's prompt lists the aliases in force after CURRENT SUBJECTS (CURRENT ALIASES,
+  within what the subject list leaves of its share, newest first), so it can correct or undo
+  one.
+- *Resolution order* (`ledger.CanonicalSubjectsWithAliases`): path root, then containment
+  over every base, then alias: a base an alias maps, or whose containment subject one maps,
+  goes to the alias's final target (aliases followed transitively, a target that nests under a
+  shorter subject going on to it). The aliased subject's words the canonical subject lacks go
+  into extra scope (`half marathon training` → `running`, subject_scope `half marathon
+  training`), and a subject that moved with its containment subject keeps its containment
+  words after them (with `running` → `fitness`, `running shoes` reads as `fitness` with
+  `running shoes`), so one alias never regroups subjects it did not name; `raw_subject` keeps
+  what was written. The result depends on the subjects as a set and on aliases only through
+  the ledger order of those with one `from`, is idempotent, and with no path and no alias is
+  byte for byte the containment result. Aliases fold with the observations they group: an
+  entry folds when the observations it claims (`observationsThroughId`) fold, though the
+  reflector appends it after them (one without the claim folds by its position), into the
+  compaction's `om.folded` details (`aliases`, omitted when empty), and the memory view, the
+  notes source, a model's summary, the observer's subject list and the detectors a model
+  defines (over the memory before the pass, `memquery.Records.SubjectContext`) all read them.
 
 ## 3. The memory view (compaction summary)
 
@@ -121,8 +181,10 @@ omitted[K]{from,to,count,first_id}:
 - Records with a subject are grouped into `notes.<subject>` tables by canonical subject
   (section 2), computed over every record of the memory so selection never moves a record,
   each chronological, the groups ordered by their newest record. A record whose subject
-  nests under another shows what its subject adds after its scope (`trail; shoes`). With no
-  nesting the layout is byte for byte what it was. Records without a subject (all records written
+  nests under another shows what its subject adds after its scope (`trail; shoes`), and so
+  does a path (`running/half marathon` in `notes.running` with `half marathon`) or an aliased
+  subject (the compaction's folded aliases, `RenderOptions.Aliases`). With no nesting, path or
+  alias the layout is byte for byte what it was. Records without a subject (all records written
   before this change) go in one chronological `notes` table.
 - `when` is the record's date; a relative phrase in the content (`last Tuesday`, `two weeks
   ago`, `yesterday`) is resolved by code against the record's cited source timestamp and
@@ -297,10 +359,10 @@ top of them: it keeps, changes or replaces every seed, per model. Underneath sit
 it cannot change, after nodecode's kernel floor (`organism/evolve.lisp`), held redefinitions
 (`organism/provisional.lisp`) and layer files (`organism/scribe.lisp`).
 
-**The kernel** (Go code, never data): storage and the `om.*` record kinds; the compaction
+**The kernel** (Go code, never data): storage and the `om.*` record kinds (`om.subjects.aliased` among them); the compaction
 invariants (never discard unobserved entries, valid cut points, positional coverage markers,
 the fold boundary); the query engine and its bounds; the `memory` tool; the event ledger and the
-kernel events it counts; the room ceiling; the evaluator; subject canonicalization (section 2); and the text that states these rules
+kernel events it counts; the room ceiling; the evaluator; subject canonicalization with its path and alias checks (section 2); and the text that states these rules
 in every worker prompt. One ownership predicate, `kernel.Owns(kind, name)`, names it. A
 definition that would replace, shadow or disable a kernel-owned name is refused when it is
 made and again when it is loaded, with the same predicate; the refusal names the owner. The
