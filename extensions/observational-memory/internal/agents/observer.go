@@ -58,50 +58,110 @@ func (a WorkerArgs) loopConfig(stage string) LoopConfig {
 // ObserverArgs are one observer run's inputs.
 type ObserverArgs struct {
 	WorkerArgs
-	PriorReflections      []string
+	PriorReflections []string
+	// PriorObservations are "[id] ..." lines, ideally with their structured
+	// fields (ledger.ObservationToObserverLine).
 	PriorObservations     []string
 	Chunk                 string
 	AllowedSourceEntryIDs []string
+	// Codec is the table format of the rows parameter; nil uses RowsCodec.
+	Codec Codec
 }
 
-var recordObservationsSchema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"observations": map[string]any{
-			"type":        "array",
-			"minItems":    1,
-			"description": "Batch of new observations. May be empty only if the tool is not called at all.",
-			"items": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"timestamp": map[string]any{
-						"type":        "string",
-						"pattern":     ObservationTimestampPattern,
-						"description": "Observation time in local 'YYYY-MM-DD HH:MM' format.",
+func (a ObserverArgs) codec() Codec {
+	if a.Codec == nil {
+		return RowsCodec
+	}
+	return a.Codec
+}
+
+// recordObservationsSchema is the record_observations parameter schema, with
+// the rows example written in codec.
+func recordObservationsSchema(codec Codec) map[string]any {
+	example := codec.Encode(Table{
+		Name:   "observations",
+		Fields: observationRowFields,
+		Rows:   [][]string{{"2026-05-02 10:30", "high", "fact", "baking", "", "", "entry-a", "User bakes sourdough weekly."}},
+		Absent: [][]bool{{false, false, false, false, true, true, false, false}},
+	})
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"observations": map[string]any{
+				"type":        "array",
+				"minItems":    1,
+				"description": "Batch of new observations (or pass rows instead). May be empty only if the tool is not called at all.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"timestamp": map[string]any{
+							"type":        "string",
+							"pattern":     ObservationTimestampPattern,
+							"description": "Observation time in local 'YYYY-MM-DD HH:MM' format.",
+						},
+						"content": map[string]any{
+							"type":        "string",
+							"minLength":   1,
+							"description": "Single-line plain prose. No markdown, no tags, no embedded timestamp.",
+						},
+						"relevance": map[string]any{
+							"type": "string",
+							"enum": []any{"low", "medium", "high", "critical"},
+						},
+						"sourceEntryIds": map[string]any{
+							"type":     "array",
+							"minItems": 1,
+							"items":    map[string]any{"type": "string", "minLength": 1},
+							"description": "Exact source entry ids from the chunk that directly support this observation. " +
+								"Use only ids shown in '[Source entry id: ...]' labels; never invent ids.",
+						},
+						"kind": map[string]any{
+							"type": "string",
+							"enum": observationKindEnum(),
+						},
+						"subject": map[string]any{
+							"type":        "string",
+							"description": "Short lowercase noun phrase grouping related observations, e.g. 'baking', 'gaming hours'.",
+						},
+						"scope": map[string]any{
+							"type":        "string",
+							"description": "Qualifier that tells two figures apart, e.g. 'hard difficulty', 'on edX'.",
+						},
+						"supersedes": map[string]any{
+							"type":        "array",
+							"items":       map[string]any{"type": "string", "pattern": ledger.MemoryIDPattern.String()},
+							"description": "Ids of earlier observations this one replaces. Only when the user explicitly corrects or replaces them.",
+						},
 					},
-					"content": map[string]any{
-						"type":        "string",
-						"minLength":   1,
-						"description": "Single-line plain prose. No markdown, no tags, no embedded timestamp.",
-					},
-					"relevance": map[string]any{
-						"type": "string",
-						"enum": []any{"low", "medium", "high", "critical"},
-					},
-					"sourceEntryIds": map[string]any{
-						"type":     "array",
-						"minItems": 1,
-						"items":    map[string]any{"type": "string", "minLength": 1},
-						"description": "Exact source entry ids from the chunk that directly support this observation. " +
-							"Use only ids shown in '[Source entry id: ...]' labels; never invent ids.",
-					},
+					"required": []any{"timestamp", "content", "relevance", "sourceEntryIds"},
 				},
-				"required": []any{"timestamp", "content", "relevance", "sourceEntryIds"},
+			},
+			"rows": map[string]any{
+				"type": "string",
+				"description": "Alternative to observations: one table in the " + codec.Name() + " format, e.g.\n" + example + "\n" +
+					codec.Spec() + "\n" +
+					"Separate several sourceEntryIds or supersedes ids with spaces; leave optional fields empty.",
 			},
 		},
-	},
-	"required": []any{"observations"},
+	}
 }
+
+// observationRowFields are the columns of the record_observations rows table.
+var observationRowFields = []string{"timestamp", "relevance", "kind", "subject", "scope", "supersedes", "sourceEntryIds", "content"}
+
+// observationRowRequired are the rows-table columns every table must have.
+var observationRowRequired = []string{"timestamp", "relevance", "sourceEntryIds", "content"}
+
+func observationKindEnum() []any {
+	out := make([]any, 0, len(ledger.ObservationKindValues))
+	for _, kind := range ledger.ObservationKindValues {
+		out = append(out, string(kind))
+	}
+	return out
+}
+
+// priorObservationID reads the id a "[id] ..." observation line starts with.
+var priorObservationID = regexp.MustCompile(`^\[([a-f0-9]{12})\]`)
 
 // NormalizeSourceEntryIDs keeps a proposal's ids when every one is allowed,
 // deduplicated and in branch order; any unknown id rejects the proposal.
@@ -185,24 +245,144 @@ func normalizeObservationContent(content string) (string, bool) {
 	return normalized, normalized != ""
 }
 
+// observationRowItems decodes a record_observations rows table into the same
+// item maps the observations parameter carries, so both share one validation
+// path. Absent cells are left out; sourceEntryIds and supersedes split on
+// white space. Unknown or missing required columns fail the whole table.
+func observationRowItems(codec Codec, text string) ([]any, error) {
+	tables, err := codec.Decode(strings.TrimSpace(text))
+	if err != nil {
+		return nil, err
+	}
+	if len(tables) != 1 {
+		return nil, fmt.Errorf("expected one table, found %d; send exactly one observations table", len(tables))
+	}
+	table := tables[0]
+	allowed := map[string]bool{}
+	for _, field := range observationRowFields {
+		allowed[field] = true
+	}
+	for _, field := range table.Fields {
+		if !allowed[field] {
+			return nil, fmt.Errorf("unknown column %q; use only %s", field, strings.Join(observationRowFields, ","))
+		}
+	}
+	for _, field := range observationRowRequired {
+		if table.Index(field) < 0 {
+			return nil, fmt.Errorf("missing column %q; the table needs %s", field, strings.Join(observationRowRequired, ","))
+		}
+	}
+	items := make([]any, 0, len(table.Rows))
+	for r := range table.Rows {
+		item := map[string]any{}
+		for _, field := range table.Fields {
+			value, ok := table.Cell(r, field)
+			if !ok {
+				continue
+			}
+			if field == "sourceEntryIds" || field == "supersedes" {
+				list := []any{}
+				for _, id := range strings.Fields(value) {
+					list = append(list, id)
+				}
+				item[field] = list
+				continue
+			}
+			item[field] = value
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// applyObservationStructure copies an item's optional structured fields onto
+// observation: a kind outside the enum is cleared, the subject is normalized,
+// and supersedes keeps only ids isKnown accepts (never the record's own). It
+// returns how many supersedes ids it dropped.
+func applyObservationStructure(observation *ledger.Observation, item map[string]any, isKnown func(string) bool) int {
+	if kind, _ := item["kind"].(string); ledger.IsObservationKind(kind) {
+		observation.Kind = ledger.ObservationKind(kind)
+	}
+	if subject, ok := item["subject"].(string); ok {
+		observation.Subject = ledger.NormalizeSubject(subject)
+	}
+	if scope, ok := item["scope"].(string); ok {
+		observation.Scope = ledger.NormalizeScope(scope)
+	}
+	proposed, _ := StringList(item["supersedes"])
+	if text, ok := item["supersedes"].(string); ok {
+		proposed = strings.Fields(text)
+	}
+	dropped := 0
+	seen := map[string]bool{}
+	for _, id := range proposed {
+		id = strings.TrimSpace(id)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if !ledger.IsMemoryID(id) || id == observation.ID || !isKnown(id) {
+			dropped++
+			continue
+		}
+		observation.Supersedes = append(observation.Supersedes, id)
+	}
+	return dropped
+}
+
+// ackClipRunes bounds the content echoed next to each id in the tool receipt.
+const ackClipRunes = 60
+
+// clipForAck shortens content for the tool receipt, so the model can match
+// each recorded id to the observation it wrote.
+func clipForAck(content string) string {
+	runes := []rune(content)
+	if len(runes) <= ackClipRunes {
+		return content
+	}
+	return strings.TrimSpace(string(runes[:ackClipRunes])) + "…"
+}
+
 // RunObserverDetailed is RunObserver with the run's completeness.
 func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult, error) {
 	conversation := strings.TrimSpace(args.Chunk)
 	if conversation == "" {
 		return ObserverResult{}, nil
 	}
+	codec := args.codec()
 	accumulated := map[string]ledger.Observation{}
 	order := []string{}
+	known := map[string]bool{}
+	for _, line := range args.PriorObservations {
+		if m := priorObservationID.FindStringSubmatch(line); m != nil {
+			known[m[1]] = true
+		}
+	}
 	recordObservations := Tool{
 		Name:  "record_observations",
 		Label: "Record observations",
 		Description: "Record a batch of new observations distilled from the conversation chunk. " +
 			"Call this multiple times as you work through the chunk. Stop calling when coverage is complete, " +
 			"then emit a short plain-text confirmation to end the run.",
-		Parameters: recordObservationsSchema,
+		Parameters: recordObservationsSchema(codec),
 		Execute: func(_ context.Context, params map[string]any) (ToolResult, error) {
-			added, duplicates, rejected, invalid := 0, 0, 0, 0
+			added, duplicates, rejected, invalid, droppedSupersedes := 0, 0, 0, 0, 0
 			items, _ := params["observations"].([]any)
+			if rowsText, _ := params["rows"].(string); strings.TrimSpace(rowsText) != "" {
+				rowItems, err := observationRowItems(codec, rowsText)
+				if err != nil {
+					return ToolResult{Text: "rows not recorded: " + err.Error() + ". Nothing from this call was recorded; fix the table and call again.", Details: map[string]any{"added": 0, "total": len(accumulated)}}, nil
+				}
+				items = append(append([]any(nil), items...), rowItems...)
+			}
+			// First pass: validate every item, so the ids a supersedes may name
+			// from this same call are only those of items that will be recorded.
+			type candidate struct {
+				observation ledger.Observation
+				item        map[string]any
+			}
+			var candidates []candidate
+			batch := map[string]bool{}
 			for _, raw := range items {
 				obs, _ := raw.(map[string]any)
 				if obs == nil {
@@ -224,19 +404,33 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 					continue
 				}
 				id := ids.HashID(content)
-				if _, dup := accumulated[id]; dup {
+				if _, dup := accumulated[id]; dup || batch[id] {
 					duplicates++
 					continue
 				}
-				accumulated[id] = ledger.Observation{
+				batch[id] = true
+				candidates = append(candidates, candidate{item: obs, observation: ledger.Observation{
 					ID:             id,
 					Content:        content,
 					Timestamp:      timestamp,
 					Relevance:      ledger.Relevance(relevance),
 					SourceEntryIDs: sourceEntryIDs,
 					TokenCount:     tokens.ObservationLineTokenCount(tokens.ObservationLine{ID: id, Timestamp: timestamp, Relevance: relevance, Content: content}),
-				}
-				order = append(order, id)
+				}})
+			}
+			// A supersedes id must name an observation already in memory,
+			// recorded earlier this run, or validated in this same call.
+			isKnown := func(id string) bool {
+				_, recorded := accumulated[id]
+				return known[id] || recorded || batch[id]
+			}
+			recordedIDs := make([]string, 0, len(candidates))
+			for _, c := range candidates {
+				observation := c.observation
+				droppedSupersedes += applyObservationStructure(&observation, c.item, isKnown)
+				accumulated[observation.ID] = observation
+				order = append(order, observation.ID)
+				recordedIDs = append(recordedIDs, observation.ID+" ("+clipForAck(observation.Content)+")")
 				added++
 			}
 			rejectedPart := ""
@@ -250,7 +444,14 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			if duplicates > 0 {
 				duplicatePart = fmt.Sprintf("(%d %s skipped).", duplicates, jsfmt.Plural(duplicates, "duplicate"))
 			}
-			ack := fmt.Sprintf("Recorded %d new %s ", added, jsfmt.Plural(added, "observation")) + duplicatePart + rejectedPart +
+			if droppedSupersedes > 0 {
+				rejectedPart += fmt.Sprintf(" %d supersedes %s dropped: not the id of a current or newly recorded observation.", droppedSupersedes, jsfmt.Plural(droppedSupersedes, "id"))
+			}
+			idsPart := ""
+			if len(recordedIDs) > 0 {
+				idsPart = " Recorded ids (cite them in supersedes to correct these later this run): " + strings.Join(recordedIDs, "; ") + "."
+			}
+			ack := fmt.Sprintf("Recorded %d new %s ", added, jsfmt.Plural(added, "observation")) + duplicatePart + rejectedPart + idsPart +
 				fmt.Sprintf(" Total so far this run: %d. ", len(accumulated)) +
 				"Continue if the chunk still has uncovered content; otherwise stop calling the tool and emit a short plain-text confirmation."
 			return ToolResult{Text: ack, Details: map[string]any{"added": added, "duplicates": duplicates, "rejected": rejected + invalid, "total": len(accumulated)}}, nil
@@ -266,6 +467,9 @@ CURRENT OBSERVATIONS:
 ` + joinOrEmpty(args.PriorObservations) + `
 
 Compress the following new conversation chunk into observations by calling record_observations one or more times. Do not restate facts already present in current reflections or current observations. Prefer inline conversation timestamps when assigning times; fall back to the current local time above only if no message timestamp applies. Stop calling the tool and reply with a short plain-text confirmation once the chunk is fully covered.
+
+ROWS FORMAT (` + codec.Name() + `), for the rows parameter:
+` + codec.Spec() + `
 
 NEW CONVERSATION CHUNK:
 ` + conversation

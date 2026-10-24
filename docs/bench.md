@@ -86,11 +86,12 @@ When the plan's usage limit is reached, each call waits until the window resets 
 | `-base-url` | (required for `openai`) | OpenAI-compatible chat-completions endpoint |
 | `-backend` | `openai` | `openai` (chat completions, key from `LONGMEMEVAL_API_KEY`) or `codex` (a ChatGPT plan signed in with `codex login`) |
 | `-codex-auth` | `~/.codex/auth.json` | with `-backend codex`, the Codex CLI's sign-in file |
-| `-context-window` | `128000` | the window the extension sizes against: the observer chunk (20%), worker memory (25%) and summary budget (12.5%); also the full-context truncation |
+| `-context-window` | `128000` | the window the extension sizes against: the observer chunk (20%), worker memory (25%) and summary budget (the room the window leaves after the unobserved tail and the compaction threshold, `config.ResolveSummaryBudget`); also the full-context truncation |
 | `-model-max-tokens` | `32000` | model output limit, which clamps the workers' `agentMaxTokens` |
 | `-worker-thinking` | extension default (`low`) | worker thinking level, sent as `reasoning_effort` |
 | `-actor-max-tokens`, `-judge-max-tokens` | `16000`, `4000` | output budgets; reasoning models spend these before answering |
 | `-recall` | off | give the actor the extension's `recall` tool (up to 8 tool turns) and keep the summary's recall paragraph |
+| `-memory-format` | `tables` | the summary layout (config `memoryFormat`): `tables` or `lines`; recorded in `run.json` |
 | `-flush` | off | after the last session, observe the remaining tail even below `observeAfterTokens`, instead of showing it raw |
 | `-max-attempts` | `8` | HTTP attempts per call; 429, 5xx and network errors back off exponentially with jitter and honor `Retry-After` |
 | `-worker-attempts` | `3` | worker process attempts per question; each one resumes from the checkpoint |
@@ -124,7 +125,7 @@ The extrapolation scales each sampled type's per-question mean by that type's co
 go run . replay -from ~/bench-runs/om-full -out ~/bench-runs/replay
 ```
 
-Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts. `-summary-tokens N` renders the summary at another `compactionSummaryMaxTokens`, and `-clip-overflow` turns on the experimental nodecode-style layout (`ledger.RenderOptions.ClippedOverflow`): observations get full lines within half the budget and the rest are listed as clipped `[id] date first-80-characters…` lines while the whole fits, instead of being omitted.
+Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts. By default the summary is rendered at the budget the run recorded in each question's `memory.json` (`summaryBudget`), or at the current room budget for runs that predate it; `-summary-tokens N` renders it at an explicit budget of N tokens instead. The summary is rendered in the run's `-memory-format`, or in `lines` for runs whose `run.json` predates that setting, so the layout does not change under the comparison; `-memory-format tables|lines` overrides it. `-clip-overflow` turns on the experimental nodecode-style layout (`ledger.RenderOptions.ClippedOverflow`): observations get full lines within half the budget and the rest are listed as clipped `[id] date first-80-characters…` lines while the whole fits, instead of being omitted. Only the lines format clips, so `-clip-overflow` implies `-memory-format lines` and is refused with `-memory-format tables`.
 
 ## Cost
 

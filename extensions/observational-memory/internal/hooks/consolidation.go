@@ -691,14 +691,14 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	}
 
 	fullMemory := ledger.FullProjection(entries, "")
-	memory := ledger.BoundWorkerMemory(fullMemory.Reflections, fullMemory.Observations, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow), false)
+	memory := ledger.BoundObserverMemory(fullMemory.Reflections, fullMemory.Observations, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
 	priorReflections := make([]string, 0, len(memory.Reflections))
 	for _, reflection := range memory.Reflections {
 		priorReflections = append(priorReflections, ledger.ReflectionToSummaryLine(reflection))
 	}
 	priorObservations := make([]string, 0, len(memory.Observations))
 	for _, observation := range memory.Observations {
-		priorObservations = append(priorObservations, ledger.ObservationToSummaryLine(observation))
+		priorObservations = append(priorObservations, ledger.ObservationToObserverLine(observation))
 	}
 
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer running on ~%s-token chunk", jsfmt.Locale(serialized.EstimatedTokens)))

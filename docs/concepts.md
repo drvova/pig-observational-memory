@@ -97,10 +97,34 @@ The compaction hook runs during `session_before_compact`. When V3 memory exists,
 - it does not run the reflector or dropper;
 - it does not call a summarization model;
 - it does not wait for background memory workers;
-- it folds/projects ledger state and renders the summary within `compactionSummaryMaxTokens`: each reflection line carries the date or date range of the observations it cites, and when observations do not all fit, the newest quarter of their budget is filled first, then observations carrying specifics, then the rest, so an old line with a price, date or name outlasts newer generic ones;
+- it folds/projects ledger state and renders the summary within the room the next context has (the context window minus the request overhead and the larger of the retained source and `compactAfterTokens`, which already counts it, with a floor of up to 8,000 tokens on windows the threshold does not fit, capped by `compactionSummaryMaxTokens` when set; every record renders when they all fit): each reflection carries the date or date range of the observations it cites, and when observations do not all fit, the newest quarter of their budget is filled first, then observations carrying specifics, then the rest, so an old record with a price, date or name outlasts newer generic ones;
+- it lays the summary out as [`memoryFormat`](configuration.md#settings-reference) says (see [Summary format](#summary-format));
 - it appends any `customInstructions` passed to the compaction after a `---` separator; they share the summary budget with the memory, which keeps at least half of it.
 
 When the observer has not reached Pi's proposed cut, observation coverage exists, and no background consolidation run is in flight, the hook first runs the observer synchronously on the gap, up to `compactionCatchUpMaxChunks` chunks (default `2`), retrying a failed chunk once on `fallbackModel` when one is configured. It appends `om.observations.recorded` for each chunk that records observations and re-resolves the cut. Unobserved source that remains is kept in context by moving `firstKeptEntryId` back (the kept source plus the summary must fit `compactionMaxRetainedTokens`), or the hook delegates.
+
+### Summary format
+
+By default (`memoryFormat: "tables"`) the summary is a short reading guide followed by tables of records, written in the `rows` codec (`name[N]{fields}:` then N rows of comma-separated values; see [memory-interface.md](memory-interface.md#1-tables-and-codecs-internaltables)):
+
+```
+reflections[1]{id,dates,content}:
+  e1eeeeeeeeee,2023-05-12..2023-05-20,"User bakes at home: bread, every week."
+notes.baking[2]{id,when,kind,scope,content,superseded_by}:
+  b1aaaaaaaaaa,2023-05-12,fact,,User bakes bread twice a week.,b2aaaaaaaaaa
+  b2aaaaaaaaaa,2023-05-20,correction,,"User now bakes bread three times a week, since last Tuesday [=2023-05-16].",
+notes[1]{id,when,relevance,content}:
+  a2aaaaaaaaaa,2023-05-10,medium,User started a sourdough starter yesterday [=2023-05-09].
+omitted[1]{from,to,count,first_id}:
+  2023-05-08,2023-05-08,1,a1aaaaaaaaaa
+```
+
+- Observations with a subject go in a `notes.<subject>` table (the subject lowercased, other characters turned into `_`), oldest first; the subject tables are ordered by their newest record. Observations without a subject, including every record written before subjects existed, go in one chronological `notes` table.
+- `when` is the record's date. A relative phrase in the content (`yesterday`, `last Tuesday`, `two weeks ago`) is followed by the date it refers to, `[=YYYY-MM-DD]`, resolved by code against the record's date; the stored content is unchanged.
+- A superseded record stays listed, with the id of the record that replaced it in `superseded_by`.
+- Records that do not fit are listed as `omitted` spans (consecutive records left out: date range, count, first id) instead of a prose note. Selection is the same as before, but each record costs its encoded row and each table its header once, and the omitted table's cost is reserved before records are chosen, so the whole summary stays within the budget.
+
+`memoryFormat: "lines"` renders the earlier layout byte for byte: `## Reflections` and `## Observations` headings over `[id] YYYY-MM-DD HH:MM [relevance] content` lines and a prose omission note. Only this layout supports the bench's clipped overflow lines.
 
 If the projection is empty, or no memory record fits the summary budget, the hook returns no extension compaction and Pi uses its native summarizer. This preserves pre-cut context instead of persisting an empty summary. Prepared V3 compactions with no observer gap remain effectively instantaneous compared with V2.
 
@@ -165,7 +189,7 @@ Only a valid ledger entry advances the watermark. An entry that memory ignores, 
 
 V3 distinguishes visible memory, full memory, and the drift between them:
 
-- **Visible memory** — the records in the newest compaction's `om.folded` details, from which the summary the agent sees was rendered within `compactionSummaryMaxTokens`. When the newest compaction was written by Pi's native summarizer, no V3 records are visible. This is what `/om:view` shows by default.
+- **Visible memory** — the records in the newest compaction's `om.folded` details, from which the summary the agent sees was rendered within the summary budget. When the newest compaction was written by Pi's native summarizer, no V3 records are visible. This is what `/om:view` shows by default.
 - **Full memory** — full V3 ledger truth folded at the branch tip. This is what `/om:view full` shows.
 - **Drift** — the difference between visible and full memory. Use `/om:status` to inspect visible-vs-full drift.
 

@@ -42,6 +42,17 @@ const (
 // CompactAfterTokensModeValues are the valid modes.
 var CompactAfterTokensModeValues = []CompactAfterTokensMode{ModeCalibrated, ModeRatio}
 
+// The memoryFormat values: how the compaction summary lays out the memory.
+// They match ledger.FormatValues.
+const (
+	MemoryFormatTables = "tables"
+	MemoryFormatLines  = "lines"
+)
+
+// MemoryFormatValues are the valid memoryFormat values; the first is the
+// default.
+var MemoryFormatValues = []string{MemoryFormatTables, MemoryFormatLines}
+
 // Config is the resolved extension configuration. Optional token budgets are 0
 // when unset; the resolve* functions derive them from a context window then.
 type Config struct {
@@ -57,8 +68,8 @@ type Config struct {
 	// context when it moves Pi's retention boundary back to the observer
 	// frontier. 0 derives it from the session model's window.
 	CompactionMaxRetainedTokens int
-	// CompactionSummaryMaxTokens budgets the rendered memory summary. 0
-	// derives it from the session model's window.
+	// CompactionSummaryMaxTokens caps the rendered memory summary. 0 leaves
+	// the budget to the room the next context has (ResolveSummaryBudget).
 	CompactionSummaryMaxTokens int
 	// CompactionCatchUpMaxChunks caps the observer chunks the compaction hook
 	// runs synchronously before Pi's cut. 0 disables catch-up.
@@ -89,6 +100,9 @@ type Config struct {
 	CuratedMemory bool
 	// CuratedMemoryIndexTokens bounds the index's memory lines.
 	CuratedMemoryIndexTokens int
+	// MemoryFormat is the compaction summary's layout, one of
+	// MemoryFormatValues (ledger.RenderOptions.Format).
+	MemoryFormat string
 }
 
 // Defaults are the built-in settings.
@@ -110,6 +124,7 @@ var Defaults = Config{
 	PiAutoCompactionEnabled:      true,
 	CuratedMemory:                true,
 	CuratedMemoryIndexTokens:     2_000,
+	MemoryFormat:                 MemoryFormatTables,
 }
 
 // ResolveCompactAfterTokens is the effective proactive-compaction threshold.
@@ -139,21 +154,50 @@ func ResolveCompactionMaxRetainedTokens(cfg Config, contextWindow int) int {
 	return CompactionRetainedFallbackMaxTokens
 }
 
-// CompactionSummaryFallbackMaxTokens is the summary budget when unset and the window is unknown.
+// CompactionSummaryFallbackMaxTokens is the summary budget when the window is
+// unknown, and the most the floor raises a known window's budget to.
 const CompactionSummaryFallbackMaxTokens = 8_000
 
-// CompactionSummaryContextRatio is the window share the rendered summary may occupy by default.
-const CompactionSummaryContextRatio = 0.125
-
-// ResolveCompactionSummaryMaxTokens is the rendered summary budget.
-func ResolveCompactionSummaryMaxTokens(cfg Config, contextWindow int) int {
+// ResolveSummaryBudget is the rendered summary budget: the room the next
+// context has once Pi's cut lands,
+//
+//	room  = contextWindow - overheadTokens - max(retainedTokens, compactAfterTokens)
+//	free  = contextWindow - overheadTokens - retainedTokens
+//	floor = min(CompactionSummaryFallbackMaxTokens, free/2)
+//	budget = max(room, floor, 1), capped by CompactionSummaryMaxTokens
+//
+// where overheadTokens is what the request carries besides the branch (system
+// prompt, tools), retainedTokens the source Pi keeps after the cut and
+// compactAfterTokens the proactive threshold. The threshold measures source
+// from the cut's first kept entry, so the retained tail is already part of it
+// and is not subtracted twice. With an unknown window there is no room to
+// measure, so the budget is the cap when set and
+// CompactionSummaryFallbackMaxTokens otherwise.
+//
+// The floor covers windows the threshold does not fit (the default 81k on a
+// 64k model): there the proactive trigger never fires and Pi's own threshold
+// governs the next compaction, so room would be negative for space the
+// context can never reach. The summary then takes the fallback budget, but
+// never more than half of what the window has left after the retained tail,
+// so the conversation keeps at least as much room as the summary. The budget
+// is never below 1: the renderer reads a non-positive budget as unlimited, and
+// a budget at or below its fixed header renders no record, which the
+// compaction hook answers by declining to Pi's native summarizer.
+func ResolveSummaryBudget(cfg Config, contextWindow, overheadTokens, retainedTokens int) int {
+	if contextWindow <= 0 {
+		if cfg.CompactionSummaryMaxTokens > 0 {
+			return cfg.CompactionSummaryMaxTokens
+		}
+		return CompactionSummaryFallbackMaxTokens
+	}
+	retained := max(0, retainedTokens)
+	free := contextWindow - max(0, overheadTokens) - retained
+	room := free + retained - max(retained, ResolveCompactAfterTokens(cfg, contextWindow))
+	budget := max(1, room, min(CompactionSummaryFallbackMaxTokens, free/2))
 	if cfg.CompactionSummaryMaxTokens > 0 {
-		return cfg.CompactionSummaryMaxTokens
+		budget = min(budget, cfg.CompactionSummaryMaxTokens)
 	}
-	if contextWindow > 0 {
-		return max(1, int(math.Floor(float64(contextWindow)*CompactionSummaryContextRatio)))
-	}
-	return CompactionSummaryFallbackMaxTokens
+	return budget
 }
 
 // WorkerMemoryFallbackMaxTokens is the worker prior-memory budget when unset and the window is unknown.
@@ -221,6 +265,19 @@ func isThinkingLevel(v any) (ThinkingLevel, bool) {
 	return "", false
 }
 
+func isMemoryFormat(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	for _, format := range MemoryFormatValues {
+		if format == s {
+			return format, true
+		}
+	}
+	return "", false
+}
+
 func isCompactAfterTokensMode(v any) (CompactAfterTokensMode, bool) {
 	s, ok := v.(string)
 	if !ok {
@@ -267,6 +324,7 @@ type partial struct {
 	ints     map[string]int
 	catchUp  *int
 	mode     *CompactAfterTokensMode
+	format   *string
 	ratio    *float64
 	bools    map[string]bool
 	model    *ConfiguredModel
@@ -304,6 +362,9 @@ func normalizeSettings(value map[string]any) partial {
 	}
 	if ratio, ok := validRatio(value["compactAfterTokensRatio"]); ok {
 		p.ratio = &ratio
+	}
+	if format, ok := isMemoryFormat(value["memoryFormat"]); ok {
+		p.format = &format
 	}
 	for _, key := range []string{"consolidateWhenIdle", "showWorkerNotifications", "passive", "debugLog", "curatedMemory"} {
 		if b, ok := value[key].(bool); ok {
@@ -353,6 +414,9 @@ func (p partial) apply(cfg *Config, target *int, targetSet *bool) {
 	}
 	if p.ratio != nil {
 		cfg.CompactAfterTokensRatio = *p.ratio
+	}
+	if p.format != nil {
+		cfg.MemoryFormat = *p.format
 	}
 	for key, b := range p.bools {
 		switch key {

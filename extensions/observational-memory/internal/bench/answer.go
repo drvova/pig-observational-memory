@@ -25,25 +25,27 @@ func UserPrompt(q Question) string {
 	return "Current Date: " + q.QuestionDate + "\nQuestion: " + q.Question
 }
 
-// recallParagraph is the paragraph of the summary's usage instructions that
-// points the agent at the recall tool.
-var recallParagraph = func() string {
-	i := strings.Index(ledger.ContextUsageInstructions, "When exact source context is needed")
-	if i < 0 {
-		return ""
+// recallParagraphs are the paragraphs of the summary's usage instructions, one
+// per format, that point the agent at the tool reading records back by id.
+var recallParagraphs = func() []string {
+	paragraphs := []string{"\n\n" + ledger.TablesRecallParagraph}
+	if i := strings.Index(ledger.ContextUsageInstructions, "When exact source context is needed"); i >= 0 {
+		paragraphs = append(paragraphs, "\n\n"+ledger.ContextUsageInstructions[i:])
 	}
-	return "\n\n" + ledger.ContextUsageInstructions[i:]
+	return paragraphs
 }()
 
 // MemoryMessage is the system message carrying the extension's memory: the
 // rendered summary, then the raw tail Pi would still hold in context. Without
-// the recall tool, the summary's paragraph about recall is left out, since
-// the actor could not follow it.
+// the recall tool, the summary's paragraph about reading records back is left
+// out, since the actor could not follow it.
 func MemoryMessage(m Memory, withRecall bool) string {
 	parts := []string{}
 	if summary := m.Summary; strings.TrimSpace(summary) != "" {
-		if !withRecall && recallParagraph != "" {
-			summary = strings.Replace(summary, recallParagraph, "", 1)
+		if !withRecall {
+			for _, paragraph := range recallParagraphs {
+				summary = strings.Replace(summary, paragraph, "", 1)
+			}
 		}
 		parts = append(parts, summary)
 	}

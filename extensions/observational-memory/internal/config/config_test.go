@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 )
 
 type env map[string]string
@@ -58,7 +59,7 @@ func TestDefaults(t *testing.T) {
 	want := config.Config{
 		ObserveAfterTokens: 10000, ReflectAfterTokens: 20000, CompactAfterTokens: 81000, CompactAfterTokensMode: "calibrated", CompactAfterTokensRatio: 0.68,
 		ObservationsPoolMaxTokens: 20000, ObservationsPoolTargetTokens: 10000, AgentMaxTurns: 16, AgentMaxTokens: 32000, CompactionCatchUpMaxChunks: 2,
-		ShowWorkerNotifications: true, PiAutoCompactionEnabled: true, CuratedMemory: true, CuratedMemoryIndexTokens: 2000,
+		ShowWorkerNotifications: true, PiAutoCompactionEnabled: true, CuratedMemory: true, CuratedMemoryIndexTokens: 2000, MemoryFormat: "tables",
 	}
 	if !reflect.DeepEqual(config.Defaults, want) {
 		t.Fatalf("defaults %+v", config.Defaults)
@@ -162,6 +163,23 @@ func TestEnvPassive(t *testing.T) {
 	}
 }
 
+func TestMemoryFormat(t *testing.T) {
+	if !reflect.DeepEqual(config.MemoryFormatValues, ledger.FormatValues) {
+		t.Fatalf("config formats %v, renderer formats %v", config.MemoryFormatValues, ledger.FormatValues)
+	}
+	f := setup(t)
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"memoryFormat": "lines"}})
+	if got := f.load(env{}); got.MemoryFormat != "lines" {
+		t.Fatalf("memoryFormat %q", got.MemoryFormat)
+	}
+	for _, invalid := range []any{"toon", "Lines", "", 1, true} {
+		f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"memoryFormat": invalid}})
+		if got := f.load(env{}); got.MemoryFormat != "tables" {
+			t.Fatalf("memoryFormat %v accepted as %q", invalid, got.MemoryFormat)
+		}
+	}
+}
+
 func TestRatioMode(t *testing.T) {
 	f := setup(t)
 	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"compactAfterTokensMode": "ratio", "compactAfterTokensRatio": 0.5}})
@@ -221,9 +239,6 @@ func TestDerivedBudgets(t *testing.T) {
 		t.Fatal("explicit retained budget ignored")
 	}
 	cfg = config.Defaults
-	if config.ResolveCompactionSummaryMaxTokens(cfg, 0) != 8_000 || config.ResolveCompactionSummaryMaxTokens(cfg, 200_000) != 25_000 {
-		t.Fatal("summary budget wrong")
-	}
 	if config.ResolveWorkerMemoryMaxTokens(cfg, 0) != 16_000 || config.ResolveWorkerMemoryMaxTokens(cfg, 200_000) != 50_000 {
 		t.Fatal("worker memory budget wrong")
 	}
@@ -273,5 +288,61 @@ func TestCuratedMemorySettings(t *testing.T) {
 	got := f.load(env{})
 	if got.CuratedMemory || got.CuratedMemoryIndexTokens != 512 {
 		t.Fatalf("curated settings not applied: %+v", got)
+	}
+}
+
+func TestResolveSummaryBudget(t *testing.T) {
+	cfg := config.Defaults
+	// Unknown window: the fallback, or the explicit setting when there is one.
+	if got := config.ResolveSummaryBudget(cfg, 0, 5_000, 30_000); got != config.CompactionSummaryFallbackMaxTokens {
+		t.Fatalf("unknown window budget = %d", got)
+	}
+	cfg.CompactionSummaryMaxTokens = 20_000
+	if got := config.ResolveSummaryBudget(cfg, 0, 0, 0); got != 20_000 {
+		t.Fatalf("unknown window with explicit budget = %d", got)
+	}
+	cfg = config.Defaults
+	// Known window: the room after overhead and the larger of the retained
+	// tail and the threshold (81k calibrated), which already counts the tail.
+	if got := config.ResolveSummaryBudget(cfg, 200_000, 10_000, 5_000); got != 109_000 {
+		t.Fatalf("small retained tail budget = %d", got)
+	}
+	if got := config.ResolveSummaryBudget(cfg, 200_000, 10_000, 100_000); got != 90_000 {
+		t.Fatalf("large retained tail budget = %d", got)
+	}
+	// A threshold the window cannot reach leaves the floor: the fallback,
+	// at most half of what the window has after the retained tail.
+	if got := config.ResolveSummaryBudget(cfg, 64_000, 8_000, 20_000); got != config.CompactionSummaryFallbackMaxTokens {
+		t.Fatalf("small window budget = %d", got)
+	}
+	if got := config.ResolveSummaryBudget(cfg, 32_000, 8_000, 14_000); got != 5_000 {
+		t.Fatalf("tight small window budget = %d", got)
+	}
+	// No room left still yields a positive budget: the renderer reads 0 as unlimited.
+	if got := config.ResolveSummaryBudget(cfg, 200_000, 10_000, 195_000); got != 1 {
+		t.Fatalf("no-room budget = %d", got)
+	}
+	// Negative inputs measure nothing.
+	if got := config.ResolveSummaryBudget(cfg, 200_000, -50, -50); got != 119_000 {
+		t.Fatalf("negative inputs budget = %d", got)
+	}
+	// Ratio mode derives the threshold from the window.
+	cfg.CompactAfterTokensMode = config.ModeRatio
+	cfg.CompactAfterTokensRatio = 0.5
+	if got := config.ResolveSummaryBudget(cfg, 100_000, 0, 10_000); got != 50_000 {
+		t.Fatalf("ratio mode budget = %d", got)
+	}
+	// The explicit setting caps the room but never raises it.
+	cfg = config.Defaults
+	cfg.CompactionSummaryMaxTokens = 12_000
+	if got := config.ResolveSummaryBudget(cfg, 200_000, 10_000, 5_000); got != 12_000 {
+		t.Fatalf("capped budget = %d", got)
+	}
+	if got := config.ResolveSummaryBudget(cfg, 200_000, 10_000, 185_000); got != 5_000 {
+		t.Fatalf("cap raised the room: %d", got)
+	}
+	cfg.CompactionSummaryMaxTokens = 2_000
+	if got := config.ResolveSummaryBudget(cfg, 64_000, 8_000, 20_000); got != 2_000 {
+		t.Fatalf("cap did not bound the floor: %d", got)
 	}
 }

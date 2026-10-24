@@ -29,7 +29,16 @@ var RelevanceValues = []Relevance{"low", "medium", "high", "critical"}
 // MemoryIDPattern matches a memory record id.
 var MemoryIDPattern = regexp.MustCompile(`^[a-f0-9]{12}$`)
 
-// Observation is a timestamped event distilled from the conversation.
+// ObservationKind classifies an observation.
+type ObservationKind string
+
+// ObservationKindValues are the valid observation kinds. "assistant" marks
+// something the assistant produced: a list, a recommendation, a number, a name.
+var ObservationKindValues = []ObservationKind{"fact", "event", "preference", "plan", "correction", "assistant"}
+
+// Observation is a timestamped event distilled from the conversation. Kind,
+// Subject, Scope and Supersedes are optional structure; records written before
+// they existed leave them empty, and the id stays the hash of Content.
 type Observation struct {
 	ID             string    `json:"id"`
 	Content        string    `json:"content"`
@@ -37,6 +46,16 @@ type Observation struct {
 	Relevance      Relevance `json:"relevance"`
 	SourceEntryIDs []string  `json:"sourceEntryIds"`
 	TokenCount     int       `json:"tokenCount"`
+	// Kind is one of ObservationKindValues, or "" when unclassified.
+	Kind ObservationKind `json:"kind,omitempty"`
+	// Subject is a short lowercase noun phrase grouping related records.
+	Subject string `json:"subject,omitempty"`
+	// Scope is the qualifier that tells two figures apart; records with
+	// different scopes never replace each other.
+	Scope string `json:"scope,omitempty"`
+	// Supersedes holds the ids of earlier records this one replaces; empty
+	// means the record adds rather than replaces.
+	Supersedes []string `json:"supersedes,omitempty"`
 }
 
 // Reflection is a durable conclusion distilled from observations.
@@ -90,6 +109,32 @@ func IsRelevance(v any) bool {
 		}
 	}
 	return false
+}
+
+// IsObservationKind reports whether v is an observation kind.
+func IsObservationKind(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	for _, k := range ObservationKindValues {
+		if string(k) == s {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeSubject trims and lowercases a subject and folds runs of
+// whitespace, so records about one subject group together.
+func NormalizeSubject(subject string) string {
+	return strings.ToLower(strings.Join(strings.Fields(subject), " "))
+}
+
+// NormalizeScope trims a scope and folds runs of whitespace, so scopes compare
+// equal however they were spaced when written.
+func NormalizeScope(scope string) string {
+	return strings.Join(strings.Fields(scope), " ")
 }
 
 // IsNonEmptyString reports a non-empty string value.
@@ -166,14 +211,53 @@ func ObservationFrom(v any) (Observation, bool) {
 	if !IsMemoryID(m["id"]) || !IsNonEmptyString(m["content"]) || !IsNonEmptyString(m["timestamp"]) || !IsRelevance(m["relevance"]) || !okIDs || !okCount {
 		return Observation{}, false
 	}
-	return Observation{
+	observation := Observation{
 		ID:             m["id"].(string),
 		Content:        m["content"].(string),
 		Timestamp:      m["timestamp"].(string),
 		Relevance:      Relevance(m["relevance"].(string)),
 		SourceEntryIDs: ids,
 		TokenCount:     count,
-	}, true
+	}
+	// The structured fields are optional and read leniently: a malformed one
+	// is cleared rather than discarding the record it annotates.
+	if IsObservationKind(m["kind"]) {
+		observation.Kind = ObservationKind(m["kind"].(string))
+	}
+	if subject, ok := m["subject"].(string); ok {
+		observation.Subject = NormalizeSubject(subject)
+	}
+	if scope, ok := m["scope"].(string); ok {
+		observation.Scope = NormalizeScope(scope)
+	}
+	// Each supersedes element is checked on its own, so one bad element drops
+	// only itself.
+	switch list := m["supersedes"].(type) {
+	case []string:
+		for _, id := range list {
+			observation.addSupersedes(id)
+		}
+	case []any:
+		for _, id := range list {
+			observation.addSupersedes(id)
+		}
+	}
+	return observation, true
+}
+
+// addSupersedes appends id to Supersedes when it is a memory id other than
+// the record's own and not already listed.
+func (observation *Observation) addSupersedes(v any) {
+	id, ok := v.(string)
+	if !ok || !IsMemoryID(id) || id == observation.ID {
+		return
+	}
+	for _, existing := range observation.Supersedes {
+		if existing == id {
+			return
+		}
+	}
+	observation.Supersedes = append(observation.Supersedes, id)
 }
 
 // IsObservation reports a valid decoded observation.

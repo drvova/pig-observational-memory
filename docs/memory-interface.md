@@ -18,6 +18,9 @@ Principles:
   dependency on any one serialization spec: the default is our own small tabular format, and
   another codec (markdown tables, JSON lines) can be added, or chosen per model, without
   touching anything above it.
+- **The live system is the target.** Every rule is justified by how the extension behaves in
+  a real Pi/PiG session and checked by the extension's own tests. The bench harness only has to
+  keep compiling; nothing is tuned to it.
 - **Commands are for settings.** Slash commands only read or change configuration; memory
   behaviour goes through the tool. `/om:status` and `/om:view` stay as read-only views.
 
@@ -80,7 +83,7 @@ the renderer resolves them (section 3).
 ```
 reflections[N]{id,dates,content}:
   ...
-notes.baking[4]{id,when,kind,scope,content,supersedes}:
+notes.baking[4]{id,when,kind,scope,content,superseded_by}:
   ...
 notes[M]{id,when,relevance,content}:
   ...
@@ -107,16 +110,23 @@ omitted[K]{from,to,count,first_id}:
 The budget is the room the next context actually has (`config.ResolveSummaryBudget`):
 
 ```
-room = contextWindow - overheadTokens - retainedTokens - compactAfterTokens
-budget = clamp(room, floor, compactionSummaryMaxTokens if set)
+room   = contextWindow - overheadTokens - max(retainedTokens, compactAfterTokens)
+free   = contextWindow - overheadTokens - retainedTokens
+floor  = min(CompactionSummaryFallbackMaxTokens, free / 2)
+budget = min(max(room, floor, 1), compactionSummaryMaxTokens if set)
 ```
 
 `retainedTokens` is the estimated size of the entries Pi keeps after the cut (always
 computable from the branch and the cut); `compactAfterTokens` is the room the conversation
-gets before the next compaction; `overheadTokens` is what the request carries besides the
+gets before the next compaction, measured like the proactive trigger from the cut's first kept
+entry, so it already includes the retained tail and only the larger of the two is subtracted; `overheadTokens` is what the request carries besides the
 branch (system prompt, tools), estimated as Pi's `tokensBefore` minus the branch estimate
-when both are known, else 0. When every record fits, every record is rendered. The floor
-applies only when the window is unknown (`CompactionSummaryFallbackMaxTokens`). The moved-cut
+when both are known, else 0. When every record fits, every record is rendered. With an
+unknown window the budget is `CompactionSummaryFallbackMaxTokens`. With a known window the floor
+covers a threshold the window cannot reach (the default 81k on a 64k model): the proactive
+trigger never fires there and Pi's own threshold governs, so the room is negative for space the
+context never reaches; the summary then gets the fallback budget, but never more than the
+conversation keeps (half of `free`). The moved-cut
 rule that retained source plus summary fit within `compactionMaxRetainedTokens` still holds.
 
 ## 5. The memory tool
@@ -172,9 +182,56 @@ benchmark scores:
   results without error twice; it is retired when it errors more often than it succeeds, or
   when feedback marks it harmed (nodecode's held definitions).
 
+## 7. Rules the harness writes
+
+The memory's behaviour rules (what a note must capture, when one record may replace another,
+what the dropper protects, how chunks are sized) are data the harness evaluates, not code
+paths, so the harness can add, test and retire them per model.
+
+- **A rule** is a record in the store (`rules/<id>.rows`): an id, the detector it answers, the
+  model ids it applies to (or all), a remedy, its state (`probation`, `established`,
+  `retired`), the counts that decided its state, and who proposed it (harness or model).
+- **Detectors** are deterministic checks over a model's own notes and the branch, run after
+  each observer, reflector and dropper pass, and counted per model in the usage ledger:
+
+  | Detector | Counts |
+  |---|---|
+  | `uncited-assistant-specifics` | assistant entries whose text has specifics (numbers, names, lists) that no note cites |
+  | `cross-scope-supersede` | `supersedes` links between notes whose scopes differ |
+  | `unresolved-relative-date` | relative-date phrases in new notes the renderer had to resolve |
+  | `thin-chunk` | chunks whose notes are far shorter than their source with specifics left uncited |
+  | `dropped-then-queried` | records the dropper retired that a later memory query asked for |
+  | `decode-failure` | rows or queries that did not decode in the model's codec |
+
+- **Remedies** come from a closed catalogue, each a pure function the harness applies:
+  - `prompt-line`: add a line to the worker's system prompt for that model (the rule carries the
+    text);
+  - `require-kind`: require a note of a kind for entries a detector flags (re-ask once with the
+    flagged entry ids);
+  - `keep-head`: keep the opening of a flagged assistant entry as a low-relevance note, inside
+    the observer's covered range only (coverage markers stay positional claims);
+  - `block-link`: drop `supersedes` links a detector flags;
+  - `protect-kind`: exempt a record kind from dropping below a pool fullness the rule names;
+  - `split-chunk`: halve the observer chunk for that model;
+  - `switch-codec` / `long-spec`: the profile switches of section 6.
+- **Probation.** A new rule applies to one model on probation. It is established when its
+  detector's rate (events per observed source token) for that model falls over the next passes,
+  and retired when it does not, so a rule survives only by fixing the behaviour it was written
+  for. Established rules that hold for several models become defaults for all.
+- **Who writes rules.** The harness writes a rule when a detector's count for a model keeps
+  rising, picking the remedy the catalogue maps to that detector. A model may propose one with
+  the memory tool (`propose detector=... remedy=... text="..."`); it enters probation the same
+  way and only the detector decides. Rule text is never taken from file, web or tool output.
+- **Invariants no rule can touch.** Compaction never discards unobserved entries, cut points
+  stay valid, coverage markers stay positional, the base `memory` tool stays active, and the
+  room budget stays the ceiling. A remedy that would break one is refused.
+- The user is notified when a rule is added, established or retired; `/om:status` lists the
+  active rules and their counts per model.
+
 ## Order of work
 
 1. `internal/tables` and the `rows` codec. 2. Structured observations and relative-date resolution. 3. The room
 budget. 4. The table memory view. 5. The memory tool, replacing `recall` and the curated tools,
-and removing `/om:memory`. 6. The per-model harness: profiles, defined tools, per-model activation. Each step ships with its
+and removing `/om:memory`. 6. The per-model harness: profiles, defined tools, per-model activation. 7. Rules as data:
+detectors, the remedy catalogue, probation. Each step ships with its
 tests and docs, and the replay harness checks that nothing regressed.

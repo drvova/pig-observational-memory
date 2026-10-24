@@ -127,3 +127,38 @@ func TestMemoryDetailsGuard(t *testing.T) {
 		t.Fatal("V2 details accepted")
 	}
 }
+
+func TestObservationStructuredFields(t *testing.T) {
+	o := tf.Observation("aaaaaaaaaaaa")
+	o.Kind, o.Subject, o.Scope, o.Supersedes = "correction", "gaming hours", "hard difficulty", []string{"bbbbbbbbbbbb"}
+	got, ok := ledger.ObservationFrom(tf.ToJSONValue(o))
+	if !ok || !reflect.DeepEqual(got, o) {
+		t.Fatalf("round trip %+v %v", got, ok)
+	}
+	old := obsMap(tf.Observation("cccccccccccc"), nil)
+	for _, key := range []string{"kind", "subject", "scope", "supersedes"} {
+		if _, present := old[key]; present {
+			t.Fatalf("empty %s not omitted", key)
+		}
+	}
+	got, ok = ledger.ObservationFrom(old)
+	if !ok || got.Kind != "" || got.Subject != "" || got.Scope != "" || got.Supersedes != nil {
+		t.Fatalf("old record %+v %v", got, ok)
+	}
+	lenient := obsMap(tf.Observation("dddddddddddd"), map[string]any{"kind": "rumor", "subject": "  Online   Courses ", "scope": 7, "supersedes": []any{"bbbbbbbbbbbb", "not-an-id", "dddddddddddd"}})
+	got, ok = ledger.ObservationFrom(lenient)
+	if !ok || got.Kind != "" || got.Subject != "online courses" || got.Scope != "" || !reflect.DeepEqual(got.Supersedes, []string{"bbbbbbbbbbbb"}) {
+		t.Fatalf("lenient decode %+v %v", got, ok)
+	}
+	// Scope folds whitespace as the observer does, and one bad supersedes
+	// element drops only itself.
+	spaced := obsMap(tf.Observation("eeeeeeeeeeee"), map[string]any{"scope": " hard  difficulty ", "supersedes": []any{"bbbbbbbbbbbb", "", 3, "bbbbbbbbbbbb", "cccccccccccc"}})
+	got, ok = ledger.ObservationFrom(spaced)
+	if !ok || got.Scope != "hard difficulty" || !reflect.DeepEqual(got.Supersedes, []string{"bbbbbbbbbbbb", "cccccccccccc"}) {
+		t.Fatalf("scope/supersedes decode %+v %v", got, ok)
+	}
+	data, ok := ledger.ObservationsRecordedDataFrom(map[string]any{"observations": []any{tf.ToJSONValue(o)}, "coversUpToId": "raw-1"})
+	if !ok || !reflect.DeepEqual(data.Observations[0], o) {
+		t.Fatalf("recorded payload dropped structured fields: %+v", data)
+	}
+}

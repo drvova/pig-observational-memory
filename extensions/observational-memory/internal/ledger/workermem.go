@@ -47,14 +47,28 @@ func pick[T any](records []T, line func(T) string, budget int, fromOldest bool) 
 // Observations get at least half the budget, reflections the rest (newest
 // first), and each side reclaims what the other leaves unused. fromOldest
 // serves the dropper, whose job is pruning old observations. A non-positive
-// budget returns everything.
+// budget returns everything. Each record is costed by its summary line
+// (ObservationToSummaryLine, ReflectionToSummaryLine), the form the reflector
+// and dropper prompts carry.
 func BoundWorkerMemory(reflections []Reflection, observations []Observation, maxTokens int, fromOldest bool) WorkerMemorySlice {
+	return boundWorkerMemory(reflections, observations, maxTokens, fromOldest, ObservationToSummaryLine)
+}
+
+// BoundObserverMemory is BoundWorkerMemory for the observer's prompt, which
+// carries observations as ObservationToObserverLine (their structured fields
+// in braces): each observation is costed by that longer line, so the rendered
+// prior observations stay within maxTokens.
+func BoundObserverMemory(reflections []Reflection, observations []Observation, maxTokens int) WorkerMemorySlice {
+	return boundWorkerMemory(reflections, observations, maxTokens, false, ObservationToObserverLine)
+}
+
+func boundWorkerMemory(reflections []Reflection, observations []Observation, maxTokens int, fromOldest bool, observationLine func(Observation) string) WorkerMemorySlice {
 	if maxTokens <= 0 {
 		return WorkerMemorySlice{Reflections: reflections, Observations: observations}
 	}
-	_, reservedTokens := pick(observations, ObservationToSummaryLine, maxTokens/2, fromOldest)
+	_, reservedTokens := pick(observations, observationLine, maxTokens/2, fromOldest)
 	keptReflections, reflectionTokens := pick(reflections, ReflectionToSummaryLine, maxTokens-reservedTokens, false)
-	keptObservations, _ := pick(observations, ObservationToSummaryLine, maxTokens-reflectionTokens, fromOldest)
+	keptObservations, _ := pick(observations, observationLine, maxTokens-reflectionTokens, fromOldest)
 	return WorkerMemorySlice{
 		Reflections:         keptReflections,
 		Observations:        keptObservations,

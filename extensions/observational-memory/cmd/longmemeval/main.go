@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/bench"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
@@ -52,6 +53,9 @@ type settings struct {
 	ActorThinking  string `json:"actorThinking,omitempty"`
 	JudgeThinking  string `json:"judgeThinking,omitempty"`
 	CodexAuth      string `json:"codexAuth,omitempty"`
+	// MemoryFormat is the summary layout (config memoryFormat). A run.json
+	// without it predates the tables format, so its summaries are lines.
+	MemoryFormat string `json:"memoryFormat,omitempty"`
 }
 
 func (s *settings) register(fs *flag.FlagSet) {
@@ -72,6 +76,27 @@ func (s *settings) register(fs *flag.FlagSet) {
 	fs.IntVar(&s.MaxAttempts, "max-attempts", 8, "HTTP attempts per model call (429/5xx/network)")
 	fs.StringVar(&s.UserAgent, "user-agent", "", "User-Agent sent on every model call")
 	fs.StringVar(&s.SessionHeader, "session-header", "", "header carrying a stable per-question session id, for providers that route or cache by session")
+	fs.StringVar(&s.MemoryFormat, "memory-format", ledger.FormatTables, `summary layout: "tables" or "lines" (config memoryFormat)`)
+}
+
+// validMemoryFormat reports whether format is a summary layout.
+func validMemoryFormat(format string) bool {
+	for _, f := range ledger.FormatValues {
+		if format == f {
+			return true
+		}
+	}
+	return false
+}
+
+// workerConfig is the extension configuration the run's workers and
+// renderer use: bench.WorkerConfig with the run's summary layout.
+func (s settings) workerConfig() config.Config {
+	cfg := bench.WorkerConfig(s.spec(), s.WorkerThinking)
+	if s.MemoryFormat != "" {
+		cfg.MemoryFormat = s.MemoryFormat
+	}
+	return cfg
 }
 
 // resolveBackend checks -backend and fills the Codex backend's base URL.
@@ -174,6 +199,9 @@ func runCmd(args []string) error {
 	}
 	if s.Mode != "om" && s.Mode != "full-context" {
 		return fmt.Errorf("unknown -mode %q", s.Mode)
+	}
+	if !validMemoryFormat(s.MemoryFormat) {
+		return fmt.Errorf("unknown -memory-format %q", s.MemoryFormat)
 	}
 	if s.Backend == "openai" && os.Getenv(APIKeyEnv) == "" {
 		return fmt.Errorf("%s is not set", APIKeyEnv)
@@ -356,8 +384,9 @@ func replayCmd(args []string) error {
 	out := fs.String("out", "", "directory for the replayed prompts (created)")
 	floor := fs.Bool("drop-floor", true, "apply the drop floor to the recorded drops")
 	ids := fs.String("ids", "", "comma-separated question ids (default: all with a checkpoint)")
-	clip := fs.Bool("clip-overflow", false, "list observations the summary cannot hold in full as clipped lines (ledger.RenderOptions.ClippedOverflow)")
-	summaryTokens := fs.Int("summary-tokens", 0, "compactionSummaryMaxTokens for the replayed summary (0: the run's setting)")
+	clip := fs.Bool("clip-overflow", false, "list observations the summary cannot hold in full as clipped lines (ledger.RenderOptions.ClippedOverflow; lines format only, implies -memory-format lines)")
+	format := fs.String("memory-format", "", `summary layout for the replayed summary: "tables" or "lines" (default: the run's -memory-format, "lines" for runs that predate it)`)
+	summaryTokens := fs.Int("summary-tokens", 0, "summary budget for the replayed summary (0: the budget the run's memory.json recorded, else the current room budget for the run's context window)")
 	_ = fs.Parse(args)
 	if *from == "" || *out == "" {
 		return errors.New("-from and -out are required")
@@ -370,10 +399,23 @@ func replayCmd(args []string) error {
 	if s.ContextWindow == 0 {
 		s.ContextWindow = 128_000
 	}
-	cfg := bench.WorkerConfig(s.spec(), s.WorkerThinking)
-	if *summaryTokens > 0 {
-		cfg.CompactionSummaryMaxTokens = *summaryTokens
+	// Replay in the layout the run rendered, so the comparison measures the
+	// deterministic change and not the layout; only the lines format clips.
+	switch {
+	case *format != "":
+		s.MemoryFormat = *format
+	case *clip:
+		s.MemoryFormat = ledger.FormatLines
+	case s.MemoryFormat == "":
+		s.MemoryFormat = ledger.FormatLines
 	}
+	if !validMemoryFormat(s.MemoryFormat) {
+		return fmt.Errorf("unknown -memory-format %q", s.MemoryFormat)
+	}
+	if *clip && s.MemoryFormat != ledger.FormatLines {
+		return errors.New("-clip-overflow needs -memory-format lines: the tables format lists omitted spans instead")
+	}
+	cfg := s.workerConfig()
 	dirs, _ := filepath.Glob(filepath.Join(*from, "questions", "*", "checkpoint.json"))
 	want := map[string]bool{}
 	for _, id := range split(*ids) {
@@ -406,7 +448,25 @@ func replayCmd(args []string) error {
 		if *floor {
 			entries, r.Stats = bench.ApplyDropFloor(entries, cfg)
 		}
-		memory := bench.RenderMemoryWithOptions(entries, cfg, s.ContextWindow, ledger.RenderOptions{ClippedOverflow: *clip})
+		var old struct {
+			Memory bench.Memory `json:"memory"`
+		}
+		hasOld := readJSON(filepath.Join(dir, "memory.json"), &old) == nil
+		// Replay at the recorded budget, so the comparison measures the
+		// deterministic change and not a change in the budget rule.
+		options := ledger.RenderOptions{ClippedOverflow: *clip}
+		var memory bench.Memory
+		switch {
+		case *summaryTokens > 0:
+			memory = bench.RenderMemoryWithBudget(entries, cfg, *summaryTokens, options)
+		case old.Memory.SummaryBudget > 0:
+			memory = bench.RenderMemoryWithBudget(entries, cfg, old.Memory.SummaryBudget, options)
+		default:
+			memory = bench.RenderMemoryWithOptions(entries, cfg, s.ContextWindow, options)
+		}
+		if memory.NoRecordFits {
+			fmt.Fprintf(os.Stderr, "warning: %s: no memory record fits the ~%d-token summary budget; the replayed prompt carries no memory\n", q.ID, memory.SummaryBudget)
+		}
 		messages := bench.OMMessages(q, memory, s.Recall)
 		qdir := filepath.Join(*out, "questions", q.ID)
 		if err := os.MkdirAll(qdir, 0o755); err != nil {
@@ -421,10 +481,7 @@ func replayCmd(args []string) error {
 		before, _ := os.ReadFile(filepath.Join(dir, "actor-prompt.md"))
 		after, _ := os.ReadFile(filepath.Join(qdir, "actor-prompt.md"))
 		r.Changed = string(before) != string(after)
-		var old struct {
-			Memory bench.Memory `json:"memory"`
-		}
-		if readJSON(filepath.Join(dir, "memory.json"), &old) == nil {
+		if hasOld {
 			r.OmittedBefore = old.Memory.OmittedObservations
 		}
 		r.OmittedAfter = memory.OmittedObservations
@@ -568,7 +625,7 @@ func ingestStage(ctx context.Context, dir string, q bench.Question, s settings, 
 	if readJSON(filepath.Join(dir, "memory.json"), &done) == nil {
 		return done.Memory, done.Ingest, nil
 	}
-	cfg := bench.WorkerConfig(s.spec(), s.WorkerThinking)
+	cfg := s.workerConfig()
 	opts := bench.IngestOptions{Config: cfg, Spec: s.spec(), Flush: s.Flush}
 	var checkpoint bench.Checkpoint
 	if readJSON(filepath.Join(dir, "checkpoint.json"), &checkpoint) == nil {
@@ -596,6 +653,13 @@ func ingestStage(ctx context.Context, dir string, q bench.Question, s settings, 
 	fmt.Println("memory:", memory)
 	if err := writeJSON(filepath.Join(dir, "checkpoint.json"), bench.Checkpoint{SessionsDone: len(q.HaystackSessions), Entries: entryMaps(ingest)}); err != nil {
 		return bench.Memory{}, bench.IngestResult{}, err
+	}
+	// The hook would decline to Pi's native summarizer here; the bench has no
+	// such fallback, so scoring the actor against an empty memory would be
+	// silent noise. The checkpoint is kept, so a rerun with a larger
+	// -context-window re-renders without ingesting again.
+	if memory.NoRecordFits {
+		return bench.Memory{}, bench.IngestResult{}, fmt.Errorf("no memory record fits the ~%d-token summary budget (%s); raise -context-window", memory.SummaryBudget, memory)
 	}
 	trimmed := bench.IngestResult{Errors: ingest.Errors, PipelineRuns: ingest.PipelineRuns}
 	if err := writeJSON(filepath.Join(dir, "memory.json"), saved{Memory: memory, Ingest: trimmed}); err != nil {

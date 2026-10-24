@@ -206,12 +206,45 @@ func HandleBeforeCompact(ctx context.Context, rt *runtime.Runtime, h host.Host, 
 	return handleCompaction(debuglog.With(ctx, debugScope(rt, h)), rt, h, event)
 }
 
+// branchContextTokens estimates what the branch puts into Pi's context: the
+// source in the current compaction range plus the latest compaction's summary.
+func branchContextTokens(entries []ledger.Entry) int {
+	total := ledger.RawTokensSinceLastCompaction(entries)
+	if index := ledger.FindLastCompactionIndex(entries); index >= 0 {
+		if summary, ok := entries[index].Summary.(string); ok {
+			total += tokens.EstimateStringTokens(summary)
+		}
+	}
+	return total
+}
+
+// summaryBudget is the rendered summary budget for a cut: the room the next
+// context has once the cut lands (config.ResolveSummaryBudget). The retained
+// tail is the source from the first kept entry on; the overhead is Pi's
+// tokensBefore minus the branch's own context estimate, 0 when either is
+// unknown. A moved cut also keeps retained source plus summary within
+// maxRetainedTokens.
+func summaryBudget(cfg config.Config, contextWindow, tokensBefore int, entries []ledger.Entry, resolution CutResolution, maxRetainedTokens int) int {
+	retained := 0
+	if index := ledger.EntryIndexForID(entries, resolution.Cut.FirstKeptEntryID); index >= 0 {
+		retained = ledger.RawTokensAfterIndex(entries, index-1)
+	}
+	overhead := 0
+	if branch := branchContextTokens(entries); tokensBefore > 0 && branch > 0 {
+		overhead = max(0, tokensBefore-branch)
+	}
+	budget := config.ResolveSummaryBudget(cfg, contextWindow, overhead, retained)
+	if resolution.Gap != nil && resolution.RetainedTokens >= 0 {
+		budget = max(1, min(budget, maxRetainedTokens-resolution.RetainedTokens))
+	}
+	return budget
+}
+
 func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) BeforeCompactOutcome {
 	cfg := rt.Config()
 	entries := event.BranchEntries
 	contextWindow := host.ModelContextWindow(h.SessionModel())
 	maxRetainedTokens := config.ResolveCompactionMaxRetainedTokens(cfg, contextWindow)
-	summaryMaxTokens := config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow)
 	resolution := ResolveCompactionCut(entries, event.FirstKeptEntryID, CutOptions{MaxRetainedTokens: maxRetainedTokens, Reason: event.Reason})
 
 	// The background observer is behind Pi's cut. Rather than retaining the
@@ -238,6 +271,7 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 	if resolution.Kind == "cut" {
 		built := ledger.BuildCompactionProjection(entries, resolution.Cut.FoldThroughEntryID, ledger.CompactionProjectionConfig{ObservationsPoolMaxTokens: observationsPoolMaxTokens(cfg)})
 		projection = &built
+		summaryMaxTokens := summaryBudget(cfg, contextWindow, event.TokensBefore, entries, resolution, maxRetainedTokens)
 		// Instructions attached to this compaction ride along after the
 		// memory, so the memory render gets the budget minus their share.
 		instructionsBlock := ""
@@ -249,7 +283,7 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			// not crowd the memory out of its own summary.
 			memoryBudget = max(summaryMaxTokens/2, summaryMaxTokens-tokens.EstimateStringTokens(instructionsBlock))
 		}
-		rendered := ledger.RenderSummaryWithOptions(projection.Reflections, projection.Observations, memoryBudget, ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, ""))})
+		rendered := ledger.RenderSummaryWithOptions(projection.Reflections, projection.Observations, memoryBudget, ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: cfg.MemoryFormat})
 		summary = rendered.Text
 		// A summary that kept no record would replace older context with only
 		// instructions and an omission notice. Decline instead, so Pi's native

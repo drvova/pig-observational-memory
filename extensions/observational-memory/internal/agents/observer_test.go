@@ -3,12 +3,15 @@ package agents_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -304,5 +307,236 @@ func TestObserverRejectsMalformedTimestamps(t *testing.T) {
 	block, _ := content[0].(map[string]any)
 	if text, _ := block["text"].(string); !strings.Contains(text, "rejected for empty content, a timestamp not in 'YYYY-MM-DD HH:MM' form") {
 		t.Fatalf("ack %q", text)
+	}
+}
+
+// lastToolResultText is the text of the newest tool result the loop fed back.
+func lastToolResultText(t *testing.T, rec *tf.StreamRecorder) string {
+	t.Helper()
+	messages, _ := rec.Requests[len(rec.Requests)-1]["messages"].([]any)
+	last, _ := messages[len(messages)-1].(map[string]any)
+	content, _ := last["content"].([]any)
+	block, _ := content[0].(map[string]any)
+	text, _ := block["text"].(string)
+	return text
+}
+
+// Structured fields are carried, normalized and validated; supersedes keeps
+// only ids of prior or same-batch observations.
+func TestObserverStructuredFields(t *testing.T) {
+	prior := ids.HashID("User finished the game in 25 hours.")
+	sameBatch := "User plays on normal difficulty."
+	rec := &tf.StreamRecorder{Replies: []map[string]any{recordCall(
+		map[string]any{"timestamp": "2026-05-02 10:30", "content": "User finished the game in 30 hours.", "relevance": "high", "sourceEntryIds": []any{"raw-1"},
+			"kind": "correction", "subject": "  Gaming   Hours ", "scope": " normal  difficulty ", "supersedes": []any{prior, "aaaaaaaaaaaa", "not-an-id", ids.HashID(sameBatch), prior}},
+		map[string]any{"timestamp": "2026-05-02 10:31", "content": sameBatch, "relevance": "medium", "sourceEntryIds": []any{"raw-1"}, "kind": "rumor",
+			"supersedes": []any{ids.HashID(sameBatch)}},
+	), tf.AssistantText("done")}}
+	args := detailedArgs(rec)
+	args.PriorObservations = []string{"[" + prior + "] 2026-05-01 09:00 [medium] User finished the game in 25 hours."}
+	observations, err := agents.RunObserver(context.Background(), args)
+	if err != nil || len(observations) != 2 {
+		t.Fatalf("observations %+v err %v", observations, err)
+	}
+	first, second := observations[0], observations[1]
+	if first.Kind != "correction" || first.Subject != "gaming hours" || first.Scope != "normal difficulty" || !reflect.DeepEqual(first.Supersedes, []string{prior, ids.HashID(sameBatch)}) {
+		t.Fatalf("first %+v", first)
+	}
+	if first.ID != ids.HashID(first.Content) {
+		t.Fatal("id is not the content hash")
+	}
+	if second.Kind != "" || second.Subject != "" || second.Supersedes != nil {
+		t.Fatalf("second %+v", second)
+	}
+	if text := lastToolResultText(t, rec); !strings.Contains(text, "3 supersedes ids dropped") {
+		t.Fatalf("ack %q", text)
+	}
+}
+
+// A supersedes id recorded by an earlier call in the same run is known.
+func TestObserverSupersedesEarlierCall(t *testing.T) {
+	earlier := "User owns two cats."
+	rec := &tf.StreamRecorder{Replies: []map[string]any{
+		recordCall(map[string]any{"timestamp": "2026-05-02 10:30", "content": earlier, "relevance": "medium", "sourceEntryIds": []any{"raw-1"}}),
+		recordCall(map[string]any{"timestamp": "2026-05-02 10:40", "content": "User owns three cats.", "relevance": "medium", "sourceEntryIds": []any{"raw-1"}, "supersedes": []any{ids.HashID(earlier)}}),
+		tf.AssistantText("done"),
+	}}
+	args := detailedArgs(rec)
+	observations, err := agents.RunObserver(context.Background(), args)
+	if err != nil || len(observations) != 2 || !reflect.DeepEqual(observations[1].Supersedes, []string{ids.HashID(earlier)}) {
+		t.Fatalf("observations %+v err %v", observations, err)
+	}
+}
+
+// The rows parameter goes through the same validation as the JSON items.
+func TestObserverRows(t *testing.T) {
+	prior := ids.HashID("User takes two courses.")
+	rows := "observations[3]{timestamp,relevance,kind,subject,scope,supersedes,sourceEntryIds,content}:\n" +
+		"  2026-05-02 10:30,high,fact,Online Courses,on edX,," + "raw-1 raw-2" + ",\"User takes three courses, all on edX.\"\n" +
+		"  2026-05-02 10:31,medium,correction,online courses,,\"" + prior + " bbbbbbbbbbbb\",raw-1,User now takes four courses.\n" +
+		"  2026-05-02 10:32,medium,,,,,missing,Invented source."
+	rec := &tf.StreamRecorder{Replies: []map[string]any{
+		tf.AssistantToolCall("tool-1", "record_observations", map[string]any{"rows": rows}),
+		tf.AssistantText("done"),
+	}}
+	args := detailedArgs(rec)
+	args.AllowedSourceEntryIDs = []string{"raw-1", "raw-2"}
+	args.PriorObservations = []string{"[" + prior + "] 2026-05-01 09:00 [medium] User takes two courses."}
+	observations, err := agents.RunObserver(context.Background(), args)
+	if err != nil || len(observations) != 2 {
+		t.Fatalf("observations %+v err %v", observations, err)
+	}
+	first, second := observations[0], observations[1]
+	if first.Content != "User takes three courses, all on edX." || first.Kind != "fact" || first.Subject != "online courses" || first.Scope != "on edX" ||
+		first.Supersedes != nil || !reflect.DeepEqual(first.SourceEntryIDs, []string{"raw-1", "raw-2"}) || first.Relevance != "high" {
+		t.Fatalf("first %+v", first)
+	}
+	if second.Kind != "correction" || !reflect.DeepEqual(second.Supersedes, []string{prior}) {
+		t.Fatalf("second %+v", second)
+	}
+	if text := lastToolResultText(t, rec); !strings.Contains(text, "1 observation rejected for missing or invalid sourceEntryIds") || !strings.Contains(text, "1 supersedes id dropped") {
+		t.Fatalf("ack %q", text)
+	}
+}
+
+// A malformed rows table records nothing and tells the model how to fix it.
+func TestObserverRowsErrors(t *testing.T) {
+	for name, tc := range map[string]struct{ rows, want string }{
+		"count":   {"observations[2]{timestamp,relevance,sourceEntryIds,content}:\n  2026-05-02 10:30,high,raw-1,One row.", "line"},
+		"unknown": {"observations[1]{timestamp,relevance,sourceEntryIds,content,mood}:\n  2026-05-02 10:30,high,raw-1,One row.,happy", `unknown column "mood"`},
+		"missing": {"observations[1]{timestamp,relevance,content}:\n  2026-05-02 10:30,high,One row.", `missing column "sourceEntryIds"`},
+	} {
+		rec := &tf.StreamRecorder{Replies: []map[string]any{
+			tf.AssistantToolCall("tool-1", "record_observations", map[string]any{"rows": tc.rows, "observations": []any{map[string]any{"timestamp": "2026-05-02 10:30", "content": "JSON item.", "relevance": "low", "sourceEntryIds": []any{"raw-1"}}}}),
+			tf.AssistantText("done"),
+		}}
+		observations, err := agents.RunObserver(context.Background(), detailedArgs(rec))
+		if err != nil || observations != nil {
+			t.Fatalf("%s: recorded %+v err %v", name, observations, err)
+		}
+		if text := lastToolResultText(t, rec); !strings.HasPrefix(text, "rows not recorded: ") || !strings.Contains(text, tc.want) || !strings.Contains(text, "Nothing from this call was recorded") {
+			t.Fatalf("%s: ack %q", name, text)
+		}
+	}
+}
+
+func TestObserverStructuredSchemaAndPrompt(t *testing.T) {
+	rec := &tf.StreamRecorder{}
+	_, _ = agents.RunObserver(context.Background(), observerArgs(rec, tf.Model("p", "m")))
+	system, _ := rec.Requests[0]["systemPrompt"].(string)
+	for _, want := range []string{"kind=assistant", "ONLY when the user explicitly corrects or replaces", "different scope is an addition, never a replacement", "subject:", "scope:"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt missing %q", want)
+		}
+	}
+	tools, _ := rec.Requests[0]["tools"].([]any)
+	encoded := fmt.Sprint(tools[0])
+	for _, want := range []string{"rows", "supersedes", "correction", "assistant", "timestamp,relevance,kind,subject,scope,supersedes,sourceEntryIds,content"} {
+		if !strings.Contains(encoded, want) {
+			t.Fatalf("tool schema missing %q", want)
+		}
+	}
+}
+
+// A supersedes id naming a same-call item that validation rejects is dropped:
+// only items that will be recorded count as known.
+func TestObserverSupersedesIgnoresRejectedSameCallItem(t *testing.T) {
+	rejected := "User owns two cats."
+	rec := &tf.StreamRecorder{Replies: []map[string]any{recordCall(
+		map[string]any{"timestamp": "2026-05-02 10:30", "content": rejected, "relevance": "medium", "sourceEntryIds": []any{"missing"}},
+		map[string]any{"timestamp": "bad", "content": "User owns four cats.", "relevance": "medium", "sourceEntryIds": []any{"raw-1"}},
+		map[string]any{"timestamp": "2026-05-02 10:40", "content": "User owns three cats.", "relevance": "medium", "sourceEntryIds": []any{"raw-1"},
+			"supersedes": []any{ids.HashID(rejected), ids.HashID("User owns four cats.")}},
+	), tf.AssistantText("done")}}
+	observations, err := agents.RunObserver(context.Background(), detailedArgs(rec))
+	if err != nil || len(observations) != 1 || observations[0].Supersedes != nil {
+		t.Fatalf("observations %+v err %v", observations, err)
+	}
+	if text := lastToolResultText(t, rec); !strings.Contains(text, "2 supersedes ids dropped") {
+		t.Fatalf("ack %q", text)
+	}
+}
+
+// The receipt names each recorded id, so a later call can supersede it.
+func TestObserverAckListsRecordedIDs(t *testing.T) {
+	content := "User owns two cats."
+	rec := &tf.StreamRecorder{Replies: []map[string]any{recordCall(
+		map[string]any{"timestamp": "2026-05-02 10:30", "content": content, "relevance": "medium", "sourceEntryIds": []any{"raw-1"}},
+	), tf.AssistantText("done")}}
+	if _, err := agents.RunObserver(context.Background(), detailedArgs(rec)); err != nil {
+		t.Fatal(err)
+	}
+	if text := lastToolResultText(t, rec); !strings.Contains(text, ids.HashID(content)+" ("+content+")") {
+		t.Fatalf("ack %q", text)
+	}
+}
+
+// fieldsCodec is a stand-in codec: one table as a "name|f1;f2" header line
+// followed by one "v1;v2" line per row, an empty value meaning absent.
+type fieldsCodec struct{}
+
+func (fieldsCodec) Name() string { return "fields" }
+
+func (fieldsCodec) Encode(tables ...agents.Table) string {
+	var lines []string
+	for _, table := range tables {
+		lines = append(lines, table.Name+"|"+strings.Join(table.Fields, ";"))
+		for _, row := range table.Rows {
+			lines = append(lines, strings.Join(row, ";"))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (fieldsCodec) Decode(text string) ([]agents.Table, error) {
+	lines := strings.Split(text, "\n")
+	name, header, ok := strings.Cut(lines[0], "|")
+	if !ok {
+		return nil, errors.New("line 1: missing header")
+	}
+	table := agents.Table{Name: name, Fields: strings.Split(header, ";")}
+	for _, line := range lines[1:] {
+		row := strings.Split(line, ";")
+		absent := make([]bool, len(row))
+		for i, value := range row {
+			absent[i] = value == ""
+		}
+		table.Rows = append(table.Rows, row)
+		table.Absent = append(table.Absent, absent)
+	}
+	return []agents.Table{table}, nil
+}
+
+func (fieldsCodec) Spec() string { return "FIELDS-CODEC-SPEC" }
+
+// The rows parameter is decoded by, and described with, the active codec.
+func TestObserverRowsUseActiveCodec(t *testing.T) {
+	rows := "observations|timestamp;relevance;subject;sourceEntryIds;content\n2026-05-02 10:30;high;;raw-1;User bakes sourdough weekly."
+	rec := &tf.StreamRecorder{Replies: []map[string]any{
+		tf.AssistantToolCall("tool-1", "record_observations", map[string]any{"rows": rows}),
+		tf.AssistantText("done"),
+	}}
+	args := detailedArgs(rec)
+	args.Codec = fieldsCodec{}
+	observations, err := agents.RunObserver(context.Background(), args)
+	if err != nil || len(observations) != 1 || observations[0].Content != "User bakes sourdough weekly." || observations[0].Subject != "" {
+		t.Fatalf("observations %+v err %v", observations, err)
+	}
+	tools, _ := rec.Requests[0]["tools"].([]any)
+	schema := fmt.Sprint(tools[0])
+	user := fmt.Sprint(rec.Requests[0]["messages"])
+	system, _ := rec.Requests[0]["systemPrompt"].(string)
+	for name, text := range map[string]string{"schema": schema, "user": user} {
+		if !strings.Contains(text, "FIELDS-CODEC-SPEC") || !strings.Contains(text, "fields") {
+			t.Fatalf("%s does not describe the active codec: %s", name, text)
+		}
+	}
+	if !strings.Contains(schema, "observations|timestamp;relevance;kind") {
+		t.Fatalf("schema example not in the active codec: %s", schema)
+	}
+	for _, text := range []string{system, schema, user} {
+		if strings.Contains(text, "TOON") {
+			t.Fatalf("prompt names a concrete format: %s", text)
+		}
 	}
 }

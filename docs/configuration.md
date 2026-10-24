@@ -78,7 +78,8 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `model.provider` | string | unset | Provider name in Pi's model registry. Optional; without it, `model.id` resolves against the session model's provider. |
 | `model.id` | string | unset | Model id in Pi's model registry. Required when `model` is set. |
 | `model.thinking` | enum | unset; workers fall back to `low` | Optional reasoning/thinking level for memory workers. |
-| `compactionSummaryMaxTokens` | positive integer | derived | Estimated token budget for the memory summary the compaction hook renders. Unset: one eighth of the session model's context window, or `8000` when unknown. Observations get at least half (the newest quarter first, then those carrying numbers, dates or names, then the rest); reflections take the rest. |
+| `compactionSummaryMaxTokens` | positive integer | unset | Optional cap on the memory summary the compaction hook renders. The budget itself is the room the next context has: the session model's context window minus the request overhead and the larger of the source Pi retains and the `compactAfterTokens` threshold, but at least `8000` or half of what the window has left after the retained source, whichever is smaller; `8000` (or this cap) when the window is unknown. Observations get at least half (the newest quarter first, then those carrying numbers, dates or names, then the rest); reflections take the rest. |
+| `memoryFormat` | enum | `"tables"` | Layout of the memory summary the compaction hook renders: `"tables"` lists reflections, notes grouped by subject and omitted spans as tables of records; `"lines"` keeps the earlier bracketed lines. See [Summary format](concepts.md#summary-format). |
 | `compactionCatchUpMaxChunks` | non-negative integer | `2` | Observer chunks the compaction hook may run synchronously to cover source entries the background observer has not reached before Pi's cut. `0` disables. |
 | `workerMemoryMaxTokens` | positive integer | derived | Estimated token budget for the prior memory each observer, reflector, and dropper request carries. Unset: a quarter of the memory model's context window, or `16000` when unknown. |
 | `consolidateWhenIdle` | boolean | `false` | Run memory workers only while the agent is idle (launch from `agent_settled`, abort when a new agent run starts). For hosts where the session model and the memory model share one context budget. |
@@ -92,7 +93,7 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory_*` tools, the `/om:memory` command and an evidence-ranked index in the system prompt. See [Curated memory](concepts.md#curated-memory). |
 | `curatedMemoryIndexTokens` | positive integer | `2000` | Estimated token budget for the index's memory lines; past it, the first memories are described within half and the next named on one `also:` line. |
 
-Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`.
+Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`. Valid `memoryFormat` values are `tables` and `lines`; any other value is ignored.
 
 Invalid values are ignored. Positive-integer settings must be finite integers greater than zero. `compactAfterTokensRatio` must be a finite number strictly between `0` and `1`. `observationsPoolTargetTokens` must also be below `observationsPoolMaxTokens`; if omitted or invalid, it is derived as `floor(observationsPoolMaxTokens / 2)`.
 
@@ -244,11 +245,27 @@ The observer, reflector and dropper summarize and cite; they do not solve proble
 
 ## `compactionSummaryMaxTokens`
 
-Default: derived — `floor(contextWindow / 8)` of the active session model, or `8000` when the context window is unknown.
+Default: unset. The summary budget is derived from the room the next context has; this setting only caps it.
 
-The rendered memory summary replaces the compacted range in context, so its size decides how much room is left before Pi's next compaction. Without a budget it grows with the ledger: on a long session it reached 17k tokens on a 64k window, more than the context it replaced. The hook reserves at least half of the budget for the newest observations (the chronological record), gives reflections the rest (newest first), lets each side reclaim what the other leaves unused, and ends the summary with a line stating how many older records were omitted. A record too large for the remaining budget is skipped rather than ending the selection, so a long newest record does not hide shorter older ones. If no record fits at all, the hook declines ownership and Pi's native summarizer runs, instead of writing a summary with instructions and no facts. Omitted records stay in the session ledger, count toward the full memory in `/om:status`, and are shown by `/om:view full`.
+The rendered memory summary replaces the compacted range in context, so its size decides how much room is left before the next compaction. Without a budget it grows with the ledger: on a long session it reached 17k tokens on a 64k window, more than the context it replaced. The hook sizes the summary from what it already knows rather than from a fixed share of the window:
 
-Custom instructions passed with a compaction (by the user or another extension) are appended after the rendered memory, below a `---` separator. They count toward this budget, but the memory render always keeps at least half of it.
+```
+room   = contextWindow - overheadTokens - max(retainedTokens, compactAfterTokens)
+free   = contextWindow - overheadTokens - retainedTokens
+floor  = min(8000, free / 2)
+budget = min(max(room, floor, 1), compactionSummaryMaxTokens if set)
+```
+
+- `contextWindow` is the active session model's window.
+- `overheadTokens` is what the request carries besides the branch (system prompt, tools): Pi's `tokensBefore` minus the estimate of the branch's context (the source since the latest compaction boundary plus that compaction's summary), or `0` when either is unknown.
+- `retainedTokens` is the estimated source Pi keeps after this compaction's cut.
+- `compactAfterTokens` is the threshold resolved by [`compactAfterTokensMode`](#compactaftertokensmode-and-compactaftertokensratio), the room the conversation gets before the next compaction. The threshold measures source from the cut's first kept entry, so the retained source already counts toward it and only the larger of the two is subtracted.
+
+When every record fits the room, every record is rendered. When the window is unknown there is no room to measure, and the budget is this setting, or `8000` when it is unset. On a window the threshold does not fit, the room is negative for space the context can never reach: the proactive trigger cannot fire before Pi's own threshold, which then governs the next compaction. The floor covers that case: the summary gets `8000` tokens, but never more than half of what the window has left after the overhead and the retained source, so the conversation keeps at least as much room as the summary. For example, a 64k window with the default 81k threshold, about 8k of overhead and 20k retained gets an 8,000-token summary; a 32k window with 8k of overhead and 14k retained gets 5,000. To give a small window a summary sized by the threshold instead, lower it below the window: at 64k, `compactAfterTokens: 40000` (or `ratio` mode with `compactAfterTokensRatio: 0.6`, 38,400) leaves `64000 - 8000 - 40000 = 16000`. The budget never drops below one token; a budget too small for any record makes the hook decline (below). When the cut moved to retain unobserved source, the budget is also capped at [`compactionMaxRetainedTokens`](#compactionmaxretainedtokens) minus the retained source.
+
+The hook reserves at least half of the budget for the newest observations (the chronological record), gives reflections the rest (newest first), lets each side reclaim what the other leaves unused, and discloses what it left out: the tables format ends with an `omitted` table listing each left-out span's date range, count and first id, the lines format with a line stating how many older records were omitted. A record too large for the remaining budget is skipped rather than ending the selection, so a long newest record does not hide shorter older ones. If no record fits at all, the hook declines ownership and Pi's native summarizer runs, instead of writing a summary with instructions and no facts. Omitted records stay in the session ledger, count toward the full memory in `/om:status`, and are shown by `/om:view full`.
+
+Custom instructions passed with a compaction (by the user or another extension) are appended after the rendered memory, below a `---` separator. They count toward the summary budget, but the memory render always keeps at least half of it.
 
 ## `compactionCatchUpMaxChunks`
 

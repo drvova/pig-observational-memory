@@ -21,6 +21,7 @@ type hookArgs struct {
 	hookInFlight      bool
 	maxRetainedTokens int
 	summaryMaxTokens  int
+	compactAfter      int
 	model             host.Model
 }
 
@@ -34,6 +35,9 @@ func hookSetup(a hookArgs) (*runtime.Runtime, *testfix.FakeHost) {
 	cfg.CompactionCatchUpMaxChunks = 0
 	cfg.CompactionMaxRetainedTokens = a.maxRetainedTokens
 	cfg.CompactionSummaryMaxTokens = a.summaryMaxTokens
+	if a.compactAfter > 0 {
+		cfg.CompactAfterTokens = a.compactAfter
+	}
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	rt.SetCompactHookInFlight(a.hookInFlight)
@@ -95,7 +99,7 @@ func TestHookFirstCompactionWritesCoveredObservationsWithoutOrphanReflections(t 
 	if result.Details.FullFold || !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa"}) || len(result.Details.Reflections) != 0 {
 		t.Fatalf("details %+v", result.Details)
 	}
-	if !strings.Contains(result.Summary, "## Observations") || strings.Contains(result.Summary, "## Reflections") {
+	if !strings.Contains(result.Summary, "\nnotes[") || strings.Contains(result.Summary, "\nreflections[") {
 		t.Fatalf("summary %q", result.Summary)
 	}
 }
@@ -129,7 +133,7 @@ func TestHookWritesNormalProjectionWithoutApplyingNewReflectionsOrDrops(t *testi
 	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}) || !reflect.DeepEqual(testfix.RefIDs(result.Details.Reflections), []string{"eeeeeeeeeeee"}) {
 		t.Fatalf("details %+v", result.Details)
 	}
-	if !strings.Contains(result.Summary, "## Reflections\n[eeeeeeeeeeee]") || !strings.Contains(result.Summary, "## Observations") {
+	if !strings.Contains(result.Summary, "\nreflections[1]{id,dates,content}:\n  eeeeeeeeeeee,") || !strings.Contains(result.Summary, "\nnotes[") {
 		t.Fatalf("summary %q", result.Summary)
 	}
 }
@@ -186,11 +190,12 @@ type lagArgs struct {
 	entries           []ledger.Entry
 	maxRetainedTokens int
 	summaryMaxTokens  int
+	compactAfter      int
 	model             host.Model
 }
 
 func lagSetup(a lagArgs) (*runtime.Runtime, *testfix.FakeHost) {
-	return hookSetup(hookArgs{entries: a.entries, maxRetainedTokens: a.maxRetainedTokens, summaryMaxTokens: a.summaryMaxTokens, model: a.model})
+	return hookSetup(hookArgs{entries: a.entries, maxRetainedTokens: a.maxRetainedTokens, summaryMaxTokens: a.summaryMaxTokens, compactAfter: a.compactAfter, model: a.model})
 }
 
 func TestLagKeepsPiCutWhenCoverageReachesIt(t *testing.T) {
@@ -217,7 +222,7 @@ func TestLagMovesRetentionBoundaryBackToValidCutPoint(t *testing.T) {
 	}
 	// Every recorded observation is folded, including the one whose coverage
 	// marker (a1) is now the first retained entry.
-	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}) || !strings.Contains(result.Summary, "[bbbbbbbbbbbb]") {
+	if !reflect.DeepEqual(observationIDs(result.Details.Observations), []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}) || !strings.Contains(result.Summary, "\n  bbbbbbbbbbbb,") {
 		t.Fatalf("result %+v", result)
 	}
 	expectNotification(t, h, "Observational memory: observer has not reached 2 source entries (~7 tokens) before the compaction cut; keeping them in context until they are observed", "info")
@@ -240,15 +245,28 @@ func TestLagDelegatesWhenRetainingExceedsBudget(t *testing.T) {
 	}
 }
 
-func TestLagDelegatesWhenTailPlusSummaryExceedBudget(t *testing.T) {
-	// The retained source alone (~14 tokens) fits a 100-token budget, but the
-	// rendered summary adds a few hundred tokens of instructions and lines.
+func TestLagCapsSummaryAtRetainedBudgetRemainder(t *testing.T) {
+	// The retained source alone fits a 100-token budget, so the summary gets
+	// what it leaves, which holds no record: the hook delegates.
 	entries := laggingBranch()
+	retained := ResolveCompactionCut(entries, "u2", CutOptions{MaxRetainedTokens: 100}).RetainedTokens
 	rt, h := lagSetup(lagArgs{entries: entries, maxRetainedTokens: 100})
 
 	expectDelegated(t, runHook(rt, h, entries, "u2", "threshold"))
 
-	if len(h.Notifications) == 0 || h.Notifications[0].Level != "warning" || !strings.Contains(h.Notifications[0].Message, "plus a ~") || !strings.Contains(h.Notifications[0].Message, "memory summary exceeds the ~100-token budget") {
+	expectNotification(t, h, fmt.Sprintf("Observational memory: no memory record fits the ~%d-token summary budget; delegating to Pi's native summarizer", 100-retained), "warning")
+}
+
+func TestLagDelegatesWhenTailPlusSummaryAndInstructionsExceedBudget(t *testing.T) {
+	// The memory fits what the retained tail leaves, but instructions ride
+	// along in full and push retained source plus summary over the budget.
+	entries := laggingBranch()
+	rt, h := lagSetup(lagArgs{entries: entries, maxRetainedTokens: 700})
+	instructions := strings.TrimSpace(strings.Repeat("Keep the deploy checklist and the open questions. ", 40))
+
+	expectDelegated(t, HandleBeforeCompact(context.Background(), rt, h, BeforeCompactEvent{FirstKeptEntryID: "u2", TokensBefore: 123, BranchEntries: entries, Reason: "threshold", CustomInstructions: instructions}))
+
+	if len(h.Notifications) == 0 || h.Notifications[0].Level != "warning" || !strings.Contains(h.Notifications[0].Message, "plus a ~") || !strings.Contains(h.Notifications[0].Message, "memory summary exceeds the ~700-token budget") {
 		t.Fatalf("notifications %+v", h.Notifications)
 	}
 }
@@ -259,7 +277,7 @@ func TestLagDerivesRetainedBudgetFromSessionModelWindow(t *testing.T) {
 	rt, h := lagSetup(lagArgs{entries: entries, model: host.Model{"contextWindow": 4}})
 	expectDelegated(t, runHook(rt, h, entries, "u2", "threshold"))
 
-	rt, h = lagSetup(lagArgs{entries: entries, model: host.Model{"contextWindow": 4_000}})
+	rt, h = lagSetup(lagArgs{entries: entries, compactAfter: 1_000, model: host.Model{"contextWindow": 4_000}})
 	if compactionOf(t, runHook(rt, h, entries, "u2", "threshold")).FirstKeptEntryID != "a1" {
 		t.Fatal("roomy window should retain the tail")
 	}
@@ -393,6 +411,26 @@ func TestHookDelegatesInsteadOfInstructionsOnlySummary(t *testing.T) {
 	expectNotification(t, h, "Observational memory: no memory record fits the ~500-token summary budget; delegating to Pi's native summarizer", "warning")
 }
 
+// memoryFormat picks the summary layout: tables by default, the earlier lines
+// when configured.
+func TestHookRendersConfiguredMemoryFormat(t *testing.T) {
+	obs1 := testfix.Observation("aaaaaaaaaaaa", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"raw-1"}; o.TokenCount = 10 })
+	entries := []ledger.Entry{
+		text("raw-1", "aaaa"),
+		testfix.ObservationsRecordedEntry("om-aaaaaaaaaaaa", []ledger.Observation{obs1}, "raw-1"),
+	}
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100})
+	if summary := compactionOf(t, runHook(rt, h, entries, "raw-1", "")).Summary; !strings.HasPrefix(summary, ledger.TablesUsageInstructions) || !strings.Contains(summary, "\nnotes[1]{id,when,relevance,content}:\n  aaaaaaaaaaaa,") {
+		t.Fatalf("default summary %q", summary)
+	}
+	cfg := rt.Config()
+	cfg.MemoryFormat = config.MemoryFormatLines
+	rt.SetConfig(cfg)
+	if summary := compactionOf(t, runHook(rt, h, entries, "raw-1", "")).Summary; !strings.HasPrefix(summary, ledger.ContextUsageInstructions) || !strings.Contains(summary, "## Observations\n[aaaaaaaaaaaa] ") {
+		t.Fatalf("lines summary %q", summary)
+	}
+}
+
 // customInstructions attached to the compaction ride along after the memory
 // (upstream issue #55).
 func TestHookAppendsCustomInstructions(t *testing.T) {
@@ -406,7 +444,7 @@ func TestHookAppendsCustomInstructions(t *testing.T) {
 
 	result := compactionOf(t, HandleBeforeCompact(context.Background(), rt, h, event))
 
-	if !strings.HasSuffix(result.Summary, "\n\n---\n\nKeep the deploy checklist.") || !strings.Contains(result.Summary, "## Observations") {
+	if !strings.HasSuffix(result.Summary, "\n\n---\n\nKeep the deploy checklist.") || !strings.Contains(result.Summary, "\nnotes[") {
 		t.Fatalf("summary %q", result.Summary)
 	}
 
@@ -516,11 +554,11 @@ func TestHookKeepsRemovedSourceObservationsUnderTightBudget(t *testing.T) {
 		t.Fatalf("details %+v", result.Details)
 	}
 	for _, observation := range removed {
-		if !strings.Contains(result.Summary, "["+observation.ID+"]") {
+		if !strings.Contains(result.Summary, "\n  "+observation.ID+",") {
 			t.Fatalf("summary omits removed-source observation %s: %q", observation.ID, result.Summary)
 		}
 	}
-	if strings.Contains(result.Summary, "omitted to fit the summary budget") {
+	if strings.Contains(result.Summary, "\nomitted[") {
 		t.Fatalf("summary %q", result.Summary)
 	}
 }
@@ -645,5 +683,120 @@ func TestHookReservesBudgetForCustomInstructions(t *testing.T) {
 	}
 	if got := tokens.EstimateStringTokens(withInstructions.Summary); got > budget+2 {
 		t.Fatalf("summary %d tokens exceeds the %d-token budget", got, budget)
+	}
+}
+
+// roomBranch is instructionBudgetBranch with tailTokens of source after its
+// first kept entry, raw-1.
+func roomBranch(tailTokens int) []ledger.Entry {
+	entries := instructionBudgetBranch()
+	if tailTokens > 0 {
+		entries = append(entries, text("raw-2", strings.Repeat("abcd", tailTokens)))
+	}
+	return entries
+}
+
+func TestSummaryBudgetIsTheRoomTheNextContextHas(t *testing.T) {
+	cfg := config.Defaults
+	cfg.CompactAfterTokens = 1_000
+	entries := roomBranch(2_000)
+	cut := cutAt("raw-1", "raw-1")
+	retained := ledger.RawTokensAfterIndex(entries, -1)
+	branch := branchContextTokens(entries)
+	if retained < 2_000 || branch != retained {
+		t.Fatalf("retained %d branch %d", retained, branch)
+	}
+	// Unknown window: the fallback.
+	if got := summaryBudget(cfg, 0, 0, entries, cut, 100_000); got != config.CompactionSummaryFallbackMaxTokens {
+		t.Fatalf("unknown window budget %d", got)
+	}
+	// Overhead is tokensBefore beyond the branch's own estimate.
+	// The threshold counts the retained tail, so the larger of the two is subtracted.
+	if got := summaryBudget(cfg, 10_000, branch+3_000, entries, cut, 100_000); got != 10_000-3_000-retained {
+		t.Fatalf("budget with overhead %d", got)
+	}
+	// A tokensBefore below the branch estimate measures no overhead.
+	if got := summaryBudget(cfg, 10_000, 1, entries, cut, 100_000); got != 10_000-retained {
+		t.Fatalf("budget without overhead %d", got)
+	}
+	// A cut Pi proposes on an unknown entry retains nothing measurable.
+	if got := summaryBudget(cfg, 10_000, 0, entries, cutAt("missing", "missing"), 100_000); got != 9_000 {
+		t.Fatalf("unknown cut budget %d", got)
+	}
+	// A moved cut keeps retained source plus summary within the retained budget.
+	moved := cut
+	moved.Gap = &ledger.UnobservedSourceSpan{}
+	moved.RetainedTokens = retained
+	if got := summaryBudget(cfg, 100_000, 0, entries, moved, retained+500); got != 500 {
+		t.Fatalf("moved-cut budget %d", got)
+	}
+	if got := summaryBudget(cfg, 100_000, 0, entries, moved, retained); got != 1 {
+		t.Fatalf("exhausted moved-cut budget %d", got)
+	}
+}
+
+func TestHookRendersEveryRecordWhenRoomAllows(t *testing.T) {
+	for _, window := range []host.Model{nil, {"contextWindow": 6_000}} {
+		entries := roomBranch(0)
+		rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, compactAfter: 1_000, model: window})
+
+		result := compactionOf(t, runHook(rt, h, entries, "raw-1", "threshold"))
+
+		if !strings.Contains(result.Summary, "Observation 0: ") || !strings.Contains(result.Summary, "Observation 29: ") || strings.Contains(result.Summary, "\nomitted[") {
+			t.Fatalf("window %v summary %q", window, result.Summary)
+		}
+	}
+}
+
+func TestHookShrinksSummaryForALargeRetainedTail(t *testing.T) {
+	// 6,000 - a ~5,000-token tail (above the 1,000 threshold, which counts
+	// it) leaves room for only part of the memory.
+	entries := roomBranch(5_000)
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, compactAfter: 1_000, model: host.Model{"contextWindow": 6_000}})
+
+	result := compactionOf(t, runHook(rt, h, entries, "raw-1", "threshold"))
+
+	if !strings.Contains(result.Summary, "Observation 29: ") || strings.Contains(result.Summary, "Observation 0: ") || !strings.Contains(result.Summary, "\nomitted[") {
+		t.Fatalf("summary %q", result.Summary)
+	}
+	if got, room := tokens.EstimateStringTokens(result.Summary), 6_000-ledger.RawTokensAfterIndex(entries, -1); got > room {
+		t.Fatalf("summary %d tokens exceeds the %d-token room", got, room)
+	}
+
+	// No room at all: nothing renders and the hook delegates.
+	entries = roomBranch(6_000)
+	rt, h = hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, compactAfter: 1_000, model: host.Model{"contextWindow": 6_000}})
+	expectDelegated(t, runHook(rt, h, entries, "raw-1", "threshold"))
+	expectNotification(t, h, "Observational memory: no memory record fits the ~1-token summary budget; delegating to Pi's native summarizer", "warning")
+}
+
+// A 64k model with the default 81k threshold: the proactive trigger cannot
+// fire before Pi's own threshold, so the room is negative, but the floor still
+// gives the summary its fallback budget and the extension owns the compaction.
+func TestHookOwnsCompactionOnASmallWindowWithTheDefaultThreshold(t *testing.T) {
+	entries := roomBranch(20_000)
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, model: host.Model{"contextWindow": 64_000}})
+	if threshold := config.ResolveCompactAfterTokens(rt.Config(), 64_000); threshold <= 64_000 {
+		t.Fatalf("test needs a threshold above the window; got %d", threshold)
+	}
+
+	result := compactionOf(t, runHook(rt, h, entries, "raw-1", "threshold"))
+
+	if !strings.Contains(result.Summary, "Observation 0: ") || !strings.Contains(result.Summary, "Observation 29: ") {
+		t.Fatalf("summary %q", result.Summary)
+	}
+	if len(h.Notifications) != 0 {
+		t.Fatalf("notifications %+v", h.Notifications)
+	}
+}
+
+func TestHookCapsRoomAtCompactionSummaryMaxTokens(t *testing.T) {
+	entries := roomBranch(0)
+	rt, h := hookSetup(hookArgs{entries: entries, poolMaxTokens: 100_000, compactAfter: 1_000, summaryMaxTokens: 400, model: host.Model{"contextWindow": 100_000}})
+
+	result := compactionOf(t, runHook(rt, h, entries, "raw-1", "threshold"))
+
+	if got := tokens.EstimateStringTokens(result.Summary); got > 400 || !strings.Contains(result.Summary, "\nomitted[") {
+		t.Fatalf("summary %d tokens: %q", got, result.Summary)
 	}
 }

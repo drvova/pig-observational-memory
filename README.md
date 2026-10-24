@@ -83,22 +83,20 @@ Three memory workers run in one background pipeline and save what they write as 
 
 Compaction starts either from the extension, after about 81k tokens of history the observer has read since the last compaction (`compactAfterTokens`; all history when PiG's automatic compaction is off), or from PiG itself (`/compact`, or a full context window). Either way the extension writes the summary from memory, like this:
 
-```md
-These are condensed memories from earlier in this session.
-…
+```
+These are condensed memories from earlier in this session, as tables: …
 
-## Reflections
-[a1b2c3d4e5f6] User works at Acme Corp building Acme Dashboard on Next.js 15 with Supabase auth.
-[b2c3d4e5f6a1] Hard constraint: ship by January 22nd 2026.
-
-## Observations
-[d4e5f6a1b2c3] 2026-01-15 14:30 [high] User decided to switch from REST to GraphQL for the public API; motivation was reducing over-fetching on mobile clients.
-[e5f6a1b2c3d4] 2026-01-15 14:50 [medium] GraphQL migration completed; user confirmed queries working.
+reflections[2]{id,dates,content}:
+  a1b2c3d4e5f6,2026-01-08..2026-01-12,User works at Acme Corp building Acme Dashboard on Next.js 15 with Supabase auth.
+  b2c3d4e5f6a1,2026-01-10,"Hard constraint: ship by January 22nd 2026."
+notes.graphql_migration[2]{id,when,kind,scope,content,superseded_by}:
+  d4e5f6a1b2c3,2026-01-15,plan,public API,User decided to switch from REST to GraphQL to reduce over-fetching on mobile clients.,
+  e5f6a1b2c3d4,2026-01-15,event,public API,GraphQL migration completed; user confirmed queries working.,
 ```
 
-When a line is too compressed to act on, the agent calls `recall` with its id and gets the original conversation back.
+When a record is too compressed to act on, the agent calls `recall` with its id and gets the original conversation back. The `memoryFormat` setting switches back to the older `## Reflections` / `## Observations` line layout; [Summary format](docs/concepts.md#summary-format) describes both.
 
-The summary is capped at `compactionSummaryMaxTokens` (an eighth of the context window by default). When memory outgrows it, the oldest lines are left out and a closing line says how many. If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and how compaction decides what to keep.
+The summary is sized to the room the next context has: the context window minus the request overhead and the larger of the retained source and the `compactAfterTokens` threshold, with a floor of up to 8,000 tokens on windows the threshold does not fit; `compactionSummaryMaxTokens` caps it. When memory outgrows it, older records are left out and the summary says which: an `omitted` table lists each left-out span's dates, count and first id (the lines layout ends with a line saying how many). If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and how compaction decides what to keep.
 
 ## Commands
 

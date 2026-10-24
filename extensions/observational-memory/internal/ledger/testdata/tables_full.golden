@@ -1,0 +1,24 @@
+These are condensed memories from earlier in this session, as tables: name[rows]{fields}: then one record per line, values in field order; an empty value means none.
+
+- reflections: stable facts about the user, project, decisions, and constraints; dates is when their observations were recorded.
+- notes.<subject>: observations about one subject, oldest first. kind is fact, event, preference, plan, correction or assistant (something the assistant produced); scope tells two figures apart; superseded_by is the id of the record that replaced this one.
+- notes: observations without a subject, oldest first.
+- when is the date recorded; [=date] is the date a relative phrase refers to; omitted lists records left out to fit: date range, count, first id.
+
+Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+
+The recall tool reads any record back by its id with its exact source, omitted ones included; use it when precision needs the source, not as broad search.
+
+reflections[2]{id,dates,content}:
+  e1eeeeeeeeee,2023-05-12..2023-05-20,"User bakes at home: bread, every week."
+  e2eeeeeeeeee,,User prefers short answers.
+notes.gaming_hours[1]{id,when,kind,scope,content,superseded_by}:
+  g1aaaaaaaaaa,2023-05-15,event,hard difficulty,User finished the game in 30 hours.,
+notes.baking[2]{id,when,kind,scope,content,superseded_by}:
+  b1aaaaaaaaaa,2023-05-12,fact,,User bakes bread twice a week.,b2aaaaaaaaaa
+  b2aaaaaaaaaa,2023-05-20,correction,,"User now bakes bread three times a week, since last Tuesday [=2023-05-16].",
+notes[4]{id,when,relevance,content}:
+  a1aaaaaaaaaa,2023-05-08,medium,"User chatted about general topics and more and more and more and more and more and more and more and more and more and more and more and more "
+  a2aaaaaaaaaa,2023-05-10,medium,User started a sourdough starter yesterday [=2023-05-09].
+  a3aaaaaaaaaa,2023-05-16,medium,"User chatted about the weather at length at length at length at length at length at length at length at length at length at length "
+  a4aaaaaaaaaa,2023-05-21,high,"User asked for a reading list, \"short ones\"."

@@ -80,7 +80,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 		coversUpToID := serialized.SourceEntryIDs[len(serialized.SourceEntryIDs)-1]
 		fullMemory := ledger.FullProjection(branch, "")
-		memory := ledger.BoundWorkerMemory(fullMemory.Reflections, fullMemory.Observations, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow), false)
+		memory := ledger.BoundObserverMemory(fullMemory.Reflections, fullMemory.Observations, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
 		if cfg.ShowWorkerNotifications && h.HasUI() {
 			noun := "entries"
 			if len(serialized.SourceEntryIDs) == 1 {
@@ -95,7 +95,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 		priorObservations := make([]string, 0, len(memory.Observations))
 		for _, observation := range memory.Observations {
-			priorObservations = append(priorObservations, ledger.ObservationToSummaryLine(observation))
+			priorObservations = append(priorObservations, ledger.ObservationToObserverLine(observation))
 		}
 		outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, current, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
 			return runObserver(ctx, agents.ObserverArgs{

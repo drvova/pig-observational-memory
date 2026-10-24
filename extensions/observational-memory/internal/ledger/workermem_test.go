@@ -1,6 +1,7 @@
 package ledger_test
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -62,5 +63,32 @@ func TestBoundWorkerMemoryReclaim(t *testing.T) {
 	slice := ledger.BoundWorkerMemory(reflections, observations[:1], 200, false)
 	if len(slice.Observations) != 1 || len(slice.Reflections) != 4 {
 		t.Fatalf("reclaim failed: %d observations, %d reflections", len(slice.Observations), len(slice.Reflections))
+	}
+}
+
+func TestBoundObserverMemoryCostsObserverLines(t *testing.T) {
+	observations := []ledger.Observation{}
+	for i := 0; i < 40; i++ {
+		id := padID(fmt.Sprintf("b%02d", i), 'b')
+		observations = append(observations, tf.Observation(id, withContent(fmt.Sprintf("User baked loaf %d at home", i)), func(o *ledger.Observation) {
+			o.Kind, o.Subject, o.Scope = ledger.ObservationKind("event"), "baking", "sourdough at home"
+			o.Supersedes = []string{"aaaaaaaaaaaa", "cccccccccccc"}
+		}))
+	}
+	const budget = 300
+	lineTotal := func(slice ledger.WorkerMemorySlice, line func(ledger.Observation) string) int {
+		total := 0
+		for _, observation := range slice.Observations {
+			total += (len(line(observation))+3)/4 + 1
+		}
+		return total
+	}
+	observer := ledger.BoundObserverMemory(nil, observations, budget)
+	if got := lineTotal(observer, ledger.ObservationToObserverLine); got > budget || len(observer.Observations) == 0 {
+		t.Fatalf("observer lines cost %d tokens for %d records, budget %d", got, len(observer.Observations), budget)
+	}
+	summary := ledger.BoundWorkerMemory(nil, observations, budget, false)
+	if lineTotal(summary, ledger.ObservationToObserverLine) <= budget || len(summary.Observations) <= len(observer.Observations) {
+		t.Fatal("fixture does not exercise the longer observer line")
 	}
 }

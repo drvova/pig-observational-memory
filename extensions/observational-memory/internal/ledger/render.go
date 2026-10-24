@@ -5,9 +5,11 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
-// ContextUsageInstructions opens every rendered memory summary.
+// ContextUsageInstructions opens every memory summary rendered in the lines
+// format; TablesUsageInstructions opens the tables format.
 const ContextUsageInstructions = `These are condensed memories from earlier in this session.
 
 - Reflections: stable, long-lived facts about the user, project, decisions, and constraints. New reflection lines may include ids in brackets.
@@ -20,6 +22,32 @@ When exact source context is needed for precision or traceability, use the recal
 // ObservationToSummaryLine renders "[id] YYYY-MM-DD HH:MM [relevance] content".
 func ObservationToSummaryLine(observation Observation) string {
 	return "[" + observation.ID + "] " + observation.Timestamp + " [" + string(observation.Relevance) + "] " + observation.Content
+}
+
+// ObservationToObserverLine renders an observation for the observer's input:
+// the summary line followed by its structured fields in braces, as
+// "{kind: fact; subject: baking; scope: on edX; supersedes: id1 id2}", so the
+// observer can reuse subjects and compare scopes. Empty fields are left out,
+// and a record without any renders exactly as its summary line.
+func ObservationToObserverLine(observation Observation) string {
+	var fields []string
+	if observation.Kind != "" {
+		fields = append(fields, "kind: "+string(observation.Kind))
+	}
+	if observation.Subject != "" {
+		fields = append(fields, "subject: "+observation.Subject)
+	}
+	if observation.Scope != "" {
+		fields = append(fields, "scope: "+observation.Scope)
+	}
+	if len(observation.Supersedes) > 0 {
+		fields = append(fields, "supersedes: "+strings.Join(observation.Supersedes, " "))
+	}
+	line := ObservationToSummaryLine(observation)
+	if len(fields) == 0 {
+		return line
+	}
+	return line + " {" + strings.Join(fields, "; ") + "}"
 }
 
 // ReflectionToSummaryLine renders "[id] content".
@@ -91,10 +119,16 @@ func estimateTokens(text string) int { return (jsfmt.UTF16Len(text) + 3) / 4 }
 // in original order. A record that does not fit is skipped, not a stopping
 // point: one long newest record must not hide shorter older ones.
 func selectWithinBudget[T any](records []T, line func(T) string, budget int) ([]T, int) {
+	return selectCostedWithinBudget(records, func(record T) int { return estimateTokens(line(record)) + 1 }, budget)
+}
+
+// selectCostedWithinBudget is selectWithinBudget with each record's cost given
+// directly.
+func selectCostedWithinBudget[T any](records []T, costOf func(T) int, budget int) ([]T, int) {
 	keptIndexes := []int{}
 	tokens := 0
 	for i := len(records) - 1; i >= 0; i-- {
-		cost := estimateTokens(line(records[i])) + 1
+		cost := costOf(records[i])
 		if tokens+cost > budget {
 			continue
 		}
@@ -122,24 +156,70 @@ const SummaryObservationsRecencyShare = 0.25
 // a date outlasts newer generic chatter. The passes read only the text, so the
 // same records and budget always keep the same lines.
 func selectObservationsWithinBudget(observations []Observation, budget int) ([]Observation, int) {
+	costs := make([]int, len(observations))
+	for i, observation := range observations {
+		costs[i] = estimateTokens(ObservationToSummaryLine(observation)) + 1
+	}
+	return selectCostedObservations(observations, budget, observationCosts{rows: costs})
+}
+
+// observationCosts prices observations for selectCostedObservations: rows[i]
+// is observation i's own cost; with groups set, the first record kept from a
+// group also pays headers[groups[i]] (the group's table header).
+type observationCosts struct {
+	rows    []int
+	groups  []string
+	headers map[string]int
+	// specifics[i] caches HasSpecifics for observation i; nil computes it
+	// on each call.
+	specifics []bool
+}
+
+// observationSpecifics is HasSpecifics for each observation.
+func observationSpecifics(observations []Observation) []bool {
+	specifics := make([]bool, len(observations))
+	for i, observation := range observations {
+		specifics[i] = HasSpecifics(observation.Content)
+	}
+	return specifics
+}
+
+// selectCostedObservations runs the passes of selectObservationsWithinBudget
+// with the given costs.
+func selectCostedObservations(observations []Observation, budget int, costs observationCosts) ([]Observation, int) {
 	kept := make([]bool, len(observations))
+	opened := map[string]bool{}
+	specifics := costs.specifics
+	if specifics == nil {
+		specifics = observationSpecifics(observations)
+	}
 	tokens := 0
-	pass := func(limit int, eligible func(Observation) bool) {
+	pass := func(limit int, eligible func(int) bool) {
 		for i := len(observations) - 1; i >= 0; i-- {
-			if kept[i] || !eligible(observations[i]) {
+			if kept[i] || !eligible(i) {
 				continue
 			}
-			cost := estimateTokens(ObservationToSummaryLine(observations[i])) + 1
+			cost := costs.rows[i]
+			group := ""
+			if costs.groups != nil {
+				group = costs.groups[i]
+				if !opened[group] {
+					cost += costs.headers[group]
+				}
+			}
 			if tokens+cost > limit {
 				continue
 			}
 			tokens += cost
 			kept[i] = true
+			if costs.groups != nil {
+				opened[group] = true
+			}
 		}
 	}
-	all := func(Observation) bool { return true }
+	all := func(int) bool { return true }
 	pass(int(float64(budget)*SummaryObservationsRecencyShare), all)
-	pass(budget, func(o Observation) bool { return HasSpecifics(o.Content) })
+	pass(budget, func(i int) bool { return specifics[i] })
 	pass(budget, all)
 	out := []Observation{}
 	for i, k := range kept {
@@ -150,13 +230,31 @@ func selectObservationsWithinBudget(observations []Observation, budget int) ([]O
 	return out, tokens
 }
 
+// The summary formats (RenderOptions.Format).
+const (
+	// FormatTables renders the memory as tables of records in a codec
+	// (docs/memory-interface.md, section 3). It is the default.
+	FormatTables = "tables"
+	// FormatLines renders the memory as the earlier bracketed lines.
+	FormatLines = "lines"
+)
+
+// FormatValues are the valid summary formats; the first is the default.
+var FormatValues = []string{FormatTables, FormatLines}
+
 // RenderOptions add detail to a rendered summary.
 type RenderOptions struct {
 	// ReflectionDates (see ReflectionDateRanges) date the reflection lines.
 	ReflectionDates map[string]string
 	// ClippedOverflow lists observations the budget cannot hold in full as
 	// clipped lines (see selectObservationTiers) instead of omitting them.
+	// Only the lines format clips; the tables format lists omitted spans.
 	ClippedOverflow bool
+	// Format is FormatTables or FormatLines; "" (or an unknown value) means
+	// FormatTables.
+	Format string
+	// Codec encodes the tables format; nil means tables.Rows.
+	Codec tables.Codec
 }
 
 // ClippedObservationRunes is the content length of a clipped observation line.
@@ -229,10 +327,19 @@ func RenderSummaryWithBudget(reflections []Reflection, observations []Observatio
 	return RenderSummaryWithOptions(reflections, observations, maxTokens, RenderOptions{})
 }
 
-// RenderSummaryWithOptions renders the memory summary. With maxTokens > 0,
-// observations get at least half the budget (newest first), reflections the
-// rest, and each side reclaims what the other leaves unused.
+// RenderSummaryWithOptions renders the memory summary in options.Format. With
+// maxTokens > 0, observations get at least half the budget (newest first),
+// reflections the rest, and each side reclaims what the other leaves unused.
 func RenderSummaryWithOptions(reflections []Reflection, observations []Observation, maxTokens int, options RenderOptions) RenderedSummary {
+	if options.Format != FormatLines {
+		return renderTablesSummary(reflections, observations, maxTokens, options)
+	}
+	return renderLinesSummary(reflections, observations, maxTokens, options)
+}
+
+// renderLinesSummary renders the lines format: bracketed reflection and
+// observation lines under headings, then a prose omission note.
+func renderLinesSummary(reflections []Reflection, observations []Observation, maxTokens int, options RenderOptions) RenderedSummary {
 	reflectionLine := func(reflection Reflection) string { return DatedReflectionLine(reflection, options.ReflectionDates) }
 	instructions := ContextUsageInstructions
 	if len(options.ReflectionDates) > 0 {

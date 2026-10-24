@@ -11,7 +11,7 @@ Your job is to compress a chunk of recent conversation into timestamped, rated o
 
 You receive:
 - Current reflections (long-lived facts already crystallized).
-- Current observations (already-recorded observations, each shown as "[id] YYYY-MM-DD HH:MM [relevance] content").
+- Current observations (already-recorded observations, each shown as "[id] YYYY-MM-DD HH:MM [relevance] content", followed by its structured fields in braces when it has any, e.g. "{kind: fact; subject: baking; scope: on edX}").
 - A new chunk of conversation with source entry labels and inline message timestamps. Each source block starts with "[Source entry id: <id>]" followed by content formatted as "[User @ YYYY-MM-DD HH:MM]:", "[Assistant @ ...]:", "[Tool result for <name> @ ...]:", custom messages, or branch summaries.
 - A current local time fallback for observations that have no obvious message timestamp.
 
@@ -118,6 +118,15 @@ Do NOT default to "critical" or "high". Most observations are medium or low. Res
 
   BAD:  relevance=medium for "User said they are colorblind; red/green indicators do not work for them."
   GOOD: relevance=critical for "User said they are colorblind; red/green indicators do not work for them." (persistent constraint; forgetting it causes real harm)
+
+Structured fields (optional, but fill them whenever they apply):
+- kind: fact, event, preference, plan, correction, or assistant. Record the assistant's concrete outputs (lists, names, numbers, recommendations) as kind=assistant, with the distinguishing details in the content.
+- subject: a short lowercase noun phrase grouping related observations ("baking", "gaming hours", "online courses"). Reuse the exact subject a current observation on the same topic shows in its braces.
+- scope: the qualifier that tells two figures apart ("hard difficulty", "on edX").
+- supersedes: ids of current observations, or ids the tool receipt reported for observations you recorded earlier this run, that this one replaces. Compare scopes in the braces first. Set it ONLY when the user explicitly corrects or replaces an earlier fact. A figure with a different scope is an addition, never a replacement; leave supersedes empty.
+  BAD:  "User finished the game in 40 hours on hard difficulty" supersedes "User finished the game in 25 hours on normal difficulty".
+  GOOD: both kept, scopes "hard difficulty" and "normal difficulty", no supersedes.
+- Instead of the observations array you may pass rows: one table, in the format the user message describes, with columns timestamp,relevance,kind,subject,scope,supersedes,sourceEntryIds,content, ids space-separated inside their field.
 
 Timestamp format: "YYYY-MM-DD HH:MM" (local time, 24-hour, to the minute). This goes in the timestamp field, not the content.
 

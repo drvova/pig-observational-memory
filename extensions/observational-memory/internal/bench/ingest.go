@@ -206,7 +206,8 @@ func (l *errorLog) note(state runtime.State) {
 // Memory is what the actor sees from an ingested branch.
 type Memory struct {
 	// Summary is the compaction summary the extension renders for the
-	// folded ledger at the branch tip, within compactionSummaryMaxTokens.
+	// folded ledger at the branch tip, within the room budget
+	// (config.ResolveSummaryBudget, capped by compactionSummaryMaxTokens).
 	Summary string `json:"summary"`
 	// Tail is the unobserved source after the observation frontier,
 	// serialized with timestamps; Pi keeps it in context raw.
@@ -218,8 +219,15 @@ type Memory struct {
 	OmittedReflections  int    `json:"omittedReflections"`
 	ClippedObservations int    `json:"clippedObservations,omitempty"`
 	SummaryTokens       int    `json:"summaryTokens"`
-	TailTokens          int    `json:"tailTokens"`
-	SourceTokens        int    `json:"sourceTokens"`
+	// SummaryBudget is the token budget the summary was rendered within, so a
+	// replay can render the same memory at the same budget.
+	SummaryBudget int `json:"summaryBudget,omitempty"`
+	// NoRecordFits is set when the ledger holds records but the budget kept
+	// none. The compaction hook declines to Pi's native summarizer there; the
+	// bench has no such fallback, so the actor would see an empty memory.
+	NoRecordFits bool `json:"noRecordFits,omitempty"`
+	TailTokens   int  `json:"tailTokens"`
+	SourceTokens int  `json:"sourceTokens"`
 }
 
 // RenderMemory renders the branch's memory the way the compaction hook does
@@ -229,13 +237,31 @@ func RenderMemory(entries []session.Entry, cfg config.Config, contextWindow int)
 }
 
 // RenderMemoryWithOptions is RenderMemory with extra render options; the
-// reflection dates are always set.
+// reflection dates are always set, and the format is cfg.MemoryFormat unless
+// options names one.
 func RenderMemoryWithOptions(entries []session.Entry, cfg config.Config, contextWindow int, options ledger.RenderOptions) Memory {
+	if options.Format == "" {
+		options.Format = cfg.MemoryFormat
+	}
+	frontier := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
+	// The tail stays in context next to the summary, so it is the retained
+	// source of the room budget; the bench carries no system prompt or tools.
+	budget := config.ResolveSummaryBudget(cfg, contextWindow, 0, ledger.RawTokensAfterIndex(entries, frontier))
+	return RenderMemoryWithBudget(entries, cfg, budget, options)
+}
+
+// RenderMemoryWithBudget is RenderMemoryWithOptions at an explicit summary
+// budget instead of the room budget, for replaying a recorded run at the
+// budget it used. The format is cfg.MemoryFormat unless options names one.
+func RenderMemoryWithBudget(entries []session.Entry, cfg config.Config, budget int, options ledger.RenderOptions) Memory {
+	if options.Format == "" {
+		options.Format = cfg.MemoryFormat
+	}
 	full := ledger.FullProjection(entries, "")
 	folded := ledger.FoldLedger(entries, "")
 	options.ReflectionDates = ledger.ReflectionDateRanges(folded)
-	rendered := ledger.RenderSummaryWithOptions(full.Reflections, full.Observations, config.ResolveCompactionSummaryMaxTokens(cfg, contextWindow), options)
 	frontier := ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded)
+	rendered := ledger.RenderSummaryWithOptions(full.Reflections, full.Observations, budget, options)
 	tail := []session.Entry{}
 	for i := frontier + 1; i < len(entries); i++ {
 		if ledger.IsSourceEntry(entries[i]) {
@@ -253,6 +279,8 @@ func RenderMemoryWithOptions(entries []session.Entry, cfg config.Config, context
 		OmittedReflections:  rendered.OmittedReflections,
 		ClippedObservations: rendered.ClippedObservations,
 		SummaryTokens:       EstimateTokens(rendered.Text),
+		SummaryBudget:       budget,
+		NoRecordFits:        len(full.Reflections)+len(full.Observations) > 0 && len(rendered.Reflections)+len(rendered.Observations) == 0,
 		TailTokens:          EstimateTokens(tailText),
 		SourceTokens:        ledger.RawTokensAfterIndexWhere(entries, -1, nil),
 	}

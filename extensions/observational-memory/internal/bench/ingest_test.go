@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 )
@@ -106,16 +107,23 @@ func TestIngestRunsTheObserverOverChronologicalSessions(t *testing.T) {
 		t.Fatalf("local times = %v", models.localTimes)
 	}
 	memory := RenderMemory(result.Entries, opts.Config, opts.Spec.ContextWindow)
-	if !strings.Contains(memory.Summary, "## Observations") || !strings.Contains(memory.Summary, "Paris") || memory.ActiveObservations != 2 {
+	if !strings.Contains(memory.Summary, "\nnotes[2]{") || !strings.Contains(memory.Summary, "Paris") || memory.ActiveObservations != 2 {
 		t.Fatalf("memory = %+v", memory)
 	}
 	messages := OMMessages(testQuestion(), memory, false)
 	if len(messages) != 3 || messages[0].Text() != ActorInstructions || messages[2].Text() != "Current Date: 2023/06/01 (Thu) 09:00\nQuestion: Where do I live?" {
 		t.Fatalf("actor messages = %+v", messages)
 	}
-	// Without the recall tool the summary's recall paragraph is left out.
-	if strings.Contains(messages[1].Text(), "recall tool") || !strings.Contains(MemoryMessage(memory, true), "use the recall tool") {
+	// Without the recall tool the summary's recall paragraph is left out, in
+	// either format.
+	if strings.Contains(messages[1].Text(), "recall tool") || !strings.Contains(MemoryMessage(memory, true), ledger.TablesRecallParagraph) {
 		t.Fatalf("recall paragraph handling: %q", messages[1].Text())
+	}
+	lines := opts.Config
+	lines.MemoryFormat = config.MemoryFormatLines
+	linesMemory := RenderMemory(result.Entries, lines, opts.Spec.ContextWindow)
+	if !strings.Contains(linesMemory.Summary, "## Observations") || strings.Contains(MemoryMessage(linesMemory, false), "recall tool") || !strings.Contains(MemoryMessage(linesMemory, true), "use the recall tool") {
+		t.Fatalf("lines recall paragraph handling: %q", MemoryMessage(linesMemory, false))
 	}
 	if withRecall := OMMessages(testQuestion(), memory, true); !strings.Contains(withRecall[0].Text(), "Use recall(<id>)") {
 		t.Fatalf("recall prompt missing: %q", withRecall[0].Text())
@@ -175,6 +183,25 @@ func TestIngestLeavesASmallTailRawUnlessFlushed(t *testing.T) {
 	memory = RenderMemory(result.Entries, opts.Config, opts.Spec.ContextWindow)
 	if memory.ActiveObservations != 2 || memory.Tail != "" {
 		t.Fatalf("flushed memory = %+v", memory)
+	}
+}
+
+func TestRenderMemoryRecordsItsBudgetAndFlagsAnEmptyRender(t *testing.T) {
+	opts := testOptions()
+	opts.Flush = true
+	models := &scriptedModels{Models: Models{Spec: opts.Spec}, calls: map[string]int{}}
+	result, err := Ingest(context.Background(), testQuestion(), models, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := RenderMemory(result.Entries, opts.Config, opts.Spec.ContextWindow)
+	if memory.ActiveObservations == 0 || memory.NoRecordFits || memory.SummaryBudget != config.ResolveSummaryBudget(opts.Config, opts.Spec.ContextWindow, 0, 0) {
+		t.Fatalf("memory = %+v", memory)
+	}
+	// A budget too small for any record keeps none; the flag says so.
+	tiny := RenderMemoryWithBudget(result.Entries, opts.Config, 1, ledger.RenderOptions{})
+	if !tiny.NoRecordFits || tiny.SummaryBudget != 1 {
+		t.Fatalf("tiny memory = %+v", tiny)
 	}
 }
 
