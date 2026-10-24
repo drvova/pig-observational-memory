@@ -4,7 +4,7 @@ A full run of [LongMemEval](https://github.com/xiaowu0162/LongMemEval)'s `longme
 
 ## Results
 
-![LongMemEval_s accuracy by question type for this extension and Mastra's Observational Memory runs, and Mastra's leaderboard of overall scores with this run at 90.32%](assets/bench-chart.svg)
+![LongMemEval_s accuracy by question type for this extension (DeepSeek, and Opus 5.5 answering from the same memory) and Mastra's Observational Memory runs, and Mastra's leaderboard of overall scores with these runs at 90.32% and 89.25%](assets/bench-chart.svg)
 
 The chart is built from [docs/animation/bench-chart.ts](animation/bench-chart.ts) (`npm run export` in `docs/animation`).
 

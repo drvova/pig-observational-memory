@@ -1,7 +1,7 @@
 // The LongMemEval result as a chart, on the card the README scenes share. Chart first:
 // the main panel is grouped horizontal bars, one group per question type and the
-// overall mean set apart below them, four series in a fixed order (this extension, then
-// Mastra's observational memory with its gpt-5-mini, gemini-3-pro-preview and gpt-4o
+// overall mean set apart below them, five series in a fixed order (this extension with DeepSeek, then
+// with Opus 5.5 answering from the same memory, then Mastra's observational memory with its gpt-5-mini, gemini-3-pro-preview and gpt-4o
 // actors) on one 0-100 % axis; only this extension's bars carry values. The side panel
 // is Mastra's published leaderboard as a ranked bar list with this extension inserted
 // at its place (fourth), starred and tinted. The footnote carries the caveat (a
@@ -47,7 +47,7 @@ import { baseNode, cardBackdrop, cellRects, ease, FRAME_INSET, hex, manropeFonts
 import { logoPeriod, palette, spiderHam } from "./sprite.ts";
 
 const W = 1280;
-const H = 1040;
+const H = 1176;
 const D = 3360; // 14 s
 const POST_SCALE = 1.5; // the posting copy, 1920 wide
 
@@ -60,7 +60,7 @@ const PANEL_EDGE = "#1A242D";
 const GRID = "#1F2A34"; // hairline gridlines
 const AXIS = "#3A4651"; // the 0 % baseline
 const OTHER = "#5C6773"; // leaderboard systems not in the main chart (3.3:1)
-const SERIES = [logoPeriod, "#3987e5", "#c98500", "#199e70"]; // hero red, then the reference dark blue, yellow, aqua
+const SERIES = [logoPeriod, "#a35bd6", "#c98500", "#3987e5", "#199e70"]; // hero red, Opus violet, then yellow, blue, aqua
 
 // --- Data (percent) ------------------------------------------------------------------
 const TYPES = [
@@ -74,24 +74,26 @@ const TYPES = [
 // Per type, then the overall (unweighted mean of the six types), for each series in order.
 const SCORES: number[][] = [
   [96.2, 89.5, 76.8, 96.7, 97.1, 85.7, 90.32], // this extension, DeepSeek v4.1 flash, DeepSeek judge
+  [94.9, 90.2, 66.1, 100.0, 97.1, 87.2, 89.25], // this extension, Opus 5.5 answering from the DeepSeek-built memory, Opus judge
   [96.2, 87.2, 94.6, 100.0, 95.7, 95.5, 94.87], // Mastra OM, gpt-5-mini actor
   [94.9, 87.2, 96.4, 90.0, 97.1, 94.0, 93.27], // Mastra OM, gemini-3-pro-preview actor
   [85.9, 79.7, 82.1, 73.3, 98.6, 85.7, 84.23], // Mastra OM, gpt-4o actor
 ];
-const LEGEND: Array<[string, string]> = [["This extension*", "DeepSeek v4.1 flash"], ["Mastra OM", "gpt-5-mini"], ["Mastra OM", "gemini-3-pro-preview"], ["Mastra OM", "gpt-4o"]];
+const LEGEND: Array<[string, string]> = [["This extension*", "DeepSeek v4.1 flash"], ["This extension*", "Opus 5.5 answering"], ["Mastra OM", "gpt-5-mini"], ["Mastra OM", "gemini-3-pro-preview"], ["Mastra OM", "gpt-4o"]];
 // Mastra's published leaderboard (overall %), this extension inserted at its place.
 // `series` is the main chart's series index (its colour), or -1 for a system not in it.
 const BOARD: Array<{ system: string; model: string; score: number; series: number }> = [
-  { system: "Mastra OM", model: "gpt-5-mini", score: 94.87, series: 1 },
-  { system: "Mastra OM", model: "gemini-3-pro-preview", score: 93.27, series: 2 },
+  { system: "Mastra OM", model: "gpt-5-mini", score: 94.87, series: 2 },
+  { system: "Mastra OM", model: "gemini-3-pro-preview", score: 93.27, series: 3 },
   { system: "Hindsight", model: "gemini-3-pro-preview", score: 91.4, series: -1 },
   { system: "This extension*", model: "DeepSeek v4.1 flash", score: 90.32, series: 0 },
+  { system: "This extension*", model: "Opus 5.5 answering", score: 89.25, series: 1 },
   { system: "Mastra OM", model: "gemini-3-flash-preview", score: 89.2, series: -1 },
   { system: "Hindsight", model: "GPT-OSS 120B", score: 89.0, series: -1 },
   { system: "EmergenceMem Internal", model: "gpt-4o", score: 86.0, series: -1 },
   { system: "Supermemory", model: "gemini-3-pro-preview", score: 85.2, series: -1 },
   { system: "Supermemory", model: "gpt-5", score: 84.6, series: -1 },
-  { system: "Mastra OM", model: "gpt-4o", score: 84.23, series: 3 },
+  { system: "Mastra OM", model: "gpt-4o", score: 84.23, series: 4 },
   { system: "Hindsight", model: "GPT-OSS 20B", score: 83.6, series: -1 },
   { system: "EmergenceMem Simple", model: "gpt-4o", score: 82.4, series: -1 },
   { system: "Oracle", model: "gpt-4o", score: 82.4, series: -1 },
@@ -144,12 +146,14 @@ const ADV: Record<string, number> = {
   "19/500 Mastra RAG (topK 20) ": 195.79,
   "19/500 Zep ": 38.11,
   "19/500 Full context ": 107.74,
-  "19/500 * Not strictly comparable: this extension was judged by DeepSeek v4.1 flash, not gpt-4o as Mastra was, and 77 of the 500 questions": 1152.72,
-  "19/500 finished on deepseek-v4.1-flash rather than deepseek-v4.1-flash-uncensored. All Mastra OM runs used a gemini-2.5-flash observer.": 1155.73,
   "19/500 Sources: mastra.ai/research/observational-memory (Mastra OM and the leaderboard); docs/bench-results.md (this extension).": 1132.89,
   "20/500 longmemeval_s, 500 questions: the share answered correctly, by question type and overall": 846.19,
   "19/500 100%": 48.62,
   "19/500 overall accuracy": 143.68,
+  "19/500 Opus 5.5 answering": 173.89,
+  "19/500 * Not strictly comparable: each of this extension's runs was graded by its own answering model, not gpt-4o as Mastra's were.": 1096.04,
+  "19/500 The Opus 5.5 run answered from the memory the DeepSeek run built. 77 of the DeepSeek run's 500 questions finished on": 1063.57,
+  "19/500 deepseek-v4.1-flash rather than deepseek-v4.1-flash-uncensored. All Mastra OM runs used a gemini-2.5-flash observer.": 1052.92,
   "19/500 This extension* ": 142.31,
   "19/500 Mastra OM ": 99.67,
   "20/500 % correct, 0 to 100": 173.98,
@@ -281,15 +285,19 @@ add(pathNode("web-top-right", D, webPath(W - FRAME_INSET, FRAME_INSET, 90, 180, 
 
 // --- Header ---------------------------------------------------------------------------
 const LEFT = 56;
+const LEGEND_ROW = 28; // the legend's second row pushes the panels down
 const TITLE = "pig-observational-memory: 90.32% on LongMemEval*";
 const SUBTITLE = "longmemeval_s, 500 questions: the share answered correctly, by question type and overall";
 text("title", LEFT, 84, TITLE, 34, 700, INK);
 text("subtitle", LEFT, 116, SUBTITLE, 20, 500, DIM);
 {
+  // Two rows: this extension's runs, then Mastra's.
   let x = LEFT;
   LEGEND.forEach(([system, model], i) => {
-    rect(`legend-swatch-${i}`, x, 142, 14, 14, SERIES[i], 3);
-    x = line(`legend-${i}`, x + 22, 156, 19, [[`${system} `, 500, INK], [model, 500, MUTED]]) + 30;
+    if (i === 2) x = LEFT;
+    const y = i < 2 ? 156 : 156 + LEGEND_ROW;
+    rect(`legend-swatch-${i}`, x, y - 14, 14, 14, SERIES[i], 3);
+    x = line(`legend-${i}`, x + 22, y, 19, [[`${system} `, 500, INK], [model, 500, MUTED]]) + 30;
   });
 }
 
@@ -309,8 +317,8 @@ add(pathNode("pig-lid-left", D, lens([4, 5]), solid(palette.K, track("pig-lid-le
 add(pathNode("pig-lid-right", D, lens([10, 11]), solid(palette.K, track("pig-lid-right-o", [[0, 0], [WINK, 1], [WINK + 56, 0], [1440, 1], [1456, 0], [2400, 1], [2416, 0]]))));
 
 // --- Main panel: by question type --------------------------------------------------------
-const PANEL_TOP = 186;
-const PANEL_BOTTOM = 904;
+const PANEL_TOP = 186 + LEGEND_ROW;
+const PANEL_BOTTOM = 1016;
 const MAIN = { x: LEFT, w: 716 };
 const SIDE = { x: 788, w: 1224 - 788 };
 for (const [id, p] of [["main", MAIN], ["side", SIDE]] as const) {
@@ -320,15 +328,16 @@ for (const [id, p] of [["main", MAIN], ["side", SIDE]] as const) {
 const X0 = MAIN.x + 24;
 const PLOT_W = 600;
 const xAt = (pct: number) => X0 + (PLOT_W * pct) / 100;
-line("main-head", X0, 218, 20, [["Accuracy by question type ", 700, INK], ["% correct, 0 to 100", 500, DIM]]);
+line("main-head", X0, 218 + LEGEND_ROW, 20, [["Accuracy by question type ", 700, INK], ["% correct, 0 to 100", 500, DIM]]);
 
-const GROUP_TOP = 236;
-const GROUP_PITCH = 88;
+const GROUP_TOP = 236 + LEGEND_ROW;
+const GROUP_PITCH = 100;
 const OVERALL_TOP = GROUP_TOP + 6 * GROUP_PITCH - 4;
-const BAR_H = [14, 10, 10, 10]; // the hero series a little heavier
+const BAR_H = [14, 10, 10, 10, 10]; // the hero series a little heavier
 const groupTop = (g: number) => (g < 6 ? GROUP_TOP + g * GROUP_PITCH : OVERALL_TOP + 12);
 const GRID_TOP = GROUP_TOP - 4;
-const GRID_BOTTOM = groupTop(6) + 82;
+const GRID_BOTTOM = groupTop(6) + 94;
+if (GRID_BOTTOM + 50 !== PANEL_BOTTOM) throw new Error(`PANEL_BOTTOM should be ${GRID_BOTTOM + 50}`);
 for (let t = 0; t <= 100; t += 20) {
   rect(`grid-${t}`, xAt(t) - 0.5, GRID_TOP, 1, GRID_BOTTOM - GRID_TOP, t === 0 ? AXIS : GRID);
   const label = t === 100 ? "100%" : String(t);
@@ -344,7 +353,7 @@ for (let g = 0; g < 7; g++) {
     : [["Overall ", 700, INK], ["unweighted mean of the six types", 500, MUTED]];
   line(`group-${g}-label`, X0, top + 19, 19, head);
   let y = top + 27;
-  for (let s = 0; s < 4; s++) {
+  for (let s = 0; s < SERIES.length; s++) {
     const start = STILL + g * GROUP_STEP + (g === 6 ? OVERALL_GAP : 0) + s * SERIES_STEP;
     const v = SCORES[s][g];
     bar(`bar-${g}-${s}`, X0, y, xAt(v) - X0, BAR_H[s], SERIES[s], start, GROW);
@@ -361,22 +370,22 @@ for (let g = 0; g < 7; g++) {
 // --- Side panel: the leaderboard ----------------------------------------------------------
 const LX0 = SIDE.x + 20;
 const LX1 = SIDE.x + SIDE.w - 20;
-const ROW_TOP = 236;
+const ROW_TOP = 236 + LEGEND_ROW;
 const ROW_PITCH = 37;
 // The heading says a row was added; the scale under the last row says the bars start at 0.
 const SIDE_HEAD = "Leaderboard, overall % correct";
 if (adv(SIDE_HEAD, 20, 700) > LX1 - LX0) throw new Error("the leaderboard heading overflows its panel");
-text("side-head", LX0, 218, SIDE_HEAD, 20, 700, INK);
+text("side-head", LX0, 218 + LEGEND_ROW, SIDE_HEAD, 20, 700, INK);
 BOARD.forEach((row, i) => {
   const top = ROW_TOP + i * ROW_PITCH;
   const start = BOARD_START + i * ROW_STEP;
-  const ours = row.series === 0;
+  const ours = row.series === 0 || row.series === 1;
   const mastra = row.system === "Mastra OM";
   if (ours) {
     // The inserted row: a red tint behind it and a red tick at its left edge.
     const appear = (id: string, peak: number) => track(id, [[0, 0], [start + ROW_GROW - 32, 0, ease.settle], [start + ROW_GROW + 32, peak], [DRAIN, peak, ease.drain], [DRAIN + 40, 0]]);
-    rect("ours-tint", SIDE.x + 8, top - 7, SIDE.w - 16, ROW_PITCH + 4, logoPeriod, 6, appear("ours-tint-o", 0.16));
-    rect("ours-tick", SIDE.x + 8, top - 7, 4, ROW_PITCH + 4, logoPeriod, 2, appear("ours-tick-o", 1));
+    rect(`ours-tint-${i}`, SIDE.x + 8, top - 7, SIDE.w - 16, ROW_PITCH + 4, SERIES[row.series], 6, appear(`ours-tint-${i}-o`, 0.16));
+    rect(`ours-tick-${i}`, SIDE.x + 8, top - 7, 4, ROW_PITCH + 4, SERIES[row.series], 2, appear(`ours-tick-${i}-o`, 1));
   }
   const sysWeight: Weight = ours ? 700 : 500;
   const sysColour = ours || mastra ? INK : DIM;
@@ -399,11 +408,12 @@ BOARD.forEach((row, i) => {
 
 // --- Footnote -----------------------------------------------------------------------------
 const NOTE = [
-  "* Not strictly comparable: this extension was judged by DeepSeek v4.1 flash, not gpt-4o as Mastra was, and 77 of the 500 questions",
-  "finished on deepseek-v4.1-flash rather than deepseek-v4.1-flash-uncensored. All Mastra OM runs used a gemini-2.5-flash observer.",
+  "* Not strictly comparable: each of this extension's runs was graded by its own answering model, not gpt-4o as Mastra's were.",
+  "The Opus 5.5 run answered from the memory the DeepSeek run built. 77 of the DeepSeek run's 500 questions finished on",
+  "deepseek-v4.1-flash rather than deepseek-v4.1-flash-uncensored. All Mastra OM runs used a gemini-2.5-flash observer.",
   "Sources: mastra.ai/research/observational-memory (Mastra OM and the leaderboard); docs/bench-results.md (this extension).",
 ];
-NOTE.forEach((str, i) => text(`note-${i}`, LEFT, 940 + i * 25, str, 19, 500, i === 2 ? MUTED : DIM));
+NOTE.forEach((str, i) => text(`note-${i}`, LEFT, PANEL_BOTTOM + 36 + i * 25, str, 19, 500, i === NOTE.length - 1 ? MUTED : DIM));
 
 // Every line must end inside the card, clear of its frame.
 const widths: Array<[string, number]> = [
