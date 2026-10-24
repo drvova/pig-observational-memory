@@ -23,6 +23,17 @@ func TestMemoryToolProposesRule(t *testing.T) {
 	if len(h.Notifications) != 1 || !strings.Contains(h.Notifications[0].Message, "proposed by p/m") {
 		t.Fatalf("notifications %+v", h.Notifications)
 	}
+	// The write follows the proof: the rule is held, applies to the next pass, and is written
+	// once that pass is clean.
+	if all, _ := rules.List(store); len(all) != 0 {
+		t.Fatalf("a held proposal is written already: %+v", all)
+	}
+	if active := rules.For(store, "p/m"); len(active.Rules) != 1 {
+		t.Fatalf("the held proposal does not apply to the next pass: %+v", active)
+	}
+	if _, err := store.Layer().Claim("p/m", true, ""); err != nil {
+		t.Fatal(err)
+	}
 	all, _ := rules.List(store)
 	if len(all) != 1 || all[0].Proposer != rules.ProposerModel || all[0].Model() != "p/m" || all[0].State != rules.StateProbation {
 		t.Fatalf("rules %+v", all)
@@ -89,6 +100,9 @@ func TestProposalAttachesToMemoryWorker(t *testing.T) {
 	r := m.RunMemory(h, `propose detector=thin-chunk remedy=prompt-line text="Keep the figures the user gives in each note."`)
 	if r.IsError || !strings.Contains(r.Text, "memory worker p/worker") {
 		t.Fatalf("propose: %s", r.Text)
+	}
+	if _, err := store.Layer().Claim("p/worker", true, ""); err != nil {
+		t.Fatal(err)
 	}
 	all, _ := rules.List(store)
 	if len(all) != 1 || all[0].Model() != "p/worker" {

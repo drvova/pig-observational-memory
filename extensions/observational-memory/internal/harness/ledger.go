@@ -3,6 +3,7 @@ package harness
 import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
@@ -37,9 +38,10 @@ func WorkerModelKey(h host.Host, cfg config.Config) string {
 	return ModelKey(session)
 }
 
-// StoreOf is the curated store the harness keeps its ledgers in. There is none when curated
-// memory is off or the host does not know PiG's config root (host.ConfigHomer); the harness
-// then records nothing and every model gets the default profile.
+// StoreOf is the curated store the harness keeps its ledgers in, with this process's kernel
+// floor for it (floorOf). There is none when curated memory is off or the host does not know
+// PiG's config root (host.ConfigHomer); the harness then records nothing and every model gets
+// the default profile.
 func StoreOf(h host.Host, cfg config.Config) (curated.Store, bool) {
 	homer, ok := h.(host.ConfigHomer)
 	if !ok || !cfg.CuratedMemory {
@@ -49,7 +51,9 @@ func StoreOf(h host.Host, cfg config.Config) (curated.Store, bool) {
 	if home == "" {
 		return curated.Store{}, false
 	}
-	return curated.New(curated.DefaultDir(home)), true
+	store := curated.New(curated.DefaultDir(home))
+	store.Floor = floorOf(store, cfg.KernelFloor)
+	return store, true
 }
 
 // Ledger is one model's usage ledger in the store.
@@ -69,15 +73,44 @@ func For(h host.Host, cfg config.Config, model host.Model) (Ledger, bool) {
 }
 
 // Profile computes the model's profile from its ledger and the store's definitions, with the
-// profile rules that apply to the model (ApplyRules). A ledger
-// that cannot be read gives the default profile: the harness never fails the memory.
-func (l Ledger) Profile() Profile {
+// profile rules that apply to the model (ApplyRules), its codecs read from the model's layer
+// (Layer): the formats it declared are among the codecs it can be switched to, and a name it
+// redeclared stands for its own declaration. A ledger that cannot be read gives the default
+// profile: the harness never fails the memory.
+func (l Ledger) Profile() Profile { return l.ProfileWith(l.Layer()) }
+
+// ProfileWith is Profile with the model's layer already loaded (active), so one pass reads its
+// codecs from the same generation as the rest of its layer.
+func (l Ledger) ProfileWith(active declare.Active) Profile {
 	events, err := l.Store.ModelEvents(l.Model)
 	if err != nil {
 		return Default(l.Model)
 	}
 	definitions, _ := l.Store.ListDefinitions()
-	return ApplyRules(Compute(l.Model, events, definitions), rules.For(l.Store, l.Model))
+	p := ApplyRules(ComputeWith(l.Model, events, definitions, active.CodecNames()), rules.For(l.Store, l.Model))
+	if c, ok := active.Codec(p.Codec); ok {
+		p.codec = c
+	}
+	return p
+}
+
+// Layer is the model's effective layer, interpreted (docs/memory-interface.md, section 8): its
+// own definitions over the ones kept for every model, over the seeds. A layer that cannot be
+// read stands as its seeds, so the memory behaves as it shipped.
+func (l Ledger) Layer() declare.Active {
+	h, _, err := l.Store.Layer().Load(l.Model)
+	if err != nil {
+		return declare.SeedsOnly(l.Model)
+	}
+	return declare.Of(h)
+}
+
+// LayerFor is model's effective layer in h's store; the seeds alone without a store.
+func LayerFor(h host.Host, cfg config.Config, model host.Model) declare.Active {
+	if l, ok := For(h, cfg, model); ok {
+		return l.Layer()
+	}
+	return declare.SeedsOnly(ModelKey(model))
 }
 
 // Rules are the rules that apply to the ledger's model.

@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
@@ -28,6 +29,36 @@ type Proposer interface {
 	Propose(args map[string]string) (string, error)
 }
 
+// Layerer is the per-model harness's side of the layer (docs/memory-interface.md, section 8):
+// the harness and rollback writes and the harness source. The harness implements it over the
+// layer store: a definition is kernel-checked, refused when its text came from tool output on
+// the branch, and held until a clean pass proves it. Each method returns the model's text;
+// Define, Forget and Rollback also tell the user.
+type Layerer interface {
+	Define(kind, name, text string) (string, error)
+	Forget(kind, name string) (string, error)
+	// Rollback rolls model's layer back to generation n; model "" is the default model.
+	Rollback(n int, model string) (string, error)
+	// Listing is the layer as the harness source lists it (HarnessFields).
+	Listing() ([]HarnessRow, error)
+}
+
+// HarnessRow is one row of the harness source: a definition of a model's layer, or a seed
+// standing where the model defined nothing.
+type HarnessRow struct {
+	Model, Kind, Name string
+	// State is seed, held, written (with its probation: written, probation or established),
+	// or skipped for a file the layer refused.
+	State string
+	// Generation is the generation that wrote it, "" for a seed or a held definition.
+	Generation string
+	// Origin is seed (shipped and standing), override (the model's definition of a seed's
+	// name) or own (a name no seed has).
+	Origin string
+	// Stale is why an override was skipped as stale, "" when it is not.
+	Stale string
+}
+
 // Env is what a query runs against.
 type Env struct {
 	// Entries are the current branch's entries.
@@ -44,10 +75,26 @@ type Env struct {
 	DefinesTools bool
 	// Proposer stores proposed rules; nil refuses propose.
 	Proposer Proposer
+	// Layer is the model's layer; nil refuses the harness and rollback writes and the
+	// harness source.
+	Layer Layerer
 	// DefinedTools are the names of the registered tools the agent defined. Their calls are
 	// memory queries too, so history and the feedback quote check leave their calls and
 	// results out as they leave out the memory tool's.
 	DefinedTools []string
+	// Records, when set, are the memory the notes and reflections sources read instead of the
+	// ledger folded from Entries: a compaction's projection for a summary query, or one
+	// pass's notes for a detector query (docs/memory-interface.md, section 8).
+	Records *Records
+}
+
+// Records are a memory given to a query directly.
+type Records struct {
+	// Observations are the notes source's records, all active.
+	Observations []ledger.Observation
+	Reflections  []ledger.Reflection
+	// ReflectionDates are the reflections' date ranges (ledger.ReflectionDateRanges).
+	ReflectionDates map[string]string
 }
 
 // memoryTools are the tools whose calls are memory queries: the memory tool and the defined
@@ -207,14 +254,90 @@ type readOutput struct {
 
 // runRead runs a source and its stages.
 func runRead(env Env, q *Query) (readOutput, error) {
+	rel, words, group, err := evalRead(env, q, true)
+	if err != nil {
+		return readOutput{}, err
+	}
+	tablesOut := encodeRelation(rel, words, group)
+	out := readOutput{text: env.Codec.Encode(tablesOut...), shown: len(rel.rows), matched: rel.matched}
+	if rel.name == SourceNotes || rel.name == SourceReflections || rel.name == SourceSaved {
+		for _, row := range rel.rows {
+			out.hits = append(out.hits, row[0])
+		}
+	}
+	if rel.matched > len(rel.rows) {
+		out.text += fmt.Sprintf("\nmatched %d, showing %d", rel.matched, len(rel.rows))
+	}
+	return out, nil
+}
+
+// Selection is what a read query selected, as tables rather than text: what a summary query
+// lays out and a detector query counts (docs/memory-interface.md, section 8).
+type Selection struct {
+	// Source is the query's source.
+	Source string
+	Tables []tables.Table
+	// IDs are, per table, the id of the record each row shows; "" for a row that is no
+	// record (a count).
+	IDs [][]string
+	// Count is the selection's size: a count stage's number, else the rows selected.
+	Count int
+}
+
+// Select runs a read query and returns its tables. Unlike Run, no default limit cuts the
+// rows: an explicit limit still does, and every other bound of the query engine holds. A
+// write or a recall is refused: only a source and its stages select. sources limits the
+// sources the caller allows (none means every read source).
+func Select(env Env, query string, sources ...string) (Selection, error) {
+	q, err := Parse(query)
+	if err != nil {
+		return Selection{}, err
+	}
+	if q.Write != "" || q.Source == SourceRecall {
+		return Selection{}, &Error{Msg: "only a source and its stages select records here", Hint: "start the query with " + strings.Join(readSources(sources), ", ")}
+	}
+	if len(sources) > 0 && !contains(sources, q.Source) {
+		return Selection{}, &Error{Msg: fmt.Sprintf("the source %s is not read here", q.Source), Hint: "start the query with " + strings.Join(sources, ", ")}
+	}
+	rel, words, group, err := evalRead(env, q, false)
+	if err != nil {
+		return Selection{}, err
+	}
+	sel := Selection{Source: q.Source, Tables: encodeRelation(rel, words, group), Count: len(rel.rows)}
+	if rel.name == "count" && len(rel.rows) == 1 {
+		sel.Count, _ = strconv.Atoi(rel.rows[0][0])
+	}
+	records := rel.name == SourceNotes || rel.name == SourceReflections
+	for _, t := range sel.Tables {
+		ids := make([]string, len(t.Rows))
+		if records {
+			for r, row := range t.Rows {
+				ids[r] = row[0]
+			}
+		}
+		sel.IDs = append(sel.IDs, ids)
+	}
+	return sel, nil
+}
+
+func readSources(allowed []string) []string {
+	if len(allowed) > 0 {
+		return allowed
+	}
+	return []string{SourceNotes, SourceReflections, SourceHistory, SourceSaved}
+}
+
+// evalRead runs a source and its stages over env; defaultLimit cuts an unlimited query at
+// DefaultLimit, as the memory tool shows it.
+func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage, error) {
 	for i, stage := range q.Stages {
 		if stage.Kind == StageGroup && i != len(q.Stages)-1 {
-			return readOutput{}, &Error{Pos: stage.pos, Msg: "group by must be the last stage", Hint: "move limit, sort and where before group by"}
+			return nil, nil, nil, &Error{Pos: stage.pos, Msg: "group by must be the last stage", Hint: "move limit, sort and where before group by"}
 		}
 	}
 	rel, err := loadSource(env, q.Source)
 	if err != nil {
-		return readOutput{}, err
+		return nil, nil, nil, err
 	}
 	words := []string{}
 	limited := false
@@ -237,7 +360,7 @@ func runRead(env Env, q *Query) (readOutput, error) {
 		case StageWhere:
 			c, err := rel.fieldIndex(stage.Field, stage.fieldPos)
 			if err != nil {
-				return readOutput{}, err
+				return nil, nil, nil, err
 			}
 			value := stage.Value
 			if stage.Op == '~' {
@@ -249,7 +372,7 @@ func runRead(env Env, q *Query) (readOutput, error) {
 			}
 		case StageSince, StageUntil:
 			if rel.from == nil {
-				return readOutput{}, &Error{Pos: stage.pos, Msg: stage.Kind + " filters records, not counts", Hint: "put " + stage.Kind + " before count"}
+				return nil, nil, nil, &Error{Pos: stage.pos, Msg: stage.Kind + " filters records, not counts", Hint: "put " + stage.Kind + " before count"}
 			}
 			date := stage.Value
 			if stage.Kind == StageSince {
@@ -260,7 +383,7 @@ func runRead(env Env, q *Query) (readOutput, error) {
 		case StageSort:
 			c, err := rel.fieldIndex(stage.Field, stage.fieldPos)
 			if err != nil {
-				return readOutput{}, err
+				return nil, nil, nil, err
 			}
 			sortRelation(rel, c, stage.Desc)
 		case StageLimit:
@@ -268,29 +391,19 @@ func runRead(env Env, q *Query) (readOutput, error) {
 			rel.cut(stage.N)
 		case StageCount:
 			if err := countRelation(rel, stage); err != nil {
-				return readOutput{}, err
+				return nil, nil, nil, err
 			}
 		case StageGroup:
 			if _, err := rel.fieldIndex(stage.Field, stage.fieldPos); err != nil {
-				return readOutput{}, err
+				return nil, nil, nil, err
 			}
 			group = &q.Stages[i]
 		}
 	}
-	if !limited {
+	if !limited && defaultLimit {
 		rel.cut(DefaultLimit)
 	}
-	tablesOut := encodeRelation(rel, words, group)
-	out := readOutput{text: env.Codec.Encode(tablesOut...), shown: len(rel.rows), matched: rel.matched}
-	if rel.name == SourceNotes || rel.name == SourceReflections || rel.name == SourceSaved {
-		for _, row := range rel.rows {
-			out.hits = append(out.hits, row[0])
-		}
-	}
-	if rel.matched > len(rel.rows) {
-		out.text += fmt.Sprintf("\nmatched %d, showing %d", rel.matched, len(rel.rows))
-	}
-	return out, nil
+	return rel, words, group, nil
 }
 
 // sortRelation orders the rows by field c, numerically when both values are whole numbers.

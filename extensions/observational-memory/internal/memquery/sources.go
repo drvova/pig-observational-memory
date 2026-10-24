@@ -3,6 +3,7 @@ package memquery
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ var (
 	ReflectionFields = []string{"id", "dates", "content", "supports"}
 	HistoryFields    = []string{"id", "when", "role", "content"}
 	SavedFields      = []string{"name", "type", "scope", "updated", "description", "body"}
+	HarnessFields    = []string{"model", "kind", "name", "state", "generation", "origin", "stale"}
 )
 
 // savedQueryType is the type a defined query is listed under in saved.
@@ -35,6 +37,8 @@ func loadSource(env Env, source string) (*relation, error) {
 		return historyRelation(env), nil
 	case SourceSaved:
 		return savedRelation(env)
+	case SourceHarness:
+		return harnessRelation(env)
 	}
 	return nil, fmt.Errorf("unknown source %q", source)
 }
@@ -50,24 +54,49 @@ func dayOf(timestamp string) string {
 // notesRelation lists the folded ledger's active observations. A relative date in the content
 // is resolved against the record's date, as the memory view writes it.
 func notesRelation(env Env) *relation {
-	folded := ledger.FoldLedger(env.Entries, "")
+	var all, active []ledger.Observation
+	if env.Records != nil {
+		all, active = env.Records.Observations, env.Records.Observations
+	} else {
+		folded := ledger.FoldLedger(env.Entries, "")
+		all, active = folded.Observations, folded.ActiveObservations
+	}
 	supersededBy := map[string][]string{}
-	for _, o := range folded.Observations {
+	for _, o := range all {
 		for _, id := range o.Supersedes {
 			if id != o.ID && !contains(supersededBy[id], o.ID) {
 				supersededBy[id] = append(supersededBy[id], o.ID)
 			}
 		}
 	}
-	rel := &relation{name: SourceNotes, fields: NoteFields, rows: [][]string{}, from: []string{}, to: []string{}}
-	for _, o := range folded.ActiveObservations {
+	// Fields a note schema added (Observation.Fields) follow the kernel's, by name, when any
+	// note carries one; a note without one has it empty.
+	added := []string{}
+	for _, o := range active {
+		for name := range o.Fields {
+			if !contains(added, name) && !contains(NoteFields, name) {
+				added = append(added, name)
+			}
+		}
+	}
+	sort.Strings(added)
+	fields := NoteFields
+	if len(added) > 0 {
+		fields = append(append([]string{}, NoteFields...), added...)
+	}
+	rel := &relation{name: SourceNotes, fields: fields, rows: [][]string{}, from: []string{}, to: []string{}}
+	for _, o := range active {
 		day := dayOf(o.Timestamp)
 		content := o.Content
 		if day != "" {
 			anchor, _ := time.Parse("2006-01-02", day)
 			content = ledger.ResolveRelativeDates(content, anchor)
 		}
-		rel.rows = append(rel.rows, []string{o.ID, o.Timestamp, string(o.Kind), o.Subject, o.Scope, string(o.Relevance), content, strings.Join(supersededBy[o.ID], " ")})
+		row := []string{o.ID, o.Timestamp, string(o.Kind), o.Subject, o.Scope, string(o.Relevance), content, strings.Join(supersededBy[o.ID], " ")}
+		for _, name := range added {
+			row = append(row, o.Fields[name])
+		}
+		rel.rows = append(rel.rows, row)
 		rel.from, rel.to = append(rel.from, day), append(rel.to, day)
 	}
 	return rel
@@ -76,10 +105,16 @@ func notesRelation(env Env) *relation {
 // reflectionsRelation lists the folded ledger's reflections, dated by the observations they
 // cite.
 func reflectionsRelation(env Env) *relation {
-	folded := ledger.FoldLedger(env.Entries, "")
-	dates := ledger.ReflectionDateRanges(folded)
+	var reflections []ledger.Reflection
+	var dates map[string]string
+	if env.Records != nil {
+		reflections, dates = env.Records.Reflections, env.Records.ReflectionDates
+	} else {
+		folded := ledger.FoldLedger(env.Entries, "")
+		reflections, dates = folded.Reflections, ledger.ReflectionDateRanges(folded)
+	}
 	rel := &relation{name: SourceReflections, fields: ReflectionFields, rows: [][]string{}, from: []string{}, to: []string{}}
-	for _, r := range folded.Reflections {
+	for _, r := range reflections {
 		from, to, ranged := strings.Cut(dates[r.ID], " to ")
 		span := from
 		if ranged {
@@ -152,6 +187,26 @@ func savedRelation(env Env) (*relation, error) {
 		day := d.Created.Format("2006-01-02")
 		rel.rows = append(rel.rows, []string{d.Name, savedQueryType, "global", day, d.Description, d.Query})
 		rel.from, rel.to = append(rel.from, day), append(rel.to, day)
+	}
+	return rel, nil
+}
+
+// errLayerOff is the harness source's and writes' error without a layer.
+var errLayerOff = &Error{Msg: "the harness layer is not available here", Hint: "the layer needs the per-model harness and curated memory (curatedMemory: true)"}
+
+// harnessRelation lists the model's layer (Layerer.Listing), undated.
+func harnessRelation(env Env) (*relation, error) {
+	if env.Layer == nil {
+		return nil, errLayerOff
+	}
+	listing, err := env.Layer.Listing()
+	if err != nil {
+		return nil, err
+	}
+	rel := &relation{name: SourceHarness, fields: HarnessFields, rows: [][]string{}, from: []string{}, to: []string{}}
+	for _, r := range listing {
+		rel.rows = append(rel.rows, []string{r.Model, r.Kind, r.Name, r.State, r.Generation, r.Origin, r.Stale})
+		rel.from, rel.to = append(rel.from, ""), append(rel.to, "")
 	}
 	return rel, nil
 }

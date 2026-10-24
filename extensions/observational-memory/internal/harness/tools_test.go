@@ -2,15 +2,19 @@ package harness_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -448,4 +452,29 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// A defined tool written before the layer that the kernel refuses to migrate is not
+// registered, and the user is told why at registration and in /om:status.
+func TestRegisterStoredReportsRefusedMigration(t *testing.T) {
+	h, store, _ := session(t)
+	dir := filepath.Join(store.Dir, "definitions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	text := tables.Rows.Encode(tables.Table{Name: "definition", Fields: []string{"name", "query", "description", "created", "sources"}, Rows: [][]string{{"coverage", "notes", "Old.", "2026-05-02T10:00:00Z", "s0"}}})
+	if err := os.WriteFile(filepath.Join(dir, "coverage.rows"), []byte(text+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := harness.NewManager(func(host.ToolHost) (curated.Call, bool) { return curated.Call{Store: store}, true })
+	m.RegisterStored(h)
+	if len(h.Registered) != 0 {
+		t.Fatalf("registered %v", m.Registered())
+	}
+	if !hasMessage(h, "defined tool coverage was not migrated: refused") {
+		t.Fatalf("notifications %v", h.Messages())
+	}
+	if status := strings.Join(harness.StatusLines(h, config.Defaults), "\n"); !strings.Contains(status, "defined tool coverage was not migrated") {
+		t.Fatalf("status %s", status)
+	}
 }

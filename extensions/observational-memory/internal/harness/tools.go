@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
@@ -149,7 +150,7 @@ func (m *Manager) RunMemory(h host.ToolHost, query string) memquery.Result {
 	var before map[string]Standing
 	if on {
 		env.Saved = &call
-		env.Definer = definer{m: m, h: h, store: call.Store}
+		env.Definer = definer{m: m, h: h, store: call.Store, entries: entries}
 		env.DefinesTools = true
 		if key := ModelKey(h.SessionModel()); key != "" {
 			worker := key
@@ -157,6 +158,7 @@ func (m *Manager) RunMemory(h host.ToolHost, query string) memquery.Result {
 				worker = WorkerModelKey(h, m.Config(h))
 			}
 			env.Proposer = proposer{store: call.Store, session: key, worker: worker, entries: entries}
+			env.Layer = layerWriter{h: h, store: call.Store, session: key, worker: worker, entries: entries}
 		}
 		if q, err := memquery.Parse(query); err == nil && (q.Write == memquery.WriteFeedback || q.Write == memquery.WriteForget) {
 			before = m.states(call.Store)
@@ -239,7 +241,7 @@ func (p proposer) Propose(args map[string]string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Observational memory: rule %s proposed by %s for memory worker %s, on probation: it is established if %s falls for %s over its next %d memory passes, and retired otherwise.", r.Describe(), p.session, model, r.Detector, model, rules.MinEvidence), nil
+	return fmt.Sprintf("Observational memory: rule %s proposed by %s for memory worker %s, held until %s's next memory pass is clean, then on probation: it is established if %s falls for %s over its next %d memory passes, and retired otherwise.", r.Describe(), p.session, model, model, r.Detector, model, rules.MinEvidence), nil
 }
 
 // definer stores a definition and registers it at once as a tool of its name
@@ -248,14 +250,22 @@ type definer struct {
 	m     *Manager
 	h     host.ToolHost
 	store curated.Store
+	// entries is the branch the call was made on, for the provenance check.
+	entries []ledger.Entry
 }
 
 // Define refuses a name another tool holds (the host's built-ins, other extensions' tools, the
-// memory tool), stores the definition and registers it. A definition whose registration fails
-// is forgotten again, so nothing is stored that is not a tool.
+// memory tool), and a description or query that quotes output on the branch (the description
+// and the query reach the tool list of every later session, and text from files, web pages or
+// tool output never becomes a definition), stores the definition and registers it. A
+// definition whose registration fails is forgotten again, so nothing is stored that is not a
+// tool.
 func (d definer) Define(def curated.Definition, source string) (curated.Definition, error) {
 	if def.Name == memquery.ToolName {
 		return curated.Definition{}, fmt.Errorf("%q is the memory tool's own name; choose another name", def.Name)
+	}
+	if err := checkToolProvenance(d.entries, def); err != nil {
+		return curated.Definition{}, err
 	}
 	tools, err := d.h.AllTools()
 	if err != nil {
@@ -279,6 +289,20 @@ func (d definer) Define(def curated.Definition, source string) (curated.Definiti
 		return curated.Definition{}, fmt.Errorf("the definition could not be registered as a tool, so it was not kept: %w", err)
 	}
 	return saved, nil
+}
+
+// checkToolProvenance is the provenance check a defined tool from the model passes: its
+// description as any definition's text is (rules.CheckFromModel: the whole, or a quotation of
+// rules.MinCopiedWords words in it), and its query for quotations only, since a short query as
+// a whole may well match one the branch's output already shows.
+func checkToolProvenance(branch []ledger.Entry, def curated.Definition) error {
+	if err := rules.CheckFromModel(branch, layer.Definition{Kind: layer.KindTool, Name: def.Name, Model: layer.AllModels, Text: def.Description}); err != nil {
+		return fmt.Errorf("the description of %s: %w", def.Name, err)
+	}
+	if quoted, ok := rules.QuotedFromOutput(branch, def.Query); ok {
+		return fmt.Errorf("refused: the query of %s quotes text found in tool output, a file or another message on this branch (%q); a definition's text must be your own words", def.Name, quoted)
+	}
+	return nil
 }
 
 // register registers definition d as a tool and marks it registered and active. Registering
@@ -314,13 +338,19 @@ func (m *Manager) register(h host.ToolHost, d curated.Definition) error {
 // RegisterStored registers the store's definitions as tools, as the extension starts and at
 // each session start: every one not retired, not registered in this process yet, and whose
 // name no other tool holds. The user is warned of each one it skips for a collision or a
-// failed registration.
+// failed registration, and of each legacy definition the layer refused to migrate
+// (curated.Store.RefusedDefinitions).
 func (m *Manager) RegisterStored(h host.ToolHost) {
 	call, on := m.resolve(h)
 	if !on {
 		return
 	}
 	definitions, err := call.Store.ListDefinitions()
+	if refused, rerr := call.Store.RefusedDefinitions(); rerr == nil {
+		for _, r := range refused {
+			h.Notify(r.Message(), "warning")
+		}
+	}
 	if err != nil || len(definitions) == 0 {
 		return
 	}

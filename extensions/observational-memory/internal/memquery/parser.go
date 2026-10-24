@@ -13,10 +13,12 @@ const (
 	SourceHistory     = "history"
 	SourceSaved       = "saved"
 	SourceRecall      = "recall"
+	// SourceHarness lists the model's layer (docs/memory-interface.md, section 8).
+	SourceHarness = "harness"
 )
 
 // Sources lists the sources in the order the grammar names them.
-var Sources = []string{SourceNotes, SourceReflections, SourceHistory, SourceSaved, SourceRecall}
+var Sources = []string{SourceNotes, SourceReflections, SourceHistory, SourceSaved, SourceRecall, SourceHarness}
 
 // The stages of a read query.
 const (
@@ -41,10 +43,14 @@ const (
 	WriteFeedback = "feedback"
 	WriteDefine   = "define"
 	WritePropose  = "propose"
+	// WriteHarness defines, changes or forgets a layer definition (section 8).
+	WriteHarness = "harness"
+	// WriteRollback makes the model's layer what it was at an earlier generation.
+	WriteRollback = "rollback"
 )
 
 // Writes lists the writes in the order the grammar names them.
-var Writes = []string{WriteSave, WriteEdit, WriteForget, WriteFeedback, WriteDefine, WritePropose}
+var Writes = []string{WriteSave, WriteEdit, WriteForget, WriteFeedback, WriteDefine, WritePropose, WriteHarness, WriteRollback}
 
 // The limit stage's bounds: a query without one shows DefaultLimit rows.
 const (
@@ -59,7 +65,13 @@ var writeArgs = map[string]struct{ required, optional []string }{
 	WriteForget:   {required: []string{"name"}},
 	WriteFeedback: {required: []string{"name", "outcome", "quote"}},
 	WritePropose:  {required: []string{"detector", "remedy"}, optional: []string{"text", "kind", "fullness"}},
+	WriteHarness:  {required: []string{"kind", "name", "text"}},
+	// harnessForget is harness forget's keys.
+	harnessForget: {required: []string{"kind", "name"}},
 }
+
+// harnessForget is the writeArgs key of harness forget, which takes no text.
+const harnessForget = "harness forget"
 
 // Query is a parsed query: a read (Source and Stages) or a write.
 type Query struct {
@@ -74,7 +86,11 @@ type Query struct {
 	Args map[string]string
 	// Define is define's definition.
 	Define *Definition
-	pos    int
+	// Forget marks harness forget, which removes a layer definition.
+	Forget bool
+	// N is rollback's generation.
+	N   int
+	pos int
 }
 
 // Stage is one parsed stage.
@@ -134,6 +150,13 @@ func Parse(query string) (*Query, error) {
 			return p.parseDefine()
 		case WriteSave, WriteEdit, WriteForget, WriteFeedback, WritePropose:
 			return p.parseWrite()
+		case WriteRollback:
+			return p.parseRollback()
+		case WriteHarness:
+			// harness alone, or harness | stages, reads the layer; with arguments it writes.
+			if next := p.tokens[p.i+1]; next.kind != tokEOF && next.kind != tokPipe {
+				return p.parseWrite()
+			}
 		}
 	}
 	q, err := p.parseRead(false)
@@ -278,10 +301,15 @@ func (p *parser) parseStage() (Stage, error) {
 // arguments, each key once.
 func (p *parser) parseWrite() (*Query, error) {
 	t := p.next()
-	spec := writeArgs[t.text]
-	allowed := append(append([]string{}, spec.required...), spec.optional...)
-	usage := writeUsage(t.text)
 	q := &Query{Write: t.text, Args: map[string]string{}, pos: t.pos}
+	form := t.text
+	if t.text == WriteHarness && p.peek().kind == tokWord && p.peek().text == WriteForget {
+		p.next()
+		q.Forget, form = true, harnessForget
+	}
+	spec := writeArgs[form]
+	allowed := append(append([]string{}, spec.required...), spec.optional...)
+	usage := writeUsage(form)
 	for {
 		k := p.next()
 		if k.kind == tokEOF {
@@ -308,6 +336,35 @@ func (p *parser) parseWrite() (*Query, error) {
 	for _, key := range spec.required {
 		if _, ok := q.Args[key]; !ok {
 			return nil, errAt(t, "write "+usage, "%s needs %s=", t.text, key)
+		}
+	}
+	return q, nil
+}
+
+// parseRollback parses rollback N [model="<model id>"].
+func (p *parser) parseRollback() (*Query, error) {
+	t := p.next()
+	usage := writeUsage(WriteRollback)
+	n := p.next()
+	gen, err := strconv.Atoi(n.text)
+	if n.kind != tokWord || err != nil || gen < 0 {
+		return nil, errAt(n, "write "+usage+": N is a generation number, 0 for the seeds alone", "rollback needs a generation number, got %s", n.describe())
+	}
+	q := &Query{Write: WriteRollback, Args: map[string]string{}, N: gen, pos: t.pos}
+	if k := p.next(); k.kind != tokEOF {
+		if k.kind != tokWord || k.text != "model" {
+			return nil, errAt(k, "write "+usage, "rollback takes only model=, got %s", k.describe())
+		}
+		if eq := p.next(); eq.kind != tokEq {
+			return nil, errAt(eq, "write "+usage, "model needs = and a value, got %s", eq.describe())
+		}
+		v := p.next()
+		if v.kind != tokWord && v.kind != tokString {
+			return nil, errAt(v, `quote the model id: model="provider/id"`, "model= needs a value, got %s", v.describe())
+		}
+		q.Args["model"] = v.text
+		if rest := p.peek(); rest.kind != tokEOF {
+			return nil, errAt(rest, "write "+usage, "unexpected %s", rest.describe())
 		}
 	}
 	return q, nil
@@ -357,6 +414,12 @@ func writeUsage(write string) string {
 		return `define <name> = <query> "what it returns"`
 	case WritePropose:
 		return `propose detector=<detector> remedy=<remedy> [text="one line for your worker prompt"] [kind=<kind>] [fullness=<number>]`
+	case WriteHarness:
+		return `harness kind=format|schema|instructions|summary|detector|remedy name=<name> text="the declarative definition"`
+	case harnessForget:
+		return `harness forget kind=<kind> name=<name>`
+	case WriteRollback:
+		return `rollback <generation> [model="provider/id"]`
 	}
 	return write
 }

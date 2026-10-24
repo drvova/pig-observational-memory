@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 )
 
 func TestToChatRequestConvertsAPiToolLoop(t *testing.T) {
@@ -44,6 +45,12 @@ func TestToChatRequestConvertsAPiToolLoop(t *testing.T) {
 	}
 	if WorkerRole(request) != RoleObserver || WorkerRole(map[string]any{"systemPrompt": agents.ReflectorSystem}) != RoleReflector {
 		t.Fatal("worker role not detected")
+	}
+	// A prompt with the model's own instructions and rule lines after the kernel text is
+	// still its stage's.
+	own := agents.Compose(kernel.TextDropperRules, "Drop duplicates first.") + "\nMemory rules for this model:\n- keep figures\n"
+	if WorkerRole(map[string]any{"systemPrompt": own}) != RoleDropper || WorkerRole(map[string]any{"systemPrompt": "You answer questions."}) != RoleWorker {
+		t.Fatal("worker role not detected from a model's own instructions")
 	}
 }
 

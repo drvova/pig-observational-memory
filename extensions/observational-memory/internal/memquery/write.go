@@ -12,6 +12,21 @@ import (
 // runWrite applies a write. It returns the model's text and, for a save, edit, define or
 // propose, the user's notification.
 func runWrite(env Env, q *Query) (text, notify string, err error) {
+	if q.Write == WriteHarness || q.Write == WriteRollback {
+		// The layer tells the user of each change itself (held, claimed, reverted, rolled back).
+		if env.Layer == nil {
+			return "", "", errLayerOff
+		}
+		switch {
+		case q.Write == WriteRollback:
+			text, err = env.Layer.Rollback(q.N, q.Args["model"])
+		case q.Forget:
+			text, err = env.Layer.Forget(q.Args["kind"], q.Args["name"])
+		default:
+			text, err = env.Layer.Define(q.Args["kind"], q.Args["name"], q.Args["text"])
+		}
+		return text, "", err
+	}
 	if env.Saved == nil {
 		return "", "", errCuratedOff
 	}

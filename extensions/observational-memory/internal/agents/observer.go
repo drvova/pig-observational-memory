@@ -10,6 +10,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
@@ -40,10 +41,20 @@ type WorkerArgs struct {
 	// SystemLines are lines appended to the stage's system prompt: the prompt-line rules
 	// (docs/memory-interface.md, section 7) that apply to the worker model for this stage.
 	SystemLines []string
+	// Instructions are the model's own instructions for this stage (an instructions
+	// definition in its layer, docs/memory-interface.md section 8); "" keeps the seed. They
+	// replace the seed instructions only: the kernel's fixed rules still open the prompt.
+	Instructions string
 }
 
-// system is the stage's system prompt base with the worker's SystemLines appended.
-func (a WorkerArgs) system(base string) string {
+// system is the stage's system prompt: the kernel's fixed rules (textID), the stage's
+// instructions (the worker's own, else seed), and the worker's SystemLines appended.
+func (a WorkerArgs) system(textID, seed string) string {
+	instructions := seed
+	if strings.TrimSpace(a.Instructions) != "" {
+		instructions = a.Instructions
+	}
+	base := Compose(textID, instructions)
 	if len(a.SystemLines) == 0 {
 		return base
 	}
@@ -88,6 +99,42 @@ type ObserverArgs struct {
 	// Instruction, when set, is a harness instruction the user message carries before the
 	// chunk: a require-kind rule's re-ask over the entries it flagged.
 	Instruction string
+	// Schema is the worker model's note schema (docs/memory-interface.md, section 8): the
+	// structured fields its notes carry beyond the kernel's, offered in the tool's parameters
+	// and the rows columns, validated and stored with each note. nil offers section 2's four
+	// fields, as the seed schema does.
+	Schema *ledger.NoteSchema
+}
+
+// defaultSchemaFields are the structured fields the observer offers without a schema: section
+// 2's kind, subject, scope and supersedes, as the seed schema declares them.
+var defaultSchemaFields = []ledger.SchemaField{
+	{Name: ledger.NoteFieldKind, Type: ledger.FieldEnum, Values: kindStrings()},
+	{Name: ledger.NoteFieldSubject, Type: ledger.FieldText, Description: "Short lowercase noun phrase grouping related observations, e.g. 'baking', 'gaming hours'."},
+	{Name: ledger.NoteFieldScope, Type: ledger.FieldText, Description: "Qualifier that tells two figures apart, e.g. 'hard difficulty', 'on edX'."},
+	{Name: ledger.NoteFieldSupersedes, Type: ledger.FieldIDs, Description: "Ids of earlier observations this one replaces. Only when the user explicitly corrects or replaces them."},
+}
+
+// DefaultSchemaFields are the fields the observer offers without a schema, for the seed's
+// identity test.
+func DefaultSchemaFields() []ledger.SchemaField {
+	return append([]ledger.SchemaField(nil), defaultSchemaFields...)
+}
+
+func kindStrings() []string {
+	out := make([]string, 0, len(ledger.ObservationKindValues))
+	for _, k := range ledger.ObservationKindValues {
+		out = append(out, string(k))
+	}
+	return out
+}
+
+// schemaFields are the structured fields this run offers.
+func (a ObserverArgs) schemaFields() []ledger.SchemaField {
+	if a.Schema == nil {
+		return defaultSchemaFields
+	}
+	return a.Schema.Fields
 }
 
 // The outcomes ObserverArgs.RecordDecode is told.
@@ -117,15 +164,57 @@ func (a ObserverArgs) codec() Codec {
 	return a.Codec
 }
 
-// recordObservationsSchema is the record_observations parameter schema, with
-// the rows example written in codec.
-func recordObservationsSchema(codec Codec, spec string) map[string]any {
+// recordObservationsSchema is the record_observations parameter schema for the structured
+// fields offered, with the rows example written in codec.
+func recordObservationsSchema(codec Codec, spec string, fields []ledger.SchemaField) map[string]any {
+	row := []string{"2026-05-02 10:30", "high"}
+	absent := []bool{false, false}
+	for _, f := range fields {
+		value := ""
+		switch f.Name {
+		case ledger.NoteFieldKind:
+			value = f.Values[0]
+			if containsValue(f.Values, "fact") {
+				value = "fact"
+			}
+		case ledger.NoteFieldSubject:
+			value = "baking"
+		}
+		row, absent = append(row, value), append(absent, value == "")
+	}
+	row, absent = append(row, "entry-a", "User bakes sourdough weekly."), append(absent, false, false)
 	example := codec.Encode(Table{
 		Name:   "observations",
-		Fields: observationRowFields,
-		Rows:   [][]string{{"2026-05-02 10:30", "high", "fact", "baking", "", "", "entry-a", "User bakes sourdough weekly."}},
-		Absent: [][]bool{{false, false, false, false, true, true, false, false}},
+		Fields: observationRowFields(fields),
+		Rows:   [][]string{row},
+		Absent: [][]bool{absent},
 	})
+	properties := map[string]any{
+		"timestamp": map[string]any{
+			"type":        "string",
+			"pattern":     ObservationTimestampPattern,
+			"description": "Observation time in local 'YYYY-MM-DD HH:MM' format.",
+		},
+		"content": map[string]any{
+			"type":        "string",
+			"minLength":   1,
+			"description": "Single-line plain prose. No markdown, no tags, no embedded timestamp.",
+		},
+		"relevance": map[string]any{
+			"type": "string",
+			"enum": []any{"low", "medium", "high", "critical"},
+		},
+		"sourceEntryIds": map[string]any{
+			"type":     "array",
+			"minItems": 1,
+			"items":    map[string]any{"type": "string", "minLength": 1},
+			"description": "Exact source entry ids from the chunk that directly support this observation. " +
+				"Use only ids shown in '[Source entry id: ...]' labels; never invent ids.",
+		},
+	}
+	for _, f := range fields {
+		properties[f.Name] = fieldProperty(f)
+	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -134,48 +223,9 @@ func recordObservationsSchema(codec Codec, spec string) map[string]any {
 				"minItems":    1,
 				"description": "Batch of new observations (or pass rows instead). May be empty only if the tool is not called at all.",
 				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"timestamp": map[string]any{
-							"type":        "string",
-							"pattern":     ObservationTimestampPattern,
-							"description": "Observation time in local 'YYYY-MM-DD HH:MM' format.",
-						},
-						"content": map[string]any{
-							"type":        "string",
-							"minLength":   1,
-							"description": "Single-line plain prose. No markdown, no tags, no embedded timestamp.",
-						},
-						"relevance": map[string]any{
-							"type": "string",
-							"enum": []any{"low", "medium", "high", "critical"},
-						},
-						"sourceEntryIds": map[string]any{
-							"type":     "array",
-							"minItems": 1,
-							"items":    map[string]any{"type": "string", "minLength": 1},
-							"description": "Exact source entry ids from the chunk that directly support this observation. " +
-								"Use only ids shown in '[Source entry id: ...]' labels; never invent ids.",
-						},
-						"kind": map[string]any{
-							"type": "string",
-							"enum": observationKindEnum(),
-						},
-						"subject": map[string]any{
-							"type":        "string",
-							"description": "Short lowercase noun phrase grouping related observations, e.g. 'baking', 'gaming hours'.",
-						},
-						"scope": map[string]any{
-							"type":        "string",
-							"description": "Qualifier that tells two figures apart, e.g. 'hard difficulty', 'on edX'.",
-						},
-						"supersedes": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string", "pattern": ledger.MemoryIDPattern.String()},
-							"description": "Ids of earlier observations this one replaces. Only when the user explicitly corrects or replaces them.",
-						},
-					},
-					"required": []any{"timestamp", "content", "relevance", "sourceEntryIds"},
+					"type":       "object",
+					"properties": properties,
+					"required":   []any{"timestamp", "content", "relevance", "sourceEntryIds"},
 				},
 			},
 			"rows": map[string]any{
@@ -188,19 +238,52 @@ func recordObservationsSchema(codec Codec, spec string) map[string]any {
 	}
 }
 
-// observationRowFields are the columns of the record_observations rows table.
-var observationRowFields = []string{"timestamp", "relevance", "kind", "subject", "scope", "supersedes", "sourceEntryIds", "content"}
+// fieldProperty is one structured field's parameter schema.
+func fieldProperty(f ledger.SchemaField) map[string]any {
+	p := map[string]any{"type": "string"}
+	switch {
+	case f.Name == ledger.NoteFieldSupersedes:
+		p = map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": ledger.MemoryIDPattern.String()}}
+	case f.Type == ledger.FieldEnum:
+		values := make([]any, 0, len(f.Values))
+		for _, v := range f.Values {
+			values = append(values, v)
+		}
+		p["enum"] = values
+	case f.Type == ledger.FieldNumber:
+		p["pattern"] = ledger.NumberPattern
+	case f.Type == ledger.FieldDate:
+		p["pattern"] = ledger.DatePattern
+	case f.Type == ledger.FieldText && !f.Builtin():
+		p["maxLength"] = f.Max
+	}
+	if f.Description != "" {
+		p["description"] = f.Description
+	}
+	return p
+}
+
+// observationRowFields are the columns of the record_observations rows table: the kernel's
+// timestamp and relevance, the structured fields offered, then sourceEntryIds and content.
+func observationRowFields(fields []ledger.SchemaField) []string {
+	out := []string{"timestamp", "relevance"}
+	for _, f := range fields {
+		out = append(out, f.Name)
+	}
+	return append(out, "sourceEntryIds", "content")
+}
+
+func containsValue(values []string, value string) bool {
+	for _, v := range values {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
 
 // observationRowRequired are the rows-table columns every table must have.
 var observationRowRequired = []string{"timestamp", "relevance", "sourceEntryIds", "content"}
-
-func observationKindEnum() []any {
-	out := make([]any, 0, len(ledger.ObservationKindValues))
-	for _, kind := range ledger.ObservationKindValues {
-		out = append(out, string(kind))
-	}
-	return out
-}
 
 // priorObservationID reads the id a "[id] ..." observation line starts with.
 var priorObservationID = regexp.MustCompile(`^\[([a-f0-9]{12})\]`)
@@ -291,12 +374,12 @@ func normalizeObservationContent(content string) (string, bool) {
 // item maps the observations parameter carries, so both share one validation
 // path. Absent cells are left out; sourceEntryIds and supersedes split on
 // white space. Unknown or missing required columns fail the whole table.
-func observationRowItems(codec Codec, text string) ([]any, string, error) {
+func observationRowItems(codec Codec, text string, fields []ledger.SchemaField) ([]any, string, error) {
 	tables, err := codec.Decode(strings.TrimSpace(text))
 	if err != nil {
 		return nil, DecodeError, err
 	}
-	items, err := observationTableItems(tables)
+	items, err := observationTableItems(tables, observationRowFields(fields))
 	if err != nil {
 		return nil, DecodeColumns, err
 	}
@@ -305,18 +388,18 @@ func observationRowItems(codec Codec, text string) ([]any, string, error) {
 
 // observationTableItems checks a decoded rows text's shape (one table, known columns, the
 // required ones present) and turns its rows into item maps.
-func observationTableItems(tables []Table) ([]any, error) {
+func observationTableItems(tables []Table, rowFields []string) ([]any, error) {
 	if len(tables) != 1 {
 		return nil, fmt.Errorf("expected one table, found %d; send exactly one observations table", len(tables))
 	}
 	table := tables[0]
 	allowed := map[string]bool{}
-	for _, field := range observationRowFields {
+	for _, field := range rowFields {
 		allowed[field] = true
 	}
 	for _, field := range table.Fields {
 		if !allowed[field] {
-			return nil, fmt.Errorf("unknown column %q; use only %s", field, strings.Join(observationRowFields, ","))
+			return nil, fmt.Errorf("unknown column %q; use only %s", field, strings.Join(rowFields, ","))
 		}
 	}
 	for _, field := range observationRowRequired {
@@ -347,19 +430,43 @@ func observationTableItems(tables []Table) ([]any, error) {
 	return items, nil
 }
 
-// applyObservationStructure copies an item's optional structured fields onto
-// observation: a kind outside the enum is cleared, the subject is normalized,
-// and supersedes keeps only ids isKnown accepts (never the record's own). It
-// returns how many supersedes ids it dropped.
-func applyObservationStructure(observation *ledger.Observation, item map[string]any, isKnown func(string) bool) int {
-	if kind, _ := item["kind"].(string); ledger.IsObservationKind(kind) {
-		observation.Kind = ledger.ObservationKind(kind)
+// applyObservationStructure copies an item's optional structured fields offered (fields) onto
+// observation: a kind outside the declared values is cleared, the subject is normalized,
+// supersedes keeps only ids isKnown accepts (never the record's own), and a field the schema
+// adds is stored when its declaration accepts the value (ledger.SchemaField.Normalize). A
+// field not offered is ignored. It returns how many supersedes ids it dropped.
+func applyObservationStructure(observation *ledger.Observation, item map[string]any, isKnown func(string) bool, fields []ledger.SchemaField) int {
+	offered := map[string]ledger.SchemaField{}
+	for _, f := range fields {
+		offered[f.Name] = f
+		if f.Builtin() {
+			continue
+		}
+		raw, _ := item[f.Name].(string)
+		if value, ok := f.Normalize(raw); ok {
+			if observation.Fields == nil {
+				observation.Fields = map[string]string{}
+			}
+			observation.Fields[f.Name] = value
+		}
 	}
-	if subject, ok := item["subject"].(string); ok {
-		observation.Subject = ledger.NormalizeSubject(subject)
+	if f, ok := offered[ledger.NoteFieldKind]; ok {
+		if kind, _ := item["kind"].(string); ledger.IsObservationKind(kind) && containsValue(f.Values, kind) {
+			observation.Kind = ledger.ObservationKind(kind)
+		}
 	}
-	if scope, ok := item["scope"].(string); ok {
-		observation.Scope = ledger.NormalizeScope(scope)
+	if _, ok := offered[ledger.NoteFieldSubject]; ok {
+		if subject, ok := item["subject"].(string); ok {
+			observation.Subject = ledger.NormalizeSubject(subject)
+		}
+	}
+	if _, ok := offered[ledger.NoteFieldScope]; ok {
+		if scope, ok := item["scope"].(string); ok {
+			observation.Scope = ledger.NormalizeScope(scope)
+		}
+	}
+	if _, ok := offered[ledger.NoteFieldSupersedes]; !ok {
+		return 0
 	}
 	proposed, _ := StringList(item["supersedes"])
 	if text, ok := item["supersedes"].(string); ok {
@@ -402,6 +509,7 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 		return ObserverResult{}, nil
 	}
 	codec := args.codec()
+	fields := args.schemaFields()
 	accumulated := map[string]ledger.Observation{}
 	order := []string{}
 	known := map[string]bool{}
@@ -416,12 +524,12 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 		Description: "Record a batch of new observations distilled from the conversation chunk. " +
 			"Call this multiple times as you work through the chunk. Stop calling when coverage is complete, " +
 			"then emit a short plain-text confirmation to end the run.",
-		Parameters: recordObservationsSchema(codec, args.spec()),
+		Parameters: recordObservationsSchema(codec, args.spec(), fields),
 		Execute: func(_ context.Context, params map[string]any) (ToolResult, error) {
 			added, duplicates, rejected, invalid, droppedSupersedes := 0, 0, 0, 0, 0
 			items, _ := params["observations"].([]any)
 			if rowsText, _ := params["rows"].(string); strings.TrimSpace(rowsText) != "" {
-				rowItems, outcome, err := observationRowItems(codec, rowsText)
+				rowItems, outcome, err := observationRowItems(codec, rowsText, fields)
 				args.recordDecode(outcome)
 				if err != nil {
 					return ToolResult{Text: "rows not recorded: " + err.Error() + ". Nothing from this call was recorded; fix the table and call again.", Details: map[string]any{"added": 0, "total": len(accumulated)}}, nil
@@ -480,7 +588,7 @@ func RunObserverDetailed(ctx context.Context, args ObserverArgs) (ObserverResult
 			recordedIDs := make([]string, 0, len(candidates))
 			for _, c := range candidates {
 				observation := c.observation
-				droppedSupersedes += applyObservationStructure(&observation, c.item, isKnown)
+				droppedSupersedes += applyObservationStructure(&observation, c.item, isKnown, fields)
 				accumulated[observation.ID] = observation
 				order = append(order, observation.ID)
 				recordedIDs = append(recordedIDs, observation.ID+" ("+clipForAck(observation.Content)+")")
@@ -531,7 +639,7 @@ ROWS FORMAT (` + codec.Name() + `), for the rows parameter:
 NEW CONVERSATION CHUNK:
 ` + conversation
 
-	result, err := RunLoop(ctx, args.Stream, args.loopConfig("observer"), args.system(ObserverSystem), userText, []Tool{recordObservations})
+	result, err := RunLoop(ctx, args.Stream, args.loopConfig("observer"), args.system(kernel.TextObserverRules, ObserverInstructions), userText, []Tool{recordObservations})
 	if err != nil {
 		return ObserverResult{}, err
 	}

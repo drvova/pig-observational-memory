@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -27,8 +28,9 @@ func ObservationToSummaryLine(observation Observation) string {
 // ObservationToObserverLine renders an observation for the observer's input:
 // the summary line followed by its structured fields in braces, as
 // "{kind: fact; subject: baking; scope: on edX; supersedes: id1 id2}", so the
-// observer can reuse subjects and compare scopes. Empty fields are left out,
-// and a record without any renders exactly as its summary line.
+// observer can reuse subjects and compare scopes, then the fields its note
+// schema added (Observation.Fields) by name. Empty fields are left out, and a
+// record without any renders exactly as its summary line.
 func ObservationToObserverLine(observation Observation) string {
 	var fields []string
 	if observation.Kind != "" {
@@ -42,6 +44,18 @@ func ObservationToObserverLine(observation Observation) string {
 	}
 	if len(observation.Supersedes) > 0 {
 		fields = append(fields, "supersedes: "+strings.Join(observation.Supersedes, " "))
+	}
+	// Fields the writing model's note schema added, by name, so the observer sees what it
+	// stored.
+	added := make([]string, 0, len(observation.Fields))
+	for name := range observation.Fields {
+		added = append(added, name)
+	}
+	sort.Strings(added)
+	for _, name := range added {
+		if value := observation.Fields[name]; value != "" {
+			fields = append(fields, name+": "+value)
+		}
 	}
 	line := ObservationToSummaryLine(observation)
 	if len(fields) == 0 {

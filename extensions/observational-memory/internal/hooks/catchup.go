@@ -74,6 +74,8 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 	}
 	branch := entries
 	for chunkIndex := 0; chunkIndex < args.MaxChunks && len(remaining) > 0; chunkIndex++ {
+		// Each chunk is one pass with one layer snapshot (layerFor).
+		ctx := withPassLayers(ctx)
 		if ctx.Err() != nil {
 			result.StoppedBecause = "aborted"
 			return result
@@ -104,7 +106,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		used := current
 		outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, current, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
 			used = worker
-			return runObserver(ctx, observerArgs(cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
+			return runObserver(ctx, observerArgs(ctx, cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
 		})
 		if resolver.fallbackActive != nil && !current.FallbackUsed {
 			// Later chunks go straight to the fallback that worked, sized by its own
@@ -120,6 +122,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			}
 			debuglog.Log(ctx, "compaction.catch_up.error", map[string]any{"chunkIndex": chunkIndex, "errorMessage": err.Error()})
 			notifyUI(h, "Observational memory: catch-up observer failed: "+err.Error(), "warning")
+			settlePass(ctx, cfg, h, err)
 			result.StoppedBecause = "error"
 			return result
 		}
@@ -147,6 +150,12 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 		if data == nil {
 			debuglog.Log(ctx, "compaction.catch_up.empty", map[string]any{"chunkIndex": chunkIndex, "coversUpToId": coversUpToID})
+			if len(observations) == 0 && ctx.Err() == nil {
+				// An empty chunk is counted like the background stage's, and proves nothing.
+				chunk := observerChunk{branch: branch, serialized: serialized, known: fullMemory.Observations}
+				recordEmptyPass(ctx, cfg, h, used.Model, emptyObserverPass(ctx, cfg, h, used.Model, chunk, coversUpToID))
+				settlePass(ctx, cfg, h, nil)
+			}
 			result.StoppedBecause = "empty"
 			return result
 		}
@@ -158,6 +167,8 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 		}
 		result.ChunksRecorded++
 		recordPass(ctx, cfg, h, used.Model, pass)
+		// Each chunk is a pass: it proves (or reverts) the held definitions it ran with.
+		settlePass(ctx, cfg, h, nil)
 		debuglog.Log(ctx, "compaction.catch_up.recorded", map[string]any{"chunkIndex": chunkIndex, "count": len(observations), "coversUpToId": coversUpToID})
 
 		// Coverage is positional: everything at or before the marker counts as

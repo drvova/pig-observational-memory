@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
@@ -350,5 +352,117 @@ func TestDefinitionQueryIsBounded(t *testing.T) {
 	}
 	if err := s.ForgetDefinition("hand"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("forget twice = %v", err)
+	}
+}
+
+// Definitions written before the layer move into it on first use: the layer file holds the
+// same row, the legacy file is kept renamed, a name the kernel owns is kept refused and never
+// applied, and a store with nothing to migrate keeps working.
+func TestDefinitionsMigrateToTheLayer(t *testing.T) {
+	s := testStore(t)
+	if list, err := s.ListDefinitions(); err != nil || len(list) != 0 {
+		t.Fatalf("empty store: %+v, %v", list, err)
+	}
+	legacy := func(name, query string) {
+		t.Helper()
+		text := tables.Rows.Encode(tables.Table{Name: definitionTable, Fields: definitionFields, Rows: [][]string{{name, query, "Old.", "2026-05-02T10:00:00Z", "s0"}}})
+		if err := os.MkdirAll(s.legacyDefinitionsDir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.legacyDefinitionPath(name), []byte(text+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacy("old-bakes", "notes | where subject=baking")
+	legacy("count", "notes | count")
+	list, err := s.ListDefinitions()
+	if err != nil || len(list) != 1 || list[0].Name != "old-bakes" || list[0].Query != "notes | where subject=baking" || list[0].Sources[0] != "s0" {
+		t.Fatalf("migrated %+v, %v", list, err)
+	}
+	if _, err := os.Stat(s.definitionPath("old-bakes")); err != nil {
+		t.Fatalf("no layer file: %v", err)
+	}
+	if _, err := os.Stat(s.legacyDefinitionPath("old-bakes") + migratedSuffix); err != nil {
+		t.Fatalf("the legacy file was not kept: %v", err)
+	}
+	if _, err := os.Stat(s.legacyDefinitionPath("count") + refusedSuffix); err != nil {
+		t.Fatalf("a kernel-owned legacy name was not kept refused: %v", err)
+	}
+	if gens, _ := s.Layer().Generations(layer.AllModels); len(gens) != 1 || gens[0].Session != "s0" {
+		t.Fatalf("generations %+v", gens)
+	}
+	// Run again: nothing left to migrate, nothing changes.
+	if list, _ := s.ListDefinitions(); len(list) != 1 {
+		t.Fatalf("second list %+v", list)
+	}
+	// A legacy name collides with a save as a defined query did.
+	legacy("legacy-tool", "notes")
+	if _, err := s.Save(Memory{Name: "legacy-tool", Type: TypeUser, Description: "x"}, ""); err == nil || !strings.Contains(err.Error(), "defined query") {
+		t.Fatalf("save over a legacy definition: %v", err)
+	}
+}
+
+// A definition the kernel owns is refused, and the refusal names the owner.
+func TestDefineRefusesKernelNames(t *testing.T) {
+	s := testStore(t)
+	for name, owner := range map[string]string{"memory": kernel.OwnerMemoryTool, "notes": kernel.OwnerQuerySource, "rollback": kernel.OwnerQueryWrite, "coverage": kernel.OwnerInvariant} {
+		_, err := s.Define(Definition{Name: name, Query: "notes", Description: "x"}, "s1")
+		if r, ok := kernel.AsRefusal(err); !ok || r.Owner != owner {
+			t.Errorf("define %s: %v; want a refusal naming %q", name, err, owner)
+		}
+	}
+	// An event outcome or a room name shadows nothing a tool can reach, so a tool may hold it.
+	for _, name := range []string{"error", "room"} {
+		if _, err := s.Define(Definition{Name: name, Query: "notes", Description: "x"}, "s1"); err != nil {
+			t.Errorf("define %s: %v", name, err)
+		}
+	}
+}
+
+// A legacy defined tool the kernel owns is not migrated, and RefusedDefinitions says why; one
+// named after an event outcome or a room name (owned only for the kinds that read the ledger)
+// migrates; and a refused one migrates once the layer admits it.
+func TestMigrationReportsKernelRefusals(t *testing.T) {
+	s := testStore(t)
+	if err := os.MkdirAll(s.legacyDefinitionsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"coverage", "harness", "error", "room", "shown"} {
+		text := tables.Rows.Encode(tables.Table{Name: definitionTable, Fields: definitionFields, Rows: [][]string{{name, "notes", "Old.", "2026-05-02T10:00:00Z", "s0"}}})
+		if err := os.WriteFile(s.legacyDefinitionPath(name), []byte(text+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.ListDefinitions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, d := range list {
+		got = append(got, d.Name)
+	}
+	if strings.Join(got, ",") != "error,room,shown" {
+		t.Fatalf("migrated %v", got)
+	}
+	refused, err := s.RefusedDefinitions()
+	if err != nil || len(refused) != 2 {
+		t.Fatalf("refused %+v, %v", refused, err)
+	}
+	for _, r := range refused {
+		owner := map[string]string{"coverage": kernel.OwnerInvariant, "harness": kernel.OwnerQueryWrite}[r.Name]
+		if owner == "" || !strings.Contains(r.Reason, owner) || !strings.Contains(r.Message(), "defined tool "+r.Name+" was not migrated") {
+			t.Errorf("refusal %+v; want one naming %q", r, owner)
+		}
+	}
+	// The user lowers the floor: the refused files are retried and migrate.
+	s.Floor = &kernel.Floor{Record: s.Layer().RecordFloor}
+	if err := s.Floor.Lower("drvova", "recovering old tools"); err != nil {
+		t.Fatal(err)
+	}
+	if refused, _ := s.RefusedDefinitions(); len(refused) != 0 {
+		t.Fatalf("still refused under a lowered floor: %+v", refused)
+	}
+	if _, err := os.Stat(s.legacyDefinitionPath("coverage") + migratedSuffix); err != nil {
+		t.Fatalf("a retried file was not kept as migrated: %v", err)
 	}
 }

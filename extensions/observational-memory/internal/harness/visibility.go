@@ -34,7 +34,7 @@ func VisibilityOf(entries []ledger.Entry, indexShown []string) Visibility {
 	if !ok || summary == "" {
 		return v
 	}
-	spanStarts := omittedSpanStarts(summary)
+	spanStarts := omittedSpanStarts(summary, details)
 	ids := []string{}
 	for _, r := range details.Reflections {
 		ids = append(ids, r.ID)
@@ -53,14 +53,16 @@ func VisibilityOf(entries []ledger.Entry, indexShown []string) Visibility {
 }
 
 // omittedSpanStarts are the first ids of the omitted spans a tables summary lists, decoded in
-// whichever codec wrote it. A lines summary, or one no codec decodes, lists none.
-func omittedSpanStarts(summary string) map[string]bool {
+// the codec the compaction recorded writing it (details.SummaryCodec, with its declaration
+// when a model declared it), else in whichever shipped codec decodes it. A lines summary, or
+// one no codec decodes, lists none.
+func omittedSpanStarts(summary string, details ledger.MemoryDetails) map[string]bool {
 	out := map[string]bool{}
 	body, ok := ledger.TablesSummaryBody(summary)
 	if !ok {
 		return out
 	}
-	for _, codec := range tables.Codecs() {
+	for _, codec := range summaryCodecs(details) {
 		decoded, err := codec.Decode(body)
 		if err != nil {
 			continue
@@ -78,6 +80,21 @@ func omittedSpanStarts(summary string) map[string]bool {
 		break
 	}
 	return out
+}
+
+// summaryCodecs are the codecs to decode a compaction's summary with: the one it recorded
+// writing it, else the shipped codecs in order.
+func summaryCodecs(details ledger.MemoryDetails) []tables.Codec {
+	if details.SummaryFormat != "" {
+		if f, err := tables.ParseFormat(details.SummaryCodec, details.SummaryFormat); err == nil {
+			if c, err := tables.Declared(f); err == nil {
+				return []tables.Codec{c}
+			}
+		}
+	} else if c, ok := tables.Lookup(details.SummaryCodec); ok {
+		return []tables.Codec{c}
+	}
+	return tables.Codecs()
 }
 
 // Classify is the outcome of a memory query that showed hits: OutcomeOmitted (with

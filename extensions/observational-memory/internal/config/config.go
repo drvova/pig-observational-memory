@@ -104,6 +104,18 @@ type Config struct {
 	// MemoryFormat is the compaction summary's layout, one of
 	// MemoryFormatValues (ledger.RenderOptions.Format).
 	MemoryFormat string
+	// KernelFloor is the user's request to lower the kernel floor
+	// (docs/memory-interface.md, section 8), nil when the floor stays engaged.
+	// Configuration is the only way to lower it: the model cannot.
+	KernelFloor *FloorRequest
+}
+
+// FloorRequest is the configured request to lower the kernel floor: who asked
+// and why. Both are recorded before the lowering takes effect, and a request
+// missing either is refused (kernel.Floor.Lower).
+type FloorRequest struct {
+	RequestedBy string `json:"requestedBy"`
+	Reason      string `json:"reason"`
 }
 
 // Defaults are the built-in settings.
@@ -330,6 +342,10 @@ type partial struct {
 	bools    map[string]bool
 	model    *ConfiguredModel
 	fallback *ConfiguredModel
+	// floor is kernelFloor's request when floorSet; nil with floorSet is an
+	// explicit lower: false, which overrides a lower-priority source's request.
+	floor    *FloorRequest
+	floorSet bool
 }
 
 var numberKeys = []string{
@@ -374,7 +390,28 @@ func normalizeSettings(value map[string]any) partial {
 	}
 	p.model = normalizeModel(value["model"])
 	p.fallback = normalizeModel(value["fallbackModel"])
+	p.floor, p.floorSet = normalizeFloor(value["kernelFloor"])
 	return p
+}
+
+// normalizeFloor reads kernelFloor: {"lower": true, "requestedBy": "...",
+// "reason": "..."}. A request with lower true is kept even without who or why,
+// so lowering refuses it and says so; lower false is an explicit engage.
+func normalizeFloor(v any) (*FloorRequest, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	lower, ok := m["lower"].(bool)
+	if !ok {
+		return nil, false
+	}
+	if !lower {
+		return nil, true
+	}
+	requestedBy, _ := m["requestedBy"].(string)
+	reason, _ := m["reason"].(string)
+	return &FloorRequest{RequestedBy: requestedBy, Reason: reason}, true
 }
 
 func (p partial) apply(cfg *Config, target *int, targetSet *bool) {
@@ -438,6 +475,9 @@ func (p partial) apply(cfg *Config, target *int, targetSet *bool) {
 	}
 	if p.fallback != nil {
 		cfg.FallbackModel = p.fallback
+	}
+	if p.floorSet {
+		cfg.KernelFloor = p.floor
 	}
 }
 
@@ -541,7 +581,13 @@ func Load(cwd string, paths Paths, lookupEnv func(string) (string, bool)) Config
 	cfg.ObservationsPoolTargetTokens = 0
 	target, targetSet := 0, false
 	readNamespaced(globalPath).apply(&cfg, &target, &targetSet)
-	readNamespaced(projectPath).apply(&cfg, &target, &targetSet)
+	project := readNamespaced(projectPath)
+	if project.floor != nil {
+		// A project's settings travel with its repository, so they can keep the
+		// kernel floor engaged but never lower it: only the user's own settings do.
+		project.floor, project.floorSet = nil, false
+	}
+	project.apply(&cfg, &target, &targetSet)
 	if passive, set := ReadEnvPassive(lookupEnv); set {
 		cfg.Passive = passive
 	}

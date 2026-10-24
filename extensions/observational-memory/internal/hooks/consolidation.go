@@ -33,6 +33,9 @@ var (
 	runObserver  = agents.RunObserverDetailed
 	runReflector = agents.RunReflector
 	runDropper   = agents.RunDropper
+	// runBuilder is the harness build and revision passes' worker (docs/memory-interface.md,
+	// section 8).
+	runBuilder = agents.RunBuilder
 )
 
 // ConsolidationHooks are callbacks around the consolidation trigger.
@@ -411,6 +414,9 @@ func runStageWithFallback[T any](ctx context.Context, h host.Host, stage runtime
 	if fallback == nil {
 		return value, err
 	}
+	// The primary's pass failed even if the fallback's succeeds: its held definitions are
+	// not proven by it.
+	failPass(ctx, resolved.Model, "a kernel error: the worker call failed: "+err.Error())
 	// Resolving the fallback can take a while (an OAuth refresh, the
 	// availability re-check); the run may have been aborted meanwhile.
 	if ctx.Err() != nil {
@@ -576,7 +582,7 @@ func MaybeLaunchConsolidation(rt *runtime.Runtime, h host.Host) <-chan struct{} 
 		return nil
 	}
 	current, hasCurrent := realContextTokens(h)
-	if !anyStageDue(rt, h, entries, cfg, current, hasCurrent) {
+	if _, _, build := buildDue(h, cfg); !build && !anyStageDue(rt, h, entries, cfg, current, hasCurrent) {
 		return nil
 	}
 	scope := debuglog.Context{Enabled: cfg.DebugLog, Cwd: h.Cwd(), SessionID: h.SessionID(), SessionFile: h.SessionFile(), RunID: newRunID("consolidation")}
@@ -585,51 +591,69 @@ func MaybeLaunchConsolidation(rt *runtime.Runtime, h host.Host) <-chan struct{} 
 	})
 }
 
-// RunConsolidationPipeline runs the observer, reflector and dropper stages.
+// RunConsolidationPipeline runs the harness build pass when the memory model has no layer yet,
+// the observer, reflector and dropper stages, and then a revision pass when one is due
+// (docs/memory-interface.md, section 8). An aborted run (Runtime.AbortConsolidation) stops at
+// its next check.
 func RunConsolidationPipeline(ctx context.Context, rt *runtime.Runtime, h host.Host) error {
 	resolver := &modelResolver{rt: rt, h: h}
+	if store, model, due := buildDue(h, rt.Config()); due {
+		rt.SetConsolidationPhase(runtime.PhaseHarness)
+		runHarnessPass(ctx, rt, h, resolver, store, model, nil)
+		if ctx.Err() != nil {
+			return nil
+		}
+	}
+	runConsolidationStages(ctx, rt, h, resolver)
+	if ctx.Err() == nil {
+		maybeRevise(ctx, rt, h, resolver)
+	}
+	return nil
+}
 
+// runConsolidationStages runs the observer, reflector and dropper stages.
+func runConsolidationStages(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver) {
 	rt.SetConsolidationPhase(runtime.PhaseObserver)
 	outcome, err := runObserverStage(ctx, rt, h, resolver)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil
+			return
 		}
 		debuglog.Log(ctx, "observer.error", map[string]any{"errorMessage": rt.RecordConsolidationStageError(h, runtime.PhaseObserver, err)})
-		return nil
+		return
 	}
 	if outcome == outcomeAbort || ctx.Err() != nil {
-		return nil
+		return
 	}
 
 	rt.SetConsolidationPhase(runtime.PhaseReflector)
 	reflector, err := runReflectorStage(ctx, rt, h, resolver)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil
+			return
 		}
 		debuglog.Log(ctx, "reflector.error", map[string]any{"errorMessage": rt.RecordConsolidationStageError(h, runtime.PhaseReflector, err)})
-		return nil
+		return
 	}
 	if reflector.outcome == outcomeAbort || ctx.Err() != nil {
-		return nil
+		return
 	}
 
 	rt.SetConsolidationPhase(runtime.PhaseDropper)
 	if _, err := runDropperStage(ctx, rt, h, resolver, reflector.sameRunReflections, reflector.effectiveReflectionCoverageID); err != nil {
 		if ctx.Err() != nil {
-			return nil
+			return
 		}
 		debuglog.Log(ctx, "dropper.error", map[string]any{"errorMessage": rt.RecordConsolidationStageError(h, runtime.PhaseDropper, err)})
 	}
-	return nil
 }
 
 // workerArgs are a stage's worker call arguments for worker, with the prompt-line rules that
-// apply to the worker model for stage.
-func workerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult, stage string) agents.WorkerArgs {
+// apply to the worker model for stage and the model's own instructions for it from its layer.
+func workerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runtime.ResolveResult, stage string) agents.WorkerArgs {
 	return agents.WorkerArgs{
 		SystemLines:     rulesFor(h, cfg, worker.Model).PromptLines(stage),
+		Instructions:    instructionsFor(ctx, h, cfg, worker.Model, stage),
 		Model:           worker.Model,
 		APIKey:          worker.APIKey,
 		Headers:         worker.Headers,
@@ -641,24 +665,32 @@ func workerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult, st
 	}
 }
 
-// observerArgs are an observer run's arguments for worker: the chunk and prior memory, and
-// the worker model's harness profile (docs/memory-interface.md, section 6): the codec its rows
+// observerArgs are an observer run's arguments for worker: the chunk and prior memory, the
+// worker model's harness profile (docs/memory-interface.md, section 6): the codec its rows
 // parameter uses, the long spec when the profile carries it, and every rows decode counted in
-// the model's usage ledger.
-func observerArgs(cfg config.Config, h host.Host, worker runtime.ResolveResult, priorReflections, priorObservations []string, chunk string, allowed []string) agents.ObserverArgs {
+// the model's usage ledger; and the note schema of its layer (section 8), the seed's when it
+// defined none.
+func observerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runtime.ResolveResult, priorReflections, priorObservations []string, chunk string, allowed []string) agents.ObserverArgs {
+	active := layerFor(ctx, h, cfg, worker.Model)
+	schema := active.Schema()
 	args := agents.ObserverArgs{
-		WorkerArgs:            workerArgs(cfg, h, worker, rules.StageObserver),
+		WorkerArgs:            workerArgs(ctx, cfg, h, worker, rules.StageObserver),
 		PriorReflections:      priorReflections,
 		PriorObservations:     priorObservations,
 		Chunk:                 chunk,
 		AllowedSourceEntryIDs: allowed,
+		Schema:                &schema,
 	}
 	if l, ok := harness.For(h, cfg, worker.Model); ok {
-		profile := l.Profile()
+		profile := l.ProfileWith(active)
 		codec := profile.CodecValue()
 		args.Codec, args.LongSpec = codec, profile.LongSpec
 		args.RecordDecode = func(outcome string) {
-			l.Record(curated.ModelEvent{Kind: curated.ModelKindDecode, Outcome: decodeOutcome(outcome), Codec: codec.Name()})
+			recorded := decodeOutcome(outcome)
+			l.Record(curated.ModelEvent{Kind: curated.ModelKindDecode, Outcome: recorded, Codec: codec.Name()})
+			if recorded != curated.OutcomeOK {
+				failPass(ctx, worker.Model, "a decode failure ("+recorded+") in the "+codec.Name()+" codec")
+			}
 		}
 	}
 	return args
@@ -675,7 +707,16 @@ func decodeOutcome(outcome string) string {
 	return curated.OutcomeOK
 }
 
+// runObserverStage runs one observer pass with one layer snapshot (layerFor), then settles the
+// held definitions it ran with (settlePass).
 func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver) (stageOutcome, error) {
+	ctx = withPass(ctx, passObserver)
+	outcome, err := runObserverPass(ctx, rt, h, resolver)
+	settlePass(ctx, rt.Config(), h, err)
+	return outcome, err
+}
+
+func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver) (stageOutcome, error) {
 	cfg := rt.Config()
 	entries, err := h.GetBranch()
 	if err != nil {
@@ -761,7 +802,7 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	used := *resolved
 	outcome, err := runStageWithFallback(ctx, h, runtime.PhaseObserver, *resolved, resolver, func(worker runtime.ResolveResult) (agents.ObserverResult, error) {
 		used = worker
-		return runObserver(ctx, observerArgs(cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
+		return runObserver(ctx, observerArgs(ctx, cfg, h, worker, priorReflections, priorObservations, serialized.Text, serialized.SourceEntryIDs))
 	})
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {
@@ -773,6 +814,7 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 			// An API/stream failure is not a clean empty: surface it as a real
 			// failure instead of the "no observations" path. Coverage stays put.
 			rt.RecordConsolidationStageError(h, runtime.PhaseObserver, err)
+			failPass(ctx, nil, "a kernel error: "+err.Error())
 			return outcomeAbort, nil
 		}
 		return outcomeAbort, err
@@ -786,6 +828,10 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		debuglog.Log(ctx, "observer.empty", map[string]any{"coversUpToId": coversUpToID})
 		rt.SetObserverEmptyBackoff(&runtime.ObserverEmptyBackoff{SessionIdentity: sessionIdentity, CoverageID: coverageID, TokensAtEmpty: rawTokens, ChunkEndID: coversUpToID})
 		notifyWorker(cfg, h, "Observational memory: observer found nothing new in this chunk (coverage unchanged; will retry later)")
+		// Counted, never proof: a held definition that makes the observer record nothing is
+		// not written by it (settlePass), and a written one is judged by it.
+		chunk := observerChunk{branch: entries, serialized: serialized, known: fullMemory.Observations}
+		recordEmptyPass(ctx, cfg, h, used.Model, emptyObserverPass(ctx, cfg, h, used.Model, chunk, coversUpToID))
 		return outcomeContinue, nil
 	}
 	rt.SetObserverEmptyBackoff(nil)
@@ -803,6 +849,7 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 		if cited == "" {
 			if outcome.StreamError != nil {
 				rt.RecordConsolidationStageError(h, runtime.PhaseObserver, outcome.StreamError)
+				failPass(ctx, nil, "a kernel error: "+outcome.StreamError.Error())
 				return outcomeAbort, nil
 			}
 			return outcomeContinue, nil
@@ -824,6 +871,7 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	debuglog.Log(ctx, "observer.records", map[string]any{"count": len(observations), "observationTokens": observationTokens, "coversUpToId": coversUpToID})
 	if !branchStillCurrent(h, sessionIdentity, leafID) {
 		debuglog.Log(ctx, "observer.branch_changed", map[string]any{"coversUpToId": coversUpToID})
+		incompletePass(ctx)
 		return outcomeAbort, nil
 	}
 	// A session end may have aborted the run during the branch check; the host
@@ -841,7 +889,16 @@ func runObserverStage(ctx context.Context, rt *runtime.Runtime, h host.Host, res
 	return outcomeContinue, nil
 }
 
+// runReflectorStage runs one reflector pass with one layer snapshot (layerFor), then settles
+// the held definitions it ran with (settlePass).
 func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver) (reflectorStageResult, error) {
+	ctx = withPass(ctx, passReflector)
+	result, err := runReflectorPass(ctx, rt, h, resolver)
+	settlePass(ctx, rt.Config(), h, err)
+	return result, err
+}
+
+func runReflectorPass(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver) (reflectorStageResult, error) {
 	cfg := rt.Config()
 	none := reflectorStageResult{outcome: outcomeContinue, sameRunReflections: []ledger.Reflection{}}
 	entries, err := h.GetBranch()
@@ -892,7 +949,7 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	reflectWith := func(worker runtime.ResolveResult) ([]ledger.Reflection, error) {
 		judge = worker
 		memory := ledger.BoundWorkerMemory(folded.Reflections, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), false)
-		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(cfg, h, worker, rules.StageReflector), Reflections: memory.Reflections, Observations: memory.Observations})
+		return runReflector(ctx, agents.ReflectorArgs{WorkerArgs: workerArgs(ctx, cfg, h, worker, rules.StageReflector), Reflections: memory.Reflections, Observations: memory.Observations})
 	}
 	var reflections []ledger.Reflection
 	if primaryOwed {
@@ -923,6 +980,7 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 		settled.PrimaryOwed = resolver.retriedOnFallback(judge)
 		rt.SetReflectorEmptyBackoff(settled)
 		debuglog.Log(ctx, "reflector.empty", map[string]any{"primaryOwed": settled.PrimaryOwed})
+		recordEmptyPass(ctx, cfg, h, judge.Model, rules.Pass{Stage: rules.StageReflector})
 		return none, nil
 	}
 	rt.SetReflectorEmptyBackoff(nil)
@@ -932,6 +990,7 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	}
 	if !branchStillCurrent(h, sessionIdentity, leafID) {
 		debuglog.Log(ctx, "reflector.branch_changed", map[string]any{})
+		incompletePass(ctx)
 		return reflectorStageResult{outcome: outcomeAbort, sameRunReflections: []ledger.Reflection{}}, nil
 	}
 	if ctx.Err() != nil {
@@ -945,7 +1004,16 @@ func runReflectorStage(ctx context.Context, rt *runtime.Runtime, h host.Host, re
 	return reflectorStageResult{outcome: outcomeContinue, sameRunReflections: reflections, effectiveReflectionCoverageID: data.CoversUpToID}, nil
 }
 
+// runDropperStage runs one dropper pass with one layer snapshot (layerFor), then settles the
+// held definitions it ran with (settlePass).
 func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver, sameRunReflections []ledger.Reflection, sameRunReflectionCoverageID string) (stageOutcome, error) {
+	ctx = withPass(ctx, passDropper)
+	outcome, err := runDropperPass(ctx, rt, h, resolver, sameRunReflections, sameRunReflectionCoverageID)
+	settlePass(ctx, rt.Config(), h, err)
+	return outcome, err
+}
+
+func runDropperPass(ctx context.Context, rt *runtime.Runtime, h host.Host, resolver *modelResolver, sameRunReflections []ledger.Reflection, sameRunReflectionCoverageID string) (stageOutcome, error) {
 	cfg := rt.Config()
 	if sameRunReflectionCoverageID == "" || len(sameRunReflections) == 0 {
 		debuglog.Log(ctx, "dropper.waiting_for_reflection", map[string]any{"sameRunReflections": len(sameRunReflections)})
@@ -1002,7 +1070,7 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		used = worker
 		// The dropper prunes old observations, so it sees the oldest ones that fit.
 		memory := ledger.BoundWorkerMemory(reflectionsForDropper, folded.ActiveObservations, config.ResolveWorkerMemoryMaxTokens(cfg, host.ModelContextWindow(worker.Model)), true)
-		return runDropper(ctx, agents.DropperArgs{WorkerArgs: workerArgs(cfg, h, worker, rules.StageDropper), Reflections: memory.Reflections, Observations: memory.Observations, ActiveObservations: folded.ActiveObservations, TargetTokens: cfg.ObservationsPoolTargetTokens})
+		return runDropper(ctx, agents.DropperArgs{WorkerArgs: workerArgs(ctx, cfg, h, worker, rules.StageDropper), Reflections: memory.Reflections, Observations: memory.Observations, ActiveObservations: folded.ActiveObservations, TargetTokens: cfg.ObservationsPoolTargetTokens})
 	})
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, agents.ErrAborted) {
@@ -1016,6 +1084,10 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		return outcomeAbort, nil
 	}
 	droppedIDs = protectDrops(ctx, cfg, h, used, droppedIDs, folded.ActiveObservations, metrics.Fullness)
+	if len(droppedIDs) == 0 {
+		// The dropper ran and dropped nothing: counted, never proof (settlePass).
+		recordEmptyPass(ctx, cfg, h, used.Model, rules.Pass{Stage: rules.StageDropper})
+	}
 	coversUpToID := ledger.EarlierCoverageMarkerID(entries, observationCoverageID, sameRunReflectionCoverageID)
 	var data *ledger.ObservationsDroppedData
 	if coversUpToID != "" && len(droppedIDs) > 0 {
@@ -1025,6 +1097,7 @@ func runDropperStage(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	if data != nil {
 		if !branchStillCurrent(h, sessionIdentity, leafID) {
 			debuglog.Log(ctx, "dropper.branch_changed", map[string]any{})
+			incompletePass(ctx)
 			return outcomeAbort, nil
 		}
 		if ctx.Err() != nil {

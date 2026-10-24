@@ -6,6 +6,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 )
 
@@ -13,7 +14,8 @@ import (
 // the configuration names another memory-worker model, of that one (only the codec and spec it
 // writes with: the summary and the defined tools follow the session model's profile), each
 // with the switches that made it and their reasons, then the active rules with their counts and
-// each model's recent detector counts (internal/rules), then the defined tools and their
+// each model's recent detector counts (internal/rules), the kernel floor and each model's
+// layer (generation, held definitions, skipped files), then the defined tools and their
 // standing. It is empty when there is no store.
 func StatusLines(h host.Host, cfg config.Config) []string {
 	store, ok := StoreOf(h, cfg)
@@ -76,6 +78,10 @@ func StatusLines(h host.Host, cfg config.Config) []string {
 		}
 	}
 	lines = append(lines, rules.StatusLines(store, keys)...)
+	lines = append(lines, FloorStatus(store))
+	for _, key := range append([]string{layer.AllModels}, keys...) {
+		lines = append(lines, layerStatusLines(store, key)...)
+	}
 	if definitions, err := store.ListDefinitions(); err == nil && len(definitions) > 0 {
 		parts := make([]string, 0, len(definitions))
 		for _, d := range definitions {
@@ -83,6 +89,11 @@ func StatusLines(h host.Host, cfg config.Config) []string {
 			parts = append(parts, fmt.Sprintf("%s %s (%d calls: %d with results, %d empty, %d errors)", d.Name, s.State, s.Calls, s.Results, s.Empty, s.Errors))
 		}
 		lines = append(lines, "Defined tools: "+strings.Join(parts, "; "))
+	}
+	if refused, err := store.RefusedDefinitions(); err == nil {
+		for _, r := range refused {
+			lines = append(lines, strings.TrimPrefix(r.Message(), "Observational memory: "))
+		}
 	}
 	return lines
 }

@@ -3,11 +3,12 @@ package curated
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 )
 
 // ModelEvent is one counted event in a model's usage ledger (docs/memory-interface.md,
@@ -77,20 +78,9 @@ const (
 
 func (s Store) modelsDir() string { return filepath.Join(s.Dir, "models") }
 
-// modelFileName is a model id as a file name: lowercase letters, digits, '.' and '-' kept,
-// every other byte written as '_' and two hex digits, so distinct ids never share a file.
-func modelFileName(modelID string) string {
-	var b strings.Builder
-	for i := 0; i < len(modelID); i++ {
-		c := modelID[i]
-		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '-' {
-			b.WriteByte(c)
-			continue
-		}
-		fmt.Fprintf(&b, "_%02x", c)
-	}
-	return b.String() + ".jsonl"
-}
+// modelFileName is a model id as a file name (layer.ModelDir), so distinct ids never share a
+// file and a model's ledger and layer directory have one name.
+func modelFileName(modelID string) string { return layer.ModelDir(modelID) + ".jsonl" }
 
 func (s Store) modelUsagePath(modelID string) string {
 	return filepath.Join(s.modelsDir(), modelFileName(modelID))

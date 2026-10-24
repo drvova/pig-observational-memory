@@ -88,6 +88,9 @@ type Profile struct {
 	Switches []Switch
 	// Events is how many ledger events the profile was computed from.
 	Events int
+	// codec is the codec Codec names in the model's layer (declare.Active.Codec), when the
+	// profile was computed with one; nil looks the name up among the shipped codecs.
+	codec tables.Codec
 }
 
 // Default is the profile every model starts with: the first codec, the tables layout, the
@@ -96,8 +99,13 @@ func Default(model string) Profile {
 	return Profile{Model: model, Codec: tables.Codecs()[0].Name(), Layout: ledger.FormatTables, DisabledTools: []string{}, Switches: []Switch{}}
 }
 
-// CodecValue is the profile's codec; the default codec when the name is unknown.
+// CodecValue is the profile's codec: the codec its name stands for in the model's layer (a
+// format the model declared, else the shipped codec), the default codec when the name is
+// unknown.
 func (p Profile) CodecValue() tables.Codec {
+	if p.codec != nil && p.codec.Name() == p.Codec {
+		return p.codec
+	}
 	if c, ok := tables.Lookup(p.Codec); ok {
 		return c
 	}
@@ -179,9 +187,23 @@ func (t tally) reason(against, keep string) string {
 //     it is deactivated for this model when errors meet the minimum-evidence rule against
 //     calls without error, and stays so until it is redefined.
 func Compute(model string, events []curated.ModelEvent, definitions []curated.Definition) Profile {
+	names := []string{}
+	for _, c := range tables.Codecs() {
+		names = append(names, c.Name())
+	}
+	return ComputeWith(model, events, definitions, names)
+}
+
+// ComputeWith is Compute switching codecs through codecs, in order: the codec names of the
+// model's layer (declare.Active.CodecNames: the shipped codecs, then the formats the model
+// declared under new names). The first is the default.
+func ComputeWith(model string, events []curated.ModelEvent, definitions []curated.Definition, codecs []string) Profile {
 	p := Default(model)
 	p.Events = len(events)
-	codecs := tables.Codecs()
+	if len(codecs) == 0 {
+		codecs = []string{p.Codec}
+	}
+	p.Codec = codecs[0]
 	codecIndex := 0
 	var codec, layout, spec, summary tally
 	created := map[string]time.Time{}
@@ -202,7 +224,7 @@ func Compute(model string, events []curated.ModelEvent, definitions []curated.De
 			} else {
 				spec.keep++
 			}
-			if e.Codec == codecs[codecIndex].Name() && codecIndex < len(codecs)-1 {
+			if e.Codec == codecs[codecIndex] && codecIndex < len(codecs)-1 {
 				if e.Outcome == curated.OutcomeError {
 					codec.against++
 				} else {
@@ -210,7 +232,7 @@ func Compute(model string, events []curated.ModelEvent, definitions []curated.De
 				}
 				if codec.due() {
 					codecIndex++
-					record(SettingCodec, codecs[codecIndex].Name(), codec.reason("rows decode errors", "decodes")+" in "+e.Codec, at)
+					record(SettingCodec, codecs[codecIndex], codec.reason("rows decode errors", "decodes")+" in "+e.Codec, at)
 					codec = tally{}
 				}
 			}
@@ -278,7 +300,7 @@ func Compute(model string, events []curated.ModelEvent, definitions []curated.De
 			record(SettingSpec, "long spec", spec.reason("syntax errors", "valid queries and rows"), at)
 		}
 	}
-	p.Codec = codecs[codecIndex].Name()
+	p.Codec = codecs[codecIndex]
 	return p
 }
 

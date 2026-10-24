@@ -25,6 +25,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
@@ -169,35 +170,51 @@ func newID(r Rule) string {
 
 // --- store ---------------------------------------------------------------------
 
-// ruleTable is the table a rule file holds. Rule files are in the rows codec, as the store's
+// ruleTable is the table a rule's text holds. Rule texts are in the rows codec, as the store's
 // definitions are: the active codec is chosen per model for what a model reads and writes,
 // while store files have one format every process can read.
 const ruleTable = "rule"
 
 var ruleFields = []string{"id", "detector", "models", "excluded", "remedy", "kind", "fullness", "text", "state", "reason", "proposer", "created", "start", "end", "baseline_events", "baseline_tokens", "after_events", "after_tokens", "after_passes"}
 
-// Dir is the rules directory of store.
-func Dir(store curated.Store) string { return filepath.Join(store.Dir, "rules") }
+// A rule lives in the store's layer (docs/memory-interface.md, section 8) as a remedy
+// definition named by its id, under its model, or under every model for a default:
+// <store>/harness/<model>/remedy/<id>.rows. Rules written before the layer, in
+// <store>/rules/<id>.rows, are moved there on first use (migrate).
 
-func path(store curated.Store, id string) string { return filepath.Join(Dir(store), id+".rows") }
+// legacyDir is where rules were kept before the layer.
+func legacyDir(store curated.Store) string { return filepath.Join(store.Dir, "rules") }
 
-// write stores r; the caller holds the store's lock.
-func write(store curated.Store, r Rule) error {
-	if err := os.MkdirAll(Dir(store), 0o700); err != nil {
-		return err
+// layerModel is the layer model a rule is kept under: its model, or every model for a default.
+func layerModel(r Rule) (string, error) {
+	switch {
+	case r.Default():
+		return layer.AllModels, nil
+	case r.Model() != "":
+		return r.Model(), nil
 	}
+	return "", fmt.Errorf("rule %s applies to no model", r.ID)
+}
+
+// encode is r's table in the rows codec.
+func encode(r Rule) string {
 	row := []string{r.ID, r.Detector, strings.Join(r.Models, " "), strings.Join(r.Excluded, " "), r.Remedy, r.Kind, formatFullness(r.Fullness), r.Text, r.State, r.Reason, r.Proposer, r.Created.UTC().Format(time.RFC3339Nano),
 		strconv.Itoa(r.Start), strconv.Itoa(r.End), strconv.Itoa(r.BaselineEvents), strconv.Itoa(r.BaselineTokens), strconv.Itoa(r.AfterEvents), strconv.Itoa(r.AfterTokens), strconv.Itoa(r.AfterPasses)}
 	absent := make([]bool, len(row))
 	for i, v := range row {
 		absent[i] = v == ""
 	}
-	table := tables.Table{Name: ruleTable, Fields: ruleFields, Rows: [][]string{row}, Absent: [][]bool{absent}}
-	tmp := path(store, r.ID) + ".tmp"
-	if err := os.WriteFile(tmp, []byte(tables.Rows.Encode(table)+"\n"), 0o600); err != nil {
+	return tables.Rows.Encode(tables.Table{Name: ruleTable, Fields: ruleFields, Rows: [][]string{row}, Absent: [][]bool{absent}})
+}
+
+// write stores r in the layer; the caller holds the store's lock.
+func write(store curated.Store, r Rule) error {
+	model, err := layerModel(r)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path(store, r.ID))
+	_, err = store.Layer().PutLocked(layer.Definition{Kind: layer.KindRemedy, Name: r.ID, Model: model, Text: encode(r)})
+	return err
 }
 
 // Add checks r (Check), stamps it (id, creation time, and Start from its model's ledger when
@@ -218,6 +235,7 @@ func Add(store curated.Store, r Rule) (Rule, error) {
 	if r.Proposer == "" {
 		r.Proposer = ProposerHarness
 	}
+	migrate(store)
 	err = store.Locked(func() error {
 		r.Created = store.Now().UTC()
 		if model := r.Model(); model != "" {
@@ -236,18 +254,14 @@ func Add(store curated.Store, r Rule) (Rule, error) {
 	return r, nil
 }
 
-// read reads one rule file; one that fails Check is refused.
-func read(file string) (Rule, error) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return Rule{}, err
-	}
-	decoded, err := tables.Rows.Decode(string(data))
+// parse reads one rule from its text (where names the file); one that fails Check is refused.
+func parse(where, text string) (Rule, error) {
+	decoded, err := tables.Rows.Decode(text)
 	if err != nil {
 		return Rule{}, err
 	}
 	if len(decoded) != 1 || decoded[0].Name != ruleTable || len(decoded[0].Rows) != 1 {
-		return Rule{}, fmt.Errorf("%s is not one %s row", file, ruleTable)
+		return Rule{}, fmt.Errorf("%s is not one %s row", where, ruleTable)
 	}
 	t := decoded[0]
 	cell := func(field string) string { v, _ := t.Cell(0, field); return v }
@@ -261,39 +275,53 @@ func read(file string) (Rule, error) {
 	r.Fullness, _ = strconv.ParseFloat(cell("fullness"), 64)
 	r.Created, _ = time.Parse(time.RFC3339Nano, cell("created"))
 	if r.ID == "" || len(r.Models) == 0 {
-		return Rule{}, fmt.Errorf("%s is not a valid rule", file)
+		return Rule{}, fmt.Errorf("%s is not a valid rule", where)
 	}
 	// A file edited by hand or written by another version is held to what Check allows of a
 	// new rule: one whose parameters would break an invariant is never applied.
 	if r, err = Check(r); err != nil {
-		return Rule{}, fmt.Errorf("%s: %w", file, err)
+		return Rule{}, fmt.Errorf("%s: %w", where, err)
 	}
 	switch r.State {
 	case StateProbation, StateEstablished, StateRetired:
 	default:
-		return Rule{}, fmt.Errorf("%s has an unknown state %q", file, r.State)
+		return Rule{}, fmt.Errorf("%s has an unknown state %q", where, r.State)
 	}
 	return r, nil
 }
 
-// List reads every readable rule in the store, oldest first. A missing directory is empty;
-// unreadable files and ones that fail Check are skipped, so one bad file never stops the rest.
+// List reads every readable rule in the store, oldest first, after moving any rules written
+// before the layer into it. Files the layer refuses (the kernel, a stale header), unreadable
+// rules and ones that fail Check are skipped, so one bad file never stops the rest. A caller
+// already holding the store's lock uses list.
 func List(store curated.Store) ([]Rule, error) {
-	entries, err := os.ReadDir(Dir(store))
-	if errors.Is(err, os.ErrNotExist) {
-		return []Rule{}, nil
-	}
+	migrate(store)
+	return list(store)
+}
+
+// list is List without the migration, for a caller holding the store's lock.
+func list(store curated.Store) ([]Rule, error) {
+	defs, _, err := store.Layer().ListAll(layer.KindRemedy)
 	if err != nil {
 		return nil, err
 	}
+	return rulesOf(defs), nil
+}
+
+// rulesOf are the rules among remedy definitions, oldest first: a catalogue table, a file that
+// is not a valid rule, and a rule kept under another model than its own are skipped.
+func rulesOf(defs []layer.Definition) []Rule {
 	out := []Rule{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".rows") {
+	for _, d := range defs {
+		r, err := parse(d.Kind+"/"+d.Name, d.Text)
+		if err != nil || r.ID != d.Name {
 			continue
 		}
-		if r, err := read(filepath.Join(Dir(store), entry.Name())); err == nil {
-			out = append(out, r)
+		// A rule kept under another model than its own is a file moved to apply it elsewhere.
+		if model, err := layerModel(r); err != nil || model != d.Model {
+			continue
 		}
+		out = append(out, r)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].Created.Equal(out[j].Created) {
@@ -301,7 +329,67 @@ func List(store curated.Store) ([]Rule, error) {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out, nil
+	return out
+}
+
+// The suffixes a legacy rule file is renamed with once migration has handled it: moved into
+// the layer, or refused (kept, never applied). Neither is read again.
+const (
+	migratedSuffix = ".migrated"
+	refusedSuffix  = ".refused"
+)
+
+// migrate moves rules written before the layer into it, when there are any, under the store's
+// lock. Each legacy file a rule reads from becomes a layer file of the same rule (a rule the
+// layer already holds keeps the layer's), and the legacy file is renamed with migratedSuffix,
+// so nothing is lost; one that is not a valid rule is renamed with refusedSuffix. A failure
+// leaves the rest to be tried again, and the layer's rules still work.
+func migrate(store curated.Store) {
+	if names := legacyNames(store); len(names) == 0 {
+		return
+	}
+	_ = store.Locked(func() error {
+		ls := store.Layer()
+		for _, name := range legacyNames(store) {
+			file := filepath.Join(legacyDir(store), name)
+			suffix := migratedSuffix
+			data, err := os.ReadFile(file)
+			if err != nil {
+				return err
+			}
+			r, err := parse(file, string(data))
+			if err == nil {
+				var model string
+				if model, err = layerModel(r); err == nil {
+					if _, statErr := os.Stat(ls.Path(model, layer.KindRemedy, r.ID)); errors.Is(statErr, os.ErrNotExist) {
+						err = write(store, r)
+					}
+				}
+			}
+			if err != nil {
+				suffix = refusedSuffix
+			}
+			if err := os.Rename(file, file+suffix); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// legacyNames are the .rows files in the legacy rules directory.
+func legacyNames(store curated.Store) []string {
+	entries, err := os.ReadDir(legacyDir(store))
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".rows") {
+			out = append(out, entry.Name())
+		}
+	}
+	return out
 }
 
 // fields splits a space-separated list; nil when it is empty.

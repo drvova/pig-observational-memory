@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
@@ -32,10 +33,59 @@ func (t Transition) Message() string {
 	return fmt.Sprintf("Observational memory: rule %s is now %s for %s (%s)", r.Describe(), t.To, r.Model(), r.Reason)
 }
 
-// isObserverPass reports whether e is an observer pass: a pass that observed source, the only
-// kind with a rate.
+// isObserverPass reports whether e is an observer pass: a pass that observed source and recorded
+// notes, the only kind with a rate the rules are decided by. An observer pass that recorded
+// nothing (isEmptyPass) is counted for probation only (gradedPasses).
 func isObserverPass(e curated.ModelEvent) bool {
+	return e.Kind == curated.ModelKindPass && e.Tokens > 0 && e.Outcome != curated.OutcomeEmpty
+}
+
+// isEmptyPass reports whether e is a worker pass that ran and recorded nothing (Pass.Empty).
+func isEmptyPass(e curated.ModelEvent) bool {
+	return e.Kind == curated.ModelKindPass && e.Outcome == curated.OutcomeEmpty
+}
+
+// isGradedPass reports whether e is a pass probation and the revision pass read: an observer
+// pass, recorded or empty, so a definition that silences the observer is counted
+// (CountEmptyPass) rather than invisible.
+func isGradedPass(e curated.ModelEvent) bool {
 	return e.Kind == curated.ModelKindPass && e.Tokens > 0
+}
+
+// gradedPasses are the indexes of the graded passes (isGradedPass) in events at or after from.
+func gradedPasses(events []curated.ModelEvent, from int) []int {
+	out := []int{}
+	for i := max(0, from); i < len(events); i++ {
+		if isGradedPass(events[i]) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// EmptyPassesSince counts model's passes of stage that ran and recorded nothing (Pass.Empty)
+// after since, with no recorded pass of stage between them and now: the passes a held
+// definition ran through without anything proving it.
+func EmptyPassesSince(store curated.Store, model, stage string, since time.Time) (int, error) {
+	events, err := store.ModelEvents(model)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range events {
+		if e.Kind != curated.ModelKindPass || e.Stage != stage {
+			continue
+		}
+		if t, ok := eventTime(e); !ok || !t.After(since) {
+			continue
+		}
+		if isEmptyPass(e) {
+			n++
+		} else {
+			n = 0
+		}
+	}
+	return n, nil
 }
 
 // observerPasses are the indexes of the observer passes in events at or after from.
@@ -107,6 +157,12 @@ func fell(beforeEvents, beforeTokens, afterEvents, afterTokens int) bool {
 //   - Defaults: a rule established, with one signature, for DefaultAfterModels models becomes
 //     a default for all, established, excluding the models for which it was retired.
 func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Time) ([]Rule, []Transition) {
+	return EvaluateWith(model, events, all, now, SeedCatalog())
+}
+
+// EvaluateWith is Evaluate with the model's own remedy catalogue (CatalogOf its layer): the
+// remedies the harness tries for each detector, in its order and with its parameters.
+func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now time.Time, catalog Catalog) ([]Rule, []Transition) {
 	var changed []Rule
 	var transitions []Transition
 	rules := append([]Rule(nil), all...)
@@ -122,6 +178,10 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 	// Probation.
 	for _, r := range rules {
 		if r.State != StateProbation || r.Model() != model {
+			continue
+		}
+		// Grading stays with the kernel: a rule is judged only by a kernel count.
+		if !containsString(KernelKeys(), countKey(r.Detector, r.Remedy)) {
 			continue
 		}
 		passes := observerPasses(events, r.Start)
@@ -184,7 +244,7 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 			continue
 		}
 		remedy := ""
-		for _, candidate := range Catalogue[detector] {
+		for _, candidate := range catalog.Tries(detector) {
 			if tried[candidate] {
 				continue
 			}
@@ -201,7 +261,7 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 		if remedy == "" {
 			continue
 		}
-		r, err := Check(harnessRule(detector, remedy, kinds))
+		r, err := Check(catalog.Rule(detector, remedy, kinds))
 		if err != nil {
 			continue
 		}
@@ -218,6 +278,7 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 	retired := map[string][]string{}
 	sample := map[string]Rule{}
 	hasDefault := map[string]bool{}
+	authored := map[string]bool{}
 	for _, r := range rules {
 		sig := r.Signature()
 		switch {
@@ -227,6 +288,7 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 			if established[sig] == nil {
 				established[sig] = map[string]bool{}
 			}
+			authored[sig] = authored[sig] || (r.Proposer == ProposerModel && r.Text != "")
 			established[sig][r.Model()] = true
 			sample[sig] = r
 		case r.State == StateRetired:
@@ -238,8 +300,14 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 			continue
 		}
 		base := sample[sig]
+		// A default keeps the authorship of its text: a line a model wrote stays the model's
+		// when it applies to every model.
+		proposer := ProposerHarness
+		if authored[sig] {
+			proposer = ProposerModel
+		}
 		d := Rule{Detector: base.Detector, Remedy: base.Remedy, Kind: base.Kind, Fullness: base.Fullness, Text: base.Text,
-			Models: []string{AllModels}, Excluded: retired[sig], State: StateEstablished, Proposer: ProposerHarness, Created: now}
+			Models: []string{AllModels}, Excluded: retired[sig], State: StateEstablished, Proposer: proposer, Created: now}
 		d.Reason = fmt.Sprintf("established for %d models", len(models))
 		d.ID = newID(d)
 		replace(d)
@@ -256,6 +324,15 @@ type Pass struct {
 	Tokens int
 	// Findings are the note detectors' findings; nil for a reflector or dropper pass.
 	Findings *Findings
+	// Layer is the model's effective layer the pass ran with, whose catalogue the rules are
+	// decided by; nil loads it from the store.
+	Layer *layer.Harness
+	// Empty marks a pass that ran and recorded nothing (an observer chunk with no notes, a
+	// reflector with no reflections, a dropper that dropped nothing). It is recorded with the
+	// outcome empty and, for an observer pass, CountEmptyPass and the detectors' findings over
+	// the chunk it left unnoted, so probation sees a definition that silences a worker; it
+	// decides no rule (it is no observer pass the rules count).
+	Empty bool
 }
 
 // AfterPass records one pass of model in its usage ledger (with decode-failure counted from
@@ -269,6 +346,29 @@ func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, erro
 		return nil, errors.New("a pass needs a model id")
 	}
 	e := curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: pass.Stage, Tokens: pass.Tokens, Counts: map[string]int{}}
+	if pass.Empty {
+		// An empty pass is evidence for probation only: no rule is decided by it. An observer
+		// one carries what the kernel's checks found in the chunk it left unnoted.
+		e.Outcome = curated.OutcomeEmpty
+		if pass.Stage != StageObserver || pass.Tokens <= 0 {
+			e.Tokens = 0
+			return nil, store.RecordModel(e)
+		}
+		e.Counts[CountEmptyPass] = 1
+		if pass.Findings != nil {
+			for d, n := range pass.Findings.Counts {
+				if n > 0 {
+					e.Counts[d] = n
+				}
+			}
+			for d, n := range pass.Findings.Defined {
+				if n > 0 {
+					e.Counts[DefinedCountKey(d)] = n
+				}
+			}
+		}
+		return nil, store.RecordModel(e)
+	}
 	if pass.Findings != nil {
 		for d, n := range pass.Findings.Counts {
 			if n > 0 {
@@ -278,8 +378,20 @@ func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, erro
 		if len(pass.Findings.DroppedKinds) > 0 {
 			e.Kinds = pass.Findings.DroppedKinds
 		}
+		for d, n := range pass.Findings.Defined {
+			if n > 0 {
+				e.Counts[DefinedCountKey(d)] = n
+			}
+		}
+	}
+	catalog := SeedCatalog()
+	if pass.Layer != nil {
+		catalog = CatalogOf(*pass.Layer)
+	} else if h, _, err := store.Layer().Load(model); err == nil {
+		catalog = CatalogOf(h)
 	}
 	var transitions []Transition
+	migrate(store)
 	err := store.Locked(func() error {
 		events, err := store.ModelEvents(model)
 		if err != nil {
@@ -298,11 +410,11 @@ func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, erro
 		if events, err = store.ModelEvents(model); err != nil {
 			return err
 		}
-		all, err := List(store)
+		all, err := list(store)
 		if err != nil {
 			return err
 		}
-		changed, ts := Evaluate(model, events, all, store.Now().UTC())
+		changed, ts := EvaluateWith(model, events, all, store.Now().UTC(), catalog)
 		for _, r := range changed {
 			if err := write(store, r); err != nil {
 				return err
@@ -320,7 +432,9 @@ type Proposal struct {
 	Fullness                     float64
 }
 
-// Propose writes a rule model proposed, on probation for model. It is checked like a harness
+// Propose holds a rule model proposed, on probation for model: it applies to the model's next
+// pass and is written once that pass is clean (layer.Store.Claim), as every definition from the
+// model is (docs/memory-interface.md, section 8). It is checked like a harness
 // rule (Check), and refused when the same rule is already applied to model or was retired for
 // it (the detector decided), or when its text is not the model's own: text found in a tool
 // result, a custom message or a summary on the branch came from a file, a web page or tool
@@ -334,15 +448,22 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 	if err != nil {
 		return Rule{}, err
 	}
-	if r.Text != "" && copiedFromOutput(branch, r.Text) {
-		return Rule{}, errors.New("refused: that text appears in tool output, a file or another message on this branch; a rule's text must be your own words")
+	// The same provenance check every definition from the model passes (CheckFromModel): the
+	// whole text, or any quotation of MinCopiedWords words inside it, found in output on the
+	// branch is refused; the catalogue's own line for the remedy is not a quotation.
+	if quoted, copied := copiedSegment(branch, r.Text, CatalogueSeeds[r.Remedy]); r.Text != "" && copied {
+		return Rule{}, fmt.Errorf("refused: that text quotes tool output, a file or another message on this branch (%q); a rule's text must be your own words", clip(quoted, 80))
 	}
 	r.Proposer, r.Models, r.State = ProposerModel, []string{model}, StateProbation
 	var saved Rule
+	migrate(store)
 	err = store.Locked(func() error {
-		all, err := List(store)
+		all, err := list(store)
 		if err != nil {
 			return err
+		}
+		if held, err := store.Layer().Held(model); err == nil {
+			all = append(all, rulesOf(held)...)
 		}
 		for _, existing := range all {
 			if existing.Signature() != r.Signature() || !existing.AppliesTo(model) {
@@ -362,7 +483,10 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 		r.Reason = fmt.Sprintf("proposed by the model; %d events in %d tokens over its last passes", r.BaselineEvents, r.BaselineTokens)
 		r.ID = newID(r)
 		saved = r
-		return write(store, r)
+		// The write follows the proof: the rule is held, applied to the model's next pass,
+		// and written (then judged by its detector) once that pass is clean.
+		_, err = store.Layer().HoldLocked(layer.Definition{Kind: layer.KindRemedy, Name: r.ID, Model: model, Text: encode(r)})
+		return err
 	})
 	if err != nil {
 		return Rule{}, err
@@ -370,11 +494,31 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 	return saved, nil
 }
 
+// IsRule reports whether kind named name is a rule kept in the layer (section 7): a remedy
+// definition not named after a catalogue remedy. The harness writes, establishes and retires
+// rules; the model only proposes them, so no harness write, forget or rollback of the model's
+// touches one.
+func IsRule(kind, name string) bool {
+	return kind == layer.KindRemedy && !containsString(Remedies, name)
+}
+
 // copiedFromOutput reports whether text, whitespace collapsed and case ignored, appears in a
 // tool result, a custom message or a summary on the branch: output the model read, not words
 // it wrote.
 func copiedFromOutput(branch []ledger.Entry, text string) bool {
-	needle := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	return containedIn(outputTexts(branch), normalizeText(text))
+}
+
+// normalizeText is text with whitespace collapsed and case ignored, as the provenance checks
+// compare it.
+func normalizeText(text string) string {
+	return strings.ToLower(strings.Join(strings.Fields(text), " "))
+}
+
+// outputTexts are the texts on branch the model read rather than wrote (tool results, custom
+// messages, summaries, `!command` runs), each normalized (normalizeText).
+func outputTexts(branch []ledger.Entry) []string {
+	out := []string{}
 	for _, entry := range branch {
 		var haystack string
 		switch {
@@ -390,20 +534,36 @@ func copiedFromOutput(branch []ledger.Entry, text string) bool {
 		default:
 			continue
 		}
-		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(haystack), " ")), needle) {
+		if haystack = normalizeText(haystack); haystack != "" {
+			out = append(out, haystack)
+		}
+	}
+	return out
+}
+
+// containedIn reports whether needle (normalized) appears in any of haystacks.
+func containedIn(haystacks []string, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	for _, h := range haystacks {
+		if strings.Contains(h, needle) {
 			return true
 		}
 	}
 	return false
 }
 
-// For reads the rules that apply to model in store; none when the store cannot be read.
+// For reads the rules that apply to model in store, from its effective layer: the written and
+// held rules kept for every model and for model, so a held proposal applies to the pass that
+// proves it. None when the store cannot be read.
 func For(store curated.Store, model string) Active {
-	all, err := List(store)
+	migrate(store)
+	h, _, err := store.Layer().Load(model)
 	if err != nil {
 		return Active{}
 	}
-	return ActiveFor(all, model)
+	return ActiveFor(rulesOf(h.List(layer.KindRemedy)), model)
 }
 
 // StatusLines is the rules section of /om:status: every active rule with its counts, and for

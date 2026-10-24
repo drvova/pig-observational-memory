@@ -346,3 +346,29 @@ func TestResolveSummaryBudget(t *testing.T) {
 		t.Fatalf("cap did not bound the floor: %d", got)
 	}
 }
+
+// Only the user's own settings lower the kernel floor; a project's settings, which travel with
+// its repository, can keep it engaged but never lower it.
+func TestKernelFloor(t *testing.T) {
+	f := setup(t)
+	request := map[string]any{"lower": true, "requestedBy": "drvova", "reason": "rebuilding the memory tool"}
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"kernelFloor": request}})
+	if got := f.load(env{}); got.KernelFloor != nil {
+		t.Fatalf("a project lowered the floor: %+v", got.KernelFloor)
+	}
+	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"kernelFloor": request}})
+	got := f.load(env{})
+	if got.KernelFloor == nil || *got.KernelFloor != (config.FloorRequest{RequestedBy: "drvova", Reason: "rebuilding the memory tool"}) {
+		t.Fatalf("global request %+v", got.KernelFloor)
+	}
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"kernelFloor": map[string]any{"lower": false}}})
+	if got := f.load(env{}); got.KernelFloor != nil {
+		t.Fatalf("a project could not keep the floor engaged: %+v", got.KernelFloor)
+	}
+	// A request without who or why is kept, so lowering refuses it and says so.
+	f.writeJSON(t, f.project(), map[string]any{})
+	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"kernelFloor": map[string]any{"lower": true}}})
+	if got := f.load(env{}); got.KernelFloor == nil || got.KernelFloor.RequestedBy != "" {
+		t.Fatalf("bare request %+v", got.KernelFloor)
+	}
+}

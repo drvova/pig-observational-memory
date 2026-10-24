@@ -242,8 +242,14 @@ type (
 func mockWorkers(t *testing.T) (*observerMock, *reflectorMock, *dropperMock) {
 	t.Helper()
 	obs, ref, drop := &observerMock{}, &reflectorMock{}, &dropperMock{}
-	oldObserver, oldReflector, oldDropper := runObserver, runReflector, runDropper
+	oldObserver, oldReflector, oldDropper, oldBuilder := runObserver, runReflector, runDropper, runBuilder
 	runObserver, runReflector, runDropper = obs.run, ref.run, drop.run
-	t.Cleanup(func() { runObserver, runReflector, runDropper = oldObserver, oldReflector, oldDropper })
+	// The harness build pass defines nothing unless a test scripts it (scriptBuilder).
+	runBuilder = func(context.Context, agents.BuilderArgs) (agents.BuilderResult, error) {
+		return agents.BuilderResult{}, nil
+	}
+	t.Cleanup(func() {
+		runObserver, runReflector, runDropper, runBuilder = oldObserver, oldReflector, oldDropper, oldBuilder
+	})
 	return obs, ref, drop
 }

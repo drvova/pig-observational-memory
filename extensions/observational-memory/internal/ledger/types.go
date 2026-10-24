@@ -56,6 +56,9 @@ type Observation struct {
 	// Supersedes holds the ids of earlier records this one replaces; empty
 	// means the record adds rather than replaces.
 	Supersedes []string `json:"supersedes,omitempty"`
+	// Fields are the values of the fields the writing model's own note schema adds
+	// (NoteSchema), by field name; none for a record written under the seed schema.
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // Reflection is a durable conclusion distilled from observations.
@@ -95,6 +98,13 @@ type MemoryDetails struct {
 	// ledger. It differs from the compaction's firstKeptEntryId when the hook
 	// moved the cut to retain unobserved source.
 	FoldThroughEntryID string `json:"foldThroughEntryId,omitempty"`
+	// SummaryCodec is the codec the summary's tables were encoded in; "" for a
+	// lines summary or one written before the codec was recorded.
+	SummaryCodec string `json:"summaryCodec,omitempty"`
+	// SummaryFormat is that codec's declaration (tables.Format.Declaration)
+	// when a model declared it, so the summary decodes in the codec that wrote
+	// it whatever the layer holds later; "" for a native codec.
+	SummaryFormat string `json:"summaryFormat,omitempty"`
 }
 
 // IsRelevance reports whether v is a relevance level.
@@ -240,6 +250,18 @@ func ObservationFrom(v any) (Observation, bool) {
 	case []any:
 		for _, id := range list {
 			observation.addSupersedes(id)
+		}
+	}
+	// A schema's own fields are kept when they are strings under field names a schema can
+	// declare; the schema checked them when the note was recorded.
+	if fields, ok := m["fields"].(map[string]any); ok {
+		for name, raw := range fields {
+			if value, ok := raw.(string); ok && value != "" && schemaFieldName.MatchString(name) {
+				if observation.Fields == nil {
+					observation.Fields = map[string]string{}
+				}
+				observation.Fields[name] = value
+			}
 		}
 	}
 	return observation, true
@@ -399,7 +421,9 @@ func MemoryDetailsFrom(v any) (MemoryDetails, bool) {
 	if m["type"] != OMFolded || version != 1 || !okFold || !okObs || !okRef || (foldPresent && !okFoldThrough) {
 		return MemoryDetails{}, false
 	}
-	return MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID}, true
+	summaryCodec, _ := m["summaryCodec"].(string)
+	summaryFormat, _ := m["summaryFormat"].(string)
+	return MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID, SummaryCodec: summaryCodec, SummaryFormat: summaryFormat}, true
 }
 
 // IsMemoryDetails reports valid decoded memory details.

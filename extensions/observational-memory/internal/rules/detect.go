@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
@@ -39,8 +40,43 @@ const (
 // answers both. It is not a detector of its own.
 const CountCodecDecodeFailure = DetectDecodeFailure + ":codec"
 
+// CountEmptyPass is the count an observer pass that ran over a chunk and recorded nothing
+// carries (Pass.Empty), one per such pass. It is kernel code, read by probation
+// (GradingKeys) and the revision pass's evidence, so a definition that silences the observer is
+// counted like any other failure; no rule is written or judged on it. It is not a detector.
+const CountEmptyPass = "observer-empty"
+
 // Detectors lists the detectors in the order the spec's table names them.
 var Detectors = []string{DetectUncitedAssistantSpecifics, DetectCrossScopeSupersede, DetectUnresolvedRelativeDate, DetectThinChunk, DetectDroppedThenQueried, DetectDecodeFailure}
+
+// detectorDescriptions say what each kernel check counts.
+var detectorDescriptions = map[string]string{
+	DetectUncitedAssistantSpecifics: "assistant entries whose text has specifics (numbers, names, lists) that no note cites",
+	DetectCrossScopeSupersede:       "supersedes links between notes whose scopes differ",
+	DetectUnresolvedRelativeDate:    "relative-date phrases in new notes the renderer had to resolve",
+	DetectThinChunk:                 "chunks whose notes are far shorter than their source with specifics left uncited",
+	DetectDroppedThenQueried:        "records the dropper retired that a later memory query asked for",
+	DetectDecodeFailure:             "rows or queries that did not decode in the model's codec",
+}
+
+// DetectorSeeds are the shipped detectors as declarations (DetectorTable), the seeds a model's
+// own detector definition of the same name overrides (docs/memory-interface.md, section 8):
+// each names its kernel check and says what it counts. The counting itself is kernel code; the
+// declaration is what an override records the digest of, so an upgrade that changes what a
+// seed counts makes the override stale.
+var DetectorSeeds = func() map[string]string {
+	out := map[string]string{}
+	for name, description := range detectorDescriptions {
+		out[name] = detectorSeed(name, description)
+	}
+	return out
+}()
+
+func init() {
+	for name, text := range DetectorSeeds {
+		layer.Ship(layer.KindDetector, name, text)
+	}
+}
 
 // The worker stages a pass is recorded for.
 const (
@@ -63,6 +99,9 @@ type ObserverPass struct {
 	// Defined are the tools the agent defined, by name, with their stored queries: a call of
 	// one is a memory query too (MemoryQueries).
 	Defined map[string]string
+	// Detectors are the detectors the worker model defined in its layer (ModelDetectors),
+	// counted beside the kernel's checks.
+	Detectors []DetectorDef
 }
 
 // Findings are what the detectors counted in one pass, and what they flagged for the remedies.
@@ -75,6 +114,9 @@ type Findings struct {
 	CrossScope []string
 	// DroppedKinds are the kinds of the dropped records a memory query asked for.
 	DroppedKinds map[string]int
+	// Defined are the counts of the detectors the model defined, by name; recorded under
+	// DefinedCountKey, never judging a rule.
+	Defined map[string]int
 }
 
 // DetectObserverPass runs every note detector over one observer pass. It is pure: the same
@@ -94,6 +136,12 @@ func DetectObserverPass(p ObserverPass) Findings {
 	f.Counts[DetectDroppedThenQueried] = len(asked)
 	for _, o := range asked {
 		f.DroppedKinds[kindName(o.Kind)]++
+	}
+	for _, d := range p.Detectors {
+		if f.Defined == nil {
+			f.Defined = map[string]int{}
+		}
+		f.Defined[d.Name] = d.Count(p, f.Counts)
 	}
 	return f
 }

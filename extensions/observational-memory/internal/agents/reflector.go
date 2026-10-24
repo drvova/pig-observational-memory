@@ -9,6 +9,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -191,7 +192,7 @@ func RunReflector(ctx context.Context, args ReflectorArgs) ([]ledger.Reflection,
 	}
 	userText := "CURRENT REFLECTIONS:\n" + joinOrEmpty(reflectionLines) + "\n\nCURRENT OBSERVATIONS:\n" + joinOrEmpty(observationLines) + "\n\nCrystallize any missing durable facts or patterns into new reflections. If nothing is stable enough, do not call the tool."
 
-	result, err := RunLoop(ctx, args.Stream, args.loopConfig("reflector"), args.system(ReflectorSystem), userText, []Tool{recordReflections})
+	result, err := RunLoop(ctx, args.Stream, args.loopConfig("reflector"), args.system(kernel.TextReflectorRules, ReflectorInstructions), userText, []Tool{recordReflections})
 	if err != nil {
 		return nil, err
 	}

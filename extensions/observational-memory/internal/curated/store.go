@@ -21,6 +21,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 )
 
 // The memory types: the operator's own word (user, feedback) ranks first.
@@ -54,10 +57,18 @@ type Store struct {
 	Dir string
 	// Now is the clock; tests replace it.
 	Now func() time.Time
+	// Floor is the kernel floor the store's layer checks definitions under; nil is engaged.
+	Floor *kernel.Floor
 }
 
 // New returns the store at dir.
 func New(dir string) Store { return Store{Dir: dir, Now: time.Now} }
+
+// Layer is the model-built layer kept in the store (docs/memory-interface.md, section 8):
+// <store>/harness, locked with the store's lock and checked under its floor.
+func (s Store) Layer() layer.Store {
+	return layer.Store{Dir: filepath.Join(s.Dir, "harness"), Lock: s, Floor: s.Floor, Now: s.Now}
+}
 
 // DefaultDir is the store under the PiG config root.
 func DefaultDir(configHome string) string {
@@ -169,6 +180,9 @@ func (s Store) Save(m Memory, source string) (Memory, error) {
 			return fmt.Errorf("a memory named %q already exists; change it with edit name=%s instead", m.Name, m.Name)
 		} else if _, statErr := os.Stat(s.path(m.Name)); statErr == nil {
 			return fmt.Errorf("the name %q is taken by an unreadable memory file; choose another name", m.Name)
+		}
+		if err := s.migrateDefinitionsLocked(); err != nil {
+			return err
 		}
 		if _, err := os.Stat(s.definitionPath(m.Name)); err == nil {
 			return fmt.Errorf("the name %q is taken by a defined query; choose another name", m.Name)

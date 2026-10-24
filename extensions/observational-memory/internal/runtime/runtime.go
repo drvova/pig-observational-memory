@@ -21,6 +21,8 @@ const (
 	PhaseObserver  Phase = "observer"
 	PhaseReflector Phase = "reflector"
 	PhaseDropper   Phase = "dropper"
+	// PhaseHarness is the build or revision pass of the model's harness layer.
+	PhaseHarness Phase = "harness pass"
 )
 
 // ResolveResult is a resolved memory-worker model, or why none resolved.

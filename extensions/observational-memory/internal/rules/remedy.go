@@ -9,6 +9,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
@@ -85,6 +86,33 @@ var catalogueText = map[string]string{
 func stageOf(detector string) string {
 	if detector == DetectDroppedThenQueried {
 		return StageDropper
+	}
+	return StageObserver
+}
+
+// StageOfRemedy is the worker stage a remedy definition acts in, which is the stage whose pass
+// proves it once held (docs/memory-interface.md, section 8): a rule acts where its detector
+// is judged (a protect-kind or prompt-line rule for dropped-then-queried acts in the dropper),
+// and a catalogue whose every entry answers only dropper detectors acts in the dropper; every
+// other remedy definition, and one that does not parse, in the observer.
+func StageOfRemedy(d layer.Definition) string {
+	if d.Kind != layer.KindRemedy {
+		return StageObserver
+	}
+	if containsString(Remedies, d.Name) {
+		entries, err := ParseCatalogue(d.Name, d.Text)
+		if err != nil || len(entries) == 0 {
+			return StageObserver
+		}
+		for _, e := range entries {
+			if stageOf(e.Detector) != StageDropper {
+				return StageObserver
+			}
+		}
+		return StageDropper
+	}
+	if r, err := parse(d.Kind+"/"+d.Name, d.Text); err == nil {
+		return stageOf(r.Detector)
 	}
 	return StageObserver
 }
@@ -167,8 +195,10 @@ func kindList() string {
 	return strings.Join(out, ", ")
 }
 
-// harnessRule is the catalogue rule the harness writes for detector with remedy; kinds are
-// the kinds the evidence flagged (protect-kind protects the most frequent one).
+// harnessRule is the catalogue rule the harness wrote for detector with remedy before the
+// catalogue was data; kinds are the kinds the evidence flagged (protect-kind protects the most
+// frequent one). The seed catalogue (CatalogueSeeds) declares exactly these parameters, and
+// Catalog.Rule, which the harness now uses, reproduces them from it.
 func harnessRule(detector, remedy string, kinds map[string]int) Rule {
 	r := Rule{Detector: detector, Remedy: remedy, Proposer: ProposerHarness}
 	switch remedy {

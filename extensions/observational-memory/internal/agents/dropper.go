@@ -8,6 +8,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
@@ -281,7 +282,7 @@ func RunDropper(ctx context.Context, args DropperArgs) ([]string, error) {
 		fmt.Sprintf("Maximum drops allowed this run: %s %s. This maximum is sized to move the active pool toward the target if every proposed drop is clearly safe.\n", jsfmt.Locale(maxDrops), jsfmt.Plural(maxDrops, "observation")) +
 		"This maximum is a hard upper bound, not a target. Drop fewer or none if fewer observations are clearly safe."
 
-	result, err := RunLoop(ctx, args.Stream, args.loopConfig("dropper"), args.system(DropperSystem), userText, []Tool{dropObservations})
+	result, err := RunLoop(ctx, args.Stream, args.loopConfig("dropper"), args.system(kernel.TextDropperRules, DropperInstructions), userText, []Tool{dropObservations})
 	if err != nil {
 		return nil, err
 	}

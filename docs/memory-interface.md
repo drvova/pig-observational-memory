@@ -211,7 +211,7 @@ The memory's behaviour rules (what a note must capture, when one record may repl
 what the dropper protects, how chunks are sized) are data the harness evaluates, not code
 paths, so the harness can add, test and retire them per model.
 
-- **A rule** is a record in the store (`rules/<id>.rows`): an id, the detector it answers, the
+- **A rule** is a record in the store (built as a `remedy` definition of the section 8 layer, `harness/<model>/remedy/<id>.rows`; it was `rules/<id>.rows` before, which is migrated on first use): an id, the detector it answers, the
   model ids it applies to (or all), a remedy, its state (`probation`, `established`,
   `retired`), the counts that decided its state, and who proposed it (harness or model).
 - **Detectors** are deterministic checks over a model's own notes and the branch, run after
@@ -303,6 +303,123 @@ is recorded with who asked and why, before it takes effect.
   declarations, text) and never code. Text from files, web pages or tool output never becomes a
   definition. The user is notified of every change, hold, revert and rollback; `/om:status`
   shows each model's harness, generation and held definitions.
+- Built (the kernel and the layer store): `internal/kernel` holds the ownership predicate
+  (`Owns`), the list it reads (the memory tool, the query engine's sources, stages and writes
+  including `harness` and `rollback`, the `om.*` kinds, the event ledger's kinds and outcomes and
+  the room ceiling's names for the kinds that read the ledger or run under the room budget
+  (`detector`, `remedy`, `summary`), the compaction settings and boundaries, the kernel text ids,
+  and the note schema's kernel fields for `schema` definitions), `Check` (a definition's name, and the
+  `name`, `field`, `setting` and `tool` columns of its tables; a `tool`, `schema` or `remedy`
+  text that is not a readable table is refused, since it cannot be checked), the floor (`Floor`:
+  `Lower(requestedBy, reason)` records first and refuses without both; reached only through the
+  user's global `kernelFloor` setting) and the fixed worker-prompt rules behind kernel text ids,
+  which open every worker prompt with the stage's instructions (seed or the model's own)
+  appended after them. `internal/layer` is the store: atomic layer files with the header above,
+  one home per name (a header naming another kind, name or model than its path is refused at
+  load), an append-only manifest of generations with content blobs and `Rollback(n)` (only names
+  some generation wrote are touched), `Hold`/`Claim` (re-holding keeps the original fallback; a
+  revert restores it even over a later write), stale detection against seeds the packages ship
+  (`layer.Ship`: the worker instructions and the detectors), and `Forget` restoring the seed.
+  Defined tools (section 6) and rules (section 7) are stored as `tool` and `remedy` definitions
+  and migrated from their old directories; a defined tool the layer refuses to migrate is kept
+  renamed (`.rows.refused`), retried on every use, and reported at registration and in
+  `/om:status` with the refusal. A model's effective layer applies, in order, the written and then
+  the held definitions for all models, then the model's own written and held ones.
+- Built (seeds and interpreters): every built-in ships as a seed with a digest (`declare.Seeds`):
+  `format/rows` and `format/jsonl` (declarations: header form `counted` or `jsonl`, delimiter,
+  quote, escape, the escapes `n` `r` `t`, the characters that force quoting, the indent),
+  `schema/observation` (kind, subject, scope, supersedes), the three `instructions`,
+  `summary/default` (the section 3 layout as a `summary[N]{table,query,fields}` declaration), the
+  six `detector`s (`detector[1]{check,query,description}`, each naming its kernel check) and one
+  `remedy` per catalogue remedy (`catalogue[N]{detector,rank,kind,fullness,text}`: the detectors it
+  answers, the order the harness tries it, the parameters a harness rule carries). The
+  interpreters (`internal/declare`, and `internal/rules` for detectors and remedies) register
+  per-kind validators the layer runs in `Check`, at definition and at load: a format is
+  interpreted by one generic strict codec (`tables.Declared`) and accepted only if it round-trips
+  the kernel's fixed test tables (`kernel.AcceptCodec`); a schema may narrow kind or leave out
+  the four structured fields and add fields of type text, enum, number or date, which the
+  observer offers, validates and stores in `Observation.fields`; a summary is one query or a
+  declaration of up to eight sections, each reading `notes` or `reflections` through
+  `memquery.Select` over the compaction's projection, laid out under the room budget by the
+  kernel (`ledger.RenderSectionsSummary`), which always appends the `omitted` table for every
+  record not shown (no section may take its name); a detector declares a kernel check or a query
+  over the pass's notes and covered history and is counted as `defined:<name>` beside the
+  kernel's checks, which alone judge rules; a catalogue entry must answer a detector within
+  `Answers` and pass `rules.Check`. The session model's layer selects the summary, the worker
+  model's layer the observer's codec, schema and instructions and its catalogue; the profile's
+  codecs are the shipped ones then the model's newly named formats. A name standing as its seed
+  is interpreted as before: the rows and jsonl seeds are the native codecs and the summary seed
+  is the native tables layout (the reference interpretation of its declaration, with the
+  selection of section 3), so behaviour with no definitions is unchanged. A format declared
+  under a shipped name is a declared codec like any other: the summary's instructions describe
+  it by its own spec, and the compaction records the codec (and its declaration) in its details
+  (`summaryCodec`, `summaryFormat`) so the summary is decoded in it later. A summary section's
+  `fields` start with `id` and include `content`, and the kernel counts a row as showing its
+  record only when its table carries `content`; a section whose query sorts keeps its first rows
+  under the budget, any other its newest. When the model's summary shows no record of a memory
+  that has some, the seed layout renders that compaction and the user is told which definition
+  selected nothing. Fields a schema adds are read back: the observer's prior lines show them,
+  `notes` queries (the memory tool, detectors, summaries) select them, and summary `fields` may
+  name them. Formats under new names join the codec rotation in the order they were first
+  written. A pass (one observer chunk, reflector or dropper run) loads each model's layer once,
+  and the rules lifecycle judges it by that snapshot's catalogue. A catalogue line that is not
+  the seed's is the model's: the harness rule carrying it, and a default it earns, are recorded
+  as proposed by the model, and `rules.CheckFromModel` (refusing catalogue lines, rule text and
+  instructions found in tool output on the branch, and a model's own lines kept for every
+  model) is the check the `harness` write must run beside `Store.Check`. Built (the build pass, the tool writes, holding and grading):
+  the `memory` tool's `harness kind=... name=... text="..."`, `harness forget kind=... name=...`
+  and `rollback N [model=...]` writes and the `harness` source (model, kind, name, state,
+  generation, origin, stale) go through `harness.CheckModelDefinition` (a tool is made with
+  `define`, a rule with `propose`; `rules.CheckFromModel` now refuses text of any kind whose whole,
+  or any run of six consecutive words wherever it sits, is found in tool output on the branch, a
+  seed's own text aside) and `layer.Store.Hold`; a summary is the session model's and every other
+  kind the worker's (`harness.DefinitionModel`). `propose` holds its rule the same way, and
+  `rules.For` reads the effective layer so a held rule applies to the pass that proves it. The
+  build pass runs first in the consolidation run when the worker model has no generation and
+  nothing held (once per process per model; an aborted one is retried), the revision pass after
+  the stages when `rules.RevisionDue` holds (a build or revision generation exists, at least
+  `MinEvidence` observer passes were counted since it, and the evidence digest, the set of
+  non-zero counts over the last `MinEvidence` passes and the rules' states, differs from the one
+  it recorded); both call `runBuilder` (`agents.RunBuilder`, opened by the kernel text
+  `kernel-builder`) through `runStageWithFallback`, hold what the worker's `define_harness` tool
+  accepted only while the run context is live, and mark the manifest (`OpBuild`, `OpRevise`, with
+  the evidence digest and ledger length) in the same critical section (`layer.Store.HoldPass`). Each pass settles the held definitions it ran with
+  (`layer.Store.ClaimHeld`, only those whose held file still holds the text the pass read): an
+  observer pass (background or catch-up chunk) the format, schema, detectors, the remedies that
+  act in the observer and its instructions, a dropper pass its instructions and the remedies that
+  act in the dropper (`rules.StageOfRemedy`: a rule for `dropped-then-queried`, a catalogue
+  answering only it), a reflector pass its instructions, a compaction the summary once the
+  outcome is decided (a summary that made the hook delegate to Pi is reverted);
+  clean means no stage error, no decode failure and no invariant refusal (a keep-head note outside
+  the covered range, a summary definition the kernel had to replace with the seed layout); an
+  aborted pass, or one whose branch moved before it recorded, settles nothing. Probation for a
+  written format, schema, instructions or catalogue (`rules.JudgeDefinitions`, after each recorded
+  pass) compares the counts `rules.GradingKeys` allows (the kernel's checks, and detectors whose
+  written text last changed, by any put, revert, forget or rollback, before the baseline's first
+  pass) over the first `MinEvidence` observer passes after its put with the `MinEvidence` before
+  it, retires it (`layer.Store.Settle` restores what stood before the generation that wrote it)
+  when the rate rose, and establishes it otherwise. A rollback never brings a definition back
+  without proof: one that would restore content a revert took away is refused, and what it does
+  restore is on probation again from the rollback, while names it leaves alone keep theirs. Defined tools and rules keep their own
+  probations. Only a pass that recorded its results (notes, reflections, drops, or a summary
+  that became the compaction) proves a held definition: a worker pass that ran and recorded
+  nothing is counted in the usage ledger as an empty pass (outcome `empty`; an observer one
+  carries `observer-empty`, which probation and the revision evidence read, so a written
+  definition that silences the observer is retired), proves nothing, and a held definition that
+  runs through `MinEvidence` empty passes in a row since its hold is reverted. Probation judges
+  the format, schema, observer instructions and catalogues; the reflector's and dropper's
+  instructions change no observer pass, so their proof is their own stage's recorded pass. The
+  layer loads only what the store recorded: a written file whose digest is not its manifest's
+  latest state for that name, or a held file the held index (`held/index.json`, written by every
+  hold) does not record, was written outside the store and is reported as untracked and never
+  loaded (a claim removes such a held file without restoring anything). `propose` and `define`
+  run the same provenance check (`propose` on the rule text; `define` on the description, and on
+  the query for quotations only), and the quotation check splits words at every character that
+  is not a letter or digit, so a table's delimiters and quotes do not hide one. The rules are the
+  harness's: `harness forget` refuses a rule (and a tool, forgotten with `forget name=`), a
+  rollback leaves rules as they are (`layer.Store.RollbackKeeping`, recorded in the generation's
+  `keep`), and the build pass is due while the worker model has no build or revision mark and no
+  definition but rules; a build pass the fallback answered marks the primary built too.
 
 ## Order of work
 

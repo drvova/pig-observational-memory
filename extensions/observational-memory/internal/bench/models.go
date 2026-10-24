@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 )
 
 // Provider is the registry provider id the bench model is served under.
@@ -79,16 +79,19 @@ func (s doneStream) Events(ctx context.Context) <-chan map[string]any {
 
 func (s doneStream) Result() map[string]any { return s.message }
 
-// WorkerRole names the worker a request comes from by its system prompt.
+// WorkerRole names the worker a request comes from by its system prompt. Every worker prompt
+// opens with its stage's fixed kernel text (agents.Compose), with the seed or the model's own
+// instructions and any rule lines after it, so the role is matched on that prefix.
 func WorkerRole(request map[string]any) string {
 	system, _ := request["systemPrompt"].(string)
-	switch system {
-	case agents.ObserverSystem:
-		return RoleObserver
-	case agents.ReflectorSystem:
-		return RoleReflector
-	case agents.DropperSystem:
-		return RoleDropper
+	for _, role := range []struct{ id, role string }{
+		{kernel.TextObserverRules, RoleObserver},
+		{kernel.TextReflectorRules, RoleReflector},
+		{kernel.TextDropperRules, RoleDropper},
+	} {
+		if strings.HasPrefix(system, strings.TrimRight(kernel.Text(role.id), "\n")) {
+			return role.role
+		}
 	}
 	return RoleWorker
 }

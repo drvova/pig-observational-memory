@@ -8,6 +8,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
@@ -131,10 +132,12 @@ func TestKeepHeadLeavesEmptyVerdictEmpty(t *testing.T) {
 	fx.obs.resolve(agents.ObserverResult{})
 	fx.run()
 	fx.expectNoAppends()
+	// It is counted as an empty pass for probation (rules.CountEmptyPass, with what the kernel's
+	// checks found in the unnoted chunk), never as an observer pass a rule is decided by.
 	events, _ := store.ModelEvents(workerModel)
 	for _, e := range events {
-		if e.Kind == curated.ModelKindPass {
-			t.Fatal("an empty verdict was recorded as a pass")
+		if e.Kind == curated.ModelKindPass && (e.Outcome != curated.OutcomeEmpty || e.Counts[rules.CountEmptyPass] != 1 || e.Counts[rules.DetectUncitedAssistantSpecifics] == 0) {
+			t.Fatalf("an empty verdict was recorded as %+v", e)
 		}
 	}
 }
@@ -162,9 +165,10 @@ func TestKeepHeadInCatchUp(t *testing.T) {
 	if data.CoversUpToID != "u1" || len(data.Observations) != 2 || !reflect.DeepEqual(data.Observations[1].SourceEntryIDs, []string{"a1"}) {
 		t.Fatalf("recorded %+v", data)
 	}
+	// The second, empty chunk is counted as an empty pass.
 	events, _ := store.ModelEvents("gtr7/memory")
-	if len(events) != 1 || events[0].Kind != curated.ModelKindPass || events[0].Tokens == 0 {
-		t.Fatalf("catch-up pass %+v", events)
+	if len(events) != 2 || events[0].Kind != curated.ModelKindPass || events[0].Tokens == 0 || events[0].Outcome == curated.OutcomeEmpty || events[1].Outcome != curated.OutcomeEmpty {
+		t.Fatalf("catch-up passes %+v", events)
 	}
 }
 
@@ -302,5 +306,38 @@ func TestKeepHeadRetiredWhenModelKeepsLeavingSpecificsUncited(t *testing.T) {
 	}
 	if keepHead.State != rules.StateRetired {
 		t.Fatalf("keep-head %+v", keepHead)
+	}
+}
+
+// A held remedy is proven by a pass of the stage it acts in: a rule for dropped-then-queried
+// (and the protect-kind catalogue, which answers only it) by a dropper pass, never by the
+// observer pass that does not run it; an observer rule and a mixed catalogue by the observer.
+func TestHeldRemedyIsProvenInTheStageItActsIn(t *testing.T) {
+	store := curated.New(curated.DefaultDir(t.TempDir()))
+	for _, r := range []rules.Rule{
+		{Detector: rules.DetectDroppedThenQueried, Remedy: rules.RemedyProtectKind, Kind: "fact", Models: []string{workerModel}},
+		{Detector: rules.DetectThinChunk, Remedy: rules.RemedyPromptLine, Text: "Keep every figure.", Models: []string{workerModel}},
+	} {
+		if _, err := rules.Add(store, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defs, _, err := store.Layer().ListAll(layer.KindRemedy)
+	if err != nil || len(defs) != 2 {
+		t.Fatalf("rules %+v %v", defs, err)
+	}
+	for _, d := range defs {
+		dropper := strings.Contains(d.Text, rules.DetectDroppedThenQueried)
+		if provesDefinition(passObserver, d) == dropper || provesDefinition(passDropper, d) != dropper {
+			t.Errorf("rule %s (dropper %v): observer proves %v, dropper proves %v", d.Name, dropper, provesDefinition(passObserver, d), provesDefinition(passDropper, d))
+		}
+	}
+	protect := layer.Definition{Kind: layer.KindRemedy, Name: rules.RemedyProtectKind, Text: rules.CatalogueSeeds[rules.RemedyProtectKind]}
+	if provesDefinition(passObserver, protect) || !provesDefinition(passDropper, protect) {
+		t.Error("the protect-kind catalogue is not proven by the dropper alone")
+	}
+	prompt := layer.Definition{Kind: layer.KindRemedy, Name: rules.RemedyPromptLine, Text: rules.CatalogueSeeds[rules.RemedyPromptLine]}
+	if !provesDefinition(passObserver, prompt) || provesDefinition(passDropper, prompt) {
+		t.Error("the mixed prompt-line catalogue is not proven by the observer")
 	}
 }

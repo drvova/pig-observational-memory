@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -463,7 +466,14 @@ func TestModelProposedRules(t *testing.T) {
 	if _, err := Propose(store, "p/m", nil, Proposal{Detector: DetectDroppedThenQueried, Remedy: RemedyProtectKind, Kind: "fact", Fullness: 9}); err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("invariant-breaking fullness: %v", err)
 	}
-	// Only the detector decides it: the rate falls over the next passes, so it is established.
+	// Held until a clean pass proves it, then written; only the detector decides it from
+	// there: the rate falls over the next passes, so it is established.
+	if all, _ := List(store); len(all) != 0 || !For(store, "p/m").Has(RemedyPromptLine) {
+		t.Fatalf("the held proposal is written %+v, or does not apply to the next pass", all)
+	}
+	if _, err := store.Layer().Claim("p/m", true, ""); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < MinEvidence; i++ {
 		if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 100, Findings: &Findings{Counts: map[string]int{}}}); err != nil {
 			t.Fatal(err)
@@ -543,5 +553,57 @@ func TestListSkipsRuleFilesFailingCheck(t *testing.T) {
 	}
 	if For(store, "p/m").Has(RemedyProtectKind) {
 		t.Fatal("a rule past the fullness bound is applied")
+	}
+}
+
+// Rules written before the layer move into it on first use, under their model (a default under
+// every model), without losing one; a legacy file that is not a valid rule is kept refused; a
+// store with nothing to migrate keeps working.
+func TestRulesMigrateToTheLayer(t *testing.T) {
+	store := newStore(t)
+	if all, err := List(store); err != nil || len(all) != 0 {
+		t.Fatalf("empty store: %+v, %v", all, err)
+	}
+	created := t0.Add(time.Hour)
+	single := Rule{ID: "a1a1a1a1a1a1", Detector: DetectCrossScopeSupersede, Remedy: RemedyBlockLink, Models: []string{"p/m"}, State: StateEstablished, Proposer: ProposerHarness, Created: created, Start: 4, AfterPasses: 3}
+	def := Rule{ID: "b2b2b2b2b2b2", Detector: DetectCrossScopeSupersede, Remedy: RemedyBlockLink, Models: []string{AllModels}, State: StateEstablished, Proposer: ProposerHarness, Created: created.Add(time.Minute)}
+	if err := os.MkdirAll(legacyDir(store), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{single.ID + ".rows": encode(single), def.ID + ".rows": encode(def), "broken.rows": "rule[1]{id}:\n  x"} {
+		if err := os.WriteFile(filepath.Join(legacyDir(store), name), []byte(text+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := List(store)
+	if err != nil || len(all) != 2 || all[0].ID != single.ID || all[0].AfterPasses != 3 || all[1].ID != def.ID {
+		t.Fatalf("migrated %+v, %v", all, err)
+	}
+	ls := store.Layer()
+	if _, err := os.Stat(ls.Path("p/m", layer.KindRemedy, single.ID)); err != nil {
+		t.Fatalf("single-model rule not under its model: %v", err)
+	}
+	if _, err := os.Stat(ls.Path(layer.AllModels, layer.KindRemedy, def.ID)); err != nil {
+		t.Fatalf("default rule not under every model: %v", err)
+	}
+	for _, name := range []string{single.ID + ".rows" + migratedSuffix, def.ID + ".rows" + migratedSuffix, "broken.rows" + refusedSuffix} {
+		if _, err := os.Stat(filepath.Join(legacyDir(store), name)); err != nil {
+			t.Fatalf("legacy %s not kept: %v", name, err)
+		}
+	}
+	if !For(store, "p/m").Has(RemedyBlockLink) || !For(store, "q/other").Has(RemedyBlockLink) {
+		t.Fatal("migrated rules are not applied")
+	}
+	// A rule file copied under another model is not applied there.
+	data, _ := os.ReadFile(ls.Path("p/m", layer.KindRemedy, single.ID))
+	moved := strings.Replace(string(data), "p/m", "q/other", 1)
+	if err := os.MkdirAll(filepath.Dir(ls.Path("q/other", layer.KindRemedy, single.ID)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ls.Path("q/other", layer.KindRemedy, single.ID), []byte(moved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := List(store); len(all) != 2 {
+		t.Fatalf("a moved rule was listed: %+v", all)
 	}
 }

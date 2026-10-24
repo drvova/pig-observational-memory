@@ -14,6 +14,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -273,8 +274,21 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 		built := ledger.BuildCompactionProjection(entries, resolution.Cut.FoldThroughEntryID, ledger.CompactionProjectionConfig{ObservationsPoolMaxTokens: observationsPoolMaxTokens(cfg)})
 		projection = &built
 		// The session model reads the summary: its harness profile picks the codec and
-		// layout, and may give the summary less than the room (never more).
-		profile := harness.ProfileFor(h, cfg, h.SessionModel())
+		// layout, and may give the summary less than the room (never more), and its layer
+		// may select what the summary shows (its summary query; the seed is the native
+		// tables layout), never what the kernel discloses as omitted.
+		// The layer is loaded once, so the profile's codec and the summary come from one
+		// generation of it.
+		// The compaction is the summary's pass: it proves a held summary definition the
+		// session model runs with (settlePass) once the summary becomes the compaction, and
+		// reverts it when the kernel had to fall back to the seed layout or the summary made
+		// the hook delegate to Pi. It settles only once the outcome is decided, below.
+		passCtx := withPass(ctx, passCompaction)
+		active := layerFor(passCtx, h, cfg, h.SessionModel())
+		profile := harness.Default(harness.ModelKey(h.SessionModel()))
+		if l, ok := harness.For(h, cfg, h.SessionModel()); ok {
+			profile = l.ProfileWith(active)
+		}
 		room := summaryBudget(cfg, contextWindow, event.TokensBefore, entries, resolution, maxRetainedTokens)
 		summaryMaxTokens := profile.ApplySummary(room)
 		if summaryMaxTokens < room {
@@ -291,12 +305,27 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			// not crowd the memory out of its own summary.
 			memoryBudget = max(summaryMaxTokens/2, summaryMaxTokens-tokens.EstimateStringTokens(instructionsBlock))
 		}
-		rendered := ledger.RenderSummaryWithOptions(projection.Reflections, projection.Observations, memoryBudget, ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: profile.SummaryFormat(cfg), Codec: profile.CodecValue()})
+		options := ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: profile.SummaryFormat(cfg), Codec: profile.CodecValue()}
+		rendered, report := active.RenderSummaryReport(projection.Reflections, projection.Observations, memoryBudget, options)
+		if report != "" {
+			debuglog.Log(ctx, "compaction.summary_definition_fallback", map[string]any{"model": active.Model(), "report": report})
+			notifyUI(h, "Observational memory: "+report, "warning")
+			failPass(passCtx, nil, "an invariant refusal: "+report)
+		}
 		summary = rendered.Text
+		// The summary decodes later (harness.VisibilityOf) in the codec that wrote it,
+		// recorded with its declaration when the model declared it.
+		if options.Format != ledger.FormatLines && options.Codec != nil {
+			projection.Details.SummaryCodec = options.Codec.Name()
+			if f, declared := tables.DeclaredFormat(options.Codec); declared {
+				projection.Details.SummaryFormat = f.Declaration()
+			}
+		}
 		// A summary that kept no record would replace older context with only
 		// instructions and an omission notice. Decline instead, so Pi's native
 		// summarizer preserves the facts.
 		hadRecords := len(projection.Reflections)+len(projection.Observations) > 0
+		summaryFailed := false
 		if hadRecords && len(rendered.Reflections)+len(rendered.Observations) == 0 {
 			debuglog.Log(ctx, "compaction.summary_budget_empty", map[string]any{"summaryMaxTokens": summaryMaxTokens, "memoryBudget": memoryBudget, "reflections": len(projection.Reflections), "observations": len(projection.Observations)})
 			budgetText := fmt.Sprintf("the ~%s-token summary budget", jsfmt.Locale(summaryMaxTokens))
@@ -304,6 +333,8 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 				budgetText = fmt.Sprintf("its ~%s-token share of the ~%s-token summary budget (the compaction instructions take the rest)", jsfmt.Locale(memoryBudget), jsfmt.Locale(summaryMaxTokens))
 			}
 			notifyUI(h, "Observational memory: no memory record fits "+budgetText+"; delegating to Pi's native summarizer", "warning")
+			failPass(passCtx, nil, "the summary kept no record within "+budgetText+", so the compaction delegated to Pi")
+			summaryFailed = true
 			summary = ""
 		}
 		// Instructions another extension or the user attached to this compaction
@@ -319,8 +350,18 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			summaryTokens := tokens.EstimateStringTokens(summary)
 			if resolution.RetainedTokens+summaryTokens > maxRetainedTokens {
 				resolution = delegate(fmt.Sprintf("retaining ~%s tokens plus a ~%s-token memory summary exceeds the ~%s-token budget", jsfmt.Locale(resolution.RetainedTokens), jsfmt.Locale(summaryTokens), jsfmt.Locale(maxRetainedTokens)), resolution.Gap)
+				failPass(passCtx, nil, "the summary made the compaction delegate to Pi: "+resolution.Reason)
+				summaryFailed = true
 			}
 		}
+		// Only a summary that becomes the compaction is proven: a pass with nothing to
+		// summarize proves nothing either way, and its held summary waits for the next.
+		if summary == "" && !summaryFailed {
+			incompletePass(passCtx)
+		} else if summary != "" && !summaryFailed {
+			recordedPass(passCtx)
+		}
+		settlePass(passCtx, cfg, h, nil)
 	}
 
 	if resolution.Gap != nil {

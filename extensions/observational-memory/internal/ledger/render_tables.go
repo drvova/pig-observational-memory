@@ -35,15 +35,30 @@ Treat these as past records. When records conflict, the most recent reflects the
 ` + TablesRecallParagraph
 
 // TablesUsageInstructionsFor is the instructions that open a tables summary
-// encoded with codec: TablesUsageInstructions for the rows codec (or nil), else
-// the same text with its first sentence naming the codec and carrying the first
-// line of the codec's spec, so the instructions describe the format below them.
+// encoded with codec: TablesUsageInstructions for the native rows codec (or
+// nil), else the same text with its first sentence naming the codec and
+// carrying the first line of the codec's spec, so the instructions describe the
+// format below them. A format a model declared under the name rows is described
+// by its own spec, never by the native wording.
 func TablesUsageInstructionsFor(codec tables.Codec) string {
-	if codec == nil || codec.Name() == tables.Rows.Name() {
+	if nativeRows(codec) {
 		return TablesUsageInstructions
 	}
 	format, _, _ := strings.Cut(codec.Spec(), "\n")
 	return TablesSummaryIntro + " in the " + codec.Name() + " format. " + strings.TrimSpace(format) + tablesUsageBody
+}
+
+// nativeRows reports whether codec is the kernel's native rows codec (nil
+// stands for it), the one whose syntax the fixed wording states. A declared
+// codec (tables.Declared) is never native, whatever its name.
+func nativeRows(codec tables.Codec) bool {
+	if codec == nil {
+		return true
+	}
+	if _, declared := tables.DeclaredFormat(codec); declared {
+		return false
+	}
+	return codec.Name() == tables.Rows.Name()
 }
 
 // TablesSummaryBody is the encoded tables of a tables summary in any codec:
@@ -259,6 +274,14 @@ func (l *tablesLayout) reflectionCost(reflection Reflection) int {
 // omitted reflections, then of consecutive omitted observations, each with
 // its date range, count and first id.
 func (l *tablesLayout) omittedRows(keptReflections, keptObservations map[string]bool) [][]string {
+	return omittedSpans(l.reflections, l.observations, l.dates, keptReflections, keptObservations)
+}
+
+// omittedSpans lists the spans of records not kept: runs of consecutive
+// omitted reflections, then of consecutive omitted observations, each with
+// its date range, count and first id. dates are the reflections' date spans
+// ("from..to" or one date).
+func omittedSpans(reflections []Reflection, observations []Observation, dates map[string]string, keptReflections, keptObservations map[string]bool) [][]string {
 	rows := [][]string{}
 	span := func(n int, kept func(int) bool, from, to func(int) string, id func(int) string) {
 		for i := 0; i < n; {
@@ -281,27 +304,27 @@ func (l *tablesLayout) omittedRows(keptReflections, keptObservations map[string]
 		}
 	}
 	reflectionRange := func(i int) (string, string) {
-		from, to, _ := strings.Cut(l.dates[l.reflections[i].ID], "..")
+		from, to, _ := strings.Cut(dates[reflections[i].ID], "..")
 		if to == "" {
 			to = from
 		}
 		return from, to
 	}
-	span(len(l.reflections),
-		func(i int) bool { return keptReflections[l.reflections[i].ID] },
+	span(len(reflections),
+		func(i int) bool { return keptReflections[reflections[i].ID] },
 		func(i int) string { from, _ := reflectionRange(i); return from },
 		func(i int) string { _, to := reflectionRange(i); return to },
-		func(i int) string { return l.reflections[i].ID })
+		func(i int) string { return reflections[i].ID })
 	observationDate := func(i int) string {
-		if date := recordDate(l.observations[i].Timestamp); len(date) == 10 {
+		if date := recordDate(observations[i].Timestamp); len(date) == 10 {
 			return date
 		}
 		return ""
 	}
-	span(len(l.observations),
-		func(i int) bool { return keptObservations[l.observations[i].ID] },
+	span(len(observations),
+		func(i int) bool { return keptObservations[observations[i].ID] },
 		observationDate, observationDate,
-		func(i int) string { return l.observations[i].ID })
+		func(i int) string { return observations[i].ID })
 	return rows
 }
 

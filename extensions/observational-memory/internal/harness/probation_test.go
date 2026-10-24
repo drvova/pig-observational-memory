@@ -124,3 +124,23 @@ func TestVisibilityClassify(t *testing.T) {
 }
 
 func configOn() config.Config { return config.Defaults }
+
+// A summary encoded in a format the model declared under the name rows is decoded in that
+// format, as the compaction recorded it, so its omitted span starts still count as omitted.
+func TestVisibilityDecodesTheRecordedCodec(t *testing.T) {
+	f := tables.Format{Name: "rows", Header: tables.HeaderCounted, Delimiter: ';', Quote: '\'', Escape: '\\', Escapes: "nrt", Indent: 4}
+	codec, err := tables.Declared(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := compactionIn(t, codec, "aaaaaaaaaaa1", "aaaaaaaaaaa2", "aaaaaaaaaaa3")
+	details := entry.Details.(map[string]any)
+	details["summaryCodec"], details["summaryFormat"] = "rows", f.Declaration()
+	v := harness.VisibilityOf([]ledger.Entry{tf.RawMessage("u1", "hi"), entry}, nil)
+	if outcome, _ := v.Classify([]string{"aaaaaaaaaaa2"}); outcome != curated.OutcomeOmitted {
+		t.Fatalf("declared rows omitted span start: %s", outcome)
+	}
+	if outcome, _ := v.Classify([]string{"aaaaaaaaaaa1"}); outcome != curated.OutcomeShown {
+		t.Fatalf("declared rows shown: %s", outcome)
+	}
+}
