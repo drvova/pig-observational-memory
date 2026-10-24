@@ -21,7 +21,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -106,24 +105,43 @@ func (s Store) Get(name string) (Memory, error) {
 	return parse(name, string(data))
 }
 
+// Visible reports whether m applies in project: it is global or scoped to it.
+func Visible(m Memory, project string) bool { return m.Project == "" || m.Project == project }
+
+// GetIn reads one memory as seen from project: a memory scoped to another
+// project is not found there.
+func (s Store) GetIn(name, project string) (Memory, error) {
+	m, err := s.Get(name)
+	if err != nil {
+		return Memory{}, err
+	}
+	if !Visible(m, project) {
+		return Memory{}, ErrNotFound
+	}
+	return m, nil
+}
+
 // List returns the memories that apply in project (global ones and those
 // scoped to it), in name order. Unreadable files are skipped.
 func (s Store) List(project string) ([]Memory, error) {
-	paths, err := filepath.Glob(filepath.Join(s.Dir, "*.md"))
+	entries, err := os.ReadDir(s.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Memory{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	out := []Memory{}
-	for _, path := range paths {
-		name := strings.TrimSuffix(filepath.Base(path), ".md")
-		if ValidateName(name) != nil {
+	for _, entry := range entries {
+		name, ok := strings.CutSuffix(entry.Name(), ".md")
+		if !ok || entry.IsDir() || ValidateName(name) != nil {
 			continue
 		}
 		m, err := s.Get(name)
 		if err != nil {
 			continue
 		}
-		if m.Project == "" || m.Project == project {
+		if Visible(m, project) {
 			out = append(out, m)
 		}
 	}
@@ -145,8 +163,13 @@ func (s Store) Save(m Memory, source string) (Memory, error) {
 	}
 	var saved Memory
 	err := s.locked(func() error {
-		if _, err := os.Stat(s.path(m.Name)); err == nil {
+		if existing, err := s.Get(m.Name); err == nil {
+			if !Visible(existing, m.Project) {
+				return fmt.Errorf("the name %q is taken by a memory scoped to another project; choose another name", m.Name)
+			}
 			return fmt.Errorf("a memory named %q already exists; edit it with memory_edit instead", m.Name)
+		} else if _, statErr := os.Stat(s.path(m.Name)); statErr == nil {
+			return fmt.Errorf("the name %q is taken by an unreadable memory file; choose another name", m.Name)
 		}
 		now := s.Now().UTC()
 		m.Description = oneLine(m.Description)
@@ -168,11 +191,11 @@ type Edit struct {
 	Body        *string
 }
 
-// Update applies edit to the memory name.
-func (s Store) Update(name string, edit Edit, source string) (Memory, error) {
+// Update applies edit to the memory name, as seen from project.
+func (s Store) Update(name, project string, edit Edit, source string) (Memory, error) {
 	var updated Memory
 	err := s.locked(func() error {
-		m, err := s.Get(name)
+		m, err := s.GetIn(name, project)
 		if err != nil {
 			return err
 		}
@@ -202,10 +225,11 @@ func (s Store) Update(name string, edit Edit, source string) (Memory, error) {
 	return updated, s.Record(name, EventEdit)
 }
 
-// Forget removes the memory name. Its usage history stays in the ledger.
-func (s Store) Forget(name string) error {
+// Forget removes the memory name, as seen from project. Its usage history
+// stays in the ledger.
+func (s Store) Forget(name, project string) error {
 	err := s.locked(func() error {
-		if _, err := s.Get(name); err != nil {
+		if _, err := s.GetIn(name, project); err != nil {
 			return err
 		}
 		return os.Remove(s.path(name))
@@ -321,22 +345,6 @@ func (s Store) Usage() (map[string]Evidence, error) {
 }
 
 // --- files ---------------------------------------------------------------------
-
-func (s Store) locked(fn func() error) error {
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(filepath.Join(s.Dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	return fn()
-}
 
 func (s Store) write(m Memory) error {
 	tmp := s.path(m.Name) + ".tmp"

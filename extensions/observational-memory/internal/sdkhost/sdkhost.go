@@ -185,15 +185,3 @@ func (h *Host) ConfigHome() string {
 	}
 	return dir
 }
-
-// SystemPrompt is a before_agent_start event's current system prompt: the
-// event's prompt getter when present, else the context's.
-func SystemPrompt(ctx sdk.Context, data map[string]any) (string, error) {
-	if p, ok := data["systemPrompt"].(*sdk.SystemPrompt); ok && p != nil {
-		return p.Get()
-	}
-	if s, ok := data["systemPrompt"].(string); ok {
-		return s, nil
-	}
-	return ctx.GetSystemPrompt()
-}

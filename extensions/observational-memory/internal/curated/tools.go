@@ -89,10 +89,12 @@ func (c Call) Run(tool string, params map[string]any) (string, error) {
 		return fmt.Sprintf("Saved memory %s [%s]%s: %s", saved.Name, saved.Type, scopeNote(saved), saved.Description), nil
 	case ToolEdit:
 		edit := Edit{}
-		if v, ok := param(params, "type"); ok {
+		// Models often send every optional field, blank: only a body may be
+		// cleared with an empty string.
+		if v, ok := param(params, "type"); ok && strings.TrimSpace(v) != "" {
 			edit.Type = &v
 		}
-		if v, ok := param(params, "description"); ok {
+		if v, ok := param(params, "description"); ok && strings.TrimSpace(v) != "" {
 			edit.Description = &v
 		}
 		if v, ok := param(params, "body"); ok {
@@ -101,18 +103,18 @@ func (c Call) Run(tool string, params map[string]any) (string, error) {
 		if edit.Type == nil && edit.Description == nil && edit.Body == nil {
 			return "", errors.New("nothing to change: give a new type, description or body")
 		}
-		m, err := c.Store.Update(name, edit, c.Source)
+		m, err := c.Store.Update(name, c.Project, edit, c.Source)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Updated memory %s [%s]: %s", m.Name, m.Type, m.Description), nil
 	case ToolForget:
-		if err := c.Store.Forget(name); err != nil {
+		if err := c.Store.Forget(name, c.Project); err != nil {
 			return "", err
 		}
 		return "Forgot memory " + name + ".", nil
 	case ToolRead:
-		m, err := c.Store.Get(name)
+		m, err := c.Store.GetIn(name, c.Project)
 		if err != nil {
 			return "", err
 		}
@@ -137,7 +139,7 @@ func (c Call) Run(tool string, params map[string]any) (string, error) {
 		if outcome != EventHelped && outcome != EventHarmed {
 			return "", errors.New(`outcome must be "helped" or "harmed"`)
 		}
-		if _, err := c.Store.Get(name); err != nil {
+		if _, err := c.Store.GetIn(name, c.Project); err != nil {
 			return "", err
 		}
 		if err := c.Store.Record(name, outcome); err != nil {

@@ -33,11 +33,11 @@ func TestSaveGetEditForget(t *testing.T) {
 		t.Fatalf("a taken name must be refused, got %v", err)
 	}
 	desc := "The user prefers tabs, width 4."
-	edited, err := s.Update("prefers-tabs", Edit{Description: &desc}, "session-2")
+	edited, err := s.Update("prefers-tabs", "", Edit{Description: &desc}, "session-2")
 	if err != nil || edited.Description != desc || edited.Body != "Why: said so twice." || len(edited.Sources) != 2 || !edited.Updated.After(saved.Updated) {
 		t.Fatalf("edited %+v, %v", edited, err)
 	}
-	if err := s.Forget("prefers-tabs"); err != nil {
+	if err := s.Forget("prefers-tabs", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Get("prefers-tabs"); err != ErrNotFound {
@@ -104,6 +104,9 @@ func TestUsageRankingAndIndexLayout(t *testing.T) {
 	}
 	if text, _ := RenderIndex(nil, 100); text != "" {
 		t.Fatal("no memories should render no index")
+	}
+	if text, shown := IndexFor(testStore(t), "", 100); text != EmptyIndex || len(shown) != 0 {
+		t.Fatal("an empty store should render the header with a no-memories line")
 	}
 }
 
@@ -180,5 +183,31 @@ func TestToolCalls(t *testing.T) {
 	noProject := Call{Store: c.Store}
 	if _, err := noProject.Run(ToolSave, map[string]any{"name": "x", "type": "user", "description": "y", "scope": "project"}); err == nil {
 		t.Fatal("a project-scoped save without a project must fail")
+	}
+}
+
+func TestProjectScopedMemoriesStayInTheirProject(t *testing.T) {
+	s := testStore(t)
+	here := Call{Store: s, Project: "/repo/a"}
+	there := Call{Store: s, Project: "/repo/b"}
+	if _, err := here.Run(ToolSave, map[string]any{"name": "local", "type": "project", "description": "Uses pnpm.", "scope": "project"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{ToolRead, ToolForget, ToolFeedback} {
+		if _, err := there.Run(tool, map[string]any{"name": "local", "outcome": "helped"}); err == nil {
+			t.Fatalf("%s reached a memory scoped to another project", tool)
+		}
+	}
+	if _, err := there.Run(ToolEdit, map[string]any{"name": "local", "body": "x"}); err == nil {
+		t.Fatal("edit reached a memory scoped to another project")
+	}
+	if _, err := there.Run(ToolSave, map[string]any{"name": "local", "type": "user", "description": "x"}); err == nil || !strings.Contains(err.Error(), "another project") {
+		t.Fatalf("a save colliding with another project's memory should say so, got %v", err)
+	}
+	if _, err := here.Run(ToolEdit, map[string]any{"name": "local", "type": "", "description": "", "body": "Never run npm."}); err != nil {
+		t.Fatalf("blank optional fields must be ignored, not rejected: %v", err)
+	}
+	if m, _ := s.Get("local"); m.Body != "Never run npm." || m.Type != TypeProject || m.Description != "Uses pnpm." {
+		t.Fatalf("edit with blank fields changed the wrong things: %+v", m)
 	}
 }
