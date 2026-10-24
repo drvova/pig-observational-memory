@@ -145,23 +145,36 @@ define bake-count = notes | where subject=baking | count "How many times the use
 - Results are tables in the active codec with a `matched N, showing M` line when cut. Errors name the
   position and the fix. Queries cannot loop or run code; every query finishes.
 
-## 6. Tools the model defines, per model
+## 6. The per-model harness
 
-- `define name = query "description"` stores a named query in the curated store and
-  registers it at once as a tool (`Context.RegisterTool`) that runs the query, with `$input`
-  substituted from its one optional parameter. The user is notified of every definition.
-- A defined tool starts on probation and becomes established after it returns results
-  without error twice; it is retired when it errors more often than it succeeds over its last
-  calls, or when feedback marks it harmed (nodecode's held definitions).
-- Every call of a memory tool is recorded per model (ok, error, empty) in the store's usage
-  ledger. Before each run, tools a model keeps failing with are deactivated for that model
-  (`SetActiveTools`), and the base `memory` tool is never deactivated.
-- The codec is chosen the same way: a model whose rows or queries keep failing to decode in
-  one codec is switched to another for its next run, and the choice is recorded per model.
+Models differ in which formats, layouts, summary sizes and tools they handle well, so the
+harness builds itself per model instead of fixing one setup for all. Each model id gets a
+profile in the store, adjusted only from counted events the code observes, never from
+benchmark scores:
+
+| Setting | Default | Switched when |
+|---|---|---|
+| codec | `rows` | the model's rows or queries keep failing to decode: try the next codec |
+| layout | tables | its rows keep coming back with the wrong columns: `lines` |
+| summary size | the whole room | it queries for records the summary already showed (it did not use them): shrink; it queries for omitted records: grow back toward the room |
+| tools | `memory` only | a defined tool errors more often than it succeeds for this model: deactivate it (`SetActiveTools`); one that returns results stays |
+| instructions | the codec's short spec | repeated syntax errors: carry the longer spec with examples |
+
+- Every memory tool call and every decode is recorded per model (ok, error, empty, already
+  shown, omitted) in the store's usage ledger; the profile is a pure function of that ledger,
+  so it can be recomputed and inspected (`/om:status` shows it).
+- A switch needs repeated evidence, not one event, and is recorded with its reason. The base
+  `memory` tool and the room ceiling never change, so a bad profile cannot break the memory.
+- Tools the model defines: `define name = query "description"` stores a named query in the
+  curated store and registers it at once (`Context.RegisterTool`) as a tool that runs the
+  query with `$input` substituted from its one optional parameter. The user is notified of
+  every definition. A defined tool starts on probation and is established after it returns
+  results without error twice; it is retired when it errors more often than it succeeds, or
+  when feedback marks it harmed (nodecode's held definitions).
 
 ## Order of work
 
 1. `internal/tables` and the `rows` codec. 2. Structured observations and relative-date resolution. 3. The room
 budget. 4. The table memory view. 5. The memory tool, replacing `recall` and the curated tools,
-and removing `/om:memory`. 6. Defined tools and per-model activation. Each step ships with its
+and removing `/om:memory`. 6. The per-model harness: profiles, defined tools, per-model activation. Each step ships with its
 tests and docs, and the replay harness checks that nothing regressed.
