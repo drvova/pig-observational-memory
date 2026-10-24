@@ -30,18 +30,22 @@ Plain accuracy is 89.6% (448/500). Abstention questions, those with no answer in
 - **Recall is off**, matching Mastra's runner. The actor sees only the rendered memory and the unobserved tail.
 - **Usage.** About 361M prompt tokens, 196M of them cache hits, and 22.5M completion tokens, over about 19k model calls.
 
-## Pilot: Claude Opus 5.5 as the answering model
+## Claude Opus 5.5 as the answering model
 
-A separate, smaller measurement: 60 questions (10 per type, drawn with seed 1) answered by Claude Opus 5.5 from the **same memory** the DeepSeek run built, so only the answering model changes. Each answer came from a Claude Code subagent that read the question's saved actor prompt; a second subagent graded it with the same LongMemEval judge prompt.
+A second measurement on all 500 questions: Claude Opus 5.5 answers from the **same memory** the DeepSeek run built, so only the answering model changes. Each answer came from a Claude Code subagent that read the question's saved actor prompt, and a second subagent graded it with the same LongMemEval judge prompt.
 
-| Question type | Opus 5.5 answering | DeepSeek answering (same 60) |
+| Question type | Opus 5.5 answering | DeepSeek answering |
 |---|---|---|
-| knowledge-update | 10/10 | 9/10 |
-| multi-session | 9/10 | 8/10 |
-| single-session-assistant | 9/10 | 9/10 |
-| single-session-preference | 10/10 | 10/10 |
-| single-session-user | 10/10 | 10/10 |
-| temporal-reasoning | 10/10 | 10/10 |
-| **Mean of the 6 types** | **96.7%** (58/60) | 93.3% (56/60) |
+| knowledge-update | 94.9% (74/78) | 96.2% (75/78) |
+| multi-session | 90.2% (120/133) | 89.5% (119/133) |
+| single-session-assistant | 66.1% (37/56) | 76.8% (43/56) |
+| single-session-preference | 100.0% (30/30) | 96.7% (29/30) |
+| single-session-user | 97.1% (68/70) | 97.1% (68/70) |
+| temporal-reasoning | 87.2% (116/133) | 85.7% (114/133) |
+| **Mean of the 6 types** | **89.25%** (445/500) | **90.32%** (448/500) |
 
-Read it as a hint, not a score: 60 questions is a small sample (one question is about 1.7 points), Opus graded Opus while DeepSeek graded DeepSeek, and the subagents ran inside Claude Code with its own system prompt on top of the actor prompt. It does suggest the memory, not the answering model, sets most of the ceiling: on the same memory a stronger answerer gains about three points.
+Abstention questions: 29/30 for Opus, 24/30 for DeepSeek.
+
+On identical memory the two answering models land within about a point overall, so the memory, not the answering model, sets the ceiling. They differ in style. Opus declines when the memory does not state a detail outright, which wins on abstention questions and loses on single-session-assistant questions, where DeepSeek fills the gap, sometimes correctly and sometimes from general knowledge rather than the memory.
+
+Caveats: each model graded its own answers, and the judges differ. On one question both models gave the same wrong hostel name, and DeepSeek's judge accepted it while Opus's did not. The subagents also ran inside Claude Code, with its own system prompt on top of the actor prompt.
