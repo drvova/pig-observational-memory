@@ -196,3 +196,34 @@ func errorsAs(err error, target **retryableError) bool {
 	}
 	return ok
 }
+
+func TestChatUsageLimitWaitsWithoutSpendingAttempts(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, `{"type":"error","error":{"type":"PlanUsageLimitError","message":"usage limit exceeded"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	client := NewClient(srv.URL, "k", NewMeter(nil))
+	client.MaxAttempts = 1 // waits spend no attempt
+	var slept []time.Duration
+	client.Sleep = func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }
+	resp, err := client.Chat(context.Background(), RoleActor, ChatRequest{Model: "m"})
+	if err != nil || resp.Choices[0].Message.Text() != "ok" {
+		t.Fatalf("resp %+v, err %v", resp, err)
+	}
+	if len(slept) != 2 || slept[0] < ChatUsageLimitRecheck-time.Minute {
+		t.Fatalf("slept %v; want two waits of about %v", slept, ChatUsageLimitRecheck)
+	}
+}
+
+func TestChatRateLimitIsNotAUsageLimit(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}}
+	if limit := chatUsageLimit(resp, []byte(`{"error":{"type":"rate_limit_error","message":"slow down"}}`), time.Now()); limit != nil {
+		t.Fatalf("a rate limit should be retried with backoff, got %+v", limit)
+	}
+}

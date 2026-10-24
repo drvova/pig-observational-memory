@@ -375,6 +375,9 @@ func (c *Client) once(ctx context.Context, req ChatRequest) (ChatResponse, error
 	}
 	if httpResp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, snippet(raw))
+		if limit := chatUsageLimit(httpResp, raw, time.Now()); limit != nil {
+			return ChatResponse{}, limit
+		}
 		if httpResp.StatusCode == http.StatusTooManyRequests || httpResp.StatusCode >= 500 || httpResp.StatusCode == http.StatusRequestTimeout {
 			return ChatResponse{}, &retryableError{err: err, retryAfter: parseRetryAfter(httpResp.Header.Get("Retry-After"))}
 		}
@@ -388,6 +391,41 @@ func (c *Client) once(ctx context.Context, req ChatRequest) (ChatResponse, error
 		return ChatResponse{}, &retryableError{err: fmt.Errorf("response has no choices: %s", snippet(raw))}
 	}
 	return resp, nil
+}
+
+// ChatUsageLimitRecheck is how long a chat-completions call waits on a plan's
+// usage limit when the reply names no reset time.
+const ChatUsageLimitRecheck = 15 * time.Minute
+
+// chatUsageLimit reads a 429 whose error names a plan usage limit (an error
+// type containing "UsageLimit" or "usage_limit", or a message saying "usage
+// limit"), rather than a rate limit, as a *UsageLimitError: the call then waits
+// for the window without spending attempts, as the Codex backend does. The
+// reset is the Retry-After header's when it gives one, else
+// ChatUsageLimitRecheck from now.
+func chatUsageLimit(resp *http.Response, raw []byte, now time.Time) *UsageLimitError {
+	if resp.StatusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	var body struct {
+		Error struct {
+			Type    string `json:"type"`
+			Code    any    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return nil
+	}
+	kind := strings.ToLower(body.Error.Type + " " + fmt.Sprint(body.Error.Code))
+	if !strings.Contains(kind, "usagelimit") && !strings.Contains(kind, "usage_limit") && !strings.Contains(strings.ToLower(body.Error.Message), "usage limit") {
+		return nil
+	}
+	reset := now.Add(ChatUsageLimitRecheck)
+	if after := parseRetryAfter(resp.Header.Get("Retry-After")); after > 0 {
+		reset = now.Add(after)
+	}
+	return &UsageLimitError{ResetAt: reset, Message: body.Error.Message}
 }
 
 func parseRetryAfter(v string) time.Duration {
