@@ -49,3 +49,15 @@ Abstention questions: 29/30 for Opus, 24/30 for DeepSeek.
 On identical memory the two answering models land within about a point overall, so the memory, not the answering model, sets the ceiling. They differ in style. Opus declines when the memory does not state a detail outright, which wins on abstention questions and loses on single-session-assistant questions, where DeepSeek fills the gap, sometimes correctly and sometimes from general knowledge rather than the memory.
 
 Caveats: each model graded its own answers, and the judges differ. On one question both models gave the same wrong hostel name, and DeepSeek's judge accepted it while Opus's did not. The subagents also ran inside Claude Code, with its own system prompt on top of the actor prompt.
+
+## Deterministic memory fixes, measured on the same memory
+
+Three code-only changes (no prompt changes): the dropper's preservation floor, dated reflection lines, and specifics-aware summary eviction (see [concepts](concepts.md)). To measure them on exactly the memory a model built, `longmemeval replay` rebuilt every question's memory from the DeepSeek run's checkpoints with the new code, applying the floor to the drops the dropper had recorded, with no model calls ([bench.md](bench.md#replaying-a-finished-run)). Opus 5.5 then answered and graded, as in the run above, on two sets:
+
+| Set | Opus correct, original memory | Opus correct, replayed memory | Gained | Lost |
+|---|---|---|---|---|
+| 74 questions DeepSeek or Opus failed | 19 | 43 | 26 | 2 |
+| 100 questions both passed (control) | 100 | 98 | 0 | 2 |
+
+The gains match the failure diagnosis: facts the dropper had deleted (a discount, a cocktail bottle, a chess move), facts the newest-first summary had cut, and a duration the dated reflections made recoverable. All four losses come from the same trade-off: the floor keeps more observations active, the summary then omits more of them (8 to 59 per question instead of 0 to 21), and the cut lines held the answer without a number, date or name the eviction could favour (an assistant's list of lowercase terms, one workshop's price among several). Scaled to all 500 questions with the control loss rate, the fixes are worth roughly 15 more correct answers, about three points; a slightly larger summary budget or a narrower definition of a specific should recover most of the losses. Answers vary between runs, so treat single questions as noise and the totals as the signal.
+
