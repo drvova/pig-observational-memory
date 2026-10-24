@@ -251,10 +251,64 @@ paths, so the harness can add, test and retire them per model.
 - The user is notified when a rule is added, established or retired; `/om:status` lists the
   active rules and their counts per model.
 
+## 8. The model builds its own harness on a kernel it cannot change
+
+Sections 1-7 ship as **seeds**: the codecs, note schema, worker instructions, summary layout,
+detectors and remedies the extension starts with. The model in use builds its own harness on
+top of them: it keeps, changes or replaces every seed, per model. Underneath sits a **kernel**
+it cannot change, after nodecode's kernel floor (`organism/evolve.lisp`), held redefinitions
+(`organism/provisional.lisp`) and layer files (`organism/scribe.lisp`).
+
+**The kernel** (Go code, never data): storage and the `om.*` record kinds; the compaction
+invariants (never discard unobserved entries, valid cut points, positional coverage markers,
+the fold boundary); the query engine and its bounds; the `memory` tool; the event ledger and the
+kernel events it counts; the room ceiling; the evaluator; and the text that states these rules
+in every worker prompt. One ownership predicate, `kernel.Owns(kind, name)`, names it. A
+definition that would replace, shadow or disable a kernel-owned name is refused when it is
+made and again when it is loaded, with the same predicate; the refusal names the owner. The
+floor is not lowerable by the model; the user can only lower it in configuration, and doing so
+is recorded with who asked and why, before it takes effect.
+
+**The layer** is what the model builds, one definition per name, per model:
+
+| Kind | What the model defines | How the kernel uses it |
+|---|---|---|
+| `format` | a table format declared as data: delimiter, quote and escape characters, header form | a generic strict codec interprets it; it must round-trip the kernel's test tables before it is accepted |
+| `schema` | the fields its notes carry beyond the kernel's (id, timestamp, content, sources, relevance) | validated and stored with each note |
+| `instructions` | its own observer, reflector and dropper instructions | appended after the kernel's fixed rules, never in place of them |
+| `summary` | the memory query that selects and groups what the summary shows | run under the room budget; the kernel still discloses every omitted span |
+| `tool` | named queries (section 6) | registered, never shadowing `memory` |
+| `detector` | a query over its notes and the event ledger that counts a failure | flags problems; never judges a remedy written after it |
+| `remedy` | an instruction line, a note template, or a setting within kernel bounds | applied to that model only |
+
+- **Layer files.** Each definition is written atomically to
+  `<store>/harness/<model>/<kind>/<name>.rows` with a header naming the model, the time, the
+  session and, for an override of a seed, the seed's digest. One home per name: defining it
+  again replaces it in place. Every change appends a **generation** to the model's manifest, so a
+  harness can be rolled back to any earlier generation (`memory` tool: `rollback N`).
+- **The write follows the proof.** A new or changed definition is **held**: it applies to the
+  next pass only and is written to the layer once that pass completes with no kernel error, no
+  decode failure and no invariant refusal. Otherwise it is reverted, the previous definition (or
+  the seed) stands, and the user is told why. Re-holding a held name keeps the original fallback.
+- **Stale overrides.** An override records the digest of the seed it replaced. When an upgrade
+  changes that seed, the override is skipped and reported, and the new seed stands until the
+  model defines it again. Forgetting an override restores the seed.
+- **Grading stays with the kernel.** After a held definition is written, probation (section 7)
+  judges it only by kernel events and by detectors that existed before it, so the model never
+  grades its own change.
+- **Building and revising.** On first use with a model the harness runs a build pass: the model
+  gets the kernel's rules, the seeds and the definition kinds, and writes its starting harness
+  through the `memory` tool (`harness kind=... name=... text="..."`). After passes, it gets its
+  counted evidence and may revise. Every definition is declarative (queries, format
+  declarations, text) and never code. Text from files, web pages or tool output never becomes a
+  definition. The user is notified of every change, hold, revert and rollback; `/om:status`
+  shows each model's harness, generation and held definitions.
+
 ## Order of work
 
 1. `internal/tables` and the `rows` codec. 2. Structured observations and relative-date resolution. 3. The room
 budget. 4. The table memory view. 5. The memory tool, replacing `recall` and the curated tools,
 and removing `/om:memory`. 6. The per-model harness: profiles, defined tools, per-model activation. 7. Rules as data:
-detectors, the remedy catalogue, probation. Each step ships with its
+detectors, the remedy catalogue, probation. 8. The kernel and the model-built layer: ownership
+predicate, layer files and generations, held definitions, stale overrides, the build pass. Each step ships with its
 tests and docs, and the replay harness checks that nothing regressed.
