@@ -13,14 +13,30 @@ Principles:
 - **The model fills slots; code does the bookkeeping.** Anything code can decide (dates,
   counts, grouping, which record replaced which) is decided by code from explicit fields, not
   by asking the model to phrase it in prose.
-- **One syntax.** The model reads memory, writes notes and queries memory in the same compact
-  format, TOON-style tables.
+- **One syntax, any codec.** The model reads memory, writes notes and gets query results as
+  tables of records with named fields. The text format is a codec behind an interface, not a
+  dependency on any one serialization spec: the default is our own small tabular format, and
+  another codec (markdown tables, JSON lines) can be added, or chosen per model, without
+  touching anything above it.
 - **Commands are for settings.** Slash commands only read or change configuration; memory
   behaviour goes through the tool. `/om:status` and `/om:view` stay as read-only views.
 
-## 1. TOON subset (`internal/toon`)
+## 1. Tables and codecs (`internal/tables`)
 
-A strict subset of Token-Oriented Object Notation, encoded and decoded by `internal/toon`.
+Everything above this layer works on `tables.Table` values (a name, field names, rows of
+optional values), never on text. A `Codec` turns tables into text and back:
+
+```go
+type Codec interface {
+    Name() string
+    Encode(tables ...Table) string
+    Decode(text string) ([]Table, error)
+    Spec() string // a few lines the prompt can carry so a model can write it
+}
+```
+
+The default codec, `rows`, is our own small format (it reads like TOON's tabular arrays but
+follows no external spec and can change with us):
 
 ```
 reflections[2]{id,dates,content}:
@@ -51,15 +67,15 @@ records interoperate and replays stay comparable.
 | `supersedes` | ids of earlier records this one replaces; set only when the user explicitly corrects or replaces a fact; empty means it adds |
 
 The observer's `record_observations` tool accepts these fields in its JSON items, and also a
-single `rows` string holding a TOON table with the same columns, for models that handle text
+single `rows` string holding a table in the active codec with the same columns, for models that handle text
 better than nested JSON. Both go through the same validation. A `supersedes` id must be a
 known observation id; unknown ids are dropped. Relative dates are never asked of the model:
 the renderer resolves them (section 3).
 
 ## 3. The memory view (compaction summary)
 
-`ledger.RenderSummaryWithOptions` with `RenderOptions.Format == "toon"` (the default; config
-`memoryFormat`, `"lines"` keeps the previous layout):
+`ledger.RenderSummaryWithOptions` with `RenderOptions.Format == "tables"` (the default; config
+`memoryFormat`, `"lines"` keeps the previous layout), encoded with the active codec:
 
 ```
 reflections[N]{id,dates,content}:
@@ -82,7 +98,7 @@ omitted[K]{from,to,count,first_id}:
 - A superseded record stays visible with its replacement's id in `superseded_by`, so both
   figures and the relation between them are explicit.
 - Selection keeps the existing order (recency, then specifics, then the rest) and costs each
-  record by its TOON row. Records that do not fit are disclosed as `omitted` spans with their
+  record by its encoded row. Records that do not fit are disclosed as `omitted` spans with their
   date range, count and first id, which the memory tool can read back. Nothing is cut
   silently.
 
@@ -126,7 +142,7 @@ define bake-count = notes | where subject=baking | count "How many times the use
   at most 200), `count [by field]`, `group by field`.
 - Writes: `save`, `edit`, `forget`, `feedback` (with an evidence `quote`, as nodecode's
   experience cell requires), and `define`, which names a query as a new tool (section 6).
-- Results are TOON tables with a `matched N, showing M` line when cut. Errors name the
+- Results are tables in the active codec with a `matched N, showing M` line when cut. Errors name the
   position and the fix. Queries cannot loop or run code; every query finishes.
 
 ## 6. Tools the model defines, per model
@@ -140,10 +156,12 @@ define bake-count = notes | where subject=baking | count "How many times the use
 - Every call of a memory tool is recorded per model (ok, error, empty) in the store's usage
   ledger. Before each run, tools a model keeps failing with are deactivated for that model
   (`SetActiveTools`), and the base `memory` tool is never deactivated.
+- The codec is chosen the same way: a model whose rows or queries keep failing to decode in
+  one codec is switched to another for its next run, and the choice is recorded per model.
 
 ## Order of work
 
-1. `internal/toon`. 2. Structured observations and relative-date resolution. 3. The room
-budget. 4. The TOON memory view. 5. The memory tool, replacing `recall` and the curated tools,
+1. `internal/tables` and the `rows` codec. 2. Structured observations and relative-date resolution. 3. The room
+budget. 4. The table memory view. 5. The memory tool, replacing `recall` and the curated tools,
 and removing `/om:memory`. 6. Defined tools and per-model activation. Each step ships with its
 tests and docs, and the replay harness checks that nothing regressed.
