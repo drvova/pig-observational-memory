@@ -124,7 +124,7 @@ The extrapolation scales each sampled type's per-question mean by that type's co
 go run . replay -from ~/bench-runs/om-full -out ~/bench-runs/replay
 ```
 
-Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts.
+Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts. `-summary-tokens N` renders the summary at another `compactionSummaryMaxTokens`, and `-clip-overflow` turns on the experimental nodecode-style layout (`ledger.RenderOptions.ClippedOverflow`): observations get full lines within half the budget and the rest are listed as clipped `[id] date first-80-characters…` lines while the whole fits, instead of being omitted.
 
 ## Cost
 

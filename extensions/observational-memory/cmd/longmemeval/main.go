@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/bench"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 )
 
@@ -355,6 +356,8 @@ func replayCmd(args []string) error {
 	out := fs.String("out", "", "directory for the replayed prompts (created)")
 	floor := fs.Bool("drop-floor", true, "apply the drop floor to the recorded drops")
 	ids := fs.String("ids", "", "comma-separated question ids (default: all with a checkpoint)")
+	clip := fs.Bool("clip-overflow", false, "list observations the summary cannot hold in full as clipped lines (ledger.RenderOptions.ClippedOverflow)")
+	summaryTokens := fs.Int("summary-tokens", 0, "compactionSummaryMaxTokens for the replayed summary (0: the run's setting)")
 	_ = fs.Parse(args)
 	if *from == "" || *out == "" {
 		return errors.New("-from and -out are required")
@@ -368,6 +371,9 @@ func replayCmd(args []string) error {
 		s.ContextWindow = 128_000
 	}
 	cfg := bench.WorkerConfig(s.spec(), s.WorkerThinking)
+	if *summaryTokens > 0 {
+		cfg.CompactionSummaryMaxTokens = *summaryTokens
+	}
 	dirs, _ := filepath.Glob(filepath.Join(*from, "questions", "*", "checkpoint.json"))
 	want := map[string]bool{}
 	for _, id := range split(*ids) {
@@ -400,7 +406,7 @@ func replayCmd(args []string) error {
 		if *floor {
 			entries, r.Stats = bench.ApplyDropFloor(entries, cfg)
 		}
-		memory := bench.RenderMemory(entries, cfg, s.ContextWindow)
+		memory := bench.RenderMemoryWithOptions(entries, cfg, s.ContextWindow, ledger.RenderOptions{ClippedOverflow: *clip})
 		messages := bench.OMMessages(q, memory, s.Recall)
 		qdir := filepath.Join(*out, "questions", q.ID)
 		if err := os.MkdirAll(qdir, 0o755); err != nil {

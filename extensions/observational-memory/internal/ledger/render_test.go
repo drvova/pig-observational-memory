@@ -155,3 +155,30 @@ func TestSummaryKeepsOlderSpecificsOverNewerChatter(t *testing.T) {
 		t.Fatal("the budget should force omissions in this fixture")
 	}
 }
+
+func TestClippedOverflowListsWhatTheBudgetCannotHoldInFull(t *testing.T) {
+	observations := []ledger.Observation{}
+	for i := 0; i < 12; i++ {
+		observations = append(observations, tf.Observation(padID(fmt.Sprintf("c%d", i), 'c'), func(o *ledger.Observation) {
+			o.Content = fmt.Sprintf("User talked through topic %d at length ", i) + strings.Repeat("with many more words ", 8)
+		}))
+	}
+	plain := ledger.RenderSummaryWithBudget(nil, observations, 600)
+	if plain.OmittedObservations == 0 {
+		t.Fatal("the budget should force omissions in this fixture")
+	}
+	clipped := ledger.RenderSummaryWithOptions(nil, observations, 600, ledger.RenderOptions{ClippedOverflow: true})
+	if clipped.ClippedObservations == 0 || clipped.OmittedObservations >= plain.OmittedObservations {
+		t.Fatalf("clipped %d, omitted %d (plain omitted %d): overflow should be listed clipped, not omitted", clipped.ClippedObservations, clipped.OmittedObservations, plain.OmittedObservations)
+	}
+	if !strings.Contains(clipped.Text, ledger.ClippedObservationsHeading) || !strings.Contains(clipped.Text, "…") {
+		t.Fatalf("clipped lines missing from:\n%s", clipped.Text)
+	}
+	if got := (len(clipped.Text) + 3) / 4; got > 600 {
+		t.Fatalf("summary is ~%d tokens, over the 600 budget", got)
+	}
+	ample := ledger.RenderSummaryWithOptions(nil, observations, 100_000, ledger.RenderOptions{ClippedOverflow: true})
+	if ample.ClippedObservations != 0 || len(ample.Observations) != len(observations) {
+		t.Fatalf("with room for every line in full nothing should be clipped (clipped %d, full %d)", ample.ClippedObservations, len(ample.Observations))
+	}
+}

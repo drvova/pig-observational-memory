@@ -82,6 +82,7 @@ type RenderedSummary struct {
 	Observations        []Observation
 	OmittedReflections  int
 	OmittedObservations int
+	ClippedObservations int
 }
 
 func estimateTokens(text string) int { return (jsfmt.UTF16Len(text) + 3) / 4 }
@@ -153,6 +154,74 @@ func selectObservationsWithinBudget(observations []Observation, budget int) ([]O
 type RenderOptions struct {
 	// ReflectionDates (see ReflectionDateRanges) date the reflection lines.
 	ReflectionDates map[string]string
+	// ClippedOverflow lists observations the budget cannot hold in full as
+	// clipped lines (see selectObservationTiers) instead of omitting them.
+	ClippedOverflow bool
+}
+
+// ClippedObservationRunes is the content length of a clipped observation line.
+const ClippedObservationRunes = 80
+
+// ClippedObservationLine renders "[id] YYYY-MM-DD content", the content cut to
+// ClippedObservationRunes.
+func ClippedObservationLine(observation Observation) string {
+	date, _, _ := strings.Cut(observation.Timestamp, " ")
+	content := []rune(observation.Content)
+	text := string(content)
+	if len(content) > ClippedObservationRunes {
+		text = strings.TrimSpace(string(content[:ClippedObservationRunes])) + "…"
+	}
+	return "[" + observation.ID + "] " + date + " " + text
+}
+
+// ClippedObservationsHeading opens the clipped observation lines.
+const ClippedObservationsHeading = "## Clipped observations\nLines cut to fit the budget; recall an id for the full record."
+
+// selectObservationTiers lays observations out the way nodecode lays out its
+// index: in full within half of budget (selectObservationsWithinBudget), then
+// the rest as clipped lines while the whole fits, specifics first and newest
+// first; and when that clips every one with room to spare, clipped lines
+// become full again in the same order while the whole still fits.
+func selectObservationTiers(observations []Observation, budget int) (full, clipped []bool) {
+	full = make([]bool, len(observations))
+	clipped = make([]bool, len(observations))
+	described, tokens := selectObservationsWithinBudget(observations, budget/2)
+	byID := map[string]bool{}
+	for _, o := range described {
+		byID[o.ID] = true
+	}
+	order := []int{}
+	for _, specific := range []bool{true, false} {
+		for i := len(observations) - 1; i >= 0; i-- {
+			if byID[observations[i].ID] {
+				full[i] = true
+			} else if HasSpecifics(observations[i].Content) == specific {
+				order = append(order, i)
+			}
+		}
+	}
+	for _, i := range order {
+		cost := estimateTokens(ClippedObservationLine(observations[i])) + 1
+		if tokens+cost > budget {
+			continue
+		}
+		tokens += cost
+		clipped[i] = true
+	}
+	for i := range observations {
+		if !full[i] && !clipped[i] {
+			return full, clipped
+		}
+	}
+	for _, i := range order {
+		delta := estimateTokens(ObservationToSummaryLine(observations[i])) - estimateTokens(ClippedObservationLine(observations[i]))
+		if tokens+delta > budget {
+			continue
+		}
+		tokens += delta
+		full[i], clipped[i] = true, false
+	}
+	return full, clipped
 }
 
 // RenderSummaryWithBudget renders the memory summary with no options.
@@ -174,6 +243,7 @@ func RenderSummaryWithOptions(reflections []Reflection, observations []Observati
 	}
 	keptReflections := reflections
 	keptObservations := observations
+	var clippedObservations []Observation
 	if maxTokens > 0 {
 		fixed := estimateTokens(instructions) + estimateTokens("## Reflections\n## Observations\n\n\n\n") + 40
 		budget := max(0, maxTokens-fixed)
@@ -181,9 +251,20 @@ func RenderSummaryWithOptions(reflections []Reflection, observations []Observati
 		pickedReflections, reflectionTokens := selectWithinBudget(reflections, reflectionLine, budget-reservedTokens)
 		keptReflections = pickedReflections
 		keptObservations, _ = selectObservationsWithinBudget(observations, budget-reflectionTokens)
+		if options.ClippedOverflow && len(keptObservations) < len(observations) {
+			full, clip := selectObservationTiers(observations, budget-reflectionTokens-estimateTokens(ClippedObservationsHeading)-2)
+			keptObservations = []Observation{}
+			for i, o := range observations {
+				if full[i] {
+					keptObservations = append(keptObservations, o)
+				} else if clip[i] {
+					clippedObservations = append(clippedObservations, o)
+				}
+			}
+		}
 	}
 	omittedReflections := len(reflections) - len(keptReflections)
-	omittedObservations := len(observations) - len(keptObservations)
+	omittedObservations := len(observations) - len(keptObservations) - len(clippedObservations)
 	parts := []string{instructions}
 	if len(keptReflections) > 0 {
 		lines := make([]string, 0, len(keptReflections))
@@ -198,6 +279,13 @@ func RenderSummaryWithOptions(reflections []Reflection, observations []Observati
 			lines = append(lines, ObservationToSummaryLine(observation))
 		}
 		parts = append(parts, "## Observations\n"+strings.Join(lines, "\n"))
+	}
+	if len(clippedObservations) > 0 {
+		lines := make([]string, 0, len(clippedObservations))
+		for _, observation := range clippedObservations {
+			lines = append(lines, ClippedObservationLine(observation))
+		}
+		parts = append(parts, ClippedObservationsHeading+"\n"+strings.Join(lines, "\n"))
 	}
 	if omittedReflections > 0 || omittedObservations > 0 {
 		omitted := []string{}
@@ -221,6 +309,7 @@ func RenderSummaryWithOptions(reflections []Reflection, observations []Observati
 		Observations:        keptObservations,
 		OmittedReflections:  omittedReflections,
 		OmittedObservations: omittedObservations,
+		ClippedObservations: len(clippedObservations),
 	}
 }
 
