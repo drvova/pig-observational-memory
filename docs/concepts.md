@@ -184,6 +184,16 @@ Recall can return:
 
 Use recall when compacted memory matters and exact source evidence is needed before acting.
 
+## Curated memory
+
+Observational memory records what happened in one session. Curated memory is what the agent decides to keep across sessions, after nodecode's `define-memory`: when the user corrects it, states a preference, or it learns something about the project, the agent saves a memory itself with `memory_save`, and fixes or removes it with `memory_edit` and `memory_forget` when it goes stale.
+
+- **A memory** is one file under `<PiG config root>/observational-memory/memories/` (`PIG_HOME`, else `XDG_CONFIG_HOME/pig`, else `~/.pig`): a type (`user`, `feedback`, `project`, `reference`, `lesson`), one declarative sentence, an optional body saying why and how to apply it, the sessions that wrote it, and a scope. A `global` memory applies everywhere; a `project` one only under the working directory it was saved in. A name has one home: saving a taken name is refused, so a changed fact is an edit, not a second memory.
+- **The index.** Before the first request of a conversation, the memories that apply are ranked and added to the system prompt: the operator's own word (`user`, `feedback`) first, then by evidence. Every memory is described when all fit `curatedMemoryIndexTokens`; otherwise the first ones are described within half of it and the next ones are named on one `also:` line, and `memory_search` finds the rest. The index is pinned for the conversation, so the system prompt stays byte-identical between turns and its cache holds; it is ranked again after a compaction or `/om:memory reload`. A memory saved mid-conversation is already in that conversation, through the tool call.
+- **Evidence.** `usage.jsonl` beside the memories logs every read, save, edit, forget and every `memory_feedback` sighting (`helped` or `harmed`). A helped sighting raises a memory, a harmed one lowers it; age does not, so a memory never cools.
+
+Turn it off with `curatedMemory: false`.
+
 ## Relevance tiers
 
 Observation relevance is assigned by the observer:

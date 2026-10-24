@@ -110,6 +110,8 @@ The summary is capped at `compactionSummaryMaxTokens` (an eighth of the context 
 | `/om:view` | The memory in the latest compaction summary (empty until the first compaction), also copied to the clipboard |
 | `/om:view full` | All memory recorded on this branch except dropped observations, also copied to the clipboard |
 | `recall` (agent tool) | The original conversation behind one observation or reflection id. It is not a search tool. |
+| `/om:memory` | The agent's curated memories (all of them, ranked), `/om:memory <name>` for one in full, `/om:memory reload` to re-rank the index on the next request |
+| `memory_save`, `memory_edit`, `memory_forget`, `memory_read`, `memory_search`, `memory_feedback` (agent tools) | The agent's own long-lived memory across sessions; see [Curated memory](docs/concepts.md#curated-memory) |
 
 ## Configuration
 

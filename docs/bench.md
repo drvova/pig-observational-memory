@@ -2,9 +2,11 @@
 
 This page explains how to run [LongMemEval](https://github.com/xiaowu0162/LongMemEval) against the extension's memory pipeline, what the harness does at each step, and how far its numbers can be compared with [Mastra's published Observational Memory results](https://mastra.ai/research/observational-memory).
 
-The harness is `internal/bench` plus the `cmd/longmemeval` command. Both are part of the Go module, but the extension does not import them, so the PiG extension builds and behaves exactly as before.
+The harness is `internal/bench` plus the `cmd/longmemeval` command. The extension does not import either, so the PiG extension builds and behaves exactly as before.
 
 ## What it does
+
+The command is its own Go module (`cmd/longmemeval/go.mod`, pointing at the extension with a `replace`), so PiG, which refuses a module holding both an extension factory and a standalone `main` package, still installs the extension. Run it from `extensions/observational-memory/cmd/longmemeval`.
 
 The harness follows [Mastra's LongMemEval runner](https://github.com/mastra-ai/mastra/tree/main/explorations/longmemeval). It runs each question in three steps.
 
@@ -34,9 +36,9 @@ curl -L -o ~/bench-data/longmemeval_s.json \
 The API key is read only from the environment variable `LONGMEMEVAL_API_KEY`. The harness never writes it to a file, a log or a result. Worker processes inherit it from the environment, not from their arguments.
 
 ```bash
-cd extensions/observational-memory
+cd extensions/observational-memory/cmd/longmemeval
 export LONGMEMEVAL_API_KEY=...     # the endpoint's key
-go run ./cmd/longmemeval run \
+go run . run \
   -base-url https://api.example.com/v1 \
   -data ~/bench-data/longmemeval_s.json \
   -out ~/bench-runs/om-full \
@@ -46,14 +48,14 @@ go run ./cmd/longmemeval run \
 To run a quick stratified subset, such as one question from each of three types:
 
 ```bash
-go run ./cmd/longmemeval run -base-url https://api.example.com/v1 -data ~/bench-data/longmemeval_s.json \
+go run . run -base-url https://api.example.com/v1 -data ~/bench-data/longmemeval_s.json \
   -out ~/bench-runs/smoke -sample 3 -stratified -seed 1 -concurrency 3
 ```
 
 To rebuild the report from finished questions:
 
 ```bash
-go run ./cmd/longmemeval report -out ~/bench-runs/om-full
+go run . report -out ~/bench-runs/om-full
 ```
 
 ### On a ChatGPT plan (Codex)
@@ -61,7 +63,7 @@ go run ./cmd/longmemeval report -out ~/bench-runs/om-full
 `-backend codex` sends every call to a ChatGPT plan's Codex backend instead of an API key's endpoint. Sign in once with the Codex CLI (`codex login`, or `codex login --device-auth` on a machine without a browser). The harness reads the CLI's `auth.json` (`-codex-auth`, default `$CODEX_HOME/auth.json` or `~/.codex/auth.json`) and renews its token when it nears expiry. Workers share the file under a lock, because refresh tokens rotate. `codex debug models` lists the plan's models.
 
 ```bash
-go run ./cmd/longmemeval run -backend codex -model gpt-6-luna \
+go run . run -backend codex -model gpt-6-luna \
   -data ~/bench-data/longmemeval_s.json -out ~/bench-runs/codex-luna -concurrency 8
 ```
 
@@ -119,7 +121,7 @@ The extrapolation scales each sampled type's per-question mean by that type's co
 `replay` rebuilds every finished question's memory from its saved `checkpoint.json` with the current code, without calling a model: the dropper's preservation floor is applied to the drops the model recorded, and the summary is rendered by the current renderer. It writes each new `actor-prompt.md` and `memory.json` under `-out`, plus `replay.json` with whether each prompt changed, the drops the floor kept, observations omitted from the summary before and after, and, for short gold answers, whether the answer text appears in the prompt before and after.
 
 ```bash
-go run ./cmd/longmemeval replay -from ~/bench-runs/om-full -out ~/bench-runs/replay
+go run . replay -from ~/bench-runs/om-full -out ~/bench-runs/replay
 ```
 
 Use it to measure a deterministic change (a code rule, not a prompt change) on exactly the memory a model built before, then answer only the replayed prompts.

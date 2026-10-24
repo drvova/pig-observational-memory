@@ -89,6 +89,8 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `showWorkerNotifications` | boolean | `true` | Shows routine observer, reflector, and dropper progress notifications. |
 | `passive` | boolean | `false` | Disables proactive background memory and auto-compaction triggers. |
 | `debugLog` | boolean | `false` | Writes best-effort per-session extension debug events to PiG's agent directory. |
+| `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory_*` tools, the `/om:memory` command and an evidence-ranked index in the system prompt. See [Curated memory](concepts.md#curated-memory). |
+| `curatedMemoryIndexTokens` | positive integer | `2000` | Estimated token budget for the index's memory lines; past it, the first memories are described within half and the next named on one `also:` line. |
 
 Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`.
 
