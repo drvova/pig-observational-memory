@@ -41,6 +41,10 @@ type ModelEvent struct {
 	// Kinds are, for a pass that counted dropped-then-queried records, those records' kinds
 	// ("unclassified" for none), so a protect-kind rule can name the kind to protect.
 	Kinds map[string]int `json:"kinds,omitempty"`
+	// Revisions are, for a pass whose detectors ran, the revision each versioned count in it was
+	// counted by (rules.Revisions), so a count whose meaning changed is never compared across
+	// the change; a count absent from it was counted by its first revision.
+	Revisions map[string]int `json:"revisions,omitempty"`
 }
 
 // The model event kinds.

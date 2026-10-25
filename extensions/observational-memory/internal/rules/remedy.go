@@ -23,7 +23,7 @@ const (
 	// stage its detector judges.
 	RemedyPromptLine = "prompt-line"
 	// RemedyRequireKind re-asks the observer once for a note of the rule's kind on the entries
-	// uncited-assistant-specifics flagged.
+	// uncited-assistant-specifics flagged: only those that add specifics to their exchange.
 	RemedyRequireKind = "require-kind"
 	// RemedyKeepHead keeps the opening of a flagged assistant entry as a low-relevance note,
 	// only for entries the chunk's coverage boundary covers.
@@ -292,8 +292,8 @@ func (a Active) SplitChunk(maxTokens int) int {
 
 // RequireInstruction is the catalogue text of a require-kind re-ask over the flagged entries.
 func RequireInstruction(kind string, flagged []string) string {
-	return "A memory rule asks for one more look at these source entries, which no observation cites although they carry specifics: " + strings.Join(flagged, ", ") +
-		". Record a kind=" + kind + " observation for each one that has something worth remembering, with its distinguishing details in the content and citing only these ids. Record nothing for an entry with nothing worth keeping."
+	return "A memory rule asks for one more look at these source entries, which no observation cites although they add specifics the user did not give: " + strings.Join(flagged, ", ") +
+		". Record a kind=" + kind + " observation for each one that has something worth remembering, with the distinguishing details the assistant added in the content and citing only these ids; do not repeat what the user said. Record nothing for an entry with nothing worth keeping."
 }
 
 // KeepHeadChars bounds a keep-head note's content: the window the memory tool's history source

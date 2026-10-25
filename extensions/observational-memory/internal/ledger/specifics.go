@@ -3,6 +3,8 @@ package ledger
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The specifics of a memory line are the details a later question is most
@@ -30,27 +32,44 @@ var genericCapitals = map[string]bool{
 // duplicates. A capitalized word counts as a name only when it does not open a
 // sentence, so ordinary sentence starts are not mistaken for names.
 func Specifics(text string) []string {
+	items := specifics(text)
+	out := make([]string, len(items))
+	for i, s := range items {
+		out[i] = s.text
+	}
+	return out
+}
+
+// specific is one item Specifics finds, with whether it is a name (a capitalized word) rather
+// than a number or a time phrase.
+type specific struct {
+	text string
+	name bool
+}
+
+// specifics is Specifics with each item's type.
+func specifics(text string) []specific {
 	seen := map[string]bool{}
-	out := []string{}
-	add := func(s string) {
+	out := []specific{}
+	add := func(s string, name bool) {
 		s = strings.ToLower(strings.TrimSpace(s))
 		if s != "" && !seen[s] {
 			seen[s] = true
-			out = append(out, s)
+			out = append(out, specific{text: s, name: name})
 		}
 	}
 	for _, m := range specificNumber.FindAllString(text, -1) {
-		add(strings.ReplaceAll(m, ",", ""))
+		add(strings.ReplaceAll(m, ",", ""), false)
 	}
 	for _, m := range specificTime.FindAllString(text, -1) {
-		add(m)
+		add(m, false)
 	}
 	for _, loc := range specificWord.FindAllStringIndex(text, -1) {
 		word := strings.TrimRight(text[loc[0]:loc[1]], ".")
 		if genericCapitals[word] || opensSentence(text, loc[0]) || (loc[0] > 0 && isWordChar(text[loc[0]-1])) {
 			continue
 		}
-		add(word)
+		add(word, true)
 	}
 	return out
 }
@@ -69,6 +88,90 @@ func MissingSpecifics(text string, carriers []string) []string {
 		}
 	}
 	return missing
+}
+
+// specificToken is one word or number of a carrier text, the unit Given compares a specific
+// against.
+var specificToken = regexp.MustCompile(`[\p{L}\p{N}][\p{L}\p{N}'&.+-]*[\p{L}\p{N}]|[\p{L}\p{N}]`)
+
+// Given is the set of specifics some carrier texts already give, which AddedSpecifics subtracts
+// from a text's own. Build it once (NewGiven) to subtract the same carriers from many texts.
+type Given struct {
+	// items are the carriers' numbers and time phrases (Specifics), lowercased.
+	items map[string]bool
+	// names are the carriers' names: their Specifics names and every capitalized whole word,
+	// lowercased.
+	names map[string]bool
+}
+
+// NewGiven is the specifics carriers give: each carrier's Specifics, plus each of its
+// capitalized whole words (so a name that opens a carrier's sentence, which Specifics skips
+// there, still counts as given). A lowercase word gives nothing: "us", "nice" or "may" in a
+// carrier never gives the names "US", "Nice" or "May".
+func NewGiven(carriers []string) Given {
+	g := Given{items: map[string]bool{}, names: map[string]bool{}}
+	for _, c := range carriers {
+		for _, s := range specifics(c) {
+			if s.name {
+				g.names[s.text] = true
+			} else {
+				g.items[s.text] = true
+			}
+		}
+		for _, w := range specificToken.FindAllString(c, -1) {
+			if r, _ := utf8.DecodeRuneInString(w); unicode.IsUpper(r) {
+				g.names[strings.ToLower(strings.TrimRight(w, "."))] = true
+			}
+		}
+	}
+	return g
+}
+
+// has reports whether g gives s: exactly, on whole items, never substrings (so "8" is not given
+// by "18"); a name also by its bare form without a possessive ("Lisbon's" by "Lisbon"), and by
+// its plural or singular when the carrier's form is a name too ("Sunday" by "Sundays", one
+// trailing "s").
+func (g Given) has(s specific) bool {
+	if g.items[s.text] || g.names[s.text] {
+		return true
+	}
+	if !s.name {
+		return false
+	}
+	bare := strings.TrimSuffix(s.text, "'s")
+	if g.names[bare] || g.names[bare+"s"] {
+		return true
+	}
+	singular, plural := strings.CutSuffix(bare, "s")
+	return plural && g.names[singular]
+}
+
+// Added returns the specifics of text that none of givens gives, in order (AddedSpecifics).
+func Added(text string, givens ...Given) []string {
+	added := []string{}
+	for _, s := range specifics(text) {
+		given := false
+		for _, g := range givens {
+			if g.has(s) {
+				given = true
+				break
+			}
+		}
+		if !given {
+			added = append(added, s.text)
+		}
+	}
+	return added
+}
+
+// AddedSpecifics returns the specifics of text that the carriers did not already give, in
+// order: the set difference of Specifics(text) and what the carriers give (NewGiven). Matching
+// is on whole items, never substrings; case is ignored for a carrier's names and its capitalized
+// words only, so a lowercase common word never cancels a name; thousands separators are dropped
+// as Specifics drops them; a possessive is given by its bare name, and a name by its plural or
+// singular name (Given).
+func AddedSpecifics(text string, carriers []string) []string {
+	return Added(text, NewGiven(carriers))
 }
 
 func isWordChar(b byte) bool {

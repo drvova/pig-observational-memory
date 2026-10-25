@@ -102,6 +102,33 @@ func TestRequireKindReasksObserverOnce(t *testing.T) {
 	}
 }
 
+// require-kind re-asks only for replies that add specifics: an echo of the user's message is
+// never flagged, so no echo note is asked for, and a reply mixing echoed and new specifics is.
+func TestRequireKindSkipsEchoAndFlagsMixedReply(t *testing.T) {
+	race := userMessage("u1", "My Lisbon half is on March 8 and I run long on Sundays.")
+	t.Run("echo", func(t *testing.T) {
+		entries := []ledger.Entry{race, assistantMessage("a1", "Got it: the Lisbon half on March 8, long runs on Sunday.")}
+		fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999, quiet: true})
+		withRules(t, fx, rules.Rule{Detector: rules.DetectUncitedAssistantSpecifics, Remedy: rules.RemedyRequireKind})
+		fx.obs.resolve(agents.Observed([]ledger.Observation{noteOn("aaaaaaaaaaaa", "User's Lisbon half is on March 8.", "u1")}))
+		fx.run()
+		if fx.obs.count() != 1 {
+			t.Fatalf("an echo reply was re-asked: %d observer calls", fx.obs.count())
+		}
+	})
+	t.Run("mixed", func(t *testing.T) {
+		entries := []ledger.Entry{race, assistantMessage("a1", "For the Lisbon half on March 8, follow the Hanson plan and peak at 32 km.")}
+		fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999, quiet: true})
+		withRules(t, fx, rules.Rule{Detector: rules.DetectUncitedAssistantSpecifics, Remedy: rules.RemedyRequireKind})
+		fx.obs.resolve(agents.Observed([]ledger.Observation{noteOn("aaaaaaaaaaaa", "User's Lisbon half is on March 8.", "u1")}))
+		fx.obs.resolve(agents.Observed(nil))
+		fx.run()
+		if fx.obs.count() != 2 || !reflect.DeepEqual(fx.obs.call(1).AllowedSourceEntryIDs, []string{"a1"}) {
+			t.Fatalf("a mixed reply was not re-asked: %d observer calls", fx.obs.count())
+		}
+	})
+}
+
 // keep-head keeps the opening of a flagged assistant entry only inside the coverage boundary:
 // a partial run that covers through u1 keeps a1's head and leaves a2 to the next run.
 func TestKeepHeadStaysInsideCoverageBoundary(t *testing.T) {
@@ -258,7 +285,7 @@ func TestObserverPassesWriteHarnessRule(t *testing.T) {
 	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999, quiet: true})
 	store := withRules(t, fx)
 	for i := 0; i < rules.MinEvidence-1; i++ {
-		_ = store.RecordModel(curated.ModelEvent{Model: workerModel, Kind: curated.ModelKindPass, Stage: rules.StageObserver, Tokens: 40, Counts: map[string]int{rules.DetectUncitedAssistantSpecifics: 1}})
+		_ = store.RecordModel(curated.ModelEvent{Model: workerModel, Kind: curated.ModelKindPass, Stage: rules.StageObserver, Tokens: 40, Counts: map[string]int{rules.DetectUncitedAssistantSpecifics: 1}, Revisions: rules.Revisions()})
 	}
 	fx.obs.resolve(agents.Observed([]ledger.Observation{noteOn("aaaaaaaaaaaa", "User asked about e-readers.", "u1")}))
 	fx.run()
@@ -285,7 +312,7 @@ func TestKeepHeadRetiredWhenModelKeepsLeavingSpecificsUncited(t *testing.T) {
 	fx := consSetup(t, consArgs{entries: entries, reflectAfterTokens: 999, quiet: true})
 	store := withRules(t, fx, rules.Rule{Detector: rules.DetectUncitedAssistantSpecifics, Remedy: rules.RemedyKeepHead, BaselineEvents: 1, BaselineTokens: 40})
 	for i := 0; i < rules.MinEvidence-1; i++ {
-		_ = store.RecordModel(curated.ModelEvent{Model: workerModel, Kind: curated.ModelKindPass, Stage: rules.StageObserver, Tokens: 40, Counts: map[string]int{rules.DetectUncitedAssistantSpecifics: 1}})
+		_ = store.RecordModel(curated.ModelEvent{Model: workerModel, Kind: curated.ModelKindPass, Stage: rules.StageObserver, Tokens: 40, Counts: map[string]int{rules.DetectUncitedAssistantSpecifics: 1}, Revisions: rules.Revisions()})
 	}
 	fx.obs.resolve(agents.Observed([]ledger.Observation{noteOn("aaaaaaaaaaaa", "User asked about e-readers.", "u1")}))
 	fx.run()

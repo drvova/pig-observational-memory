@@ -97,6 +97,15 @@ type Rule struct {
 	End int
 	// BaselineEvents and BaselineTokens are the detector's events and observed source tokens
 	// over the passes before the rule: the rate it must bring down.
+	//
+	// They are counted only over passes that counted the rule's count by its current revision
+	// (CountRevision, curated.ModelEvent.Revisions), as are its after-counts, so a count whose
+	// meaning changed is never compared across the change. uncited-assistant-specifics is at
+	// revision 2 (only the specifics a reply added; revision 1 counted echoes too): passes
+	// before it are no evidence, so no harness rule for it is written until MinEvidence fresh
+	// passes exist. A rule written before the change keeps its baseline as written (the usage
+	// ledger keeps counts, not entries, so no earlier pass can be re-counted); its after-counts
+	// read fresh passes only, and a rule already decided is not re-judged.
 	BaselineEvents, BaselineTokens int
 	// AfterEvents, AfterTokens and AfterPasses are the same over its probation.
 	AfterEvents, AfterTokens, AfterPasses int

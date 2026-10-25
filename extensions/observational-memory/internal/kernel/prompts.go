@@ -4,9 +4,9 @@ package kernel
 // system prompts that state invariants and every contract the code relies on (coverage, source
 // and support ids that are never invented, the relevance levels and coverage evidence the
 // dropper relies on, what the dropper may never do, the observer's content form and exact
-// specifics, the structured note fields' meanings: kind with kind=assistant, subject with its
-// paths and reuse rule, scope, supersedes only on an explicit correction and never across
-// scopes, the rows columns; the reflector's content form and alias rules). Each worker prompt
+// specifics, the structured note fields' meanings: kind with kind=assistant (only for what the
+// assistant added, never an echo of the user), subject with its paths and reuse rule, scope,
+// supersedes only on an explicit correction and never across scopes, the rows columns; the reflector's content form and alias rules). Each worker prompt
 // opens with its stage's text; the stage's instructions (the seed, the seed with the model's
 // additions, or the model's replacement of the seed) follow it and never replace it.
 
@@ -85,7 +85,7 @@ Content:
 - Keep specifics exact and verbatim: numbers with units and direction, error messages, identifiers, paths, names, and every item of a list or recommendation with its distinguishing attribute.
 
 Structured fields (optional; fill them whenever they apply, as the memory groups and replaces notes by them):
-- kind: fact, event, preference, plan, correction, or assistant. Record the assistant's concrete outputs (lists, names, numbers, recommendations) as kind=assistant, with the distinguishing details in the content.
+- kind: fact, event, preference, plan, correction, or assistant. An assistant reply that only repeats what the user said is not a separate note; record kind=assistant only for what the assistant added (lists, recommendations, numbers or names the user did not give), with the distinguishing details in the content.
 - subject: a short lowercase noun phrase grouping related observations ("baking", "gaming hours", "online courses"). Reuse the exact subject a current observation on the same topic shows in its braces. Otherwise give the root topic first and reuse an existing root (CURRENT SUBJECTS lists them) when the note belongs to it; put the specific part after "/" (subject "running/half marathon"; not a new subject "half marathon training") or put the qualifier in scope (subject "running", scope "shoes"; not subject "running shoes"). A path has at most three segments. Create a new root only when none fits.
 - scope: the qualifier that tells two figures apart ("hard difficulty", "on edX").
 - supersedes: ids of current observations, or ids the tool receipt reported for observations you recorded earlier this run, that this one replaces. Compare scopes in the braces first. Set it ONLY when the user explicitly corrects or replaces an earlier fact. A figure with a different scope is an addition, never a replacement; leave supersedes empty.

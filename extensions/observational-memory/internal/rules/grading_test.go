@@ -14,9 +14,10 @@ func detectorText(query string) string {
 	return "detector[1]{query,description}:\n  \"" + query + "\",counted by the model"
 }
 
+// observerPass records an observer pass of model counted by the current detectors.
 func observerPass(t *testing.T, store curated.Store, model string, counts map[string]int) {
 	t.Helper()
-	if err := store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: StageObserver, Tokens: 100, Counts: counts}); err != nil {
+	if err := store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: StageObserver, Tokens: 100, Counts: counts, Revisions: Revisions()}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -326,6 +327,29 @@ func TestProposeRefusesQuotationsInRuleText(t *testing.T) {
 	}
 	if held, _ := store.Layer().Held("p/m"); len(held) != 0 {
 		t.Fatalf("held %+v", held)
+	}
+}
+
+// A kernel count whose meaning changed grades a definition only when both windows counted it by
+// its current revision: the old uncited count, which counted echoes too, falling to the
+// stricter one does not hide a rise in the other kernel counts.
+func TestJudgeSkipsACountAcrossItsRevision(t *testing.T) {
+	store := newStore(t)
+	model := "p/revised"
+	for i := 0; i < MinEvidence; i++ {
+		if err := store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: StageObserver, Tokens: 100, Counts: map[string]int{DetectUncitedAssistantSpecifics: 5}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Layer().Put(layer.Definition{Kind: layer.KindInstructions, Name: StageObserver, Model: model, Text: "Write shorter notes."}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < MinEvidence; i++ {
+		observerPass(t, store, model, map[string]int{DetectThinChunk: 1})
+	}
+	v, err := JudgeDefinitions(store, model)
+	if err != nil || len(v) != 1 || v[0].Established {
+		t.Fatalf("the old count's fall hid a rise: %+v %v", v, err)
 	}
 }
 

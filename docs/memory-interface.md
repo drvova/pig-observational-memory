@@ -319,13 +319,24 @@ paths, so the harness can add, test and retire them per model.
 
   | Detector | Counts |
   |---|---|
-  | `uncited-assistant-specifics` | assistant entries whose text has specifics (numbers, names, lists) that no note cites |
+  | `uncited-assistant-specifics` | assistant entries no note of the pass cites whose text adds specifics (numbers, names, lists): the set difference of the entry's specifics (whole items, numbers normalized; a possessive is given by its base, a name by its plural or singular name) with those of the user messages it answers (every user message since the previous assistant entry that ended a turn, walking back over the turn's tool-call entries, tool results and steering messages), of the memory tool results in its turn, and of every note in memory (those before the pass and the pass's own); a carrier gives its numbers, time phrases and capitalized words, never a lowercase word ("us" does not give "US"); a reply that only echoes the user or memory counts 0. Notes from earlier passes never count as citing an entry |
   | `cross-scope-supersede` | `supersedes` links between notes whose scopes differ |
   | `unresolved-relative-date` | relative-date phrases in new notes the renderer had to resolve |
   | `thin-chunk` | chunks whose notes are far shorter than their source with specifics left uncited |
   | `dropped-then-queried` | records the dropper retired that a later memory query asked for |
   | `decode-failure` | rows or queries that did not decode in the model's codec |
 
+  The kernel observer rules say the same: a reply that only repeats the user is not a separate
+  note, and `kind=assistant` records only what the assistant added. `require-kind` and
+  `keep-head` act on the entries this detector flags, so neither asks for an echo note. A count
+  whose meaning changed carries a revision (`uncited-assistant-specifics` is at 2, where 1 also
+  counted echoes), and each pass records the revisions it was counted by. Every window a rule is
+  written, baselined (harness rule or proposal) or judged on reads only passes counted by the
+  current revision, and probation's grading of a definition leaves such a count out unless both
+  its windows were: the usage ledger keeps counts, not entries, so earlier passes cannot be
+  re-counted and count as no evidence. No harness rule
+  for the detector is written until `MinEvidence` fresh passes exist; a rule written before the
+  change keeps its baseline and is judged on fresh passes, and a decided rule is not re-judged.
 - **Remedies** come from a closed catalogue, each a pure function the harness applies:
   - `prompt-line`: add a line to the worker's system prompt for that model (the rule carries the
     text);

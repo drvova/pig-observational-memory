@@ -29,6 +29,21 @@ func memoryCall(query string) map[string]any {
 	return map[string]any{"type": "toolCall", "id": "c1", "name": "memory", "arguments": map[string]any{"query": query}}
 }
 
+// toolCalls is an assistant entry that calls tools and continues the turn (stop reason toolUse).
+func toolCalls(id, text string, blocks ...any) ledger.Entry {
+	content := append([]any{map[string]any{"type": "text", "text": text}}, blocks...)
+	return testfix.RawMessage(id, text, map[string]any{
+		"message": map[string]any{"role": "assistant", "content": content, "stopReason": "toolUse"},
+	})
+}
+
+// namedResult is a tool result of the tool named name.
+func namedResult(id, name, text string) ledger.Entry {
+	return testfix.RawMessage(id, text, map[string]any{
+		"message": map[string]any{"role": "toolResult", "toolCallId": "c", "toolName": name, "content": []any{map[string]any{"type": "text", "text": text}}},
+	})
+}
+
 func toolResult(id, text string) ledger.Entry {
 	return testfix.RawMessage(id, text, map[string]any{
 		"message": map[string]any{"role": "toolResult", "toolCallId": "c", "toolName": "bash", "content": []any{map[string]any{"type": "text", "text": text}}},
@@ -51,8 +66,154 @@ func TestUncitedAssistantSpecifics(t *testing.T) {
 		assistant("a3", "The Framework 13 costs 1049."),
 	}
 	notes := []ledger.Observation{note("aaaaaaaaaaaa", "Assistant suggested a Framework laptop.", cites("a3"))}
-	if got := UncitedAssistantSpecifics(covered, notes); !reflect.DeepEqual(got, []string{"a1"}) {
+	if got := UncitedAssistantSpecifics(ObserverPass{Branch: covered, Covered: covered, Notes: notes}); !reflect.DeepEqual(got, []string{"a1"}) {
 		t.Fatalf("uncited %v", got)
+	}
+}
+
+// uncited-assistant-specifics counts only the specifics an assistant reply added: what the user
+// messages it answers already gave, and what notes citing its exchange carry, is subtracted.
+func TestUncitedAssistantSpecificsCountsOnlyAddedSpecifics(t *testing.T) {
+	count := func(branch []ledger.Entry, notes ...ledger.Observation) []string {
+		t.Helper()
+		f := DetectObserverPass(ObserverPass{Branch: branch, Covered: branch, Notes: notes})
+		if f.Counts[DetectUncitedAssistantSpecifics] != len(f.Uncited) {
+			t.Fatalf("count %d for flagged %v", f.Counts[DetectUncitedAssistantSpecifics], f.Uncited)
+		}
+		return f.Uncited
+	}
+	race := user("u1", "My Lisbon half is on March 8 and I run long every Sunday.")
+	echo := []ledger.Entry{race, assistant("a1", "Got it: the Lisbon half on March 8, long runs on Sunday.")}
+	if got := count(echo); len(got) != 0 {
+		t.Fatalf("an echo acknowledgment counted: %v", got)
+	}
+	ask := user("u2", "what stretches should I do after the long run?")
+	stretches := []ledger.Entry{race, echo[1], ask, assistant("a2", "Try the Pigeon pose, the Couch stretch and the Figure-4 stretch.")}
+	if got := count(stretches); !reflect.DeepEqual(got, []string{"a2"}) {
+		t.Fatalf("new names %v", got)
+	}
+	// The user message the stretches reply answers is u2 alone: u1 is before the previous reply.
+	mixed := []ledger.Entry{race, assistant("a3", "For the Lisbon half on March 8, follow the Hanson plan and peak at 32 km.")}
+	if got := count(mixed); !reflect.DeepEqual(got, []string{"a3"}) {
+		t.Fatalf("a reply mixing echoed and new specifics %v", got)
+	}
+	// A note of the pass carrying the specifics cancels them, whichever entry it cites: memory
+	// holds them, and a note for the reply would repeat it.
+	onUser := note("aaaaaaaaaaaa", "User asked about stretches; assistant named Pigeon, Couch and Figure-4.", cites("u2"))
+	if got := count(stretches, onUser); len(got) != 0 {
+		t.Fatalf("a note citing the exchange did not cancel: %v", got)
+	}
+	elsewhere := note("bbbbbbbbbbbb", "Assistant named Pigeon, Couch and Figure-4.", cites("u1"))
+	if got := count(stretches, elsewhere); len(got) != 0 {
+		t.Fatalf("a note holding the specifics did not cancel: %v", got)
+	}
+	// A note holding only some of them does not.
+	partial := note("cccccccccccc", "Assistant named the Pigeon pose.", cites("u1"))
+	if got := count(stretches, partial); !reflect.DeepEqual(got, []string{"a2"}) {
+		t.Fatalf("a note with part of the specifics cancelled: %v", got)
+	}
+	// A reply after the turn's tool calls still answers the user's message.
+	tools := []ledger.Entry{race, assistant("a4", "", memoryCall("notes")), toolResult("t1", "Berlin 2024"), assistant("a5", "Noted: Lisbon, March 8, Sunday long runs.")}
+	if got := count(tools); len(got) != 0 {
+		t.Fatalf("an echo after tool calls counted: %v", got)
+	}
+}
+
+// What memory holds and what the turn gave are not added specifics: an echo of an earlier turn
+// that a note in memory holds, a reply reading back what a memory call returned, and a reply
+// after a steering message queued mid-turn are never counted. A reply with no user message since
+// the previous reply answers none, so restating an earlier turn no note holds counts.
+func TestUncitedAssistantSpecificsEchoesOfMemoryAndTurn(t *testing.T) {
+	race := user("u1", "My race is in Lisbon on March 8")
+	n1 := note("aaaaaaaaaaaa", "User's race is in Lisbon on March 8.", cites("u1"))
+	count := func(branch, covered []ledger.Entry, known []ledger.Observation, defined map[string]string) []string {
+		t.Helper()
+		return DetectObserverPass(ObserverPass{Branch: branch, Covered: covered, Known: known, Defined: defined}).Uncited
+	}
+	// Earlier-turn echo: memory already holds Lisbon and March 8.
+	pack := []ledger.Entry{race, assistant("a1", "Noted."), user("u2", "what should I pack?"), assistant("a2", "For Lisbon on March 8, pack layers.")}
+	if got := count(pack, pack[2:], []ledger.Observation{n1}, nil); len(got) != 0 {
+		t.Fatalf("an echo of a turn memory holds counted: %v", got)
+	}
+	if got := count(pack, pack[2:], nil, nil); !reflect.DeepEqual(got, []string{"a2"}) {
+		t.Fatalf("without the note in memory: %v", got)
+	}
+	// Memory recall: the memory call's result gives what the reply reads back.
+	recall := []ledger.Entry{race, assistant("a1", "Noted."), user("u3", "where was my race again?"),
+		toolCalls("a4", "", memoryCall("race")), namedResult("t2", "memory", "Lisbon, March 8"), assistant("a5", "Your race is in Lisbon on March 8.")}
+	if got := count(recall, recall[2:], nil, nil); len(got) != 0 {
+		t.Fatalf("a memory read-back counted: %v", got)
+	}
+	// So does a tool the agent defined; any other tool's output does not.
+	defined := append(append([]ledger.Entry{}, recall[:4]...), namedResult("t2", "race-lookup", "Lisbon, March 8"), recall[5])
+	if got := count(defined, defined[2:], nil, map[string]string{"race-lookup": "notes | search"}); len(got) != 0 {
+		t.Fatalf("a defined memory tool's read-back counted: %v", got)
+	}
+	bash := append(append([]ledger.Entry{}, recall[:4]...), namedResult("t2", "bash", "Lisbon, March 8"), recall[5])
+	if got := count(bash, bash[2:], nil, nil); !reflect.DeepEqual(got, []string{"a5"}) {
+		t.Fatalf("tool output gave specifics: %v", got)
+	}
+	// A steering message after the turn's tool calls: the turn's opening message is still read.
+	steer := []ledger.Entry{user("u1", "Plan my Lisbon race on March 8"), toolCalls("a1", "Let me check the calendar.", memoryCall("race")),
+		toolResult("t1", "ok"), user("u2", "also keep it short"), assistant("a2", "Done: Lisbon, March 8.")}
+	if got := count(steer, steer, nil, nil); len(got) != 0 {
+		t.Fatalf("a reply after a steer counted: %v", got)
+	}
+	// No user message since the previous reply: u1 was answered by a1, so a2 answers none.
+	again := []ledger.Entry{race, assistant("a1", "Noted: Lisbon on March 8."), assistant("a2", "Lisbon on March 8 it is, then.")}
+	if got := count(again, again, nil, nil); !reflect.DeepEqual(got, []string{"a2"}) {
+		t.Fatalf("a reply with no new user message: %v", got)
+	}
+	if got := count(again, again, []ledger.Observation{n1}, nil); len(got) != 0 {
+		t.Fatalf("the same reply with the note in memory: %v", got)
+	}
+}
+
+// Only the pass's own notes cite an entry: a covered assistant entry an earlier note cites is
+// still counted when it adds specifics memory does not hold.
+func TestUncitedAssistantSpecificsKnownNotesDoNotCite(t *testing.T) {
+	branch := []ledger.Entry{user("u1", "which e-reader?"), assistant("a1", "The Kobo Clara costs 149.")}
+	earlier := note("aaaaaaaaaaaa", "Assistant recommended an e-reader.", cites("a1"))
+	if got := DetectObserverPass(ObserverPass{Branch: branch, Covered: branch, Known: []ledger.Observation{earlier}}).Uncited; !reflect.DeepEqual(got, []string{"a1"}) {
+		t.Fatalf("a known note's citation hid the entry: %v", got)
+	}
+}
+
+// The real session: the user gave the race context, the assistant only repeated it, and
+// require-kind made the observer write an echo note. The reply adds nothing, so it is never
+// counted (with or without the echo note) and keep-head and require-kind are given no entry; the
+// later reply naming stretches is.
+func TestUncitedAssistantSpecificsRealSessionEcho(t *testing.T) {
+	branch := []ledger.Entry{
+		user("u1", "I'm training for the Lisbon half-marathon on March 8. I do my long runs on Sundays, usually 18 km, and my budget for new shoes is €140."),
+		assistant("a1", "Great, so you're preparing for the Lisbon half-marathon on March 8, with Sunday long runs around 18 km and a shoe budget of €140. How can I help?"),
+		user("u2", "Which stretches should I do after the Sunday run?"),
+		assistant("a2", "After the Sunday long run, try these for 30 seconds each:\n\n1. Standing Quad stretch\n2. Pigeon pose\n3. Calf stretch against a Wall\n4. Hamstring Fold"),
+	}
+	userNote := note("aaaaaaaaaaaa", "User is training for the Lisbon half-marathon on March 8, long runs on Sundays of about 18 km, shoe budget €140.", cites("u1"))
+	echoNote := note("bbbbbbbbbbbb", "Assistant acknowledged the user's Lisbon half-marathon context, repeating the March 8 race, Sunday long runs, 18 km and €140.", cites("a1"), func(o *ledger.Observation) { o.Kind = "assistant" })
+	for name, notes := range map[string][]ledger.Observation{"no notes": nil, "user note": {userNote}, "echo note": {userNote, echoNote}} {
+		f := DetectObserverPass(ObserverPass{Branch: branch, Covered: branch, Notes: notes})
+		if !reflect.DeepEqual(f.Uncited, []string{"a2"}) || f.Counts[DetectUncitedAssistantSpecifics] != 1 {
+			t.Fatalf("%s: uncited %v count %d", name, f.Uncited, f.Counts[DetectUncitedAssistantSpecifics])
+		}
+		kept, refused := KeepHead(branch, f.Uncited, []string{"u1", "a1", "u2", "a2"}, "a2", notes)
+		if len(refused) != 0 || len(kept) != 1 || !reflect.DeepEqual(kept[0].SourceEntryIDs, []string{"a2"}) {
+			t.Fatalf("%s: keep-head kept %+v refused %v", name, kept, refused)
+		}
+	}
+}
+
+// keep-head keeps the opening of a reply that mixes echoed and new specifics, as flagged.
+func TestKeepHeadFlagsMixedReply(t *testing.T) {
+	branch := []ledger.Entry{
+		user("u1", "My Lisbon half is on March 8."),
+		assistant("a1", "For the Lisbon half on March 8, follow the Hanson plan and peak at 32 km."),
+	}
+	f := DetectObserverPass(ObserverPass{Branch: branch, Covered: branch, Notes: []ledger.Observation{note("aaaaaaaaaaaa", "User's Lisbon half is on March 8.", cites("u1"))}})
+	kept, _ := KeepHead(branch, f.Uncited, []string{"u1", "a1"}, "a1", nil)
+	if len(kept) != 1 || !strings.Contains(kept[0].Content, "Hanson plan") {
+		t.Fatalf("flagged %v kept %+v", f.Uncited, kept)
 	}
 }
 
@@ -317,6 +478,58 @@ func TestHarnessWritesRuleWhenCountKeepsRising(t *testing.T) {
 	more := append(append([]curated.ModelEvent{}, events...), pass(100, thin), pass(100, thin))
 	if changed, _ := Evaluate("p/m", more, []Rule{r}, t0); len(changed) != 0 {
 		t.Fatalf("second rule %+v", changed)
+	}
+}
+
+// uncited-assistant-specifics changed meaning at revision 2 (CountRevision): passes counted by
+// revision 1, which also counted echo replies, are no evidence for it. They write no harness
+// rule, go into no baseline (a harness rule's or a proposal's) and judge no rule, so a rule is
+// never established by the old count's inflated baseline against the stricter one.
+func TestEvaluateIgnoresPassesCountedByAnEarlierRevision(t *testing.T) {
+	old := func(n int) curated.ModelEvent { return pass(100, map[string]int{DetectUncitedAssistantSpecifics: n}) }
+	fresh := func(n int) curated.ModelEvent {
+		e := pass(100, map[string]int{DetectUncitedAssistantSpecifics: n})
+		e.Revisions = Revisions()
+		return e
+	}
+	// The old count rose in each of the last MinEvidence passes; one fresh pass writes nothing.
+	events := []curated.ModelEvent{old(5), old(5), old(5), fresh(1)}
+	if changed, _ := Evaluate("p/m", events, nil, t0); len(changed) != 0 {
+		t.Fatalf("old-count passes wrote %+v", changed)
+	}
+	if n, tokens := baseline(events, len(events), DetectUncitedAssistantSpecifics); n != 1 || tokens != 100 {
+		t.Fatalf("a proposal's baseline read old passes: %d events in %d tokens", n, tokens)
+	}
+	// MinEvidence fresh passes write it, baselined on them alone.
+	events = append(events, fresh(1), fresh(1))
+	changed, _ := Evaluate("p/m", events, nil, t0)
+	if len(changed) != 1 || changed[0].Start != 6 || changed[0].BaselineEvents != 3 || changed[0].BaselineTokens != 300 {
+		t.Fatalf("changed %+v", changed)
+	}
+	// A rule on probation since before the change is judged on fresh passes only: the old
+	// zero counts after its Start would have made its rate fall.
+	r := Rule{ID: "r1", Detector: DetectUncitedAssistantSpecifics, Remedy: RemedyKeepHead, Models: []string{"p/m"}, State: StateProbation, Start: 0, BaselineEvents: 3, BaselineTokens: 300}
+	events = []curated.ModelEvent{old(0), old(0), old(0), fresh(1), fresh(1)}
+	if changed, _ := Evaluate("p/m", events, []Rule{r}, t0); len(changed) != 0 {
+		t.Fatalf("decided on old passes: %+v", changed)
+	}
+	events = append(events, fresh(1))
+	changed, _ = Evaluate("p/m", events, []Rule{r}, t0)
+	if len(changed) == 0 || changed[0].ID != "r1" || changed[0].State != StateRetired || changed[0].AfterEvents != 3 || changed[0].AfterTokens != 300 {
+		t.Fatalf("changed %+v", changed)
+	}
+}
+
+// AfterPass records the revisions its detectors counted by, so later windows can tell them
+// apart.
+func TestAfterPassRecordsCountRevisions(t *testing.T) {
+	store := newStore(t)
+	if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 100, Findings: &Findings{Counts: map[string]int{}}}); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := store.ModelEvents("p/m")
+	if len(events) != 1 || events[0].Revisions[DetectUncitedAssistantSpecifics] != CountRevision(DetectUncitedAssistantSpecifics) || !countedNow(events[0], DetectUncitedAssistantSpecifics) {
+		t.Fatalf("events %+v", events)
 	}
 }
 

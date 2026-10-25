@@ -15,8 +15,10 @@ import (
 
 // The detectors (docs/memory-interface.md, section 7).
 const (
-	// DetectUncitedAssistantSpecifics counts covered assistant entries whose text has
-	// specifics (ledger.Specifics: numbers, names, relative dates) that no note cites.
+	// DetectUncitedAssistantSpecifics counts covered assistant entries no note of the pass cites
+	// whose text adds specifics (ledger.Specifics: numbers, names, relative dates) that neither
+	// the user messages it answers, the memory results of its turn nor the notes in memory give
+	// (UncitedAssistantSpecifics). What it counts changed at revision 2 (CountRevision).
 	DetectUncitedAssistantSpecifics = "uncited-assistant-specifics"
 	// DetectCrossScopeSupersede counts supersedes links between notes whose scopes differ.
 	DetectCrossScopeSupersede = "cross-scope-supersede"
@@ -51,7 +53,7 @@ var Detectors = []string{DetectUncitedAssistantSpecifics, DetectCrossScopeSupers
 
 // detectorDescriptions say what each kernel check counts.
 var detectorDescriptions = map[string]string{
-	DetectUncitedAssistantSpecifics: "assistant entries whose text has specifics (numbers, names, lists) that no note cites",
+	DetectUncitedAssistantSpecifics: "assistant entries no note cites that add specifics (numbers, names, lists) the user's messages, the turn's memory results and the notes in memory did not give",
 	DetectCrossScopeSupersede:       "supersedes links between notes whose scopes differ",
 	DetectUnresolvedRelativeDate:    "relative-date phrases in new notes the renderer had to resolve",
 	DetectThinChunk:                 "chunks whose notes are far shorter than their source with specifics left uncited",
@@ -112,7 +114,8 @@ type ObserverPass struct {
 type Findings struct {
 	// Counts are the events per detector.
 	Counts map[string]int
-	// Uncited are the covered assistant entry ids whose specifics no note cites.
+	// Uncited are the covered assistant entry ids no note of the pass cites that add specifics
+	// to their turn (UncitedAssistantSpecifics).
 	Uncited []string
 	// CrossScope are the "note id>superseded id" links between notes whose scopes differ.
 	CrossScope []string
@@ -128,7 +131,7 @@ type Findings struct {
 // (DecodeFailuresSince).
 func DetectObserverPass(p ObserverPass) Findings {
 	f := Findings{Counts: map[string]int{}, DroppedKinds: map[string]int{}}
-	f.Uncited = UncitedAssistantSpecifics(p.Covered, p.Notes)
+	f.Uncited = UncitedAssistantSpecifics(p)
 	f.CrossScope = CrossScopeSupersedes(p.Notes, p.Known)
 	f.Counts[DetectUncitedAssistantSpecifics] = len(f.Uncited)
 	f.Counts[DetectCrossScopeSupersede] = len(f.CrossScope)
@@ -196,23 +199,122 @@ func blockText(content any) string {
 	return ""
 }
 
-// UncitedAssistantSpecifics are the covered assistant entries whose text has specifics and
-// that no note cites, in branch order.
-func UncitedAssistantSpecifics(covered []ledger.Entry, notes []ledger.Observation) []string {
+// UncitedAssistantSpecifics are the pass's covered assistant entries, in branch order, that no
+// note of the pass cites and whose text adds specifics to its turn: the specifics
+// (ledger.Specifics) left after the set difference (ledger.Added: whole items, numbers
+// normalized as Specifics normalizes them, a carrier's lowercase words giving no name) with
+//
+//   - the user messages it answers: every user message on the branch since the previous
+//     assistant entry that ended a turn (endsTurn), walking back over the turn's tool-call
+//     entries (an assistant entry with stop reason toolUse, or with tool calls and no text),
+//     tool results and other entries, so a reply after a run of tool calls or after a steering
+//     message queued mid-turn still answers the message that opened the turn, and a reply with
+//     no user message since the previous one answers none;
+//   - the results of the memory tool calls in its turn (p.Defined names the agent's own memory
+//     tools): what memory just returned, which the observer's chunk skips;
+//   - every note in memory once the pass is recorded: those before it (p.Known) and the pass's
+//     own (p.Notes). A specific a note already holds, from this exchange, an earlier turn or an
+//     earlier compaction, is not lost by leaving the reply uncited, and a note repeating it
+//     would only be an echo.
+//
+// Only the pass's own notes count as citing an entry, never p.Known: a covered entry is judged
+// by what the pass recorded. An assistant reply that only repeats what the user said or what
+// memory holds is no failure to record it, so it is never counted, and a remedy is never asked
+// to write it again (require-kind and keep-head act on these entries). The turn is read on
+// p.Branch; an entry missing from it is read in p.Covered.
+func UncitedAssistantSpecifics(p ObserverPass) []string {
 	cited := map[string]bool{}
-	for _, o := range notes {
+	for _, o := range p.Notes {
 		for _, id := range o.SourceEntryIDs {
 			cited[id] = true
 		}
 	}
+	var memory ledger.Given
+	memoryRead := false
+	branchIndex := ledger.EntryIndexByID(p.Branch)
+	coveredIndex := ledger.EntryIndexByID(p.Covered)
 	out := []string{}
-	for _, entry := range covered {
+	for _, entry := range p.Covered {
 		text, ok := AssistantText(entry)
-		if ok && !cited[entry.ID] && ledger.HasSpecifics(text) {
+		if !ok || cited[entry.ID] || !ledger.HasSpecifics(text) {
+			continue
+		}
+		history, at := p.Branch, -1
+		if i, found := branchIndex[entry.ID]; found {
+			at = i
+		} else {
+			history, at = p.Covered, coveredIndex[entry.ID]
+		}
+		if !memoryRead {
+			memory, memoryRead = ledger.NewGiven(append(noteContents(p.Known), noteContents(p.Notes)...)), true
+		}
+		if len(ledger.Added(text, ledger.NewGiven(turnCarriers(history, at, p.Defined)), memory)) > 0 {
 			out = append(out, entry.ID)
 		}
 	}
 	return out
+}
+
+// noteContents are the notes' contents.
+func noteContents(notes []ledger.Observation) []string {
+	out := make([]string, 0, len(notes))
+	for _, o := range notes {
+		out = append(out, o.Content)
+	}
+	return out
+}
+
+// turnCarriers are the texts of its turn that already give the specifics of the assistant entry
+// at history[at]: the user messages it answers and the memory tool results of its turn
+// (UncitedAssistantSpecifics).
+func turnCarriers(history []ledger.Entry, at int, defined map[string]string) []string {
+	carriers := []string{}
+	for i := at - 1; i >= 0 && !endsTurn(history[i]); i-- {
+		if isRole(history[i], "user") || isMemoryResult(history[i], defined) {
+			carriers = append(carriers, blockText(history[i].Message["content"]))
+		}
+	}
+	return carriers
+}
+
+// endsTurn reports whether entry is an assistant message that ended a turn: not one that only
+// called tools (stop reason toolUse, or tool calls with no text), after which the turn goes on.
+func endsTurn(entry ledger.Entry) bool {
+	if !isRole(entry, "assistant") {
+		return false
+	}
+	if entry.Message["stopReason"] == "toolUse" {
+		return false
+	}
+	if strings.TrimSpace(blockText(entry.Message["content"])) != "" {
+		return true
+	}
+	blocks, _ := entry.Message["content"].([]any)
+	for _, raw := range blocks {
+		if block, ok := raw.(map[string]any); ok && block["type"] == "toolCall" {
+			return false
+		}
+	}
+	return true
+}
+
+// isMemoryResult reports whether entry is the result of a memory tool call: the memory tool's
+// own, or a tool the agent defined (defined, by name), the results the observer's chunk skips.
+func isMemoryResult(entry ledger.Entry, defined map[string]string) bool {
+	if !isRole(entry, "toolResult") {
+		return false
+	}
+	name, _ := entry.Message["toolName"].(string)
+	if name == memquery.ToolName {
+		return true
+	}
+	_, ok := defined[name]
+	return ok && name != ""
+}
+
+// isRole reports whether entry is a message of role.
+func isRole(entry ledger.Entry, role string) bool {
+	return entry.Type == "message" && entry.Message != nil && entry.Message["role"] == role
 }
 
 // CrossScopeSupersedes are the supersedes links from notes to notes (in notes or known) whose

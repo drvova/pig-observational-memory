@@ -96,6 +96,17 @@ func sumKeys(events []curated.ModelEvent, indexes []int, keys []string) (count, 
 	return count, tokens
 }
 
+// countedNowIn reports whether every pass at indexes counted key by its current revision
+// (countedNow).
+func countedNowIn(events []curated.ModelEvent, indexes []int, key string) bool {
+	for _, i := range indexes {
+		if !countedNow(events[i], key) {
+			return false
+		}
+	}
+	return true
+}
+
 // eventTime is when e was recorded; false for an unreadable time.
 func eventTime(e curated.ModelEvent) (time.Time, bool) {
 	t, err := time.Parse(time.RFC3339Nano, e.Time)
@@ -111,7 +122,9 @@ func eventTime(e curated.ModelEvent) (time.Time, bool) {
 //     CountEmptyPass), against the same over the last MinEvidence observer passes before it
 //     (its baseline). A detector the model defined counts
 //     only when its text last changed before the baseline's first pass, so both windows count
-//     the same detector and neither misses events the other could see;
+//     the same detector and neither misses events the other could see; for the same reason a
+//     kernel count whose meaning changed (CountRevision) counts only when every pass of both
+//     windows counted it by its current revision;
 //   - it is retired when its rate (events per observed source token) rose above the baseline's,
 //     and established otherwise: a change to the harness must not make the kernel's counted
 //     failures worse. With no baseline pass there is nothing to compare, and it is established.
@@ -145,6 +158,9 @@ func Judge(events []curated.ModelEvent, h layer.Harness, written time.Time) (est
 			if d, ok := h.Get(layer.KindDetector, name); !ok || !unchangedSince(h, d, since) {
 				continue
 			}
+		}
+		if !countedNowIn(events, before, k) || !countedNowIn(events, after, k) {
+			continue
 		}
 		keys = append(keys, k)
 	}

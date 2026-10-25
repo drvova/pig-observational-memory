@@ -598,7 +598,8 @@ func TestObserverLongSpec(t *testing.T) {
 // decoder, the detectors): kernel text, so every composed observer prompt carries them.
 var observerContract = []string{
 	"kind: fact, event, preference, plan, correction, or assistant",
-	"as kind=assistant",
+	"An assistant reply that only repeats what the user said is not a separate note",
+	"record kind=assistant only for what the assistant added",
 	"subject: a short lowercase noun phrase",
 	"Reuse the exact subject a current observation on the same topic shows in its braces",
 	`put the specific part after "/"`,
@@ -690,8 +691,9 @@ func TestObserverContractIsKernelText(t *testing.T) {
 		t.Error("an addition dropped the seed")
 	}
 	// Moving the contract into the kernel kept the seeds-only prompt no longer than before
-	// (12012 bytes), with the same rules.
-	if n := len(agents.ObserverSystem); n > 12012 {
+	// (12012 bytes), with the same rules; the kernel's added-specifics rule for kind=assistant
+	// (an echo of the user is not a note) grew it to 12098.
+	if n := len(agents.ObserverSystem); n > 12098 {
 		t.Errorf("the seeds-only observer prompt grew to %d bytes", n)
 	}
 	for _, rule := range []string{"Group repeated similar tool calls into a single observation", "Preserve user assertions exactly.", "Split compound statements", "Mark concrete completions explicitly.", "Detail preservation"} {

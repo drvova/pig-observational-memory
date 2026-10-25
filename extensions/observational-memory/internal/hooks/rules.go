@@ -397,7 +397,7 @@ func applyObserverRules(ctx context.Context, cfg config.Config, h host.Host, wor
 	active := rulesFor(h, cfg, worker.Model)
 	covered := chunk.covered(coversUpToID)
 	if kind, ok := active.RequiredKind(); ok && !partial && ctx.Err() == nil {
-		if flagged := rules.UncitedAssistantSpecifics(covered, observations); len(flagged) > 0 {
+		if flagged := rules.UncitedAssistantSpecifics(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Notes: observations, Known: chunk.known, Defined: chunk.defined}); len(flagged) > 0 {
 			prior := append([]string(nil), chunk.priorObservations...)
 			canonical := ledger.ObservationSubjectsWithAliases(append(append([]ledger.Observation(nil), chunk.known...), observations...), chunk.aliases)
 			for _, o := range observations {

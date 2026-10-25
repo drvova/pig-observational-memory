@@ -99,6 +99,55 @@ func observerPasses(events []curated.ModelEvent, from int) []int {
 	return out
 }
 
+// countRevisions are the revisions of the pass counts whose meaning changed after the usage
+// ledger had recorded them. uncited-assistant-specifics is at 2: from then on it counts only the
+// specifics a reply added to its exchange (UncitedAssistantSpecifics), where revision 1 counted
+// every uncited reply with specifics, echoes included.
+var countRevisions = map[string]int{DetectUncitedAssistantSpecifics: 2}
+
+// CountRevision is the revision of what count key counts now: 1 for a count whose meaning never
+// changed.
+func CountRevision(key string) int {
+	if r, ok := countRevisions[key]; ok {
+		return r
+	}
+	return 1
+}
+
+// Revisions are the current revisions of the versioned counts, as a pass whose detectors ran
+// records them (curated.ModelEvent.Revisions): a fresh map.
+func Revisions() map[string]int {
+	out := make(map[string]int, len(countRevisions))
+	for k, r := range countRevisions {
+		out[k] = r
+	}
+	return out
+}
+
+// countedNow reports whether pass e counted key by its current revision (CountRevision). A pass
+// counted by an earlier one is no evidence for key, neither events nor tokens: its count meant
+// something else, and the usage ledger keeps counts, not the entries they were counted over, so
+// it cannot be re-counted.
+func countedNow(e curated.ModelEvent, key string) bool {
+	r := e.Revisions[key]
+	if r == 0 {
+		r = 1
+	}
+	return r == CountRevision(key)
+}
+
+// countedPasses are the observer passes at or after from that counted key by its current
+// revision (countedNow): the passes a rule for key is written, baselined and judged on.
+func countedPasses(events []curated.ModelEvent, from int, key string) []int {
+	out := []int{}
+	for _, i := range observerPasses(events, from) {
+		if countedNow(events[i], key) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // countKey is the pass count a rule is written and judged on: the codec decode failures for
 // switch-codec (CountCodecDecodeFailure), else its detector's.
 func countKey(detector, remedy string) string {
@@ -118,9 +167,9 @@ func window(events []curated.ModelEvent, indexes []int, detector string) (count,
 }
 
 // baseline is the detector's events and tokens over the last MinEvidence observer passes
-// before end.
+// before end that counted it by its current revision (countedPasses).
 func baseline(events []curated.ModelEvent, end int, detector string) (int, int) {
-	passes := observerPasses(events[:min(end, len(events))], 0)
+	passes := countedPasses(events[:min(end, len(events))], 0, detector)
 	if len(passes) > MinEvidence {
 		passes = passes[len(passes)-MinEvidence:]
 	}
@@ -139,6 +188,9 @@ func fell(beforeEvents, beforeTokens, afterEvents, afterTokens int) bool {
 // in the order written) and every rule in the store, at now. It is pure. It returns the rules
 // it changed or added, and the transitions to notify. The rules:
 //
+//   - Every window below holds only the observer passes that counted the rule's count by its
+//     current revision (countedPasses): a pass counted by an earlier revision of a count whose
+//     meaning changed is no evidence for it, so a baseline never mixes two meanings of a count.
 //   - Probation: a rule on probation for model is decided once MinEvidence observer passes were
 //     counted after it was written. It is established when its detector's rate over them
 //     (events per observed source token) is below its baseline rate (the same over the
@@ -184,7 +236,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		if !containsString(KernelKeys(), countKey(r.Detector, r.Remedy)) {
 			continue
 		}
-		passes := observerPasses(events, r.Start)
+		passes := countedPasses(events, r.Start, countKey(r.Detector, r.Remedy))
 		if len(passes) < MinEvidence {
 			continue
 		}
@@ -224,7 +276,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		if busy {
 			continue
 		}
-		passes := observerPasses(events, floor)
+		passes := countedPasses(events, floor, detector)
 		if len(passes) < MinEvidence {
 			continue
 		}
@@ -356,6 +408,7 @@ func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, erro
 		}
 		e.Counts[CountEmptyPass] = 1
 		if pass.Findings != nil {
+			e.Revisions = Revisions()
 			for d, n := range pass.Findings.Counts {
 				if n > 0 {
 					e.Counts[d] = n
@@ -370,6 +423,7 @@ func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, erro
 		return nil, store.RecordModel(e)
 	}
 	if pass.Findings != nil {
+		e.Revisions = Revisions()
 		for d, n := range pass.Findings.Counts {
 			if n > 0 {
 				e.Counts[d] = n

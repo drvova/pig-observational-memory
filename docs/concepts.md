@@ -267,7 +267,7 @@ The memory's behaviour rules (what a note must capture, when one record may repl
 
 | Detector | Counts |
 |---|---|
-| `uncited-assistant-specifics` | covered assistant messages whose text has specifics (numbers, names, relative dates, as `ledger.Specifics` finds them) and that no note cites |
+| `uncited-assistant-specifics` | covered assistant messages no note of the pass cites whose text adds specifics (numbers, names, relative dates, as `ledger.Specifics` finds them) that the user messages of its turn, the memory tool results of its turn and the notes in memory did not give (an echo counts 0; counted at revision 2, see [memory-interface.md](memory-interface.md) section 7) |
 | `cross-scope-supersede` | `supersedes` links between notes whose named scopes differ (an empty scope is no qualifier and conflicts with none) |
 | `unresolved-relative-date` | relative-date phrases in new notes the renderer resolves (`ledger.ResolveRelativeDates`) |
 | `thin-chunk` | chunks whose user and assistant text has specifics no note carries, with notes shorter than a bare list of those left-out specifics (tool output never counts) |
