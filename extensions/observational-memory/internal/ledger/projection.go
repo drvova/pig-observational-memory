@@ -11,13 +11,6 @@ type Projection struct {
 	Aliases []SubjectAlias
 }
 
-// ProjectionDiff is what the full ledger has that the visible summary lacks.
-type ProjectionDiff struct {
-	ObservationsOnlyInFull []Observation
-	ReflectionsOnlyInFull  []Reflection
-	DroppedOnlyInFull      []Observation
-}
-
 // CompactionProjectionConfig bounds the observation pool for a fold decision.
 type CompactionProjectionConfig struct {
 	ObservationsPoolMaxTokens float64
@@ -260,37 +253,4 @@ func BuildCompactionProjection(entries []Entry, firstKeptEntryID string, cfg Com
 		Aliases:            projection.Aliases,
 	}
 	return CompactionProjection{Projection: projection, FullFold: fullFold, Details: details}
-}
-
-// DiffProjection compares the visible summary with the full ledger.
-func DiffProjection(visible, full Projection) ProjectionDiff {
-	visibleObservations := map[string]bool{}
-	for _, observation := range visible.Observations {
-		visibleObservations[observation.ID] = true
-	}
-	fullObservations := map[string]bool{}
-	for _, observation := range full.Observations {
-		fullObservations[observation.ID] = true
-	}
-	visibleReflections := map[string]bool{}
-	for _, reflection := range visible.Reflections {
-		visibleReflections[reflection.ID] = true
-	}
-	diff := ProjectionDiff{ObservationsOnlyInFull: []Observation{}, ReflectionsOnlyInFull: []Reflection{}, DroppedOnlyInFull: []Observation{}}
-	for _, observation := range full.Observations {
-		if !visibleObservations[observation.ID] {
-			diff.ObservationsOnlyInFull = append(diff.ObservationsOnlyInFull, observation)
-		}
-	}
-	for _, reflection := range full.Reflections {
-		if !visibleReflections[reflection.ID] {
-			diff.ReflectionsOnlyInFull = append(diff.ReflectionsOnlyInFull, reflection)
-		}
-	}
-	for _, observation := range visible.Observations {
-		if !fullObservations[observation.ID] {
-			diff.DroppedOnlyInFull = append(diff.DroppedOnlyInFull, observation)
-		}
-	}
-	return diff
 }

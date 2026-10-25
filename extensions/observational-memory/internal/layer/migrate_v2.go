@@ -11,16 +11,20 @@ import (
 // consolidation instructions as an addition, or retired. Kind and Name are the v1 definition's,
 // Digest the content it had then (already kept in the blobs), Reason what was done. It changes
 // no file, so the written layer v1 reads is unchanged; it marks that content migrated, so the
-// same text is never folded twice.
+// same text is never folded twice. A marker for another model's definition (MigrateWorkerToV2)
+// names that model in From.
 const OpMigrateV2 = "migrate-v2"
 
 // V2Migration is one v1 instructions definition MigrateToV2 folded, removed from the fold or
 // retired.
 type V2Migration struct {
 	Model, Name string
-	// From is the model whose v1 definition it is: Model, or AllModels for an addition Model
-	// inherits from the one kept for all models.
+	// From is the model whose v1 definition it is: Model, AllModels for an addition Model
+	// inherits from the one kept for all models, or the memory-worker model v1 kept it for
+	// (MigrateWorkerToV2, with Worker set).
 	From string
+	// Worker marks a definition memory v1 kept for its memory-worker model (MigrateWorkerToV2).
+	Worker bool
 	// Folded marks a text set as its stage's block of Into's addition; Removed marks a block
 	// taken out of it because v1's addition is gone or no longer one; otherwise it was retired,
 	// with Why.
@@ -35,7 +39,10 @@ type V2Migration struct {
 // Message is the migration as the user is told it.
 func (m V2Migration) Message() string {
 	what := fmt.Sprintf("the %s/%s addition for %s", KindInstructions, m.Name, m.Model)
-	if m.From != "" && m.From != m.Model {
+	switch {
+	case m.Worker:
+		what = fmt.Sprintf("the %s/%s addition memory v1 kept for its memory model %s", KindInstructions, m.Name, m.From)
+	case m.From != "" && m.From != m.Model:
 		what = fmt.Sprintf("the %s/%s addition kept for all models", KindInstructions, m.Name)
 	}
 	switch {
@@ -43,6 +50,9 @@ func (m V2Migration) Message() string {
 		return fmt.Sprintf("Observational memory: memory v2 folded %s into the %s/%s instructions for %s as an addition (generation %d); memory v2 runs no %s, and its own text is kept as it was for memory v1", what, KindInstructions, m.Into, m.Model, m.Generation, m.Name)
 	case m.Removed:
 		return fmt.Sprintf("Observational memory: memory v2 removed the %s block from the %s/%s instructions for %s (generation %d): memory v1's %s addition is gone or no longer an addition", m.Name, KindInstructions, m.Into, m.Model, m.Generation, m.Name)
+	}
+	if m.Worker {
+		return fmt.Sprintf("Observational memory: memory v2 retires the %s/%s definition memory v1 kept for its memory model %s (%s, marked in %s's generation %d): memory v2 runs no %s, so it is not used; its text is kept in the layer for memory v1", KindInstructions, m.Name, m.From, m.Why, m.Model, m.Generation, m.Name)
 	}
 	return fmt.Sprintf("Observational memory: memory v2 retires the %s/%s definition for %s (%s, generation %d): memory v2 runs no %s, so it is not used; its text is kept in the layer for memory v1", KindInstructions, m.Name, m.Model, m.Why, m.Generation, m.Name)
 }
@@ -54,17 +64,26 @@ const (
 )
 
 // foldHeader and foldFooter delimit the block a v1 stage's addition is folded into: the block
-// is found again by them, so a later migration replaces or removes it, never repeats it.
-func foldHeader(name string) string {
+// is found again by them, so a later migration replaces or removes it, never repeats it. A
+// block folded from the memory-worker model's definition (worker, "" for the model's own or
+// the all-models one) names that model, so it is a block of its own.
+func foldHeader(name, worker string) string {
+	if worker != "" {
+		return fmt.Sprintf("From the %s instructions memory v1 kept for its memory model %s:", name, worker)
+	}
 	return fmt.Sprintf("From the %s instructions (memory v1):", name)
 }
-func foldFooter(name string) string {
+func foldFooter(name, worker string) string {
+	if worker != "" {
+		return fmt.Sprintf("End of the %s instructions memory v1 kept for its memory model %s.", name, worker)
+	}
 	return fmt.Sprintf("End of the %s instructions (memory v1).", name)
 }
 
-// withFoldBlock is text with name's folded block set to body (in place when it is there, else
-// appended), or removed when body is nil. A header with no footer after it is not a block.
-func withFoldBlock(text, name string, body *string) string {
+// withFoldBlock is text with name's folded block (of worker's definition, foldHeader) set to
+// body (in place when it is there, else appended), or removed when body is nil. A header with
+// no footer after it is not a block.
+func withFoldBlock(text, name, worker string, body *string) string {
 	join := func(parts ...string) string {
 		kept := []string{}
 		for _, p := range parts {
@@ -76,12 +95,12 @@ func withFoldBlock(text, name string, body *string) string {
 	}
 	block := ""
 	if body != nil {
-		block = foldHeader(name) + "\n" + *body + "\n" + foldFooter(name)
+		block = foldHeader(name, worker) + "\n" + *body + "\n" + foldFooter(name, worker)
 	}
-	if i := strings.Index(text, foldHeader(name)); i >= 0 {
-		if j := strings.Index(text[i:], foldFooter(name)); j >= 0 {
+	if i := strings.Index(text, foldHeader(name, worker)); i >= 0 {
+		if j := strings.Index(text[i:], foldFooter(name, worker)); j >= 0 {
 			before := strings.TrimRight(text[:i], "\n")
-			after := strings.TrimLeft(text[i+j+len(foldFooter(name)):], "\n")
+			after := strings.TrimLeft(text[i+j+len(foldFooter(name, worker)):], "\n")
 			return join(before, block, after)
 		}
 	}
@@ -100,21 +119,47 @@ func withFoldBlock(text, name string, body *string) string {
 // replaces the all-models one entirely, so it must carry what v1 had the model inherit. A
 // model that defines no into of its own and folds nothing of its own writes none and keeps
 // inheriting the all-models one. Each migrated content is marked with an OpMigrateV2
-// generation, so it is migrated once; a later edit under v1 is migrated again and replaces its
-// stage's block, and a block whose addition v1 no longer has (forgotten, rolled back, now a
-// replacement) is removed. A block the model's own definitions took out is not put back. The
-// v1 files are left as they are: v1 still reads the written layer, which both engines share,
-// so they stand for v1 and are unused under v2. Only files the store recorded and its checks
+// generation, so it is migrated once; a later edit (by an earlier release still running v1 on
+// the shared store) is migrated again and replaces its stage's block, and a block whose addition
+// v1 no longer has (forgotten, rolled back, now a replacement) is removed. A block the model's
+// own definitions took out is not put back. The v1 files are left as they are, unused: their
+// text stays in the layer's history, and an earlier release still reads them. Only files the store recorded and its checks
 // accept are read, and a held definition (an engine's own) is never touched. While into has a
 // held definition the folds wait, so a settlement never reverts the fold away; a fold the
 // store's checks refuse retires its texts with the refusal. It returns the folds, the
 // removals, then the retirements.
 func (s Store) MigrateToV2(model, into string, extend, retire []string) ([]V2Migration, error) {
+	return s.migrateToV2(model, "", into, extend, retire)
+}
+
+// MigrateWorkerToV2 is MigrateToV2 for the definitions memory v1 kept for its memory-worker
+// model: every kind but a summary was the worker's (v1's DefinitionModel), so with a `model`
+// setting naming a model other than the session's, the observer's and reflector's additions
+// live in worker's layer, which memory v2 never reads. worker's own extend additions fold into
+// model's into instructions, each as a block naming worker (foldHeader), and its replace-mode
+// and retire texts are retired; the markers go in model's generations with worker as From, so
+// each session model folds them once. worker's all-models inheritance is MigrateToV2's
+// (AllModels). worker's files are left as they are.
+func (s Store) MigrateWorkerToV2(model, worker, into string, extend, retire []string) ([]V2Migration, error) {
+	if worker == "" || worker == model || worker == AllModels {
+		return nil, nil
+	}
+	return s.migrateToV2(model, worker, into, extend, retire)
+}
+
+// migrateToV2 is MigrateToV2 (worker "") and MigrateWorkerToV2 (the definitions are worker's).
+func (s Store) migrateToV2(model, worker, into string, extend, retire []string) ([]V2Migration, error) {
 	var out []V2Migration
 	err := s.locked(func() error {
 		recorded, err := s.current(model)
 		if err != nil {
 			return err
+		}
+		workerRecorded := map[string]string{}
+		if worker != "" {
+			if workerRecorded, err = s.current(worker); err != nil {
+				return err
+			}
 		}
 		inherited := map[string]string{}
 		if model != AllModels {
@@ -128,7 +173,7 @@ func (s Store) MigrateToV2(model, into string, extend, retire []string) ([]V2Mig
 		}
 		migrated := func(name, digest string) bool {
 			for _, g := range gens {
-				if g.Op == OpMigrateV2 && g.Kind == KindInstructions && g.Name == name && g.Digest == digest {
+				if g.Op == OpMigrateV2 && g.Kind == KindInstructions && g.Name == name && g.Digest == digest && g.From == worker {
 					return true
 				}
 			}
@@ -143,6 +188,10 @@ func (s Store) MigrateToV2(model, into string, extend, retire []string) ([]V2Mig
 		// kept for all models.
 		effective := func(name string) (source, bool) {
 			key := SeedKey(KindInstructions, name)
+			if worker != "" {
+				d, _, ok := s.recordedFile(s.Path(worker, KindInstructions, name), worker, name, workerRecorded)
+				return source{def: d, digest: workerRecorded[key], own: true}, ok
+			}
 			if d, _, ok := s.recordedFile(s.Path(model, KindInstructions, name), model, name, recorded); ok {
 				return source{def: d, digest: recorded[key], own: true}, true
 			}
@@ -206,11 +255,11 @@ func (s Store) MigrateToV2(model, into string, extend, retire []string) ([]V2Mig
 		text := target.Text
 		for _, src := range fold {
 			body := src.def.Text
-			text = withFoldBlock(text, src.def.Name, &body)
+			text = withFoldBlock(text, src.def.Name, worker, &body)
 		}
 		removed := []string{}
 		for _, name := range gone {
-			if next := withFoldBlock(text, name, nil); next != text {
+			if next := withFoldBlock(text, name, worker, nil); next != text {
 				text, removed = next, append(removed, name)
 			}
 		}
@@ -231,22 +280,26 @@ func (s Store) MigrateToV2(model, into string, extend, retire []string) ([]V2Mig
 				}
 				put := s.lastGeneration(model)
 				for _, src := range fold {
-					if _, err := s.appendGeneration(model, Generation{Op: OpMigrateV2, Kind: KindInstructions, Name: src.def.Name, Digest: src.digest, Reason: fmt.Sprintf("folded into %s/%s as an addition (generation %d)", KindInstructions, into, put)}); err != nil {
+					if _, err := s.appendGeneration(model, Generation{Op: OpMigrateV2, Kind: KindInstructions, Name: src.def.Name, Digest: src.digest, From: worker, Reason: fmt.Sprintf("folded into %s/%s as an addition (generation %d)", KindInstructions, into, put)}); err != nil {
 						return err
 					}
-					out = append(out, V2Migration{Model: model, From: src.def.Model, Name: src.def.Name, Folded: true, Into: into, Generation: put})
+					out = append(out, V2Migration{Model: model, From: src.def.Model, Worker: worker != "", Name: src.def.Name, Folded: true, Into: into, Generation: put})
 				}
 				for _, name := range removed {
-					out = append(out, V2Migration{Model: model, Name: name, Removed: true, Into: into, Generation: put})
+					out = append(out, V2Migration{Model: model, From: worker, Worker: worker != "", Name: name, Removed: true, Into: into, Generation: put})
 				}
 			}
 		}
 		for _, src := range retired {
-			g, err := s.appendGeneration(model, Generation{Op: OpMigrateV2, Kind: KindInstructions, Name: src.def.Name, Digest: src.digest, Reason: "retired under memory v2: " + why[src.def.Name]})
+			g, err := s.appendGeneration(model, Generation{Op: OpMigrateV2, Kind: KindInstructions, Name: src.def.Name, Digest: src.digest, From: worker, Reason: "retired under memory v2: " + why[src.def.Name]})
 			if err != nil {
 				return err
 			}
-			out = append(out, V2Migration{Model: model, From: model, Name: src.def.Name, Why: why[src.def.Name], Generation: g.N})
+			from := model
+			if worker != "" {
+				from = worker
+			}
+			out = append(out, V2Migration{Model: model, From: from, Worker: worker != "", Name: src.def.Name, Why: why[src.def.Name], Generation: g.N})
 		}
 		return nil
 	})

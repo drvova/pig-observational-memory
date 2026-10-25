@@ -62,11 +62,11 @@ func TestSettlesUnderV2OnlyItsOwnHolds(t *testing.T) {
 // shown (from none, before any), and never while a held v2 definition waits for its proof; v1
 // passes are never v2 evidence.
 func TestProposalDueOnlyWhenEvidenceChanged(t *testing.T) {
-	store := newV2Store(t)
+	store := newStore(t)
 	if _, due, err := ProposalDue(store, "p/m"); err != nil || due {
 		t.Fatalf("due with no evidence (%v)", err)
 	}
-	if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 50, Findings: &Findings{Counts: map[string]int{DetectThinChunk: 3}}}); err != nil {
+	if err := store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindPass, Stage: StageObserver, Tokens: 50, Counts: map[string]int{DetectThinChunk: 3}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, due, _ := ProposalDue(store, "p/m"); due {
@@ -102,7 +102,7 @@ func TestProposalDueOnlyWhenEvidenceChanged(t *testing.T) {
 // each kind on its own evidence: the consolidation instructions on a level-1 answer under them
 // (reverted on a loss), a detector on detector runs under it.
 func TestSettleV2(t *testing.T) {
-	store := newV2Store(t)
+	store := newStore(t)
 	held := func(kind, name, text string) layer.Definition {
 		d, err := store.Layer().Hold(layer.Definition{Kind: kind, Name: name, Model: "p/m", Text: text})
 		if err != nil {
@@ -119,7 +119,6 @@ func TestSettleV2(t *testing.T) {
 	}
 	compaction := func(p Pass) {
 		t.Helper()
-		p.Stage, p.Engine = StageCompaction, curated.EngineV2
 		if _, err := AfterPass(store, "p/m", p); err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +175,7 @@ func TestSettleV2(t *testing.T) {
 // V2UnitsSinceProposal counts the non-empty v2 compaction passes after the usage ledger length
 // the last level-1 offer recorded (from the start before any), never a v1 observer pass.
 func TestV2UnitsSinceProposal(t *testing.T) {
-	store := newV2Store(t)
+	store := newStore(t)
 	if units, offered, err := V2UnitsSinceProposal(store, "p/m"); err != nil || units != 0 || offered {
 		t.Fatalf("empty: %d %v (%v)", units, offered, err)
 	}
@@ -196,7 +195,7 @@ func TestV2UnitsSinceProposal(t *testing.T) {
 		t.Fatalf("at the offer: %d %v", units, offered)
 	}
 	v2Compaction(t, store, 100, nil, nil)
-	if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 50, Findings: &Findings{Counts: map[string]int{DetectThinChunk: 3}}}); err != nil {
+	if err := store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindPass, Stage: StageObserver, Tokens: 50, Counts: map[string]int{DetectThinChunk: 3}}); err != nil {
 		t.Fatal(err)
 	}
 	v2Compaction(t, store, 100, nil, map[string]int{CountLevel1UnionKept: 2})

@@ -169,7 +169,8 @@ func (t tally) reason(against, keep string) string {
 }
 
 // Compute is a model's profile from its usage ledger, read in the order it was written, and
-// the store's definitions. It is pure: the same events give the same profile. The rules:
+// the store's definitions, with the shipped codecs (ComputeWith). It is pure: the same events
+// give the same profile. The rules:
 //
 //   - codec: rows decodes in the current codec; it switches to the next codec (tables.Codecs
 //     order) when decode errors meet the minimum-evidence rule against parsed decodes. The
@@ -191,38 +192,25 @@ func Compute(model string, events []curated.ModelEvent, definitions []curated.De
 	for _, c := range tables.Codecs() {
 		names = append(names, c.Name())
 	}
-	return ComputeWith(model, "", events, definitions, names)
+	return ComputeWith(model, events, definitions, names)
 }
 
-// ComputeV2 is Compute under memory v2: from the events counted under v2 alone, one evidence
-// unit per compaction (ComputeWith with curated.EngineV2).
-func ComputeV2(model string, events []curated.ModelEvent, definitions []curated.Definition) Profile {
-	names := []string{}
-	for _, c := range tables.Codecs() {
-		names = append(names, c.Name())
-	}
-	return ComputeWith(model, curated.EngineV2, events, definitions, names)
-}
-
-// ComputeWith is Compute for the memory engine engine ("" for v1, curated.EngineV2), switching
-// codecs through codecs, in order: the codec names of the model's layer
-// (declare.Active.CodecNames: the shipped codecs, then the formats the model declared under new
-// names). The first is the default.
+// ComputeWith is Compute switching codecs through codecs, in order: the codec names of the
+// model's layer (declare.Active.CodecNames: the shipped codecs, then the formats the model
+// declared under new names). The first is the default.
 //
-// Each engine's profile reads only its own events (curated.ModelEvent.Engine), as its rules
-// do: v1's worker evidence means nothing under v2 and v2's compaction units nothing under v1,
-// so switching engines starts from that engine's own tallies, never the other's partial ones.
-// Under memory v2 one evidence unit is one compaction (docs/memory-v2.md, "Self-built
-// harness"): its events are not applied one by one but gathered until the model's next v2
-// compaction pass (rules.IsV2Compaction), where each setting gets at most one unit: one against
-// it when its events against outnumbered those that keep it since the previous compaction, one
-// for keeping it when the reverse, none on a tie. The minimum-evidence rule then asks for
-// MinEvidence compactions, not MinEvidence calls of one turn. Events after the latest
-// compaction wait for the next. v1's events apply one by one, as they always did.
-func ComputeWith(model, engine string, events []curated.ModelEvent, definitions []curated.Definition, codecs []string) Profile {
+// It reads memory v2's events alone (curated.ModelEvent.Engine): memory v1's worker evidence
+// means nothing here, so v1's tallies never carry over. One evidence unit is one compaction
+// (docs/memory-v2.md, "Self-built harness"): events are not applied one by one but gathered
+// until the model's next compaction pass (rules.IsV2Compaction), where each setting gets at
+// most one unit: one against it when its events against outnumbered those that keep it since
+// the previous compaction, one for keeping it when the reverse, none on a tie. The
+// minimum-evidence rule then asks for MinEvidence compactions, not MinEvidence calls of one
+// turn. Events after the latest compaction wait for the next.
+func ComputeWith(model string, events []curated.ModelEvent, definitions []curated.Definition, codecs []string) Profile {
 	own := make([]curated.ModelEvent, 0, len(events))
 	for _, e := range events {
-		if e.Engine == engine {
+		if e.Engine == curated.EngineV2 {
 			own = append(own, e)
 		}
 	}
@@ -240,17 +228,12 @@ func ComputeWith(model, engine string, events []curated.ModelEvent, definitions 
 	window := newVotes()
 	for _, e := range events {
 		at, _ := time.Parse(time.RFC3339, e.Time)
-		switch {
-		case engine == curated.EngineV2 && rules.IsV2Compaction(e):
+		if rules.IsV2Compaction(e) {
 			c.apply(window.units(), at)
 			window = newVotes()
-		case engine == curated.EngineV2:
-			c.classify(e, at, window)
-		default:
-			one := newVotes()
-			c.classify(e, at, one)
-			c.apply(one, at)
+			continue
 		}
+		c.classify(e, at, window)
 	}
 	p.Codec = codecs[c.codecIndex]
 	return p
@@ -268,8 +251,8 @@ type computation struct {
 	disabled                     map[string]bool
 }
 
-// votes are the events for and against each setting in one window: one event under v1, the
-// events since the previous compaction under v2. codecName is the codec the codec votes were
+// votes are the events for and against each setting in one window: the events since the
+// previous compaction. codecName is the codec the codec votes were
 // cast in, the current codec when they were classified.
 type votes struct {
 	codec, layout, spec, summary tally

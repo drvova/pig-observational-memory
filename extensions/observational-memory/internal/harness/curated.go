@@ -69,13 +69,10 @@ func NotifySettled(h host.Host, settled curated.Settled) {
 	}
 }
 
-// CuratedStatusLines are /om:status's curated memory lines under memory v2: live, staged,
-// pinned and flagged memories in this project, and the files the validator refuses
-// (curated.Store.Refused); none under v1 or without a store.
+// CuratedStatusLines are /om:status's curated memory lines: live, staged, pinned and flagged
+// memories in this project, and the files the validator refuses (curated.Store.Refused); none
+// without a store.
 func CuratedStatusLines(h host.Host, cfg config.Config) []string {
-	if !cfg.V2() {
-		return nil
-	}
 	project := ProjectRoot(h.Cwd())
 	store, ok := StoreOf(h, cfg)
 	if !ok {

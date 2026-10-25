@@ -8,7 +8,7 @@
 
 *Does whatever a spider can, and remembers all of it.*
 
-A PiG extension that gives the agent a lasting memory of the session. It records what happens while you work, distills what stays true, and makes compaction a quick render instead of a slow rewrite.
+A PiG extension that gives the agent a lasting memory of the session. It records what happens while you work, by code, and makes compaction a quick render instead of a slow rewrite.
 
 [![CI](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml)
 [![PiG extension](https://img.shields.io/badge/PiG-extension-E62429?style=flat-square)](https://github.com/MichaelKinsy/PiG)
@@ -27,10 +27,10 @@ Compaction summarizes the session. The next compaction summarizes that summary. 
 
 This extension does the memory work while the session runs, so it is ready before compaction is needed.
 
-- **No summary chains.** Observations and reflections are saved as entries in the session, and every compaction renders them as written. They are never re-summarized.
-- **Fast compaction.** When the observer has already read the history being compacted, the summary is rendered from memory without calling a summarization model. If it is behind, a catch-up run of up to two observer chunks tries to read the rest first.
-- **Traceable memory.** Every line carries an id, and the agent can read it back with the `memory` tool (`recall <id>`) to see the conversation it came from, or search the raw history behind the summary.
-- **Unread history is never lost.** Compaction keeps history the observer has not read yet in context, or hands that one compaction to PiG's native summarizer.
+- **No summary chains.** Records are saved as entries in the session, and every compaction renders them as written. They are never re-summarized.
+- **No extra requests.** Records are picked out of the conversation by code at every turn end. A compaction makes at most one model request, on the session model, to merge and reflect, in place of PiG's own summarizer; nothing runs between compactions.
+- **Traceable memory.** Every line ends with the entry it came from, and the agent can read it back with the `memory` tool (`recall <id>`), or search the raw history behind the summary. Whatever the summary leaves out is printed as the query that lists it.
+- **Unread history is never lost.** Before rendering, the compaction reads whatever of the removed range no turn end read, and a record is dropped only when the record replacing it carries every specific it carries.
 
 ## Quick start
 
@@ -47,7 +47,7 @@ The first run compiles the extension, so it starts more slowly; later sessions r
 > [!TIP]
 > Want PiG to match this page? Run `/sprite set spider-ham` and the header pig puts on the suit.
 
-Start `pig` and work as usual. Run `/om:status` to confirm the extension loaded: it prints memory counts and a line such as `Next observation: ~2,300 / 10,000 tokens (23%)`. The first observation is recorded after about 10k tokens of conversation. The workers call the session model in the background; [Configuration](#configuration) shows how to use a cheaper one.
+Start `pig` and work as usual. Run `/om:status` to confirm the extension loaded: it prints the records recorded so far and PiG's compaction threshold with the context against it. Records are written by code from the first turn end; the only model request is the one a compaction may make, on the session model.
 
 Other ways to load it:
 
@@ -69,34 +69,30 @@ pig install ./extensions/observational-memory --validate-only --json
 
 <img src="docs/assets/swing.svg" width="100%" alt="Spider-Ham web-swings through a pixel city at night while cyan memory windows release pixels that string onto a web, like observations being collected.">
 
-Observations are what happened: a decision, a finished migration, a bug traced to a module, a constraint the user stated. Reflections are what stays true: the stack, a hard deadline, a preference for minimal abstractions.
+Records (notes) are what happened: a decision, a finished migration, a bug traced to a module, a constraint the user stated. Reflections are what stays true: the stack, a hard deadline, a preference for minimal abstractions. They are saved as entries in the session: the memory ledger.
 
-<img src="docs/assets/memory-web.svg" width="100%" alt="System diagram drawn as a pixel web: session history feeds the Observer, which writes observations into the memory ledger in the session; the Reflector reads them and writes reflections back; when observations are over target the Dropper retires observations, which stay in the session; the ledger is rendered, with no summarization model, into the compaction summary.">
-
-Three memory workers run in one background pipeline and save what they write as entries in the session: the memory ledger. They use the session model unless you configure another.
-
-| Worker | Runs when | Writes |
+| Level | Runs when | Writes |
 | --- | --- | --- |
-| **Observer** | ~10k tokens of history it has not read yet (`observeAfterTokens`) | Timestamped observations ranked `low` to `critical`, each citing the messages it came from |
-| **Reflector** | ~20k tokens of history the observer has read since the last reflection (`reflectAfterTokens`) | Durable reflections, each citing the observations it preserves |
-| **Dropper** | After a reflection, when active observations exceed `observationsPoolTargetTokens` | Retires observations from active memory, favoring ones reflections now cover. They stay in the session, and the `memory` tool's `recall <id>` still finds them. |
+| **Level 0**, code | Every turn end, and at a compaction for what no turn end read | Records picked from the conversation: user facts, preferences and corrections, the model's words before a tool call, attempts with their outcome, files, commits. No model request. |
+| **Level 1**, one request | At a compaction, on the session model, when it fits (`consolidate`) | Labels, merges, reflections and subject aliases, each checked by code: nothing it proposes may lose a specific |
 
-Compaction starts either from the extension, after about 81k tokens of history the observer has read since the last compaction (`compactAfterTokens`; all history when PiG's automatic compaction is off), or from PiG itself (`/compact`, or a full context window). Either way the extension writes the summary from memory, like this:
+PiG decides when to compact (or, with PiG's automatic compaction off, the extension asks at PiG's own threshold). The extension owns every compaction PiG prepares, keeps PiG's cut, and writes the summary from memory, like this:
 
 ```
 These are condensed memories from earlier in this session, as tables: …
 
-reflections[2]{id,dates,content}:
-  a1b2c3d4e5f6,2026-01-08..2026-01-12,User works at Acme Corp building Acme Dashboard on Next.js 15 with Supabase auth.
+reflections[1]{id,dates,content}:
   b2c3d4e5f6a1,2026-01-10,"Hard constraint: ship by January 22nd 2026."
-notes.graphql_migration[2]{id,when,kind,scope,content,superseded_by}:
-  d4e5f6a1b2c3,2026-01-15,plan,public API,User decided to switch from REST to GraphQL to reduce over-fetching on mobile clients.,
-  e5f6a1b2c3d4,2026-01-15,event,public API,GraphQL migration completed; user confirmed queries working.,
+notes.graphql_migration[2]{id,when,kind,status,scope,content,superseded_by,source}:
+  d4e5f6a1b2c3,2026-01-15,correction,,public API,"Use GraphQL for the public API, not REST",,m41
+  e5f6a1b2c3d4,2026-01-15,attempt,,public API,go test ./api/... worked,,m57
+omitted[1]{from,to,count,spans,first_id,last_id,query}:
+  2026-01-08,2026-01-14,38,3,m02,m39,"notes | from m02 | through m39"
 ```
 
-When a record is too compressed to act on, the agent queries the `memory` tool with `recall <id>` and gets the original conversation back. The `memoryFormat` setting switches back to the older `## Reflections` / `## Observations` line layout; [Summary format](docs/concepts.md#summary-format) describes both.
+When a record is too compressed to act on, the agent queries the `memory` tool with `recall <id>` and gets the original conversation back. The `memoryFormat` setting switches to a bracketed line layout; [Summary format](docs/concepts.md#summary-format) describes both.
 
-The summary is sized to the room the next context has: the context window minus the request overhead and the larger of the retained source and the `compactAfterTokens` threshold, with a floor of up to 8,000 tokens on windows the threshold does not fit; `compactionSummaryMaxTokens` caps it. When memory outgrows it, older records are left out and the summary says which: an `omitted` table lists each left-out span's dates, count and first id (the lines layout ends with a line saying how many). If nothing has been recorded yet, PiG's native summarizer runs instead of an empty summary. [How it works](docs/how-it-works.md) covers the lifecycle, the ledger and how compaction decides what to keep.
+The summary budget is derived from what PiG reports: never more than PiG's threshold leaves room for, the model's output limit, or what the compaction removed; `compactionSummaryMaxTokens` caps it. Before each request, aged tool results the latest compaction retained are sent as their one-line record and the query that recalls the original. [How it works](docs/how-it-works.md) covers the lifecycle and the ledger; [memory v2](docs/memory-v2.md) is the design.
 
 ## Commands
 
@@ -104,9 +100,9 @@ The summary is sized to the room the next context has: the context window minus 
 
 | Command | Shows |
 | --- | --- |
-| `/om:status` | Memory counts, progress toward the next observation, reflection and compaction, memory sizes, any worker or compaction holding off after an empty or failed run, and the last worker errors |
+| `/om:status` | Records by who added them, PiG's compaction threshold and the context against it, the last compaction's level and request count, curated memory, the harness, and any removed setting still set |
 | `/om:view` | The memory in the latest compaction summary, also copied to the clipboard; before the first compaction it says how many records exist and points to `/om:view full` |
-| `/om:view full` | All memory recorded on this branch except dropped observations, also copied to the clipboard |
+| `/om:view full` | All memory recorded on this branch except dropped records, also copied to the clipboard |
 
 Commands only read state or settings. The agent reaches its memory through one tool, `memory`, which takes one query string: a source (`notes`, `reflections`, `history`, `saved`, or `recall <id>`) followed by stages, or one write (`save`, `edit`, `forget`, `feedback`, `define`). Results are tables. [The memory tool](docs/concepts.md#the-memory-tool) has the grammar.
 
@@ -119,73 +115,54 @@ save type=user name=prefers-tabs description="The user indents with tabs."
 
 ## Configuration
 
-The defaults suit most sessions. Settings go under the `observational-memory` key in:
+The defaults suit most sessions, and nothing needs tuning: every threshold and budget comes from PiG. Settings go under the `observational-memory` key in:
 
 - `~/.pig/agent/settings.json`, for every session
 - `<project>/.pig/settings.json`, for one project, overriding the global file once PiG trusts the project (until then the extension, like PiG, uses the global file alone)
 
 With `PIG_USE_PI_DIRS=1`, PiG reads Pi's `~/.pi/agent` and `.pi` instead. Settings are read again at each session start (`/new`, `/resume`), so a new session picks up a change; a `/trust` decision needs a PiG restart. [Where settings live](docs/configuration.md#where-settings-live) covers the overrides.
 
-The most common change is running the workers on a cheaper model, with a second one to fall back on:
-
-```json
-{
-  "observational-memory": {
-    "model": { "provider": "openrouter", "id": "google/gemma-4-31b-it", "thinking": "low" },
-    "fallbackModel": { "provider": "opencode-go", "id": "deepseek-v4.1-flash", "thinking": "low" }
-  }
-}
-```
-
 | Setting | Default | Use it to |
 | --- | --- | --- |
-| `model` | session model | Run the workers on another model: `{ provider, id, thinking }`. Without `provider`, the id resolves against the session model's provider. |
-| `fallbackModel` | unset | Try a second model when the first cannot be resolved, or retry a worker call that failed |
-| `observeAfterTokens` | `10000` | Observe more or less often |
-| `reflectAfterTokens` | `20000` | Reflect more or less often |
-| `compactAfterTokens` | `81000` | Compact earlier or later |
-| `compactAfterTokensMode` | `"calibrated"` | Set `"ratio"` to scale the compaction point to the session model's context window (`compactAfterTokensRatio`, default `0.68`) |
-| `consolidateWhenIdle` | `false` | Run the workers only while the agent is idle (see the local-server tip below) |
-| `passive` | `false` | Stop the background workers and the extension's own compaction trigger; PiG's compaction and the summary still work (or set `PI_OBSERVATIONAL_MEMORY_PASSIVE=1`) |
-| `showWorkerNotifications` | `true` | Set `false` to hide routine worker progress messages |
+| `consolidate` | `true` | Set `false` to keep every compaction at level 0: no model request at all |
+| `compactionSummaryMaxTokens` | unset | Cap the summary below the budget derived from PiG |
+| `memoryFormat` | `"tables"` | Set `"lines"` for the bracketed line layout |
+| `curatedMemory` | `true` | Set `false` to turn off the agent's long-lived memory across sessions |
+| `passive` | `false` | Stop turn-end extraction, level 1, thinning and the extension's own compaction trigger (or set `PI_OBSERVATIONAL_MEMORY_PASSIVE=1`) |
 | `debugLog` | `false` | Write NDJSON debug events to `~/.pig/agent/observational-memory/debug/` |
 
-Two tips:
-
-- **Large context windows.** On a 1M-token model the default 81k threshold compacts long before the window fills. `"compactAfterTokensMode": "ratio"` with `"compactAfterTokensRatio": 0.5` compacts at about 500k instead.
-- **Local servers.** If the workers share a llama.cpp server with the agent, set `consolidateWhenIdle` to `true` so their requests never overlap the agent's, and set `agentMaxTokens` (for example `8192`) and a lower `observerChunkMaxTokens` so that a worker request fits in the server's context.
-
-[Configuration](docs/configuration.md) lists every setting with its validation and tuning advice.
+Settings of the earlier background workers (`model`, `fallbackModel`, `observeAfterTokens`, `compactAfterTokens`, `memoryEngine` and the rest) are ignored, and `/om:status` lists any still set. [Configuration](docs/configuration.md) lists every setting and the removed ones.
 
 ## Migrating from the TypeScript extension
 
-If you used the TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3), your sessions and settings work here.
+If you used the TypeScript Pi extension [pi-observational-memory](https://github.com/elpapi42/pi-observational-memory) (V3), your sessions load here.
 
-- **Sessions carry over.** The ledger entries and compaction details have the same shape, so recorded memory keeps working.
-- **Settings carry over.** The keys are the same and are read from PiG's directories, as described above.
-- **Some behavior differs.** Several issues reported against the TypeScript extension are fixed here, and [the migration notes](docs/pig.md#migrating-from-the-typescript-extension) list each difference.
-- **V2 data is not read.** Like the TypeScript V3 release, this ignores settings and memory from the older V2 format; [Migrating from V2](docs/configuration.md#migrating-from-v2) maps the old keys.
+- **Sessions carry over.** The ledger entries and compaction details have the same shape, so recorded memory keeps folding, and extraction starts after its coverage.
+- **The workers are gone.** Memory is recorded by code and consolidated by at most one request per compaction, so the worker settings are ignored.
+- **Some behavior differs**, and [the migration notes](docs/pig.md#migrating-from-the-typescript-extension) list each difference.
 
 ## Development
 
 ```text
 extensions/observational-memory/   the extension, a standalone Go module
 ├── extension.go, memory.go        PiG factory: events, commands, the memory tool
-├── cmd/longmemeval/               LongMemEval benchmark command (not part of the extension)
 └── internal/
-    ├── hooks/                     consolidation pipeline, compaction trigger and hook
-    ├── agents/                    observer, reflector and dropper loops and prompts
-    ├── ledger/                    memory model, projections, summary rendering
-    ├── runtime/                   per-process state, model resolution
+    ├── hooks/                     turn-end extraction, compaction trigger and hook, level 1, thinning
+    ├── extract/                   level 0: records picked by code
+    ├── consolidate/               level 1's prompt and its validation
+    ├── selection/, thin/          the summary renderer; thinning aged tool results
+    ├── ledger/                    memory model, projections
+    ├── agents/                    the single model request
+    ├── runtime/                   per-process state, session model resolution
     ├── memquery/                  the memory tool's query language: parser and interpreter
     ├── commands/, recall/         /om:status, /om:view, recall <id> evidence
-    ├── curated/                   long-lived memories, defined queries, the ranked index
+    ├── curated/, harness/, rules/ long-lived memories, the per-model harness, rules
+    ├── kernel/, layer/, declare/  what no definition may touch; the model-built layer
     ├── host/                      host interfaces the packages run against
     ├── sdkhost/                   adapts the PiG SDK's extension context to host
     ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
-    ├── bench/                     LongMemEval harness over the real memory pipeline
     └── testfix/                   fake host and entry builders for tests
-docs/                              concepts, internals, settings, PiG port notes, contributing
+docs/                              concepts, internals, settings, design, PiG port notes, contributing
 docs/animation/                    Clayzo sources for the README animations
 ```
 
@@ -205,11 +182,12 @@ go test -race ./...
 | Page | Covers |
 | --- | --- |
 | [Concepts](docs/concepts.md) | Vocabulary and the memory model |
-| [How it works](docs/how-it-works.md) | Lifecycle, ledger entries, projections, compaction and recall |
-| [Configuration](docs/configuration.md) | Every setting, tuning, debugging and V2 migration |
+| [How it works](docs/how-it-works.md) | Lifecycle, ledger entries, compaction and recall |
+| [Memory v2](docs/memory-v2.md) | The design: no requests beyond what PiG makes, levels 0 and 1, migration |
+| [Configuration](docs/configuration.md) | Every setting, debugging and the removed settings |
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
-| [Benchmark](docs/bench.md) | Running LongMemEval against the memory pipeline, and how comparable the numbers are |
+| [Memory interface](docs/memory-interface.md) | The memory tool's language, the harness, the kernel and the layer |
 
 ## Credits
 

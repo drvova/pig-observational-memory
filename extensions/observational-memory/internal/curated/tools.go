@@ -27,7 +27,7 @@ type Call struct {
 	// a feedback whose quote it rejects is refused. Nil accepts any quote.
 	Evidence func(quote string) bool
 	// UserEvidence reports whether a quote (normalized) is a user's words in the conversation:
-	// under memory v2 (Store.V2) a save quoting one is live at once, any other save is staged,
+	// a save quoting one is live at once, any other save is staged,
 	// and a helped feedback quoting one is evidence for a staged memory (Store.Settle). Nil
 	// finds no user quote.
 	UserEvidence func(quote string) bool
@@ -81,13 +81,10 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 			if err != nil {
 				return "", errors.New(strings.Replace(err.Error(), "feedback needs", "save's quote needs", 1))
 			}
-			switch {
-			case c.Store.V2 && !c.userQuoted(normalized):
+			if !c.userQuoted(normalized) {
 				return "", errors.New("the quote is not a user's words in this conversation: copy words verbatim from a user message that confirm the memory, or save without quote to stage it")
-			case !c.Store.V2 && c.Evidence != nil && !c.Evidence(normalized):
-				return "", errors.New("the quote is not in this conversation: copy words verbatim from a user or assistant message")
 			}
-		} else if c.Store.V2 {
+		} else {
 			m.Staged = true
 		}
 		saved, err := c.Store.Save(m, c.Source)
@@ -164,7 +161,7 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 			}
 			key, what = DefinitionUsageKey(name), "defined query"
 		}
-		user := c.Store.V2 && outcome == EventHelped && what == "memory" && c.userQuoted(quote)
+		user := outcome == EventHelped && what == "memory" && c.userQuoted(quote)
 		if err := c.Store.appendUsage(usageLine{Name: key, Event: outcome, Quote: quote, User: user}); err != nil {
 			return "", err
 		}

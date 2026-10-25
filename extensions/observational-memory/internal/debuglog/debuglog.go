@@ -126,7 +126,7 @@ type record struct {
 }
 
 // RequestEvent is the event logged for every model request the extension makes, at its single
-// stream call site (agents.Request): data carries the stage, the engine, and the input and
+// stream call site (agents.Request): data carries the stage, the model, and the input and
 // output tokens when the provider reported them. A request whose response failed logs its
 // stage's stream_error event instead, with the same data; every request's event carries
 // "request": true (IsRequest).

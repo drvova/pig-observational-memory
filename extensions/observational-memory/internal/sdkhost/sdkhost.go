@@ -15,8 +15,8 @@ import (
 )
 
 // Host is a host.Host over one sdk.Context. A handler may retain it past its
-// own completion (background memory workers do): later host calls use the
-// live extension connection.
+// own completion (the deferred compaction trigger does): later host calls use
+// the live extension connection.
 //
 // The SDK panics from Cwd, HasUI, Model and ModelProvider once the session
 // has been replaced or reloaded. A retained host must never take the

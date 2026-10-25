@@ -651,14 +651,6 @@ func FormatResultForTui(details *Details, text string, expanded bool) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), " \t\n\r")
 }
 
-// FormatCallForTui renders the tool call line.
-func FormatCallForTui(id string) string {
-	if id == "" {
-		id = "..."
-	}
-	return "recall " + id
-}
-
 // FormatRenderedResultForTui renders the header and body.
 func FormatRenderedResultForTui(details *Details, text string, expanded bool) string {
 	body := FormatResultForTui(details, text, expanded)

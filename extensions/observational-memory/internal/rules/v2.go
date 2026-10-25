@@ -1,8 +1,6 @@
 package rules
 
 import (
-	"slices"
-
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 )
 
@@ -13,7 +11,7 @@ import (
 // them, and switch-codec and long-spec change the session model's profile. No v2 remedy asks a
 // model anything, so the rules never add a request.
 
-// StageCompaction is the stage of a memory v2 pass: one compaction (Pass.Engine EngineV2).
+// StageCompaction is the stage of a memory v2 pass: one compaction.
 const StageCompaction = "compaction"
 
 // The kernel counts of the code checks of a compaction's level-1 output (docs/memory-v2.md,
@@ -67,56 +65,18 @@ var V2Detectors = []string{DetectUncitedAssistantSpecifics, DetectCrossScopeSupe
 // v1's observer records them), so a v2 pass never counts one.
 var V2Remedies = []string{RemedyKeepHead, RemedySwitchCodec, RemedyLongSpec}
 
-// engineOf is the engine store records and decides for: memory v2's when the store is v2's
-// (curated.Store.V2, set by the harness from memoryEngine), else v1's ("").
-func engineOf(store curated.Store) string {
-	if store.V2 {
-		return curated.EngineV2
-	}
-	return ""
-}
-
-// ofEngine are the rules of all written for engine (Rule.Engine).
-func ofEngine(all []Rule, engine string) []Rule {
+// ofV2 are the rules of all memory v2 wrote (Rule.Engine): the only ones that apply, are
+// decided and are counted (StatusLines). A rule memory v1 wrote still loads (its remedy may be
+// one only v1 ran) and is listed by the harness source, but is skipped here: never applied,
+// decided or counted, as active or retired.
+func ofV2(all []Rule) []Rule {
 	out := make([]Rule, 0, len(all))
 	for _, r := range all {
-		if r.Engine == engine {
+		if r.Engine == curated.EngineV2 {
 			out = append(out, r)
 		}
 	}
 	return out
-}
-
-// detectorsOf are the detectors the harness writes rules for under engine.
-func detectorsOf(engine string) []string {
-	if engine == curated.EngineV2 {
-		return V2Detectors
-	}
-	return Detectors
-}
-
-// countsOf are the counts /om:status lists under engine: the detectors, and under v2 the
-// level-1 counts after them.
-func countsOf(engine string) []string {
-	if engine == curated.EngineV2 {
-		return append(append([]string{}, V2Detectors...), Level1Counts...)
-	}
-	return Detectors
-}
-
-// remedyRuns reports whether remedy runs under engine: every catalogue remedy under v1, only
-// V2Remedies under v2.
-func remedyRuns(engine, remedy string) bool {
-	if engine == curated.EngineV2 {
-		return slices.Contains(V2Remedies, remedy)
-	}
-	return containsString(Remedies, remedy)
-}
-
-// V2KernelKeys are the counts a memory v2 grade may read: the v2 detectors, the codec decode
-// failures and the level-1 counts, all kernel code.
-func V2KernelKeys() []string {
-	return append(append(append([]string{}, V2Detectors...), CountCodecDecodeFailure), Level1Counts...)
 }
 
 // isCompactionPass reports whether e is a memory v2 compaction that carries a rate: one that
@@ -197,9 +157,8 @@ func sinceV2Compaction(events []curated.ModelEvent) int {
 	return start
 }
 
-// afterCompaction records one memory v2 compaction of model as its evidence unit and decides
-// the v2 rules for model (evaluate under curated.EngineV2, with its catalogue from pass.Layer or
-// the store). The pass sums the detector runs recorded since the previous compaction (their
+// afterCompaction records one compaction of model as its evidence unit and decides the v2 rules
+// for model (evaluate, with its catalogue from pass.Layer or the store). The pass sums the detector runs recorded since the previous compaction (their
 // counts and source tokens), adds pass.Counts (level 1's code checks) and the decode failures
 // counted under v2 since then (memory queries that did not parse, rows that did not decode).
 // An empty pass (one whose cut range level 0 recorded nothing from) is recorded with no tokens,
@@ -270,7 +229,7 @@ func afterCompaction(store curated.Store, model string, pass Pass) ([]Transition
 		if err != nil {
 			return err
 		}
-		changed, ts := evaluate(curated.EngineV2, model, events, all, store.Now().UTC(), catalog)
+		changed, ts := evaluate(model, events, all, store.Now().UTC(), catalog)
 		for _, r := range changed {
 			if err := write(store, r); err != nil {
 				return err

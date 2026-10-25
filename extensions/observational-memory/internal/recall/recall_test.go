@@ -26,15 +26,6 @@ func teaObservation() ledger.Observation {
 	})
 }
 
-func TestCallRendering(t *testing.T) {
-	if recall.FormatCallForTui("aaaaaaaaaaaa") != "recall aaaaaaaaaaaa" {
-		t.Fatal("call rendering changed")
-	}
-	if recall.FormatCallForTui("") != "recall ..." {
-		t.Fatalf("call rendering %q", recall.FormatCallForTui(""))
-	}
-}
-
 func TestRendersActiveObservationSourceEvidence(t *testing.T) {
 	entries := []ledger.Entry{
 		testfix.RawMessage("raw-1", "I like tea."),

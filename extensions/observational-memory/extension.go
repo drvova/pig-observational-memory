@@ -29,10 +29,10 @@ func Extension() *sdk.Extension {
 
 // Register wires the extension's hooks, commands and memory tool onto ext.
 func Register(ext *sdk.Extension, rt *runtime.Runtime) {
-	// Memory v2 thins aged tool results in each provider request's context, editing the
-	// messages in place (nil result) so PiG keeps the list and its system messages. PiG sends
-	// every request's whole message list to an extension with a context handler, so the handler
-	// is held only while v2 runs (not passive): v1 pays no round trip per request.
+	// Aged tool results are thinned in each provider request's context, editing the messages
+	// in place (nil result) so PiG keeps the list and its system messages. PiG sends every
+	// request's whole message list to an extension with a context handler, so the handler is
+	// held only while the extension is not passive.
 	thinning := &contextSubscription{subscribe: func() func() {
 		return ext.OnEvent(sdk.EventContext, func(ctx sdk.Context, data map[string]any) (any, error) {
 			hooks.OnContext(rt, sdkhost.New(ctx), sdkhost.ContextMessages(data))
@@ -52,21 +52,9 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 	ext.OnEvent(sdk.EventAgentSettled, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		// Pi emits agent_settled only after retries, automatic compaction and
 		// queued continuation have finished, so retry policy stays owned by Pi.
-		// In idle mode the compaction check waits for the memory workers.
 		hooks.OnAgentSettledEvent(rt, sdkhost.New(ctx))
 		return nil, nil
 	})
-	// The session is being replaced (and under PiG this process with it):
-	// abandon in-flight memory work instead of failing against a stale context.
-	// A tree jump changes the branch under a running worker, whose coverage
-	// claims would then describe entries that are not on the branch.
-	for _, event := range []string{sdk.EventSessionBeforeSwitch, sdk.EventSessionBeforeFork, sdk.EventSessionBeforeTree, sdk.EventSessionShutdown} {
-		reason := event
-		ext.OnEvent(reason, func(sdk.Context, map[string]any) (any, error) {
-			hooks.OnSessionEnd(rt, reason)
-			return nil, nil
-		})
-	}
 	// The configuration, and with it the project's trust, is read again for
 	// each session: PiG keeps this process across sessions, so settings edited
 	// since, or a session resumed in another project (whose trust PiG resolves
@@ -106,11 +94,11 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 	registerMemory(ext, rt)
 }
 
-// contextSubscription holds the context event handler while memory v2 wants it. PiG accepts a
-// handler subscribed or unsubscribed at any time (event.subscribe), so it follows the engine
-// the configuration names, which PiG reloads per session: subscribed at the first agent_start,
-// turn_end or compaction that runs under v2, unsubscribed at the first one under v1. A request
-// before it (a session's first) is sent unthinned, which only matters after a compaction.
+// contextSubscription holds the context event handler while thinning is wanted. PiG accepts a
+// handler subscribed or unsubscribed at any time (event.subscribe), so it follows the
+// configuration, which is reloaded per session: subscribed at the first agent_start, turn_end
+// or compaction that is not passive, unsubscribed at the first one that is. A request before
+// it (a session's first) is sent unthinned, which only matters after a compaction.
 type contextSubscription struct {
 	mu sync.Mutex
 	// subscribe registers the handler and returns its unsubscribe.
@@ -131,25 +119,18 @@ func (c *contextSubscription) sync(wanted bool) {
 	}
 }
 
-// wantsContext reports whether the loaded configuration thins request contexts: memory v2, not
-// passive.
+// wantsContext reports whether the loaded configuration thins request contexts: not passive.
 func wantsContext(rt *runtime.Runtime) bool {
-	cfg := rt.Config()
-	return cfg.V2() && !cfg.Passive
+	return !rt.Config().Passive
 }
 
-// handleBeforeCompact answers session_before_compact. v1 stops its catch-up on
-// the agent run's signal; memory v2 reads only the request's own cancellation,
-// which a manual /compact's run abort leaves live.
+// handleBeforeCompact answers session_before_compact. It reads only the request's own
+// cancellation, which a manual /compact's run abort leaves live, never the agent run's signal.
 //
-// Under memory v2 a panic anywhere in the handler (decoding, the host, the
-// configuration, the hook, the result) is recovered into
-// hooks.RecoveredCompactionV2, and a result that would not encode is replaced
-// by it too: an error or a nil result would send PiG to its own summarizer,
-// whose requests v2 replaces (docs/memory-v2.md, "Owning every compaction PiG
-// prepares"). The engine is the configuration the runtime holds when the panic
-// is recovered: the one this compaction loaded, or the last one loaded when
-// loading it panicked. Under v1 a panic propagates exactly as before.
+// A panic anywhere in the handler (decoding, the host, the configuration, the hook, the
+// result) is recovered into hooks.RecoveredCompactionV2, and a result that would not encode is
+// replaced by it too: an error or a nil result would send PiG to its own summarizer, whose
+// requests the extension replaces (docs/memory-v2.md, "Owning every compaction PiG prepares").
 func handleBeforeCompact(ctx sdk.Context, rt *runtime.Runtime, data map[string]any) (result any, err error) {
 	defer func() {
 		recovered := recover()
@@ -164,12 +145,12 @@ func handleBeforeCompact(ctx sdk.Context, rt *runtime.Runtime, data map[string]a
 	}()
 	event := decodeBeforeCompact(data)
 	h := sdkhost.New(ctx)
-	outcome := hooks.HandleBeforeCompactRequest(ctx.Signal(), h.RequestContext(), rt, h, event)
+	outcome := hooks.HandleBeforeCompactRequest(h.RequestContext(), rt, h, event)
 	answer := outcome.ToResult()
 	if answer == nil {
 		return nil, nil
 	}
-	if outcome.Compaction != nil && engineV2(rt) {
+	if outcome.Compaction != nil {
 		if _, err := json.Marshal(answer); err != nil {
 			if fallback, ok := recoveredBeforeCompact(rt, data); ok {
 				return fallback, nil
@@ -179,24 +160,9 @@ func handleBeforeCompact(ctx sdk.Context, rt *runtime.Runtime, data map[string]a
 	return answer, nil
 }
 
-// engineV2 reports whether the runtime's configuration selects memory v2; a
-// configuration that cannot be read counts as v2, since only v2 answers then.
-func engineV2(rt *runtime.Runtime) (v2 bool) {
-	defer func() {
-		if recover() != nil {
-			v2 = true
-		}
-	}()
-	return rt.Config().V2()
-}
-
-// recoveredBeforeCompact is memory v2's answer after a panic in the
-// session_before_compact handler, built from PiG's payload alone: false under
-// v1, or when the payload names no firstKeptEntryId to keep.
+// recoveredBeforeCompact is the answer after a panic in the session_before_compact handler,
+// built from PiG's payload alone: false when the payload names no firstKeptEntryId to keep.
 func recoveredBeforeCompact(rt *runtime.Runtime, data map[string]any) (result map[string]any, ok bool) {
-	if !engineV2(rt) {
-		return nil, false
-	}
 	event := recoveredEvent(data)
 	if event.FirstKeptEntryID == "" {
 		return nil, false
@@ -231,8 +197,7 @@ func recoveredEvent(data map[string]any) (event hooks.BeforeCompactEvent) {
 }
 
 // decodeBeforeCompact reads PiG's session_before_compact payload: the whole
-// preparation (memory v2 reads all of it; v1 only firstKeptEntryId and
-// tokensBefore), the branch, the reason and the custom instructions.
+// preparation, the branch, the reason and the custom instructions.
 func decodeBeforeCompact(data map[string]any) hooks.BeforeCompactEvent {
 	event := hooks.BeforeCompactEvent{}
 	if preparation, ok := data["preparation"].(map[string]any); ok {

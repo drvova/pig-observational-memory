@@ -1,5 +1,7 @@
 # Memory interface (design)
 
+> **Status.** The query language, the codecs, the curated store and the kernel stand as written here. The parts that ran through memory v1's background workers (the observer's rows, the build and revision passes, the `harness` and `propose` writes, the v1 remedies, v1's probation and grading) are superseded by [memory v2](memory-v2.md), the only engine: definitions and rules are proposed only inside a compaction's level-1 request, and only the `keep-head`, `switch-codec` and `long-spec` remedies act. Section 4's budget is v1's: the v2 summary budget is `config.ResolveV2SummaryBudget` ([configuration](configuration.md#the-summary-budget)), and `compactAfterTokens` and the proactive trigger are removed. Identifiers named here that the cleanup deleted (`agents.RunBuilder`, `ledger.RenderSectionsSummary`, `ledger.RenderSummaryWithOptions`, `config.ResolveSummaryBudget`, `rules.JudgeDefinitions`, `rules.RevisionDue`, `rules.StageOfRemedy`, `rules.GradingKeys`, `harness.DefinitionModel`, `harness.LayerReportsFor`) are historical. Where this page and memory-v2.md differ, memory-v2.md holds.
+
 The memory's model-facing surface: one format the model reads and writes, one tool it calls,
 and tools it can define for itself. Storage does not change: records stay JSON in Pi's session
 entries (`om.*` custom entries) and in the curated store. The interface is a layer over them,
@@ -19,8 +21,7 @@ Principles:
   another codec (markdown tables, JSON lines) can be added, or chosen per model, without
   touching anything above it.
 - **The live system is the target.** Every rule is justified by how the extension behaves in
-  a real Pi/PiG session and checked by the extension's own tests. The bench harness only has to
-  keep compiling; nothing is tuned to it.
+  a real Pi/PiG session and checked by the extension's own tests; nothing is tuned to a benchmark.
 - **Commands are for settings.** Slash commands only read or change configuration; memory
   behaviour goes through the tool. `/om:status` and `/om:view` stay as read-only views.
 
@@ -199,7 +200,9 @@ omitted[K]{from,to,count,first_id}:
 
 ## 4. The summary budget
 
-The budget is the room the next context actually has (`config.ResolveSummaryBudget`):
+> Historical (memory v1); since memory v2 the budget is `config.ResolveV2SummaryBudget`, see [configuration](configuration.md#the-summary-budget).
+
+The budget was the room the next context actually has (`config.ResolveSummaryBudget`):
 
 ```
 room   = contextWindow - overheadTokens - max(retainedTokens, compactAfterTokens)
@@ -351,8 +354,8 @@ paths, so the harness can add, test and retire them per model.
   model ids it applies to (or all), a remedy, its state (`probation`, `established`,
   `retired`), the counts that decided its state, and who proposed it (harness or model).
 - **Detectors** are deterministic checks over a model's own notes and the branch, run after
-  each observer, reflector and dropper pass, and counted per model in the usage ledger (under
-  `memoryEngine: v2` they run over every level-0 extraction and one compaction is one evidence
+  each observer, reflector and dropper pass, and counted per model in the usage ledger (since
+  memory v2 they run over every level-0 extraction and one compaction is one evidence
   unit; which detectors and remedies keep a meaning there is in `docs/memory-v2.md`, "Self-built
   harness"):
 
@@ -482,11 +485,11 @@ is recorded with who asked and why, before it takes effect.
   counted evidence and may revise. Every definition is declarative (queries, format
   declarations, text) and never code. Text from files, web pages or tool output never becomes a
   definition. The user is notified of every change, hold, revert and rollback; `/om:status`
-  shows each model's harness, generation and held definitions. Under `memoryEngine: v2` neither
-  pass runs: definitions are proposed only inside the compaction's level-1 request, when the
-  harness evidence changed, and settled on a later compaction's evidence (`docs/memory-v2.md`,
-  "Self-built harness"). A held definition belongs to the engine whose pass held it: each engine
-  applies, settles and waits on only its own holds, while the written layer is shared.
+  shows each model's harness, generation and held definitions. Since memory v2 neither pass
+  runs: definitions are proposed only inside the compaction's level-1 request, when the harness
+  evidence changed, and settled on a later compaction's evidence (`docs/memory-v2.md`,
+  "Self-built harness"). A held definition belongs to the engine whose pass held it: a hold v1
+  left stays v1's and v2 never applies or settles it, while the written layer is shared.
 - Built (the kernel and the layer store): `internal/kernel` holds the ownership predicate
   (`Owns`), the list it reads (the memory tool, the query engine's sources, stages and writes
   including `harness` and `rollback`, the `om.*` kinds, the event ledger's kinds and outcomes and

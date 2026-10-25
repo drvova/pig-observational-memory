@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
@@ -31,9 +30,9 @@ type Manager struct {
 	MemoryTool func(description string) host.ToolSpec
 	// IndexShown is the names the pinned curated index lists; nil means none.
 	IndexShown func() []string
-	// Config is the configuration a call runs under, read for the memory-worker model a
-	// proposed rule is attached to (WorkerModelKey); nil means the session model is the worker.
-	Config func(h host.ToolHost) config.Config
+	// WorkerKey is the key memory v1 kept its memory-worker model's definitions under
+	// (WorkerModelKey), which the harness source lists and a rollback may name; nil means none.
+	WorkerKey func(h host.ToolHost) string
 
 	mu          sync.Mutex
 	registered  map[string]bool
@@ -45,12 +44,6 @@ type Manager struct {
 // NewManager returns a manager with no tools registered yet.
 func NewManager(resolve func(h host.ToolHost) (curated.Call, bool)) *Manager {
 	return &Manager{Resolve: resolve, registered: map[string]bool{}, deactivated: map[string]bool{}}
-}
-
-// v2 reports whether the call runs under memoryEngine v2, whose memory tool additions (recall's
-// cited_by) the call then gets; false without Config.
-func (m *Manager) v2(h host.ToolHost) bool {
-	return m.Config != nil && m.Config(h).V2()
 }
 
 func (m *Manager) resolve(h host.ToolHost) (curated.Call, bool) {
@@ -152,20 +145,19 @@ func (m *Manager) RunMemory(h host.ToolHost, query string) memquery.Result {
 	}
 	call, on := m.resolve(h)
 	profile, ledger, counted := profileOf(h, call, on)
-	v2 := m.v2(h)
-	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), DefinedTools: m.Registered(), CitedBy: v2, V2: v2, SessionEntries: sessionEntries(h, v2)}
+	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), DefinedTools: m.Registered(), CitedBy: true, ToolCall: true, SessionEntries: sessionEntries(h)}
 	var before map[string]Standing
 	if on {
 		env.Saved = &call
 		env.Definer = definer{m: m, h: h, store: call.Store, entries: entries}
 		env.DefinesTools = true
 		if key := ModelKey(h.SessionModel()); key != "" {
-			worker := key
-			if m.Config != nil {
-				worker = WorkerModelKey(h, m.Config(h))
+			env.Proposer = proposer{}
+			w := layerWriter{h: h, store: call.Store, session: key}
+			if m.WorkerKey != nil {
+				w.worker = m.WorkerKey(h)
 			}
-			env.Proposer = proposer{store: call.Store, session: key, worker: worker, entries: entries}
-			env.Layer = layerWriter{h: h, store: call.Store, session: key, worker: worker, entries: entries}
+			env.Layer = w
 		}
 		if q, err := memquery.Parse(query); err == nil && (q.Write == memquery.WriteFeedback || q.Write == memquery.WriteForget) {
 			before = m.states(call.Store)
@@ -215,44 +207,13 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-// proposer stores the rules the session model proposes with the memory tool's propose write
-// (docs/memory-interface.md, section 7). The text comes only from the model's own call;
-// rules.Propose refuses text found in tool output on the branch.
-//
-// A rule is decided over the observer passes of the model it is attached to, and only the
-// memory-worker model records those, so a proposal is attached to the worker: its prompt
-// lines, re-asks, links, drops and chunks are the worker's. switch-codec and long-spec change
-// the profile of the model that calls the memory tool, so they are accepted only when the
-// session model is also the worker; otherwise no pass of the session model could decide them,
-// and the per-model harness's own switches (section 6) already follow its decode evidence.
-type proposer struct {
-	store           curated.Store
-	session, worker string
-	entries         []ledger.Entry
-}
+// proposer answers the memory tool's propose write: a rule is proposed only inside the
+// compaction's level-1 request, so it is refused (ErrDefinedInLevel1).
+type proposer struct{}
 
-// Propose checks and stores the proposal and says what happens next; under memory v2 it is
-// refused (ErrDefinedInLevel1): a rule is proposed only inside the level-1 request.
-func (p proposer) Propose(args map[string]string) (string, error) {
-	if p.store.V2 {
-		return "", ErrDefinedInLevel1
-	}
-	fullness, err := rules.ParseFullness(args["fullness"])
-	if err != nil {
-		return "", err
-	}
-	model := p.worker
-	if model == "" {
-		model = p.session
-	}
-	if rules.ActsOnProfile(args["remedy"]) && model != p.session {
-		return "", fmt.Errorf("refused: %s changes the session model's profile, but the memory passes that decide a rule are run by %s, not %s; the harness switches the session model's codec and spec from its own decode evidence", args["remedy"], model, p.session)
-	}
-	r, err := rules.Propose(p.store, model, p.entries, rules.Proposal{Detector: args["detector"], Remedy: args["remedy"], Text: args["text"], Kind: args["kind"], Fullness: fullness})
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Observational memory: rule %s proposed by %s for memory worker %s, held until %s's next memory pass is clean, then on probation: it is established if %s falls for %s over its next %d memory passes, and retired otherwise.", r.Describe(), p.session, model, model, r.Detector, model, rules.MinEvidence), nil
+// Propose refuses the proposal (ErrDefinedInLevel1).
+func (proposer) Propose(map[string]string) (string, error) {
+	return "", ErrDefinedInLevel1
 }
 
 // definer stores a definition and registers it at once as a tool of its name
@@ -441,12 +402,9 @@ func (m *Manager) DefinedToolSpec(d curated.Definition) host.ToolSpec {
 	}
 }
 
-// sessionEntries are every entry of the session file, for memory v2's off-path fallback
-// (docs/memory-v2.md, "Branches"); nil under v1, or when the host cannot read the file.
-func sessionEntries(h host.ToolHost, v2 bool) []ledger.Entry {
-	if !v2 {
-		return nil
-	}
+// sessionEntries are every entry of the session file, for the off-path fallback
+// (docs/memory-v2.md, "Branches"); nil when the host cannot read the file.
+func sessionEntries(h host.ToolHost) []ledger.Entry {
 	reader, ok := h.(host.SessionFileReader)
 	if !ok {
 		return nil
@@ -487,8 +445,7 @@ func (m *Manager) RunDefined(h host.ToolHost, name, input string) memquery.Resul
 		return fail(err)
 	}
 	profile, ledger, counted := profileOf(h, call, on)
-	v2 := m.v2(h)
-	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), Saved: &call, DefinedTools: m.Registered(), CitedBy: v2, V2: v2, SessionEntries: sessionEntries(h, v2)}
+	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), Saved: &call, DefinedTools: m.Registered(), CitedBy: true, ToolCall: true, SessionEntries: sessionEntries(h)}
 	result := memquery.Run(env, memquery.Substitute(d.Query, input))
 	usage, outcome := curated.EventCallOK, curated.OutcomeOK
 	switch {

@@ -6,33 +6,26 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 )
 
-// memoryEngine defaults to v1 and consolidate to on; both are read through the trusted path,
-// so an untrusted project's settings never switch the engine.
-func TestMemoryEngineAndConsolidate(t *testing.T) {
+// consolidate defaults to on and is read through the trusted path, so an untrusted project's
+// settings never turn level 1 off; a non-boolean value is ignored.
+func TestConsolidate(t *testing.T) {
 	f := setup(t)
-	if got := f.load(env{}); got.Engine() != config.EngineV1 || got.V2() || !got.Consolidates() {
-		t.Fatalf("defaults: engine %q v2 %v consolidate %v", got.Engine(), got.V2(), got.Consolidates())
+	if got := f.load(env{}); !got.Consolidates() {
+		t.Fatal("consolidate is off by default")
 	}
-	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"memoryEngine": "v1", "consolidate": true}})
-	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"memoryEngine": "v2", "consolidate": false}})
-	if got := f.loadAs(config.ProjectTrusted, env{}); !got.V2() || got.Engine() != config.EngineV2 || got.Consolidates() {
-		t.Fatalf("trusted project: engine %q consolidate %v", got.Engine(), got.Consolidates())
+	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"consolidate": true}})
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"consolidate": false}})
+	if got := f.loadAs(config.ProjectTrusted, env{}); got.Consolidates() {
+		t.Fatal("a trusted project's consolidate: false ignored")
 	}
 	for _, trust := range []config.TrustState{config.ProjectUntrusted, config.ProjectTrustUnknown} {
-		if got := f.loadAs(trust, env{}); got.V2() || !got.Consolidates() {
-			t.Fatalf("%s project switched the engine: %q consolidate %v", trust, got.Engine(), got.Consolidates())
+		if got := f.loadAs(trust, env{}); !got.Consolidates() {
+			t.Fatalf("%s project turned level 1 off", trust)
 		}
 	}
-	// The global settings alone switch it too.
-	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"memoryEngine": "v2"}})
-	if got := f.loadAs(config.ProjectUntrusted, env{}); !got.V2() {
-		t.Fatalf("global v2 ignored: %q", got.Engine())
-	}
-	// An unknown engine or a non-boolean consolidate is ignored.
-	f.writeJSON(t, f.global(), map[string]any{})
-	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"memoryEngine": "v3", "consolidate": "no"}})
-	if got := f.load(env{}); got.Engine() != config.EngineV1 || !got.Consolidates() {
-		t.Fatalf("invalid values applied: %q consolidate %v", got.Engine(), got.Consolidates())
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"consolidate": "no"}})
+	if got := f.load(env{}); !got.Consolidates() {
+		t.Fatal("a non-boolean consolidate applied")
 	}
 }
 
@@ -86,9 +79,10 @@ func TestResolveV2SummaryBudget(t *testing.T) {
 	}
 }
 
-// The settings memory v2 removes are listed while a settings file read sets them to a valid value
-// (an invalid one is ignored by both engines), in the Migration table's order, once each; an
-// untrusted project's are never read.
+// The removed settings are listed while a settings file read sets them to a value memory v1
+// applied (an invalid one was ignored by v1 as well), in the Migration table's order, once
+// each; an untrusted project's are never read. A stale memoryEngine, v1 or v2, is one of them:
+// v2 is the only engine, so the setting is ignored and listed.
 func TestRemovedSettingsListed(t *testing.T) {
 	f := setup(t)
 	if got := f.load(env{}); len(got.RemovedSet) != 0 {
@@ -102,6 +96,36 @@ func TestRemovedSettingsListed(t *testing.T) {
 	}
 	if got := f.loadAs(config.ProjectUntrusted, env{}); !equalStrings(got.RemovedSet, []string{"observeAfterTokens", "model"}) {
 		t.Fatalf("untrusted project's removed settings read: %v", got.RemovedSet)
+	}
+	// The removed model setting's value is kept to migrate v1's worker layer; the project's
+	// overrides the global one only when trusted.
+	if w := got.RemovedWorkerModel; w == nil || w.ID != "x" || w.Provider != "" {
+		t.Fatalf("worker model %+v", w)
+	}
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"model": map[string]any{"provider": "anthropic", "id": "haiku"}}})
+	if w := f.loadAs(config.ProjectTrusted, env{}).RemovedWorkerModel; w == nil || w.Provider != "anthropic" || w.ID != "haiku" {
+		t.Fatalf("trusted project's worker model %+v", w)
+	}
+	if w := f.loadAs(config.ProjectUntrusted, env{}).RemovedWorkerModel; w == nil || w.ID != "x" {
+		t.Fatalf("untrusted project's worker model read: %+v", w)
+	}
+	for _, c := range []struct {
+		value any
+		set   bool
+	}{{"v1", true}, {"v2", true}, {"v3", false}, {2, false}} {
+		f.writeJSON(t, f.project(), map[string]any{})
+		f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"memoryEngine": c.value, "compactionCatchUpMaxChunks": 0, "compactAfterTokensRatio": 1.5}})
+		got := f.load(env{})
+		want := []string{"compactionCatchUpMaxChunks"}
+		if c.set {
+			want = append(want, "memoryEngine")
+		}
+		if !equalStrings(got.RemovedSet, want) {
+			t.Fatalf("memoryEngine %v: removed settings %v, want %v", c.value, got.RemovedSet, want)
+		}
+		if g := got; g.Passive || !g.Consolidates() || g.CompactionSummaryMaxTokens != 0 {
+			t.Fatalf("memoryEngine %v changed the configuration: %+v", c.value, g)
+		}
 	}
 }
 

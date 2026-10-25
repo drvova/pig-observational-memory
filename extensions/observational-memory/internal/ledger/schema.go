@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
@@ -84,9 +83,6 @@ type SchemaField struct {
 	Max         int
 	Description string
 }
-
-// Builtin reports whether the field is one the kernel stores in Observation's own fields.
-func (f SchemaField) Builtin() bool { _, ok := builtinTypes[f.Name]; return ok }
 
 // NoteSchema is one parsed schema declaration.
 type NoteSchema struct {
@@ -214,65 +210,4 @@ func kindValuesText() string {
 		out = append(out, string(k))
 	}
 	return strings.Join(out, ", ")
-}
-
-// Field is the declared field name.
-func (s NoteSchema) Field(name string) (SchemaField, bool) {
-	for _, f := range s.Fields {
-		if f.Name == name {
-			return f, true
-		}
-	}
-	return SchemaField{}, false
-}
-
-// Names are the declared fields' names, in order.
-func (s NoteSchema) Names() []string {
-	out := make([]string, 0, len(s.Fields))
-	for _, f := range s.Fields {
-		out = append(out, f.Name)
-	}
-	return out
-}
-
-// AllowsKind reports whether the schema declares kind with value among its values.
-func (s NoteSchema) AllowsKind(value string) bool {
-	f, ok := s.Field(NoteFieldKind)
-	return ok && containsString(f.Values, value)
-}
-
-var numberValue = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
-
-// NumberPattern is the pattern a number field's value matches.
-const NumberPattern = `^-?[0-9]+(\.[0-9]+)?$`
-
-// DatePattern is the pattern a date field's value matches.
-const DatePattern = `^[0-9]{4}-[0-9]{2}-[0-9]{2}$`
-
-// Normalize is value as a field the model added stores it: text collapsed to one line and
-// clipped to max, an enum value lowercased, a number or a date checked. ok is false for a
-// value the declaration refuses, or for a structured field (the kernel normalizes those).
-func (f SchemaField) Normalize(value string) (string, bool) {
-	value = strings.Join(strings.Fields(value), " ")
-	if value == "" || f.Builtin() {
-		return "", false
-	}
-	switch f.Type {
-	case FieldText:
-		if r := []rune(value); len(r) > f.Max {
-			value = strings.TrimSpace(string(r[:f.Max]))
-		}
-		return value, true
-	case FieldEnum:
-		value = strings.ToLower(value)
-		return value, containsString(f.Values, value)
-	case FieldNumber:
-		return value, numberValue.MatchString(value)
-	case FieldDate:
-		if _, err := time.Parse("2006-01-02", value); err != nil {
-			return "", false
-		}
-		return value, true
-	}
-	return "", false
 }

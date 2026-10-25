@@ -1,8 +1,6 @@
 # Configuration
 
-This page documents the current V3 configuration for `pig-observational-memory`.
-
-V3 keeps the existing `observational-memory` settings namespace, but the setting names changed. Old V2 keys are not aliases; they are ignored. If you are upgrading, read [Migrating from V2](#migrating-from-v2).
+This page documents the settings of `pig-observational-memory`. The extension runs one engine, [memory v2](memory-v2.md): it makes no model request outside a compaction and at most one inside it. The settings that tuned the earlier background workers are removed; see [Removed settings](#removed-settings).
 
 ## Where settings live
 
@@ -18,9 +16,9 @@ Project settings override global settings. `PI_OBSERVATIONAL_MEMORY_PASSIVE` ove
 
 ### Project trust
 
-A project's settings travel with its repository, so the extension follows PiG's rule: until you trust a project, PiG uses your global configuration alone. The extension asks PiG whether the project is trusted and reads `<project>/.pig/settings.json` only when it is. In an untrusted project, or when the trust check fails (the extension then treats the project as untrusted, as PiG does), it uses the global settings and `PI_OBSERVATIONAL_MEMORY_PASSIVE` alone. This covers every setting it reads from that file: the `observational-memory` namespace (the runtime configuration, the `memory` tool and the harness) and Pi's own `compaction.enabled`. When a project settings file exists but is not read, `/om:status` starts with a `Settings` section saying so and why.
+A project's settings travel with its repository, so the extension follows PiG's rule: until you trust a project, PiG uses your global configuration alone. The extension asks PiG whether the project is trusted and reads `<project>/.pig/settings.json` only when it is. In an untrusted project, or when the trust check fails (the extension then treats the project as untrusted, as PiG does), it uses the global settings and `PI_OBSERVATIONAL_MEMORY_PASSIVE` alone. This covers every setting it reads from that file: the `observational-memory` namespace and PiG's own `compaction.enabled`, `compaction.reserveTokens` and `compaction.modelOverrides`. When a project settings file exists but is not read, `/om:status` says so and why.
 
-Trust is read when the extension first loads its configuration in a session and again at every session start; a failed check is asked again on the next read instead of being kept for the session. A decision you make with `/trust` applies after PiG restarts, as PiG itself says when it saves one: PiG resolves trust once per working directory for the life of the process, so a new session (`/new`) in the same project keeps the old answer. The re-read at session start matters for a session resumed in a different project, whose trust PiG resolves separately. The extension handles PiG's `project_trust` event only to drop the configuration loaded under the previous answer; it never makes the decision (it answers undecided).
+Trust is read when the extension first loads its configuration in a session and again at every session start; a failed check is asked again on the next read instead of being kept for the session. A decision you make with `/trust` applies after PiG restarts, as PiG itself says when it saves one: PiG resolves trust once per working directory for the life of the process, so a new session (`/new`) in the same project keeps the old answer. The extension handles PiG's `project_trust` event only to drop the configuration loaded under the previous answer; it never makes the decision (it answers undecided).
 
 Trust does not change where curated memories are filed: project-scoped memories stay keyed by the project directory either way.
 
@@ -32,359 +30,51 @@ All extension-owned settings live under:
 }
 ```
 
-The extension loads config once per session and reads it again at each session start (`/new`, `/resume`, `/fork`, `/reload`). After changing settings, start a new session or restart PiG so the new values are picked up; the `memory` tool reads them on each call. Pi's own `compaction.enabled` is the exception: it is re-read on every check (see [`compactAfterTokens`](#compactaftertokens)).
+The extension loads config once per session and reads it again at each session start (`/new`, `/resume`, `/fork`, `/reload`). After changing settings, start a new session or restart PiG so the new values are picked up; the `memory` tool reads them on each call. PiG's own `compaction.enabled` is re-read on every check.
 
-## Full V3 example
+## Example
 
 ```json
 {
   "observational-memory": {
-    "observeAfterTokens": 10000,
-    "reflectAfterTokens": 20000,
-    "observerChunkMaxTokens": 60000,
-    "compactAfterTokens": 81000,
-    "compactAfterTokensMode": "calibrated",
-    "compactAfterTokensRatio": 0.68,
-    "observationsPoolMaxTokens": 20000,
-    "observationsPoolTargetTokens": 10000,
-    "agentMaxTurns": 16,
-    "model": {
-      "provider": "openrouter",
-      "id": "google/gemma-4-31b-it",
-      "thinking": "low"
-    },
-    "fallbackModel": {
-      "provider": "opencode-go",
-      "id": "deepseek-v4.1-flash",
-      "thinking": "low"
-    },
-    "showWorkerNotifications": true,
+    "consolidate": true,
+    "memoryFormat": "tables",
+    "curatedMemory": true,
+    "curatedMemoryIndexTokens": 2000,
     "passive": false,
     "debugLog": false
   }
 }
 ```
 
-You can omit everything. Defaults work for ordinary sessions, and if `model` is unset the memory workers use the current session model.
+You can omit everything. The defaults are the values above.
 
 ## Settings reference
 
 | Setting | Type | Default | What it controls |
 | --- | ---: | ---: | --- |
-| `observeAfterTokens` | positive integer | `10000` | Raw/source token threshold for observer runs. |
-| `reflectAfterTokens` | positive integer | `20000` | Source-token threshold for reflector runs, counted over source the observer has covered; successful reflection creates dropper maintenance opportunities. |
-| `observerChunkMaxTokens` | positive integer | derived; minimum `256` | Maximum estimated tokens sent to one observer run. Unset: 20% of the resolved memory model's context window, or `60000` when unknown. |
-| `compactAfterTokens` | positive integer | `81000` | Estimated source-entry threshold for proactive auto-compaction, counted after the latest compaction boundary and, while Pi's automatic compaction is on, only up to the observation frontier. |
-| `compactAfterTokensMode` | enum | `"calibrated"` | How the proactive compaction threshold is resolved: `"calibrated"` uses `compactAfterTokens`; `"ratio"` scales it to the session model's context window. |
-| `compactAfterTokensRatio` | number between `0` and `1`, exclusive | `0.68` | In `"ratio"` mode, the threshold is `floor(contextWindow * compactAfterTokensRatio)`, or `compactAfterTokens` when the context window is unknown. |
-| `compactionMaxRetainedTokens` | positive integer | derived | Maximum estimated source tokens the compaction hook may keep in context when it retains entries the observer has not reached yet. Unset: half of the active session model's context window, or `60000` when unknown. |
-| `observationsPoolMaxTokens` | positive integer | `20000` | Normal compaction-projection observation-token pressure that makes compaction do a full fold. |
-| `observationsPoolTargetTokens` | positive integer below max | half of `observationsPoolMaxTokens` | Folded active observation target used by post-reflection dropper maintenance. |
-| `agentMaxTurns` | positive integer | `16` | Shared nested-agent turn cap for observer, reflector, and dropper. |
-| `agentMaxTokens` | positive integer | `32000` | Maximum output tokens requested for memory-agent loops. Clamped to the model's own `maxTokens` when available. Lower it for local servers with a modest context window. |
-| `model` | object | unset | Optional model override for observer, reflector, and dropper. |
-| `model.provider` | string | unset | Provider name in Pi's model registry. Optional; without it, `model.id` resolves against the session model's provider. |
-| `model.id` | string | unset | Model id in Pi's model registry. Required when `model` is set. |
-| `model.thinking` | enum | unset; workers fall back to `low` | Optional reasoning/thinking level for memory workers. |
-| `compactionSummaryMaxTokens` | positive integer | unset | Optional cap on the memory summary the compaction hook renders. The budget itself is the room the next context has: the session model's context window minus the request overhead and the larger of the source Pi retains and the `compactAfterTokens` threshold, but at least `8000` or half of what the window has left after the retained source, whichever is smaller; `8000` (or this cap) when the window is unknown. Observations get at least half (the newest quarter first, then those carrying numbers, dates or names, then the rest); reflections take the rest. |
-| `memoryFormat` | enum | `"tables"` | Layout of the memory summary the compaction hook renders: `"tables"` lists reflections, notes grouped by subject and omitted spans as tables of records; `"lines"` keeps the earlier bracketed lines. The per-model harness may switch a model that keeps writing rows with the wrong columns to `lines`; `"lines"` here applies to every model. See [Summary format](concepts.md#summary-format). |
-| `compactionCatchUpMaxChunks` | non-negative integer | `2` | Observer chunks the compaction hook may run synchronously to cover source entries the background observer has not reached before Pi's cut. `0` disables. |
-| `workerMemoryMaxTokens` | positive integer | derived | Estimated token budget for the prior memory each observer, reflector, and dropper request carries. Unset: a quarter of the memory model's context window, or `16000` when unknown. |
-| `consolidateWhenIdle` | boolean | `false` | Run memory workers only while the agent is idle (launch from `agent_settled`, abort when a new agent run starts). For hosts where the session model and the memory model share one context budget. |
-| `fallbackModel` | object | unset | Optional model the memory workers fall back to when the primary memory model fails to resolve or a worker call errors. |
-| `fallbackModel.provider` | string | unset | Provider name in Pi's model registry. Optional; without it, `fallbackModel.id` resolves against the session model's provider. |
-| `fallbackModel.id` | string | unset | Model id in Pi's model registry. Required when `fallbackModel` is set. |
-| `fallbackModel.thinking` | enum | unset; falls back to `model.thinking` then `low` | Optional reasoning/thinking level used when the fallback is active. |
-| `showWorkerNotifications` | boolean | `true` | Shows routine observer, reflector, and dropper progress notifications. |
-| `passive` | boolean | `false` | Disables proactive background memory and auto-compaction triggers. |
-| `debugLog` | boolean | `false` | Writes best-effort per-session extension debug events to PiG's agent directory. |
-| `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory` tool's `saved` source and its `save`, `edit`, `forget`, `feedback` and `define` writes, an evidence-ranked index in the system prompt, the tools the agent defines, the per-model harness's usage ledgers, and the rules it writes (remedy definitions in the model-built layer, `<store>/harness/`; the `propose` write), and the harness the memory model builds there (its build and revision passes, the `harness` and `rollback` writes and the `harness` source). Off, the tool still reads notes, reflections, history and `recall <id>`, every model keeps the default profile, and no rule is counted or applied. See [Curated memory](concepts.md#curated-memory), [The per-model harness](concepts.md#the-per-model-harness) and [Rules the harness writes](concepts.md#rules-the-harness-writes). |
-| `kernelFloor` | object | unset | Lowers the kernel floor: `{"lower": true, "requestedBy": "<who>", "reason": "<why>"}`. Read from the global settings only (a project's settings can set `"lower": false` but never lower it). Both `requestedBy` and `reason` are required and are appended to `<store>/harness/floor.jsonl` before the lowering takes effect; a request missing either, or one that cannot be recorded, is refused and the floor stays engaged (`/om:status` says why). Lowered, layer definitions may name kernel-owned names; the memory tool and the room ceiling stay code either way. This setting is the only way the floor is lowered: no `memory` tool write (`harness`, `rollback`, `propose`) and no build or revision pass reaches it. Removing the setting (or `"lower": false`) engages the floor again, recorded the same way. See [The kernel and the layer](concepts.md#the-kernel-and-the-layer). |
+| `consolidate` | boolean | `true` | Lets a compaction make its one level-1 consolidation request on the session model. `false` keeps every compaction at level 0 (code only, no request). See [`consolidate`](#consolidate). |
+| `compactionSummaryMaxTokens` | positive integer | unset | An extra cap on the summary budget, which is otherwise derived from what PiG reports. See [The summary budget](#the-summary-budget). |
+| `memoryFormat` | enum | `"tables"` | Layout of the memory summary: `"tables"` lists reflections, notes grouped by subject and omitted spans as tables of records; `"lines"` keeps bracketed lines. The per-model harness may switch a model that keeps writing rows with the wrong columns to `lines`; `"lines"` here applies to every model. See [Summary format](concepts.md#summary-format). |
+| `passive` | boolean | `false` | Turns off turn-end extraction, level 1, thinning and the compaction trigger. See [`passive`](#passive). |
+| `debugLog` | boolean | `false` | Writes best-effort per-session debug events to PiG's agent directory. See [`debugLog`](#debuglog). |
+| `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory` tool's `saved` source and its `save`, `edit`, `forget` and `feedback` writes, an evidence-ranked index in the system prompt, the tools the agent defines, the per-model harness's usage ledgers and the rules it keeps. Off, the tool still reads notes, reflections, history and `recall <id>`, and every model keeps the default profile. See [Curated memory](concepts.md#curated-memory) and [The per-model harness](concepts.md#the-per-model-harness). |
 | `curatedMemoryIndexTokens` | positive integer | `2000` | Estimated token budget for the index's memory lines; past it, the first memories are described within half and the next named on one `also:` line. |
-| `memoryEngine` | enum | `"v1"` | Selects the memory engine while [memory v2](memory-v2.md) is built side by side: `"v1"` is the design this page describes; `"v2"` makes no model request outside a compaction and owns every compaction PiG prepares. See [`memoryEngine`](#memoryengine). |
-| `consolidate` | boolean | `true` | Memory v2 only: lets a compaction make its one level-1 consolidation request. `false` keeps every compaction at level 0 (code only, no request). See [`consolidate`](#consolidate). |
+| `kernelFloor` | object | unset | Lowers the kernel floor: `{"lower": true, "requestedBy": "<who>", "reason": "<why>"}`. Read from the global settings only (a project's settings can set `"lower": false` but never lower it). Both `requestedBy` and `reason` are required and are appended to `<store>/harness/floor.jsonl` before the lowering takes effect; a request missing either, or one that cannot be recorded, is refused and the floor stays engaged (`/om:status` says why). Lowered, layer definitions may name kernel-owned names; the memory tool and the room ceiling stay code either way. No `memory` tool write reaches it. Removing the setting (or `"lower": false`) engages the floor again, recorded the same way. See [The kernel and the layer](concepts.md#the-kernel-and-the-layer). |
 
-Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`. Valid `memoryFormat` values are `tables` and `lines`; any other value is ignored. Valid `memoryEngine` values are `v1` and `v2`; any other value is ignored.
+Valid `memoryFormat` values are `tables` and `lines`. Invalid values are ignored. Positive-integer settings must be finite integers greater than zero.
 
-Invalid values are ignored. Positive-integer settings must be finite integers greater than zero. `compactAfterTokensRatio` must be a finite number strictly between `0` and `1`. `observationsPoolTargetTokens` must also be below `observationsPoolMaxTokens`; if omitted or invalid, it is derived as `floor(observationsPoolMaxTokens / 2)`.
+The extension has no tuned numbers: every threshold and budget comes from PiG (its context window, `reserveTokens`, reported usage, output limit) or from the session itself.
 
-Rules the harness writes have no settings of their own: they are decided by counts, never tuned. A [`split-chunk` rule](concepts.md#rules-the-harness-writes) halves the resolved `observerChunkMaxTokens` cap for its model (background observer and catch-up alike), and a `protect-kind` rule never holds the pool past twice `observationsPoolTargetTokens`. To drop a rule, delete its file under `<PiG config root>/observational-memory/memories/rules/`.
+## When compactions happen
 
-## `observeAfterTokens`
+PiG decides. With PiG's automatic compaction on (its `compaction.enabled`, the default), PiG compacts at its own threshold and the extension owns every compaction it prepares. With it off, PiG never compacts on its own, so the extension asks for one at PiG's own threshold: at `agent_settled`, with the agent idle, when the reported context exceeds `contextWindow - reserveTokens`, never while usage is unknown (PiG reports none after a compaction until a response reports usage again). `reserveTokens` is PiG's `compaction.reserveTokens` with the session model's `compaction.modelOverrides` entry applied (16384 when unset), read under project trust. That compaction is level 0 only. A "Nothing to compact" answer, or PiG rejecting an invalid `compaction.reserveTokens` setting (which the extension reads as unset), suspends the trigger until the branch tip changes. `/om:status` shows PiG's threshold and the context against it.
 
-Default: `10000`.
+The compaction hook always returns a compaction on PiG's exact cut: it never declines to PiG's summarizer and never cancels, overflow, an empty ledger and a budget too small for any record included. When no record fits or none exists, it writes a minimal brief of the removed range (its opening user request and one `* tool "key arg" (entry id)` line per tool call), shortened further until it is no larger than the removed range. A panic while building the summary is recovered into the brief. Only a cancelled `session_before_compact` request makes the hook answer nothing.
 
-The observer is the first stage of the consolidation pipeline, which launches from Pi's `agent_start` and `turn_end` hooks (or from `agent_settled` with [`consolidateWhenIdle`](#consolidatewhenidle)). It counts raw/source tokens after the latest `om.observations.recorded.data.coversUpToId` marker, leaving out entries that render nothing for it (a `!!command` run PiG keeps out of context, an aborted turn with no content). When the count reaches `observeAfterTokens`, the observer receives source entries after that marker and may append a non-empty `om.observations.recorded` ledger entry.
+## The summary budget
 
-When Pi reports provider context usage, the observer is also due once the real context has grown by `observeAfterTokens` since the coverage marker (or since the latest compaction, when coverage is behind it). Either measure reaching the threshold launches the observer: the provider delta catches content the character heuristic undercounts, and the raw backlog keeps an observer that fell behind several compactions from starving on a small context window that Pi compacts every few thousand tokens.
-
-Lower values create smaller chunks and more frequent model calls. Higher values reduce model-call frequency but let unobserved raw conversation accumulate longer. If the observer deliberately emits no observations, no ledger entry is written; the same range remains uncovered, and the observer retries after another `observeAfterTokens` of source tokens it can read accumulate (provider-reported growth and `!!command` output do not shorten this wait), or sooner when coverage moves or the branch no longer contains the chunk it judged.
-
-## `observerChunkMaxTokens`
-
-Default: derived as 20% of the resolved memory model's context window, or `60000` when that window is unavailable.
-
-This caps the source-addressed text sent to one observer run. Complete source entries are added oldest-first while they fit; remaining entries stay eligible for later runs. If the oldest entry alone exceeds the budget, the observer receives a clearly marked head/tail excerpt instead of an over-context request. The original session entry is not modified, and observations still cite its original source id so the source remains traceable in the session ledger.
-
-Set an explicit value when a provider exposes a context window that differs from Pi's model metadata. Values below `256` are clamped to `256` so a chunk can always carry a complete source label, omission marker, and useful context. Keep room for the observer system prompt, prior observations/reflections, tool schemas, and output; setting this equal to the full model window will usually fail.
-
-## `reflectAfterTokens`
-
-Default: `20000`.
-
-The reflector uses this source-token threshold. Reflector progress counts source entries between the latest `om.reflections.recorded.data.coversUpToId` marker and the latest observation coverage marker — material the observer has already turned into observations. Source the observer has not reached yet does not count, so an observer draining a large backlog in small chunks does not trigger a reflector (and dropper) pass after every chunk. When Pi reports provider context usage, real context growth of `reflectAfterTokens` since the marker also makes the reflector due, but only once the observer has covered new source since the last reflection; context growth alone never does. If the reflector records nothing, it is not run again until the memory it reads (active observations and reflections) changes (with `fallbackModel` set, an empty verdict from the fallback retry first gives the primary one try at that memory; see [Fallback model](#fallbackmodel)).
-
-The dropper no longer uses `reflectAfterTokens` as its own launch threshold. Dropper work is gated by successful reflection: after the reflector records non-empty reflections in a consolidation pass, the dropper may run if the folded active observation ledger is over `observationsPoolTargetTokens`. It can see those same-run reflections before deciding what to prune.
-
-Lower values distill reflections more often and therefore create more opportunities for post-reflection dropper maintenance. Higher values reduce reflector model calls but leave more observations between reflection and dropper opportunities.
-
-## `compactAfterTokens`
-
-Default: `81000`.
-
-The auto-compaction trigger runs from Pi's `agent_settled` hook, after retries, automatic compaction, and queued continuation finish. It counts estimated source-entry tokens after the latest compaction boundary **that observation coverage has already reached** — the span a compaction can fold into memory. The count starts at `firstKeptEntryId` when Pi provides that boundary, so retained source entries remain part of the metric, and it stops at the latest observer coverage marker. Memory ledger entries and compaction metadata contribute zero. If the count reaches the threshold resolved by [`compactAfterTokensMode`](#compactaftertokensmode-and-compactaftertokensratio) (`compactAfterTokens` by default), the extension hands off to a background step and returns from the hook. That step waits for the agent to report idle, asking up to ten times 100 ms apart so another extension's slow `agent_settled` handler does not defer it, then re-checks the same metric on a fresh branch and asks PiG to compact. If the agent is still busy after the last poll, the attempt is deferred to the next settled event. Pi's provider context usage is not used for this threshold.
-
-When PiG refuses or fails the request (for example "Nothing to compact", "Already compacted", or a summarizer error), the trigger does not ask again on every settle: it waits until another threshold's worth of counted source arrives, a new compaction boundary appears, or the session changes. `/om:status` shows this backoff.
-
-Source entries the observer has not reached yet never count toward this threshold, so a session whose observer is slower than the conversation waits for coverage instead of compacting away unobserved context. Without any observation coverage, proactive compaction does not fire at all; Pi's own threshold compaction remains in charge.
-
-That backstop only exists while Pi's own automatic compaction is on. When Pi's `compaction.enabled` is `false` (read from the same `settings.json` files, project over global, the project file only when [trusted](#project-trust), and re-read on every check, so turning it off mid-session takes effect at once), the trigger counts raw source tokens after the boundary instead, so a stalled observer cannot leave context growing unchecked. The compaction hook still protects the unobserved entries (catch-up, retention, or delegation to Pi's native summarizer). `/om:status` labels the metric accordingly: "observed" or "estimated" source tokens.
-
-Outside `consolidateWhenIdle`, this trigger does not wait for observer, reflector, or dropper work. Actual compaction summary creation happens later in `session_before_compact`. A non-empty V3 projection is rendered deterministically, without a summarization model; an empty projection delegates to Pi's native summarizer so prior context is not replaced by an empty summary.
-
-Pi's own window-pressure compaction and manual compaction can still happen independently of this proactive trigger. See [`compactionMaxRetainedTokens`](#compactionmaxretainedtokens) for how the hook protects unobserved context in those cases.
-
-## `compactAfterTokensMode` and `compactAfterTokensRatio`
-
-Defaults: `"calibrated"` and `0.68`.
-
-`compactAfterTokensMode` decides which threshold the proactive trigger compares its count against:
-
-- `"calibrated"` uses `compactAfterTokens` directly.
-- `"ratio"` uses `floor(contextWindow * compactAfterTokensRatio)` (at least `1`), where `contextWindow` is the active session model's context window. When the window is unknown (missing, `0`, or negative), it falls back to `compactAfterTokens`.
-
-```json
-{
-  "observational-memory": {
-    "compactAfterTokensMode": "ratio",
-    "compactAfterTokensRatio": 0.5
-  }
-}
-```
-
-With this example, a 1,000,000-token window compacts after about 500,000 counted source tokens and a 200,000-token window after about 100,000. Ratio mode keeps a large-context model from compacting at the default ~81K; lower the ratio for models that advertise a large window but degrade at long range. The mode must be exactly `calibrated` or `ratio`, and the ratio a finite number strictly between `0` and `1`; other values are ignored and the defaults apply. The count itself is unchanged by the mode, and `/om:status` shows the resolved threshold on its `Next compaction` line.
-
-## `compactionMaxRetainedTokens`
-
-Default: derived — `floor(contextWindow * 0.5)` of the active session model, or `60000` when the context window is unknown.
-
-Pi picks the retention boundary (`firstKeptEntryId`) from its own `keepRecentTokens` budget without knowing how far the observer has progressed. When the observer is behind that boundary, every source entry between the observation frontier and Pi's cut would be discarded with no observation describing it. In `session_before_compact` the hook therefore checks for such a gap and, when it finds one:
-
-1. Moves the retention boundary back to the nearest valid cut point at or before the first unobserved entry (that entry itself, or the assistant message whose tool result it is), so those entries stay in context until the observer reaches them. Entries that render nothing for the observer, such as an aborted assistant turn with no content, do not count as unobserved. All recorded observations are folded into the summary; a retained entry that already has an observation is redundant, never lost.
-2. Checks that the estimated source tokens kept this way, plus the rendered memory summary that replaces the folded range, stay within `compactionMaxRetainedTokens`. If they would exceed it, or if the moved boundary would free nothing, or if the compaction is Pi's context-overflow recovery, the hook declines ownership instead and Pi's native summarizer summarizes the pre-cut context. Keep this budget below Pi's own compaction threshold (`contextWindow - reserveTokens`), otherwise Pi compacts again immediately after a hook-owned compaction.
-
-Set this explicitly when the session model advertises a context window that is much larger than the range it can attend to, or when Pi's `reserveTokens` leaves less than half the window for retained context.
-
-## `observationsPoolMaxTokens`
-
-Default: `20000`.
-
-This controls V3's full-fold pressure. During compaction, the extension builds the normal compaction projection: observations whose `coversUpToId` is at or before the fold boundary, with reflection/drop effects held stable from the latest full fold. The fold boundary is Pi's cut, or the newest observation coverage marker when the hook moved the cut back. When the earliest marker past Pi's cut straddles it (it also covers source before the cut), the fold goes through that marker; markers covering only retained source wait for the next compaction. Without a moved cut, the fold boundary never precedes the latest full fold's. If there is no previous full fold, normal compaction includes observations only. If that projection's active observation tokens are at or above `observationsPoolMaxTokens`, compaction performs a full fold through the fold boundary and applies observations, reflections, and drops by coverage marker. Otherwise, it keeps reflection/drop effects stable from the latest full fold and projects only observations through the new fold boundary.
-
-This is not the active observation dropper target and not a scheduling threshold for the reflector. Use `observationsPoolTargetTokens` for dropper active observation maintenance and `reflectAfterTokens` for reflector cadence.
-
-## `observationsPoolTargetTokens`
-
-Default: half of `observationsPoolMaxTokens`.
-
-This controls the folded active observation target used by the dropper. If folded active observation tokens are at or below this target, the dropper has no maintenance work. If they are over target, the dropper can run only after the reflector records non-empty reflections in the same consolidation pass.
-
-With the defaults, `observationsPoolMaxTokens` is `20000` and `observationsPoolTargetTokens` is `10000`. If the active observation pool reaches about `20000` tokens, the dropper computes a maximum count intended to move it back toward about `10000` tokens, but the model may drop fewer or none.
-
-When the dropper runs, it computes how many tokens are over target, converts that token excess to an approximate observation-count maximum using average active observation size, and passes that maximum to the model as a hard upper bound. The model may drop fewer or none, and code still rejects invalid or duplicate candidates.
-
-Dropper input includes deterministic reflection coverage evidence for every observation it is shown: `none` means no current reflection supports the observation id, `partial` means one reflection supports it, and `strong` means two or more reflections support it. Coverage is evidence for the model, not an automatic drop rule. Relevance is importance/resistance rather than an absolute lock: `critical` observations require the strongest evidence, but older covered/superseded critical observations may leave active memory when semantic safety is clear. Dropping does not delete ledger history; known ids remain recallable.
-
-This target does not affect compaction full-fold pressure. Visible compaction pressure remains based on `observationsPoolMaxTokens`.
-
-## `agentMaxTurns`
-
-Default: `16`.
-
-This is the shared nested-agent turn cap for the observer, reflector, and dropper. A turn is one assistant/model response cycle inside the worker's agent loop. The cap is not a token budget and not a literal tool-call counter.
-
-Use lower values to bound background memory-worker cost. Too low can reduce observation coverage or reflection/drop quality.
-
-## `agentMaxTokens`
-
-Default: `32000`.
-
-This is the maximum number of output tokens the extension requests for each memory-agent loop (observer, reflector, dropper). It is always clamped to the model's own `maxTokens` when the model advertises one.
-
-Lower it when the memory model is a local server with a modest context window (for example, a llama.cpp server with a 64K slot). Slot KV is shared between the main session's retained cache and concurrent sub-agent requests, so a request whose combined input and response budget exceeds the window fails with `500 "Context size has been exceeded."` and the affected memory run aborts. Pairing a smaller `agentMaxTokens` (e.g. `8192`) with a low `observerChunkMaxTokens` keeps sub-agent requests inside the window.
-
-## `model`
-
-Default: unset, meaning memory workers use the session model.
-
-Set `model` when you want the observer, reflector, and dropper to use a cheaper or faster model than the main coding agent:
-
-```json
-{
-  "observational-memory": {
-    "model": {
-      "provider": "openrouter",
-      "id": "google/gemma-4-31b-it",
-      "thinking": "low"
-    }
-  }
-}
-```
-
-`id` must be a non-empty string. `provider` is optional: without it, `id` resolves against the current session model's provider. `thinking` is optional. If the configured model is not found in Pi's model registry, the runtime warns and falls back to the current session model; the warning is shown once, and again only after a clean resolution in between. Memory workers accept an API key, OAuth-style auth headers (e.g. `Authorization: Bearer …`), or a provider PiG reports as configured for request-time signing (such as Bedrock or Vertex), so OAuth-authenticated and request-signed providers work without an API key. If no usable model or credentials are available, the relevant background worker skips/fails safely rather than inventing memory.
-
-Workers stream through PiG's model registry, on the same provider runtime as the session's own requests, so they can use any model the session can, including one served by a provider another extension registers. `model` remains optional: set it only when you want cheaper/faster workers than the coding agent. Leaving it unset runs the workers on the session model, which suits a setup with a single provider.
-
-### Choosing the worker model and thinking level
-
-The observer, reflector and dropper summarize and cite; they do not solve problems. A fast, inexpensive model that calls tools reliably is the right default.
-
-* **Tool calling is required.** Each worker answers only through its tool (`record_observations`, `record_reflections`, `drop_observations`). A model that answers in prose instead records nothing.
-* **The context window sets the work size.** When unset, an observer chunk is 20% of the memory model's window (`observerChunkMaxTokens`) and the prior memory each worker sees is 25% (`workerMemoryMaxTokens`). A small window means smaller chunks and less prior memory per call.
-* **`thinking` applies only to reasoning models.** The level is sent only when Pi's model registry marks the model as `reasoning`; on other models it is ignored. `off` sends none, and an unset level means `low`. When the fallback model is active, `fallbackModel.thinking` replaces it.
-* **Start at `low`.** Raise the level only if the observer misses facts you expected it to record, or the reflector or dropper makes poor choices. Higher levels cost tokens and time on every background call.
-* **Slow models have a cost even in the background.** When the observer is behind Pi's cut, the compaction hook runs it synchronously (`compactionCatchUpMaxChunks`), so a slow model delays compaction. With `consolidateWhenIdle`, a run still in flight when you send the next prompt is aborted, and a slow model may rarely finish. An observer that lags also delays proactive compaction, because while Pi's automatic compaction is on the trigger counts only observed source. `/om:status` shows how far behind it is.
-* **Leave `model` unset** to use the session model, for example when the only provider you have is the session's own, or it authenticates by OAuth. Set a separate `model` (and a `fallbackModel`) for cheaper workers, or when the session model is a local server whose capacity the workers would compete for; pair that with `consolidateWhenIdle`.
-
-## `compactionSummaryMaxTokens`
-
-Default: unset. The summary budget is derived from the room the next context has; this setting only caps it.
-
-The rendered memory summary replaces the compacted range in context, so its size decides how much room is left before the next compaction. Without a budget it grows with the ledger: on a long session it reached 17k tokens on a 64k window, more than the context it replaced. The hook sizes the summary from what it already knows rather than from a fixed share of the window:
-
-```
-room   = contextWindow - overheadTokens - max(retainedTokens, compactAfterTokens)
-free   = contextWindow - overheadTokens - retainedTokens
-floor  = min(8000, free / 2)
-budget = min(max(room, floor, 1), compactionSummaryMaxTokens if set)
-```
-
-- `contextWindow` is the active session model's window.
-- `overheadTokens` is what the request carries besides the branch (system prompt, tools): Pi's `tokensBefore` minus the estimate of the branch's context (the source since the latest compaction boundary plus that compaction's summary), or `0` when either is unknown.
-- `retainedTokens` is the estimated source Pi keeps after this compaction's cut.
-- `compactAfterTokens` is the threshold resolved by [`compactAfterTokensMode`](#compactaftertokensmode-and-compactaftertokensratio), the room the conversation gets before the next compaction. The threshold measures source from the cut's first kept entry, so the retained source already counts toward it and only the larger of the two is subtracted.
-
-When every record fits the room, every record is rendered. When the window is unknown there is no room to measure, and the budget is this setting, or `8000` when it is unset. On a window the threshold does not fit, the room is negative for space the context can never reach: the proactive trigger cannot fire before Pi's own threshold, which then governs the next compaction. The floor covers that case: the summary gets `8000` tokens, but never more than half of what the window has left after the overhead and the retained source, so the conversation keeps at least as much room as the summary. For example, a 64k window with the default 81k threshold, about 8k of overhead and 20k retained gets an 8,000-token summary; a 32k window with 8k of overhead and 14k retained gets 5,000. To give a small window a summary sized by the threshold instead, lower it below the window: at 64k, `compactAfterTokens: 40000` (or `ratio` mode with `compactAfterTokensRatio: 0.6`, 38,400) leaves `64000 - 8000 - 40000 = 16000`. The budget never drops below one token; a budget too small for any record makes the hook decline (below). When the cut moved to retain unobserved source, the budget is also capped at [`compactionMaxRetainedTokens`](#compactionmaxretainedtokens) minus the retained source.
-
-The hook reserves at least half of the budget for the newest observations (the chronological record), gives reflections the rest (newest first), lets each side reclaim what the other leaves unused, and discloses what it left out: the tables format ends with an `omitted` table listing each left-out span's date range, count and first id, the lines format with a line stating how many older records were omitted. A record too large for the remaining budget is skipped rather than ending the selection, so a long newest record does not hide shorter older ones. If no record fits at all, the hook declines ownership and Pi's native summarizer runs, instead of writing a summary with instructions and no facts. Omitted records stay in the session ledger, count toward the full memory in `/om:status`, and are shown by `/om:view full`.
-
-The [per-model harness](concepts.md#the-per-model-harness) can give the session model less than this budget: when its memory queries keep asking for records the summary already showed, its profile halves the summary (and doubles it back when they keep asking for records it omitted). The share is applied after this budget is resolved, never goes above it, and never below `8000` (or the budget itself when smaller).
-
-Custom instructions passed with a compaction (by the user or another extension) are appended after the rendered memory, below a `---` separator. They count toward the summary budget, but the memory render always keeps at least half of it.
-
-## `compactionCatchUpMaxChunks`
-
-Default: `2`. Set `0` to disable.
-
-When the background observer is behind Pi's proposed cut, the hook's only other choices are to retain the unobserved tail or to delegate the whole range to Pi's native summarizer. Both cost headroom: retaining keeps raw source in context, and a native summary is prose that Pi rewrites and grows on every compaction (12k tokens after a hundred rounds on a local model) and that can hit the model's output cap. Instead, when observation coverage exists, the hook observes the gap synchronously, up to this many observer chunks, appending coverage for each recorded chunk, and then re-resolves the cut, usually landing on Pi's proposed boundary with a bounded summary.
-
-This runs inside `session_before_compact`, where Pi waits for the hook and no session request is in flight, so the memory model does not compete with the session even when both share one server. Catch-up chunks are sent like background observer runs, with the same request headers and thinking level, and a chunk whose primary model call fails is retried once on `fallbackModel` when one is set. A chunk that records nothing, fails, or is aborted stops the catch-up; the remaining gap is retained or delegated, and nothing is appended for a failed chunk. A chunk the model stops partway through (a failed stream after some observations, or the turn cap) claims coverage only through the last source entry its observations cite. Catch-up reads from the global observation frontier, not from the start of the retained range: a coverage marker claims every source entry before it, so unread source between the frontier and an earlier compaction boundary is included in the catch-up input rather than silently marked as observed. Catch-up is skipped while a background consolidation run is in flight and when the ledger has no observation coverage at all, so an empty memory still delegates to Pi's native summarizer without a model call.
-
-## `workerMemoryMaxTokens`
-
-Default: derived — `floor(contextWindow / 4)` of the resolved memory model, or `16000` when the context window is unknown.
-
-Each observer, reflector, and dropper request carries prior memory so the worker does not repeat itself and can relate new material to old. The ledger grows without limit on long sessions (107 reflections and 121 active observations, about 45k tokens, on one multi-day session), and sending all of it made every worker request exceed a 64k window, which in turn kept the dropper from ever shrinking the ledger. Worker prompts carry a bounded slice: observations get at least half the budget and reflections the rest, newest first, each side reclaiming what the other leaves. The dropper receives the oldest observations that fit instead, since pruning old records is its job, and can drop only those; whether it runs, and the pool figures in its prompt, still measure the whole active pool. With the observer chunk capped at a fifth of the window and `agentMaxTokens` as the output reservation, a worker request stays inside the window.
-
-## `consolidateWhenIdle`
-
-Default: `false`.
-
-By default the observer, reflector, and dropper launch from Pi's `agent_start` and `turn_end` hooks, so they run concurrently with the session's own model calls. That is fine when the memory model has its own capacity. It breaks down when both share one context budget, such as a single local llama.cpp server whose slots draw from one KV pool: a worker request carrying the whole memory plus its output reservation, arriving while the session's request is in flight, exceeds the pool and one side fails with a context-size error — sometimes the session's turn.
-
-With `consolidateWhenIdle: true`:
-
-- Workers launch only from `agent_settled`, after the agent has finished a run and Pi is idle, so their requests never overlap the session's.
-- When a new agent run starts while a worker is still running, the run is aborted. Coverage markers are appended only when a stage succeeds, so an aborted stage leaves the ledger untouched and retries after the next settled event. PiG's extension SDK cannot cancel a model stream, so the extension stops reading the aborted request and discards its result; the provider keeps generating that response until it finishes, which costs its tokens and can overlap the session's next request.
-- Proactive compaction is evaluated after the idle run finishes (or after a run still in flight from an earlier settled event), so it is not starved by memory work sharing the same settled event and never runs beside a worker. When a new agent run aborts the idle run, the check is skipped; the next settled event runs it before launching another run.
-
-The trade-off is that during a long autonomous tool loop the observer does not advance; the compaction hook still protects unobserved context by catching it up, retaining it, or delegating to Pi's native summarizer (see [`compactionMaxRetainedTokens`](#compactionmaxretainedtokens)). Memory catches up while you type.
-
-## `fallbackModel`
-
-Default: unset, meaning there is no fallback and a failed memory model makes the worker skip or fail safely.
-
-Set `fallbackModel` to give the memory workers a second model when the primary one is unavailable:
-
-```json
-{
-  "observational-memory": {
-    "model": {
-      "provider": "anthropic",
-      "id": "claude-haiku-4-5-20251001",
-      "thinking": "low"
-    },
-    "fallbackModel": {
-      "provider": "opencode-go",
-      "id": "deepseek-v4.1-flash",
-      "thinking": "low"
-    }
-  }
-}
-```
-
-The fallback is tried in two places:
-
-1. **Resolution.** When the primary memory model cannot be resolved — it carries no usable credentials (API key, auth headers, or request-time signing), or there is no model at all — the fallback is resolved and used. A configured `model` missing from Pi's registry first falls back to the session model (see [`model`](#model)); the fallback takes over only when that model fails too. The notification names both the primary failure and the fallback that took over; it is shown once, and again only after the primary resolves cleanly in between.
-2. **Runtime.** When a worker stage (observer, reflector, or dropper) fails its model call before recording anything, that one stage is retried once with the fallback model. An observer call that fails after recording some observations keeps them, advances coverage only through the last source entry they cite, and is not retried. The retry is per-stage and per-pass, and it is logged and notified when it starts. The compaction hook's catch-up observer retries the same way. When a reflector retry finds nothing stable, the next pass gives the primary one try at the same memory, without the retry; after that the reflector waits for the memory to change. The try is skipped, and the wait starts at once, when that next pass is already on the fallback: because the primary does not resolve, or because an earlier stage's retry moved the pass onto it.
-
-Once the fallback resolves, it is reused for the rest of the consolidation pass, so later stages do not re-pay a known-broken primary. If the primary model itself resolved through the fallback, no further runtime retry is attempted for that pass.
-
-When `observerChunkMaxTokens` is unset and the fallback advertises a smaller context window than the primary, the observer chunk is sized against the smaller window before the run, so a fallback retry is never handed a prompt sized only for a larger primary. `fallbackModel.thinking`, when set, is the thinking level used for the fallback call.
-
-`id` is required and `provider` optional, exactly as for `model`. A `fallbackModel` identical to the effective primary memory model — the configured `model` when it resolves, otherwise the session model — is rejected as a misconfiguration. A fallback that also fails leaves the existing skip/fail-safe behavior intact: no memory is invented, coverage does not advance, and the failure is surfaced (worker failure notification, `/om:status`, debug log).
-
-## `showWorkerNotifications`
-
-Default: `true`.
-
-When `false`, the extension hides routine observer, reflector, and dropper progress notifications (including deliberate-empty observer info messages). Model fallback/unavailability, worker failures (including observer stream errors), compaction notifications, and explicit `/om:*` command output remain visible.
-
-## `passive`
-
-Default: `false`.
-
-When `true`, the extension does not proactively run the consolidation pipeline (observer, reflector, dropper) or the auto-compaction trigger. Manual/Pi compaction hooks, `/om:status`, `/om:view`, and the `memory` tool remain available. The compaction hook still runs its catch-up observer on unobserved source before a cut, so passive mode does not stop every model call.
-
-Environment override:
-
-```bash
-PI_OBSERVATIONAL_MEMORY_PASSIVE=true pig
-```
-
-Truthy values: `1`, `true`, `yes`, `on`.
-
-Falsy values: `0`, `false`, `no`, `off`.
-
-Unrecognized values are ignored.
-
-## `memoryEngine`
-
-Default: `"v1"`. Read through the trusted path like every other setting: an untrusted project's settings never switch the engine.
-
-[Memory v2](memory-v2.md) is built next to v1 and selected by this setting until it becomes the default. With `"v1"` nothing on this page changes. With `"v2"`, so far (steps 1 to 6 of its order of work, and the past.dev additions of step 7):
-
-* **No requests between compactions.** The observer, reflector and dropper never run, nor do the harness build and revision passes, the require-kind re-ask or the compaction catch-up. The settings that tune them (`observeAfterTokens`, `reflectAfterTokens`, `observerChunkMaxTokens`, `compactionCatchUpMaxChunks`, `consolidateWhenIdle`, `model`, `fallbackModel`, the two pool settings, `compactionMaxRetainedTokens`, `compactAfterTokens` with its mode and ratio, `workerMemoryMaxTokens`, `agentMaxTurns`, `agentMaxTokens`, `showWorkerNotifications`) are read for v1 but have no effect; `/om:status` lists each one set to a valid value. `compactionSummaryMaxTokens` stays an extra cap on the summary budget.
-* **A v1 session carries over.** The first v2 extraction starts after v1's coverage markers and the latest fold boundary (`foldThroughEntryId`), so nothing v1 observed is extracted again, and v1's records and reflections fold as before. When the latest compaction is not one the ledger backs (PiG's own summary, or one from before the extension was installed), the next v2 compaction stores its summary once as one record (origin `host`, citing that compaction's entry): shown whole when it fits the budget, else as an omitted span with its memory query, and offered to level 1, which may restate it under the union rule. At each session start the written v1 instructions are migrated once, with a notice: the observer's and reflector's additions are appended to the `consolidation` instructions as an addition (one generation), and a replace-mode text and the dropper's are retired. Their files stay as they were, since v1 still reads the shared layer.
-* **`/om:status` shows v2's state only:** PiG's threshold and the context against it, whether PiG's auto-compaction is on, the last compaction's level, request count and level-1 failure reason, the records by who added them (code, the model, host summaries, v1's workers), the curated memories live and staged, the harness evidence (compactions counted since the last level-1 offer), the removed settings still set, and whether project settings were read. `/om:view` stays read-only and leaves out the reflections level 1 replaced.
-* **Level 0 records the session by code.** At every turn end, and at a compaction for whatever of the removed range no turn end read, code picks records out of the conversation (user facts, preferences and corrections, the model's words before a tool call, attempts with their outcome, files at their newest state, commits, memory tool notes), with no model request.
-* **Aged tool results are thinned, with no request.** Before each provider request (PiG's `context` event), a tool result that the latest compaction retained and that the model had already answered before it is sent as its level-0 line (tool, key argument, outcome) and the memory query that returns the original (`recall <entry id>`); never the newest round (the results of the last assistant message before the compaction that made tool calls, even when a final reply answered them), never a result that came after the compaction, never a user message, never the result of the memory tool or of a tool the agent defined with it, never a result whose tool call id names another result in the retained tail. Every such result is thinned (a result whose thinned text would not be shorter, or whose call was cut, stays whole), with no stop and no limit; its original stays recallable. Which results are thinned is decided once per compaction, at the first request after it, from the branch up to that compaction and the defined tools as they stand then, and reused for every request until the next compaction, so the request bytes change only at a compaction. The decision is cached in the PiG process: after a restart or `/reload` it is made again at the next request, and if the defined tools changed meanwhile, the bytes change once there. With no compaction yet, nothing is thinned. The session file keeps every original. The extension subscribes to PiG's `context` event only while v2 runs (from the first `agent_start`, `turn_end` or compaction under v2), so under `"v1"` PiG sends it no request context.
-* **Curated memory is staged and checked by code.** A `save` with `quote="..."`, words copied from a user message on the branch (whitespace and case aside; harness markup such as an attached file does not count), is live at once; any other `save` is staged: listed in `saved` (state `staged`) only in the session that staged it, and absent from the always-loaded index. At `agent_settled`, at `session_start` and after level 1, with no request, code promotes a staged memory on evidence: a `feedback ... outcome=helped` whose quote is a user's words, a level-1 citation, or the same name and description staged in another session. A promoted memory enters the index at its next render (session start or after a compaction), never mid-conversation. Staged memories are never deleted automatically. `forget` retires a memory (the file stays, marked `retired`, and the name may be saved again). A level-0 user correction whose subject names a memory (its words are a whole hyphen-separated run of the name, or the reverse) made after the memory's last save or edit flags it: it ranks after every other memory and shows as `flagged` in `saved` and `/om:status` until it is edited; it is never retired, a `pinned: true` memory (set only by the user, in the memory's file) is never flagged, and nothing cools by time. Every memory is checked on every write and load: only the known front-matter fields, and the whole memory as `recall <name>` shows it within one recall page (below).
-* **The memory tool's history and recall.** `history` leaves out the current turn and harness markup (as extraction does; thinking was already left out), lists newest first, and when a search finds nothing says how many entries hold each word. A result cut by its limit leads with `matched N, showing M` and, for `history`, the query for the next older page (`through <first entry left out>`). `recall` pages a text longer than one page (10000 characters, the record content bound) on line boundaries and names the next offset (`recall <id> offset N`, which works under v1 too); `recall <entry id>` leaves thinking out. When the branch has nothing, `history`, `notes` and `recall` read the whole session file, rows from off the branch labelled `(off-path)` in file order.
-* **The extension compacts only with PiG's automatic compaction off** (Pi's `compaction.enabled: false`), where PiG never compacts on its own, at PiG's own threshold: at `agent_settled`, with the agent idle, when the reported context exceeds `contextWindow - reserveTokens`, never while usage is unknown (PiG reports none after a compaction until a response reports usage again). `reserveTokens` is PiG's `compaction.reserveTokens` with the session model's `compaction.modelOverrides` entry applied (16384 when unset), read under project trust like this extension's settings. That compaction is level 0 only. A "Nothing to compact" answer, or PiG rejecting an invalid `compaction.reserveTokens` setting (which the extension reads as unset), suspends the trigger until the branch tip changes. [`compactAfterTokens`](#compactaftertokens) has no effect. `/om:status` shows PiG's threshold and the context against it, and says when auto-compaction is off and only level 0 runs.
-* **Every compaction PiG prepares is owned.** The hook always returns a compaction, never declines to PiG's summarizer and never cancels: overflow, an empty ledger and a budget too small for any record included. It keeps PiG's cut exactly (`firstKeptEntryId`, and the fold boundary equal to it) and makes no model request beyond level 1's one ([`consolidate`](#consolidate)). The summary is the ledger's records under the v2 summary budget (below), in [`memoryFormat`](#settings-reference) with the native layout (a summary format or codec the per-model layer declares is not used under v2 until the harness moves to the new path, step 5 of the order of work); when no record fits or none exists, a minimal brief of the removed range (its opening user request and one `* tool "key arg" (entry id)` line per tool call, thinking and tool bodies dropped); when even that does not fit, or the budget is zero or less, the opening request line and an `omitted` pointer to the whole range, shortened further (the count and first and last ids, then the count alone) until it is no larger than the removed range. Only a range of a token or two can get a larger summary, the fixed line `omitted.`. The brief counts and names the conversation entries removed, not the extension's own bookkeeping entries. A panic while building the summary is recovered into the brief. Custom instructions passed with the compaction go to level 1's input when level 1 runs; at level 0 (level 1 off, skipped or failed) they ride along after the memory when they fit the budget. A summary level 1 shaped does not repeat them, so they never stay in later contexts as a standing directive. Only a cancelled `session_before_compact` request makes the hook answer nothing; a cancelled agent run (a manual `/compact` aborts it) does not.
-
-The v2 summary budget is derived from what PiG reports, with no tuned constants:
+The summary budget is derived from what PiG reports, with no tuned constants:
 
 ```
 removed   = est(entries from the previous boundary up to firstKeptEntryId) + est(previous summary)
@@ -393,21 +83,35 @@ budget    = min(threshold, maxOutputTokens, removed)
 budget    = min(budget, compactionSummaryMaxTokens if set)
 ```
 
-`reserveTokens` and `tokensBefore` come from PiG's compaction preparation (an unknown `reserveTokens` counts as PiG's default, 16384), `contextWindow` and `maxOutputTokens` from the session model (each bound applies only when known), and `headroom` is the largest growth of input usage (input plus cache read and cache write) between the last assistant messages of consecutive runs since the previous compaction, `0` without usage. The headroom comes off PiG's threshold bound only: the output and removed bounds do not depend on the next run's growth. The summary is therefore never larger than what it removed and leaves room for one more run like the largest so far before PiG's threshold. When PiG had no usage to anchor `tokensBefore`, its chars/4 estimate (PiG v0.5.1 `EstimateProjectedContextTokens`) already counts the session's current system message, the prompt, its sections and the tool schemas, so the extension adds no overhead of its own; only a session whose branch records no system message leaves that overhead out of `tokensBefore`.
+`reserveTokens` and `tokensBefore` come from PiG's compaction preparation (an unknown `reserveTokens` counts as PiG's default, 16384), `contextWindow` and `maxOutputTokens` from the session model (each bound applies only when known), and `headroom` is the largest growth of input usage between the last assistant messages of consecutive runs since the previous compaction, `0` without usage. The headroom comes off PiG's threshold bound only. The summary is therefore never larger than what it removed and leaves room for one more run like the largest so far before PiG's threshold.
 
-With [`debugLog`](#debuglog) on, every model request the extension makes logs one `model.request` event (stage, engine, and input, output and cache tokens when the provider reported them; a failed request logs its stage's `stream_error` event with the same fields), under either engine, and each v2 compaction logs `compaction.v2` with its budget inputs, its level and which summary it chose (and `compaction.v2.level1` when level 1 made its request: what it showed, accepted and refused), and a request whose context was thinned logs `thin.v2` with the count.
+Everything the summary leaves out is printed as a `memory` tool query that lists it, so nothing is lost from reach: left-out records stay in the session ledger and are shown by `/om:view full`. Custom instructions passed with a compaction go to level 1's input when level 1 runs; at level 0 they ride along after the memory when they fit the budget.
 
 ## `consolidate`
 
-Default: `true`. Memory v2 only: a compaction may make one level-1 request, in place of PiG's own summarizer requests (which never run, since the hook returns the compaction), never in addition to them. `false` keeps every compaction at level 0, code only.
+Default: `true`. A compaction may make one level-1 request, in place of PiG's own summarizer requests (which never run, since the hook returns the compaction), never in addition to them. `false` keeps every compaction at level 0, code only.
 
-* **One request, never retried.** One completion on the session model with one forced tool, read from that one response. There is no worker model: `model` and `fallbackModel` are not used, so a session model that cannot be resolved (no usable API key, auth headers or request-time signing) skips level 1 rather than trying a second model.
-* **Only when it fits.** `est(system prompt + tool schema + input) + output cap + 4096 <= contextWindow`, where 4096 is PiG's own context safety margin (PiG v0.5.1 `ai/simple_options.go` `contextSafetyTokens`) and the output cap is the model's output limit, else the summary budget. Otherwise level 1 is skipped.
-* **When it runs.** Not on an overflow compaction (recovery is not delayed), not for the extension's own compaction with PiG's auto-compaction off, not in `passive` mode, not when the `session_before_compact` request is already cancelled, and not when the removed range has no level-0 records.
-* **Input.** The removed range (what does not fit stays level 0 only), its level-0 records as candidates, the active records and reflections competing for the next summary, newest first within the summary budget (the older ones as omitted spans with the memory queries that list them, and they cannot be cited), the possible updates between records shown, the subjects shown, the curated memories that apply in the project (staged ones marked), and the compaction's custom instructions. Whatever does not fit is said in the input, each notice's room reserved first. The harness evidence is not part of the input yet (step 5 of the order of work), nor are harness definitions part of the output.
-* **Output, validated by code.** Labels for candidates (kind, relevance, subject, scope, supersedes, outcome), merges, new or replacing reflections, subject aliases, verdicts on listed possible updates, and citations of listed curated memories (a citation needs at least one shown record code picked from a user message, and is the evidence a staged memory needs). A proposal citing an id the input did not show is refused; a merge's sources are set by code to the union of its records' sources; a merge, supersede or replacing reflection that drops a specific of what it replaces is refused, specifics compared as whole items (`30` is not carried by `300`); attempt, file, commit and note records and records with different scopes are never merged; a record is labelled or merged once, never after another proposal superseded it, and never superseded after another proposal replaced it; supersede cycles and cross-scope supersedes are refused; a reflection's supports are only the records whose specifics it carries, read from the record that stands for each (a merged or relabelled one), the supports it takes over from a reflection it replaces included. A label keeps the candidate's origin (its text is unchanged), so a user correction or preference keeps its place in the summary, and it never changes the kind of a correction or preference. A record is dropped only when the record replacing it carries every specific it carries, and a new reflection cites a record only when it carries that record's specifics, so a weak model can improve the memory but never lose a fact from it.
-* **Failure.** No tool call, a stream error, a response cut at the output cap, an abort, or output with nothing valid: the level-0 records and reflections stand, nothing is retried, and the compaction is still returned. A request cancelled while it runs is counted as made (`"aborted": true`).
-* The compaction's `usage` is the request's provider usage (none at level 0), and `/om:status` shows the last compaction's level, its request count, what level 1 recorded, and why it did not run or failed. A request counts once its stream started; a panic after it still reports the request and its usage.
+* **One request, never retried.** One completion on the session model with one forced tool. There is no separate worker model, so a session model that cannot be resolved (no usable API key, auth headers or request-time signing) skips level 1.
+* **Only when it fits.** `est(system prompt + tool schema + input) + output cap + 4096 <= contextWindow`, where 4096 is PiG's own context safety margin (PiG v0.5.1 `ai/simple_options.go` `contextSafetyTokens`). Otherwise level 1 is skipped.
+* **When it runs.** Not on an overflow compaction, not for the extension's own compaction with PiG's auto-compaction off, not in `passive` mode, not when the `session_before_compact` request is already cancelled, and not when the removed range has no level-0 records.
+* **Output, validated by code.** Labels, merges, new or replacing reflections, subject aliases, verdicts on listed possible updates, and citations of listed curated memories. A proposal citing an id the input did not show is refused, and a record is dropped only when the record replacing it carries every specific it carries, so a weak model can improve the memory but never lose a fact from it.
+* **Failure.** No tool call, a stream error, a response cut at the output cap, an abort, or output with nothing valid: the level-0 records and reflections stand, nothing is retried, and the compaction is still returned.
+
+`/om:status` shows the last compaction's level, its request count, what level 1 recorded, and why it did not run or failed. See [memory-v2.md](memory-v2.md) for the full input and validation rules.
+
+## `passive`
+
+Default: `false`.
+
+When `true`, the extension does not extract at turn end, does not make the level-1 request, does not thin requests and does not trigger compactions. The compaction hook still owns every compaction PiG prepares (level 0), and `/om:status`, `/om:view` and the `memory` tool remain available.
+
+Environment override:
+
+```bash
+PI_OBSERVATIONAL_MEMORY_PASSIVE=true pig
+```
+
+Truthy values: `1`, `true`, `yes`, `on`. Falsy values: `0`, `false`, `no`, `off`. Unrecognized values are ignored.
 
 ## `debugLog`
 
@@ -425,90 +129,31 @@ Contexts without a usable session id fall back to the shared global file:
 <agent dir>/observational-memory/debug.ndjson
 ```
 
-Each row includes event metadata such as `sessionId`, `sessionFile`, `runId`, `cwd`, and event-specific `data`. `runId` identifies one consolidation pipeline inside a session file, so you can filter a session log to a single observer/reflector/dropper pass.
+Every model request the extension makes logs one `model.request` event (stage, and input, output and cache tokens when the provider reported them; a failed request logs its stage's `stream_error` event with the same fields). Each compaction logs `compaction.v2` with its budget inputs, its level and which summary it chose (and `compaction.v2.level1` when level 1 made its request: what it showed, accepted and refused), and a request whose context was thinned logs `thin.v2` with the count.
 
-Dropper diagnostics are especially useful when the active observation pool is over target but no drops are appended. For example:
+Debug logs are opt-in local debugging artifacts. Diagnostic events record counts, token totals, ids, file paths and errors rather than memory content, prompts or model responses. Treat debug files as sensitive local artifacts. Debug-log write failures do not change memory behavior.
 
-```bash
-grep '"event":"dropper' ~/.pig/agent/observational-memory/debug/<session-id>.ndjson | tail -n 50
-```
+## Removed settings
 
-Look for `dropper.result`: `no_tool_call` means the model chose not to drop anything, `all_filtered` means proposed ids were unusable, and `selected_nonempty` means usable drops were selected before append handling.
+These settings tuned the background observer, reflector and dropper, the worker models, the pools, the moved cut, the compaction catch-up and the proactive trigger, all removed with the earlier engine. They are ignored; `/om:status` lists each one a settings file still sets to a valid value under "Removed settings, ignored", so you can delete it.
 
-Debug logs are opt-in local debugging artifacts. By default, diagnostic events should record aggregate counts, token totals, ids, file paths, errors, and project details rather than observation/reflection content, prompts, model responses, or raw model-proposed drop ids. Treat debug files as sensitive local artifacts.
+| Removed setting | What replaced it |
+| --- | --- |
+| `observeAfterTokens`, `reflectAfterTokens`, `observerChunkMaxTokens` | Level 0 extraction by code at every turn end. |
+| `consolidateWhenIdle` | Nothing runs between compactions. |
+| `model`, `fallbackModel` | Level 1 uses the session model. While `model` is still set, its value names the layer memory v1 kept the worker's harness definitions in, which is migrated into the session model's (see [memory v2](memory-v2.md), "Migration > Layer definitions"). |
+| `observationsPoolTargetTokens`, `observationsPoolMaxTokens`, `workerMemoryMaxTokens` | The summary budget, derived from PiG. |
+| `compactionMaxRetainedTokens`, `compactionCatchUpMaxChunks` | The hook keeps PiG's exact cut. |
+| `compactAfterTokens`, `compactAfterTokensMode`, `compactAfterTokensRatio` | PiG's own threshold. |
+| `agentMaxTurns`, `agentMaxTokens` | One request per compaction, capped by the model's output limit. |
+| `showWorkerNotifications` | No workers. |
+| `memoryEngine` | v2 is the only engine; `"v1"` is ignored. |
 
-Debug-log write failures do not change memory behavior.
-
-## Migrating from V2
-
-V3 is not backwards compatible with V2 settings. Old keys are silently ignored and do not act as aliases.
-
-| V2 setting | V3 setting | Migration note |
-| --- | --- | --- |
-| `observationThresholdTokens` | `observeAfterTokens` | Rename. Same rough observer-cadence role. |
-| `compactionThresholdTokens` | `compactAfterTokens` | Rename. Same rough proactive-compaction role. |
-| `reflectionThresholdTokens` | `reflectAfterTokens`, `observationsPoolMaxTokens`, and/or `observationsPoolTargetTokens` | Split. Use `reflectAfterTokens` for reflector cadence, `observationsPoolMaxTokens` for compaction full-fold pressure, and `observationsPoolTargetTokens` for dropper active observation maintenance. |
-| `compactionModel` | `model` | Move `{ provider, id }` under `model`. |
-| `thinkingLevel` | `model.thinking` | Move under `model`. |
-| `observerMaxTurnsPerRun` | `agentMaxTurns` | Replace with one shared cap. |
-| `reflectorMaxTurnsPerPass` | `agentMaxTurns` | Replace with one shared cap. |
-| `prunerMaxTurnsPerPass` | `agentMaxTurns` | Replace with one shared cap; V3 calls the role the dropper. |
-| `compactionMaxToolCalls` | none | Remove. No V3 replacement. |
-| `passive` | `passive` | Keep if desired. |
-| `debugLog` | `debugLog` | Keep if desired. |
-
-Old V2 memory entries and old V2 compaction details are ignored by V3. Start a new clean session after upgrading to V3 so old visible summaries and old memory formats do not confuse the transition.
-
-## Tuning recipes
-
-### Lower background cost
-
-```json
-{
-  "observational-memory": {
-    "observeAfterTokens": 20000,
-    "reflectAfterTokens": 50000,
-    "agentMaxTurns": 8,
-    "model": { "provider": "openrouter", "id": "a-cheaper-model", "thinking": "off" }
-  }
-}
-```
-
-Tradeoff: fewer background model calls, but memory updates lag longer, observation chunks are larger, and reflection/drop cleanup happens less often.
-
-### More responsive memory
-
-```json
-{
-  "observational-memory": {
-    "observeAfterTokens": 750,
-    "reflectAfterTokens": 3000,
-    "agentMaxTurns": 16,
-    "model": { "provider": "openrouter", "id": "a-fast-model", "thinking": "low" }
-  }
-}
-```
-
-Tradeoff: more background model calls.
-
-### Disable proactive work temporarily
-
-```json
-{
-  "observational-memory": {
-    "passive": true
-  }
-}
-```
-
-Or for one shell:
-
-```bash
-PI_OBSERVATIONAL_MEMORY_PASSIVE=1 pig
-```
+Sessions and stores written by the earlier engine still load: its records, reflections, drops, coverage markers and folded compactions fold as before, the next extraction starts after its coverage, and its written layer instructions are migrated once at session start.
 
 ## See also
 
 - [concepts.md](concepts.md) — vocabulary and mental model.
 - [how-it-works.md](how-it-works.md) — lifecycle and data shapes.
-- [../README.md](../README.md) — quick start and V2 migration summary.
+- [memory-v2.md](memory-v2.md) — the design.
+- [../README.md](../README.md) — quick start.

@@ -7,9 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
@@ -17,7 +15,10 @@ import (
 )
 
 // The remedy catalogue (docs/memory-interface.md, section 7). It is closed: a rule names one
-// of these, and nothing else is applied.
+// of these, and nothing else is applied. Memory v1's remedies (prompt-line, require-kind,
+// block-link, protect-kind and split-chunk acted on its worker passes) stay in the catalogue
+// so rules and remedy definitions v1 wrote still parse, but nothing applies them: only
+// V2Remedies run.
 const (
 	// RemedyPromptLine adds the rule's text as a line of the worker's system prompt for the
 	// stage its detector judges.
@@ -40,6 +41,11 @@ const (
 	// RemedyLongSpec makes the profile carry the long spec, as section 6's syntax evidence would.
 	RemedyLongSpec = "long-spec"
 )
+
+// ProtectKindMaxFullness is the most a protect-kind rule's fullness may be: memory v1's
+// dropper floor (pool tokens over target), kept so the protect-kind rules v1 wrote parse with
+// the bounds they were written under.
+const ProtectKindMaxFullness = 2.0
 
 // Remedies lists the catalogue.
 var Remedies = []string{RemedyPromptLine, RemedyRequireKind, RemedyKeepHead, RemedyBlockLink, RemedyProtectKind, RemedySplitChunk, RemedySwitchCodec, RemedyLongSpec}
@@ -82,47 +88,6 @@ var catalogueText = map[string]string{
 	DetectDecodeFailure:             "Write the rows table exactly in the format the user message describes, or pass the observations array instead.",
 }
 
-// stageOf is the worker stage a detector judges: where a prompt-line answering it is read.
-func stageOf(detector string) string {
-	if detector == DetectDroppedThenQueried {
-		return StageDropper
-	}
-	return StageObserver
-}
-
-// StageOfRemedy is the worker stage a remedy definition acts in, which is the stage whose pass
-// proves it once held (docs/memory-interface.md, section 8): a rule acts where its detector
-// is judged (a protect-kind or prompt-line rule for dropped-then-queried acts in the dropper),
-// and a catalogue whose every entry answers only dropper detectors acts in the dropper; every
-// other remedy definition, and one that does not parse, in the observer.
-func StageOfRemedy(d layer.Definition) string {
-	if d.Kind != layer.KindRemedy {
-		return StageObserver
-	}
-	if containsString(Remedies, d.Name) {
-		entries, err := ParseCatalogue(d.Name, d.Text)
-		if err != nil || len(entries) == 0 {
-			return StageObserver
-		}
-		for _, e := range entries {
-			if stageOf(e.Detector) != StageDropper {
-				return StageObserver
-			}
-		}
-		return StageDropper
-	}
-	if r, err := parse(d.Kind+"/"+d.Name, d.Text); err == nil {
-		return stageOf(r.Detector)
-	}
-	return StageObserver
-}
-
-// ActsOnProfile reports whether remedy changes a model's profile (its codec or spec) rather
-// than what its memory-worker passes record: the profile also shapes the memory tool's calls.
-func ActsOnProfile(remedy string) bool {
-	return remedy == RemedySwitchCodec || remedy == RemedyLongSpec
-}
-
 // Answers reports whether remedy can answer detector.
 func Answers(remedy, detector string) bool { return containsString(answers[remedy], detector) }
 
@@ -132,7 +97,7 @@ func Answers(remedy, detector string) bool { return containsString(answers[remed
 //   - prompt-line needs one line of at most MaxTextChars characters;
 //   - require-kind needs a known kind (default assistant);
 //   - protect-kind needs a known kind or Unclassified and a fullness above 0 and at most
-//     agents.DropFloorMaxFullness: above it memory pressure wins (the pool must stay bounded,
+//     ProtectKindMaxFullness: above it memory pressure wins (the pool must stay bounded,
 //     or the summary the room budget caps would be crowded by records no drop can remove),
 //     the same bound the dropper's specifics floor respects.
 //
@@ -172,10 +137,10 @@ func Check(r Rule) (Rule, error) {
 			return r, fmt.Errorf("kind %q must be one of %s or %s", r.Kind, kindList(), Unclassified)
 		}
 		if r.Fullness == 0 {
-			r.Fullness = agents.DropFloorMaxFullness
+			r.Fullness = ProtectKindMaxFullness
 		}
-		if r.Fullness < 0 || r.Fullness > agents.DropFloorMaxFullness {
-			return r, fmt.Errorf("refused: protect-kind fullness %s would keep the pool from being pruned past %s times its target, where memory pressure must win so the memory stays bounded", formatFullness(r.Fullness), formatFullness(agents.DropFloorMaxFullness))
+		if r.Fullness < 0 || r.Fullness > ProtectKindMaxFullness {
+			return r, fmt.Errorf("refused: protect-kind fullness %s would keep the pool from being pruned past %s times its target, where memory pressure must win so the memory stays bounded", formatFullness(r.Fullness), formatFullness(ProtectKindMaxFullness))
 		}
 	default:
 		if r.Kind != "" || r.Fullness != 0 {
@@ -195,23 +160,7 @@ func kindList() string {
 	return strings.Join(out, ", ")
 }
 
-// harnessRule is the catalogue rule the harness wrote for detector with remedy before the
-// catalogue was data; kinds are the kinds the evidence flagged (protect-kind protects the most
-// frequent one). The seed catalogue (CatalogueSeeds) declares exactly these parameters, and
-// Catalog.Rule, which the harness now uses, reproduces them from it.
-func harnessRule(detector, remedy string, kinds map[string]int) Rule {
-	r := Rule{Detector: detector, Remedy: remedy, Proposer: ProposerHarness}
-	switch remedy {
-	case RemedyPromptLine:
-		r.Text = catalogueText[detector]
-	case RemedyRequireKind:
-		r.Kind = string(kindAssistant)
-	case RemedyProtectKind:
-		r.Kind, r.Fullness = mostFrequent(kinds), agents.DropFloorMaxFullness
-	}
-	return r
-}
-
+// mostFrequent is the most frequent kind of counts (Unclassified when none), ties broken by name.
 func mostFrequent(counts map[string]int) string {
 	best, bestN := Unclassified, 0
 	keys := make([]string, 0, len(counts))
@@ -257,43 +206,6 @@ func (a Active) Has(remedy string) bool {
 		}
 	}
 	return false
-}
-
-// PromptLines are the prompt-line texts for stage's worker, in rule order, each once.
-func (a Active) PromptLines(stage string) []string {
-	out := []string{}
-	for _, r := range a.Rules {
-		if r.Remedy == RemedyPromptLine && stageOf(r.Detector) == stage && !containsString(out, r.Text) {
-			out = append(out, r.Text)
-		}
-	}
-	return out
-}
-
-// RequiredKind is the kind a require-kind rule asks for, and whether one applies.
-func (a Active) RequiredKind() (string, bool) {
-	for _, r := range a.Rules {
-		if r.Remedy == RemedyRequireKind {
-			return r.Kind, true
-		}
-	}
-	return "", false
-}
-
-// SplitChunk is the observer chunk cap for the model: halved when a split-chunk rule applies
-// (once, however many do), never below 1 token, so the serializer still takes the first entry
-// (as an excerpt when it is larger) and coverage keeps moving.
-func (a Active) SplitChunk(maxTokens int) int {
-	if !a.Has(RemedySplitChunk) || maxTokens <= 0 {
-		return maxTokens
-	}
-	return max(1, maxTokens/2)
-}
-
-// RequireInstruction is the catalogue text of a require-kind re-ask over the flagged entries.
-func RequireInstruction(kind string, flagged []string) string {
-	return "A memory rule asks for one more look at these source entries, which no observation cites although they add specifics the user did not give: " + strings.Join(flagged, ", ") +
-		". Record a kind=" + kind + " observation for each one that has something worth remembering, with the distinguishing details the assistant added in the content and citing only these ids; do not repeat what the user said. Record nothing for an entry with nothing worth keeping."
 }
 
 // KeepHeadChars bounds a keep-head note's content: the window the memory tool's history source
@@ -377,62 +289,6 @@ func opening(text string) string {
 		head = strings.TrimSpace(string(r[:KeepHeadChars])) + "…"
 	}
 	return head
-}
-
-// BlockLinks is the block-link remedy: it removes from notes every supersedes link
-// CrossScopeSupersedes flags against known, and returns how many it removed. It only removes
-// links, so a blocked link leaves both records active.
-func BlockLinks(notes, known []ledger.Observation) ([]ledger.Observation, int) {
-	flagged := map[string]bool{}
-	for _, link := range CrossScopeSupersedes(notes, known) {
-		flagged[link] = true
-	}
-	if len(flagged) == 0 {
-		return notes, 0
-	}
-	out := make([]ledger.Observation, len(notes))
-	blocked := 0
-	for i, o := range notes {
-		var keep []string
-		for _, target := range o.Supersedes {
-			if flagged[o.ID+">"+target] {
-				blocked++
-				continue
-			}
-			keep = append(keep, target)
-		}
-		o.Supersedes = keep
-		out[i] = o
-	}
-	return out, blocked
-}
-
-// Protect is the protect-kind remedy: it removes from dropped the records of every protected
-// kind while the pool's fullness is at or below that rule's fullness, and returns the drops
-// that remain and the ids it kept. Above the fullness memory pressure wins.
-func (a Active) Protect(dropped []string, pool []ledger.Observation, fullness float64) ([]string, []string) {
-	protected := map[string]bool{}
-	for _, r := range a.Rules {
-		if r.Remedy == RemedyProtectKind && fullness <= r.Fullness {
-			protected[r.Kind] = true
-		}
-	}
-	if len(protected) == 0 {
-		return dropped, nil
-	}
-	kinds := map[string]string{}
-	for _, o := range pool {
-		kinds[o.ID] = kindName(o.Kind)
-	}
-	remaining, kept := []string{}, []string{}
-	for _, id := range dropped {
-		if kind, ok := kinds[id]; ok && protected[kind] {
-			kept = append(kept, id)
-			continue
-		}
-		remaining = append(remaining, id)
-	}
-	return remaining, kept
 }
 
 // ParseFullness reads a protect-kind fullness parameter.

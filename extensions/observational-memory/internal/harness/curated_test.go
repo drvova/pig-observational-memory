@@ -10,30 +10,19 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
-func v2Config() config.Config {
-	cfg := config.Defaults
-	cfg.MemoryEngine = config.EngineV2
-	return cfg
-}
+func v2Config() config.Config { return config.Defaults }
 
-// Under v2 the memory tool reads the session file when the branch has nothing, labelling the
-// rows off-path; under v1 it does not. No model request is made either way.
-func TestRunMemoryFallsBackToTheSessionFileUnderV2(t *testing.T) {
+// The memory tool reads the session file when the branch has nothing, labelling the rows
+// off-path. No model request is made.
+func TestRunMemoryFallsBackToTheSessionFile(t *testing.T) {
 	counter := tf.CountRequests(t)
 	h, _, m := session(t)
 	h.SessionEntries = append(append([]ledger.Entry{}, h.Entries...), tf.RawMessage("o1", "The kiln fires at 900C."))
 	h.Entries = append(h.Entries, tf.RawMessage("u9", "kiln?"))
-	cfg := config.Defaults
-	m.Config = func(host.ToolHost) config.Config { return cfg }
-	if r := m.RunMemory(h, `history | search "900C"`); r.IsError || strings.Contains(r.Text, "o1") {
-		t.Fatalf("v1 history %q", r.Text)
-	}
-	cfg = v2Config()
 	if r := m.RunMemory(h, `history | search "900C"`); r.IsError || !strings.Contains(r.Text, "o1 (off-path)") {
 		t.Fatalf("v2 history %q", r.Text)
 	}
@@ -56,7 +45,7 @@ func TestSettleCuratedWithoutRequests(t *testing.T) {
 	)
 	cfg := v2Config()
 	store, ok := harness.StoreOf(h, cfg)
-	if !ok || !store.V2 {
+	if !ok || store.Layer().Engine != curated.EngineV2 {
 		t.Fatalf("a v2 store: %+v %v", store, ok)
 	}
 	store.Now = func() time.Time { return time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC) }
@@ -92,9 +81,6 @@ func TestSettleCuratedWithoutRequests(t *testing.T) {
 	}
 	if status := strings.Join(harness.CuratedStatusLines(h, cfg), "\n"); !strings.Contains(status, "Refused by the validator, so not loaded (1; edit within it or forget): tagged (") || !strings.Contains(status, "tags") {
 		t.Fatalf("status:\n%s", status)
-	}
-	if lines := harness.CuratedStatusLines(h, config.Defaults); lines != nil {
-		t.Fatalf("v1 status lines %v", lines)
 	}
 	if counter.Total() != 0 {
 		t.Fatalf("the evidence check made %d requests", counter.Total())

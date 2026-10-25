@@ -212,7 +212,8 @@ func TestBeforeAgentStartFiltersDefinedTools(t *testing.T) {
 	define(t, h, m, `define pick = recall $input "One record"`)
 	// pick keeps erroring for p/m only (its probation, counted across models, is untouched).
 	for i := 0; i < harness.MinEvidence; i++ {
-		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDefined, Tool: "pick", Outcome: curated.OutcomeError})
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDefined, Tool: "pick", Outcome: curated.OutcomeError, Engine: curated.EngineV2})
+		compacted(store, "p/m")
 	}
 	// The user deactivated kept on their own.
 	h.Active = []string{"read", memquery.ToolName, "lookup", "bakes", "pick"}
@@ -263,12 +264,13 @@ func TestBeforeAgentStartFiltersDefinedTools(t *testing.T) {
 // No ledger can make the harness deactivate the memory tool or another extension's tool.
 func TestBadProfileKeepsTheMemoryTool(t *testing.T) {
 	h, store, m := session(t)
-	for _, tool := range []string{memquery.ToolName, "lookup", "read"} {
-		for i := 0; i < 10; i++ {
-			_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDefined, Tool: tool, Outcome: curated.OutcomeError})
+	for i := 0; i < 10; i++ {
+		for _, tool := range []string{memquery.ToolName, "lookup", "read"} {
+			_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDefined, Tool: tool, Outcome: curated.OutcomeError, Engine: curated.EngineV2})
 		}
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100})
 	}
-	p := harness.ProfileFor(h, configOn(), h.Model)
+	p := profileFor(h, configOn(), h.Model)
 	if !p.ToolDisabled(memquery.ToolName) {
 		t.Fatal("the test needs a profile that disables the memory tool's name")
 	}
@@ -291,6 +293,7 @@ func TestMemoryDescriptionFollowsProfile(t *testing.T) {
 	}
 	for i := 0; i < harness.MinEvidence; i++ {
 		m.RunMemory(h, "notes |")
+		compacted(store, "p/m")
 	}
 	m.BeforeAgentStart(h)
 	spec, ok := h.RegisteredSpec(memquery.ToolName)
@@ -301,14 +304,15 @@ func TestMemoryDescriptionFollowsProfile(t *testing.T) {
 	if len(h.Registered) != 1 {
 		t.Fatalf("re-registered %d times", len(h.Registered))
 	}
-	if events, _ := store.ModelEvents("p/m"); len(events) != harness.MinEvidence || !events[0].Syntax {
+	if events, _ := store.ModelEvents("p/m"); len(events) != 2*harness.MinEvidence || !events[0].Syntax || events[0].Engine != curated.EngineV2 {
 		t.Fatalf("events %+v", events)
 	}
 }
 
 // Every memory call is counted: ok, error (syntax or not), empty, shown, omitted.
 func TestRunMemoryRecordsOutcomes(t *testing.T) {
-	h, store, m := session(t, compaction(t, obsBake, obsShop))
+	// A later user message, so the earlier turn's text is history, not the current turn.
+	h, store, m := session(t, compaction(t, obsBake, obsShop), tf.RawMessage("u9", "and now?"))
 	m.IndexShown = func() []string { return nil }
 	queries := []struct{ query, outcome, target string }{
 		{`history | search "sourdough"`, curated.OutcomeOK, ""},
@@ -349,18 +353,20 @@ func TestRunMemoryRecordsOutcomes(t *testing.T) {
 // recall fetches the evidence behind a record the summary showed, as the tool's guidelines
 // ask: recalls of shown records never shrink the summary, while table queries for them do.
 func TestRecallOfShownRecordsKeepsTheSummary(t *testing.T) {
-	h, _, m := session(t, compaction(t, obsBake, obsShop))
+	h, store, m := session(t, compaction(t, obsBake, obsShop))
 	m.IndexShown = func() []string { return nil }
 	for i := 0; i < 2*harness.MinEvidence; i++ {
 		m.RunMemory(h, "recall "+obsBake)
+		compacted(store, "p/m")
 	}
-	if p := harness.ProfileFor(h, configOn(), h.Model); p.SummaryHalvings != 0 {
+	if p := profileFor(h, configOn(), h.Model); p.SummaryHalvings != 0 {
 		t.Fatalf("recalls halved the summary: %+v", p.Switches)
 	}
 	for i := 0; i < harness.MinEvidence; i++ {
 		m.RunMemory(h, "notes | where subject=baking")
+		compacted(store, "p/m")
 	}
-	if p := harness.ProfileFor(h, configOn(), h.Model); p.SummaryHalvings != 1 {
+	if p := profileFor(h, configOn(), h.Model); p.SummaryHalvings != 1 {
 		t.Fatalf("queries for shown records did not halve it: %+v", p.Switches)
 	}
 }
@@ -479,29 +485,20 @@ func TestRegisterStoredReportsRefusedMigration(t *testing.T) {
 	}
 }
 
-// Under memoryEngine v2 the memory tool's recall lists the reflections citing a note
-// (memquery.Env.CitedBy); under v1 recall reads back as before.
-func TestRunMemoryCitedByUnderV2(t *testing.T) {
+// The memory tool's recall lists the reflections citing a note (memquery.Env.CitedBy).
+func TestRunMemoryCitedBy(t *testing.T) {
 	h, _, m := session(t, tf.ReflectionsRecordedEntry("rf", []ledger.Reflection{tf.Reflection("ffffffffff01", []string{obsBake}, func(r *ledger.Reflection) {
 		r.Content = "User bakes sourdough."
 	})}, "u1"))
-	cfg := config.Defaults
-	m.Config = func(host.ToolHost) config.Config { return cfg }
-	if r := m.RunMemory(h, "recall "+obsBake); r.IsError || len(r.Details.CitedBy) != 0 {
-		t.Fatalf("v1 recall: %+v", r)
-	}
-	cfg.MemoryEngine = config.EngineV2
 	if r := m.RunMemory(h, "recall "+obsBake); r.IsError || len(r.Details.CitedBy) != 1 || !strings.Contains(r.Text, "[ffffffffff01] User bakes sourdough.") {
 		t.Fatalf("v2 recall: %s %+v", r.Text, r.Details.CitedBy)
 	}
 }
 
-// Under memoryEngine v2 a defined tool runs its query as the memory tool does (memquery.Env.V2):
-// its history leaves out the current turn, so the request that called it is never its own hit.
-func TestRunDefinedUnderV2(t *testing.T) {
+// A defined tool runs its query as the memory tool does (memquery.Env.ToolCall): its history
+// leaves out the current turn, so the request that called it is never its own hit.
+func TestRunDefinedAsAToolCall(t *testing.T) {
 	h, _, m := session(t, tf.RawMessage("u2", "Which sourdough day did I name?"))
-	cfg := config.Defaults
-	m.Config = func(host.ToolHost) config.Config { return cfg }
 	define(t, h, m, `define find-history = history | search $input "Search the history"`)
 	ids := func() string {
 		r := m.RunDefined(h, "find-history", "sourdough")
@@ -510,11 +507,13 @@ func TestRunDefinedUnderV2(t *testing.T) {
 		}
 		return r.Text
 	}
-	if text := ids(); !strings.Contains(text, "u2") {
-		t.Fatalf("v1 history lists the current turn as before: %s", text)
-	}
-	cfg.MemoryEngine = config.EngineV2
 	if text := ids(); strings.Contains(text, "u2") || !strings.Contains(text, "u1") {
 		t.Fatalf("v2 history leaves the current turn out: %s", text)
 	}
+}
+
+// compacted records one compaction of model: the end of an evidence unit, after which the
+// profile applies the events counted since the previous one.
+func compacted(store curated.Store, model string) {
+	_ = store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100})
 }

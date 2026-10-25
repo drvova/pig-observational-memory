@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -22,7 +21,7 @@ var consolidateTool = agents.Tool{
 }
 
 func singleConfig(model map[string]any) agents.SingleRequestConfig {
-	return agents.SingleRequestConfig{Stage: "consolidate", Engine: config.EngineV2, Model: model, MaxTokens: 1000, ThinkingLevel: "low"}
+	return agents.SingleRequestConfig{Stage: "consolidate", Model: model, MaxTokens: 1000, ThinkingLevel: "low"}
 }
 
 // One completion, whatever the response: a tool call, two tool calls, text, a wrong tool, a
@@ -59,7 +58,7 @@ func TestSingleRequestMakesExactlyOneRequest(t *testing.T) {
 			if !result.Made {
 				t.Fatal("a request whose stream started is not counted as made")
 			}
-			if rec.Calls() != 1 || counter.Total() != 1 || counter.Stage("consolidate") != 1 || counter.Engine(config.EngineV2) != 1 {
+			if rec.Calls() != 1 || counter.Total() != 1 || counter.Stage("consolidate") != 1 {
 				t.Fatalf("calls %d, counted %v", rec.Calls(), counter.ByStage())
 			}
 			if !reflect.DeepEqual(result.Arguments, c.wantArgs) {
@@ -124,24 +123,6 @@ func TestSingleRequestForcesTheTool(t *testing.T) {
 		}
 		if tools, _ := request["tools"].([]any); len(tools) != 1 {
 			t.Fatalf("%s: %d tools offered", c.api, len(tools))
-		}
-	}
-}
-
-// Every worker loop request goes through the same call site, is counted per stage, and is
-// labelled with the engine its WorkerArgs carry, never with a default: a v1 worker running
-// under v2 reports v2, and one whose caller set no engine reports "".
-func TestLoopRequestsAreCounted(t *testing.T) {
-	for _, engine := range []string{config.EngineV1, config.EngineV2, ""} {
-		counter := tf.CountRequests(t)
-		rec := &tf.StreamRecorder{Replies: []map[string]any{dropCall("aaaaaaaaaaaa"), tf.AssistantText("done")}}
-		args := dropperArgs(rec, tf.Model("p", "m"))
-		args.Engine = engine
-		if _, err := agents.RunDropper(context.Background(), args); err != nil {
-			t.Fatal(err)
-		}
-		if rec.Calls() == 0 || counter.Total() != rec.Calls() || counter.Stage("dropper") != rec.Calls() || counter.Engine(engine) != rec.Calls() {
-			t.Fatalf("engine %q: counted %v for %d calls", engine, counter.ByStage(), rec.Calls())
 		}
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
@@ -157,7 +156,7 @@ type CatalogueEntry struct {
 	// Kind is require-kind's kind, or protect-kind's ("" protects the kind the evidence
 	// flagged most).
 	Kind string
-	// Fullness is protect-kind's fullness (0 is agents.DropFloorMaxFullness).
+	// Fullness is protect-kind's fullness (0 is ProtectKindMaxFullness).
 	Fullness float64
 	// Text is prompt-line's line.
 	Text string
@@ -168,7 +167,7 @@ type CatalogueEntry struct {
 }
 
 // catalogueSeed is remedy's seed: its entries in Catalogue, with the parameters the harness
-// rules carried before the layer (harnessRule).
+// rules carried before the layer.
 func catalogueSeed(remedy string) string {
 	t := tables.Table{Name: CatalogueTable, Fields: CatalogueColumns, Rows: [][]string{}}
 	for _, detector := range Detectors {
@@ -345,7 +344,7 @@ func (c Catalog) Rule(detector, remedy string, kinds map[string]int) Rule {
 			r.Kind = mostFrequent(kinds)
 		}
 		if r.Fullness == 0 {
-			r.Fullness = agents.DropFloorMaxFullness
+			r.Fullness = ProtectKindMaxFullness
 		}
 	}
 	return r

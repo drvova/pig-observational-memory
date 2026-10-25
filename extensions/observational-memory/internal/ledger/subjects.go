@@ -2,7 +2,6 @@ package ledger
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -458,46 +457,6 @@ func CanonicalScope(scope string, c Canonical) string {
 		return c.ExtraScope
 	}
 	return scope + "; " + c.ExtraScope
-}
-
-// SubjectCount is a canonical subject with the number of notes grouped under it.
-type SubjectCount struct {
-	Subject string
-	Count   int
-}
-
-// Line renders "subject: count", the form the observer's prompt lists.
-func (s SubjectCount) Line() string {
-	return s.Subject + ": " + strconv.Itoa(s.Count)
-}
-
-// CountCanonicalSubjects counts observations per canonical subject, most used first, then by
-// subject; observations without a subject are not counted.
-func CountCanonicalSubjects(observations []Observation) []SubjectCount {
-	return CountCanonicalSubjectsWithAliases(observations, nil)
-}
-
-// CountCanonicalSubjectsWithAliases is CountCanonicalSubjects with the subjects canonical
-// under aliases (CanonicalSubjectsWithAliases).
-func CountCanonicalSubjectsWithAliases(observations []Observation, aliases []SubjectAlias) []SubjectCount {
-	canonical := ObservationSubjectsWithAliases(observations, aliases)
-	counts := map[string]int{}
-	for _, o := range observations {
-		if c, ok := canonical[o.Subject]; ok {
-			counts[c.Subject]++
-		}
-	}
-	out := make([]SubjectCount, 0, len(counts))
-	for s, n := range counts {
-		out = append(out, SubjectCount{Subject: s, Count: n})
-	}
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].Count != out[b].Count {
-			return out[a].Count > out[b].Count
-		}
-		return out[a].Subject < out[b].Subject
-	})
-	return out
 }
 
 // SubjectInText is the canonical subject a text names among the subjects already in the

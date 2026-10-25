@@ -224,7 +224,7 @@ func TestSchemaFieldShadowedByLevelZeroField(t *testing.T) {
 			o.SourceEntryIDs, o.Content, o.Fields = []string{"s1"}, "Ticket is open.", map[string]string{"status": "open"}
 		})}, "s1"),
 	}
-	table := notesTable(t, Env{Entries: entries, V2: true}, "notes")
+	table := notesTable(t, Env{Entries: entries, ToolCall: true}, "notes")
 	if v, _ := cell(t, table, "c9bbbbbbbbbb", shadowedFieldPrefix+FieldStatus); v != "open" {
 		t.Errorf("schema_status = %q, fields %v", v, table.Fields)
 	}

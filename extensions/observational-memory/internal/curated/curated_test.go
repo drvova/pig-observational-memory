@@ -46,7 +46,7 @@ func TestSaveGetEditForget(t *testing.T) {
 	if err := s.Forget("prefers-tabs", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Get("prefers-tabs"); err != ErrNotFound {
+	if _, err := s.GetIn("prefers-tabs", ""); err != ErrNotFound {
 		t.Fatalf("forgotten memory still readable: %v", err)
 	}
 }
@@ -143,7 +143,8 @@ func names(ms []Memory) string {
 }
 
 func TestWrites(t *testing.T) {
-	c := Call{Store: testStore(t), Project: "/repo", Source: "s1"}
+	userSaid := func(string) bool { return true }
+	c := Call{Store: testStore(t), Project: "/repo", Source: "s1", UserEvidence: userSaid}
 	run := func(op string, args map[string]string) string {
 		t.Helper()
 		text, err := c.Run(op, args)
@@ -152,7 +153,7 @@ func TestWrites(t *testing.T) {
 		}
 		return text
 	}
-	if got := run(OpSave, map[string]string{"name": "uses-pnpm", "type": "project", "description": "This repo uses pnpm.", "scope": "project"}); !strings.Contains(got, "Saved memory uses-pnpm [project] (this project)") {
+	if got := run(OpSave, map[string]string{"name": "uses-pnpm", "type": "project", "description": "This repo uses pnpm.", "scope": "project", "quote": "we use pnpm in this repo"}); !strings.Contains(got, "Saved memory uses-pnpm [project] (this project)") {
 		t.Fatalf("save: %s", got)
 	}
 	if got := run(OpSave, map[string]string{"name": "uses-pnpm", "type": "project", "description": "dup", "scope": "project"}); !strings.HasPrefix(got, "ERR") || !strings.Contains(got, "edit name=uses-pnpm") {
@@ -296,9 +297,10 @@ func TestDefineRefusals(t *testing.T) {
 
 func TestProjectScopedMemoriesStayInTheirProject(t *testing.T) {
 	s := testStore(t)
-	here := Call{Store: s, Project: "/repo/a"}
-	there := Call{Store: s, Project: "/repo/b"}
-	if _, err := here.Run(OpSave, map[string]string{"name": "local", "type": "project", "description": "Uses pnpm.", "scope": "project"}); err != nil {
+	userSaid := func(string) bool { return true }
+	here := Call{Store: s, Project: "/repo/a", UserEvidence: userSaid}
+	there := Call{Store: s, Project: "/repo/b", UserEvidence: userSaid}
+	if _, err := here.Run(OpSave, map[string]string{"name": "local", "type": "project", "description": "Uses pnpm.", "scope": "project", "quote": "this repo uses pnpm"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, op := range []string{OpForget, OpFeedback} {
@@ -312,7 +314,7 @@ func TestProjectScopedMemoriesStayInTheirProject(t *testing.T) {
 	if _, err := there.Run(OpEdit, map[string]string{"name": "local", "body": "x"}); err == nil {
 		t.Fatal("edit reached a memory scoped to another project")
 	}
-	if _, err := there.Run(OpSave, map[string]string{"name": "local", "type": "user", "description": "x"}); err == nil || !strings.Contains(err.Error(), "another project") {
+	if _, err := there.Run(OpSave, map[string]string{"name": "local", "type": "user", "description": "x", "quote": "remember this one"}); err == nil || !strings.Contains(err.Error(), "another project") {
 		t.Fatalf("a save colliding with another project's memory should say so, got %v", err)
 	}
 	if _, err := here.Run(OpEdit, map[string]string{"name": "local", "type": "", "description": "", "body": "Never run npm."}); err != nil {

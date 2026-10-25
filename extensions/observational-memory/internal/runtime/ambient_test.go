@@ -30,7 +30,7 @@ func ambientModels(configured bool, oauth bool) *testfix.FakeModels {
 }
 
 func resolveBedrock(rt *runtime.Runtime, models host.Models) runtime.ResolveResult {
-	return rt.ResolveModel(context.Background(), runtime.ResolveCtx{Model: bedrockModel, Models: models})
+	return rt.ResolveSessionModel(context.Background(), runtime.ResolveCtx{Model: bedrockModel, Models: models})
 }
 
 func TestResolvesWhenCredentialSourceExistsButNothingToAttach(t *testing.T) {
@@ -55,7 +55,7 @@ func TestStillFailsForOAuthProvidersWhoseCredentialsNoLongerResolve(t *testing.T
 	models.Configured["openai-codex"] = true
 	models.OAuth["openai-codex"] = true
 
-	result := withConfig(nil).ResolveModel(context.Background(), runtime.ResolveCtx{Model: host.Model{"provider": "openai-codex", "id": "gpt-5-codex"}, Models: models})
+	result := withConfig(nil).ResolveSessionModel(context.Background(), runtime.ResolveCtx{Model: host.Model{"provider": "openai-codex", "id": "gpt-5-codex"}, Models: models})
 
 	if result.OK || !strings.Contains(result.Reason, "/login openai-codex") {
 		t.Fatalf("result %+v", result)
@@ -67,7 +67,7 @@ func TestStillFailsWhenStoredCredentialResolvesToEmptyKey(t *testing.T) {
 	models.Auth["xai"] = host.Auth{OK: true, APIKey: strp("")}
 	models.Configured["xai"] = true
 
-	result := withConfig(nil).ResolveModel(context.Background(), runtime.ResolveCtx{Model: host.Model{"provider": "xai", "id": "grok-4"}, Models: models})
+	result := withConfig(nil).ResolveSessionModel(context.Background(), runtime.ResolveCtx{Model: host.Model{"provider": "xai", "id": "grok-4"}, Models: models})
 
 	if result.OK || !strings.Contains(result.Reason, fmt.Sprintf(authFailure, "xai")) {
 		t.Fatalf("result %+v", result)
@@ -78,7 +78,7 @@ func TestDoesNotAcceptUnconfiguredProviderBecauseAuthOK(t *testing.T) {
 	models := testfix.NewFakeModels()
 	models.Auth["anthropic"] = host.Auth{OK: true}
 
-	result := withConfig(nil).ResolveModel(context.Background(), runtime.ResolveCtx{Model: host.Model{"provider": "anthropic", "id": "claude"}, Models: models})
+	result := withConfig(nil).ResolveSessionModel(context.Background(), runtime.ResolveCtx{Model: host.Model{"provider": "anthropic", "id": "claude"}, Models: models})
 
 	if result.OK {
 		t.Fatalf("result %+v", result)

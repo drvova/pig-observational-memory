@@ -409,11 +409,11 @@ func TestRecall(t *testing.T) {
 
 func TestWrites(t *testing.T) {
 	env := envWith(t)
-	r := run(t, env, `save type=user name=prefers-tabs description="The user indents with tabs."`)
+	r := run(t, env, `save type=user name=prefers-tabs description="The user indents with tabs." quote="i bake sourdough every sunday"`)
 	if !strings.Contains(r.Text, "Saved memory prefers-tabs [user]") || r.Notify != r.Text || r.Details.Kind != WriteSave {
 		t.Fatalf("save %+v", r)
 	}
-	r = run(t, env, `save type=project name=uses-pnpm description="Uses pnpm." scope=project`)
+	r = run(t, env, `save type=project name=uses-pnpm description="Uses pnpm." scope=project quote="i bake sourdough every sunday"`)
 	if m, err := env.Saved.Store.Get("uses-pnpm"); err != nil || m.Project != "/repo/a" {
 		t.Fatalf("project save %+v, %v", m, err)
 	}
@@ -542,13 +542,13 @@ func TestParseErrorsComeBackAsResults(t *testing.T) {
 
 // The summary's usage instructions name the tool this package registers.
 func TestSummaryInstructionsNameTheTool(t *testing.T) {
-	for _, text := range []string{ledger.TablesRecallParagraph, ledger.ContextUsageInstructions, curated.IndexHeader} {
+	for _, text := range []string{ledger.TablesRecallParagraph, curated.IndexHeader} {
 		if !strings.Contains(strings.ToLower(text), "the "+ToolName+" tool") || !strings.Contains(text, "recall <") {
 			t.Errorf("instructions do not name the %s tool and its recall query: %q", ToolName, text)
 		}
 	}
 	for _, retired := range []string{"recall tool", "memory_save", "memory_search", "memory_read", "memory_edit", "memory_forget", "memory_feedback"} {
-		for _, text := range []string{ledger.TablesUsageInstructions, ledger.ContextUsageInstructions, curated.IndexHeader, Description(nil)} {
+		for _, text := range []string{ledger.TablesRecallParagraph, curated.IndexHeader, Description(nil)} {
 			if strings.Contains(text, retired) {
 				t.Errorf("%q still names %s", text, retired)
 			}

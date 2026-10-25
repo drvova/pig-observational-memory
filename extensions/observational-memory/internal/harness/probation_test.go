@@ -7,6 +7,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -83,7 +84,7 @@ func compactionIn(t *testing.T, codec tables.Codec, shown string, omitted ...str
 		observations = append(observations, tf.Observation(id))
 	}
 	details := tf.MemoryDetails(tf.MemoryDetailsArgs{FullFold: true, Observations: observations, Reflections: []ledger.Reflection{tf.Reflection("bbbbbbbbbbb1", nil)}})
-	return tf.CompactionEntry("c1", tf.CompactionArgs{FirstKeptEntryID: "u1", Details: details, Summary: ledger.TablesUsageInstructionsFor(codec) + "\n\n" + body + "\n\n---\n\nKeep bbbbbbbbbbb1 in mind? no."})
+	return tf.CompactionEntry("c1", tf.CompactionArgs{FirstKeptEntryID: "u1", Details: details, Summary: selection.TablesInstructionsFor(codec) + "\n\n" + body + "\n\n---\n\nKeep bbbbbbbbbbb1 in mind? no."})
 }
 
 func TestVisibilityClassify(t *testing.T) {

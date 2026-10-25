@@ -12,14 +12,24 @@ import (
 
 func v2Store(t *testing.T) Store {
 	t.Helper()
-	s := testStore(t)
-	s.V2 = true
-	return s
+	return testStore(t)
 }
 
-// One validator on every write and load under memory v2: the fields a memory takes, a body that
-// fits one recall, and pinned only from the user's own edit of the file. Under v1 the same files
-// load as before.
+// writeV1 writes m as memory v1 did: no validator, so a body past the bound or a field no
+// memory takes could be stored.
+func writeV1(t *testing.T, s Store, m Memory) {
+	t.Helper()
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m.Created, m.Updated = s.Now().UTC(), s.Now().UTC()
+	if err := s.write(m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// One validator on every write and load: the fields a memory takes, a body that fits one
+// recall, and pinned only from the user's own edit of the file.
 func TestCheckOnWriteAndLoad(t *testing.T) {
 	s := v2Store(t)
 	long := strings.Repeat("x", serialize.RecallPageChars)
@@ -50,23 +60,17 @@ func TestCheckOnWriteAndLoad(t *testing.T) {
 	if m, err := s.Get("pinned-try"); err != nil || !m.Pinned {
 		t.Fatalf("pin lost: %+v, %v", m, err)
 	}
-	// A field no memory takes is refused on load under v2, read as before under v1.
+	// A field no memory takes is refused on load.
 	if err := os.WriteFile(filepath.Join(s.Dir, "odd.md"), []byte("---\ntype: user\ndescription: Odd.\ncolour: blue\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Get("odd"); err == nil || !strings.Contains(err.Error(), "colour") {
-		t.Fatalf("an unknown field must be refused under v2, got %v", err)
-	}
-	v1 := s
-	v1.V2 = false
-	if m, err := v1.Get("odd"); err != nil || m.Description != "Odd." {
-		t.Fatalf("v1 reads the file as before: %+v, %v", m, err)
+		t.Fatalf("an unknown field must be refused, got %v", err)
 	}
 }
 
-// Under v2 forget retires: the file stays, the memory is found nowhere, and its name may be saved
-// again. Under v1 forget removes the file, as before.
-func TestForgetRetiresUnderV2(t *testing.T) {
+// Forget retires: the file stays, the memory is found nowhere, and its name may be saved again.
+func TestForgetRetires(t *testing.T) {
 	s := v2Store(t)
 	mustSave(t, s, Memory{Name: "old-fact", Type: TypeProject, Description: "The api runs on port 8080."})
 	if err := s.Forget("old-fact", ""); err != nil {
@@ -219,31 +223,26 @@ func TestSubjectMatches(t *testing.T) {
 	}
 }
 
-// A v1 store loaded under memory v2: a memory past the bound, or with a field no memory takes,
-// is refused on load but never silently (Refused names it and why), and it can still be edited
-// within the validator or retired with forget; a save of its name says how.
-func TestV1StoreUnderV2(t *testing.T) {
-	v1 := testStore(t)
+// A store memory v1 wrote: a memory past the bound, or with a field no memory takes, is refused
+// on load but never silently (Refused names it and why), and it can still be edited within the
+// validator or retired with forget; a save of its name says how.
+func TestV1Store(t *testing.T) {
+	s := testStore(t)
 	big := strings.Repeat("x", serialize.RecallPageChars+2000)
-	mustSave(t, v1, Memory{Name: "big", Type: TypeLesson, Description: "A long lesson.", Body: big})
-	mustSave(t, v1, Memory{Name: "tagged", Type: TypeUser, Description: "Tabs."})
-	mustSave(t, v1, Memory{Name: "old-big", Type: TypeLesson, Description: "Another long one.", Body: big})
-	path := filepath.Join(v1.Dir, "tagged.md")
+	writeV1(t, s, Memory{Name: "big", Type: TypeLesson, Description: "A long lesson.", Body: big})
+	writeV1(t, s, Memory{Name: "tagged", Type: TypeUser, Description: "Tabs."})
+	writeV1(t, s, Memory{Name: "old-big", Type: TypeLesson, Description: "Another long one.", Body: big})
+	path := filepath.Join(s.Dir, "tagged.md")
 	data, _ := os.ReadFile(path)
 	if err := os.WriteFile(path, []byte(strings.Replace(string(data), "---\n", "---\ntags: style\n", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := v1
-	s.V2 = true
 	if listed, _ := s.List(""); len(listed) != 0 {
 		t.Fatalf("refused memories are not loaded: %s", names(listed))
 	}
 	refused, err := s.Refused("")
 	if err != nil || len(refused) != 3 || refused[0].Name != "big" || !strings.Contains(refused[0].Reason, "shorten the body") || refused[2].Name != "tagged" || !strings.Contains(refused[2].Reason, "tags") {
 		t.Fatalf("refused %+v, %v", refused, err)
-	}
-	if v1Refused, _ := v1.Refused(""); len(v1Refused) != 0 {
-		t.Fatalf("v1 refuses nothing it reads: %+v", v1Refused)
 	}
 	if _, err := s.Save(Memory{Name: "big", Type: TypeLesson, Description: "New."}, "s1"); err == nil || !strings.Contains(err.Error(), "edit name=big") {
 		t.Fatalf("a save of a refused memory's name says how to fix it, got %v", err)
@@ -298,10 +297,8 @@ func TestSettleEvidenceSinceLastEdit(t *testing.T) {
 	}
 }
 
-// A pinned memory ranks as unflagged even when a correction flagged it before the pin, and a v1
-// store's ranking leaves out the corrected events a memory v2 session recorded in the shared
-// store.
-func TestRankIgnoresFlagsOnPinnedAndUnderV1(t *testing.T) {
+// A pinned memory ranks as unflagged even when a correction flagged it before the pin.
+func TestRankIgnoresFlagsOnPinned(t *testing.T) {
 	s := v2Store(t)
 	mustSave(t, s, Memory{Name: "other", Type: TypeUser, Description: "Other."})
 	// Saved last, so it ranks first among equals.
@@ -312,12 +309,7 @@ func TestRankIgnoresFlagsOnPinnedAndUnderV1(t *testing.T) {
 	}
 	all, _ := s.List("")
 	if ranked := names(Rank(all, s.RankUsage())); ranked != "other,deploy-target" {
-		t.Fatalf("a flagged memory ranks last under v2: %s", ranked)
-	}
-	v1 := s
-	v1.V2 = false
-	if ranked := names(Rank(all, v1.RankUsage())); ranked != "deploy-target,other" {
-		t.Fatalf("v1 ranks without v2's corrections: %s", ranked)
+		t.Fatalf("a flagged memory ranks last: %s", ranked)
 	}
 	path := filepath.Join(s.Dir, "deploy-target.md")
 	data, _ := os.ReadFile(path)

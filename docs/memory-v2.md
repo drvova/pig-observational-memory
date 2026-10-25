@@ -1,9 +1,10 @@
 # Memory v2: no requests beyond what PiG makes on its own
 
-Status: proposed design, for approval before any rebuild. Revised after two reviews against the
-code and PiG v0.5.1, and after source studies of pi-vcc, VCC, pi-blackhole, the upstream
-pi-observational-memory, Mastra's observational memory, nodecode, letta-code and past.dev (see
-"Sources").
+Status: built, and since the cleanup (see "Rollout") the only engine: memory v1's workers,
+scheduling, catch-up, moved cut and worker-model settings are deleted, and the data v1 wrote still
+loads (see "Migration"). Revised after two reviews against the code and PiG v0.5.1, and after source
+studies of pi-vcc, VCC, pi-blackhole, the upstream pi-observational-memory, Mastra's observational
+memory, nodecode, letta-code and past.dev (see "Sources").
 
 ## Why
 
@@ -47,7 +48,7 @@ When the compaction hook returns a compaction (not `cancel`, not null), PiG make
 | Plain PiG | 0 | 1 or more (above) |
 | v2, level 0 | 0 | 0 |
 | v2, level 1 | exactly 1 | 0 |
-| v1 (current) | the catch-up and every background pass since the last compaction | 0 |
+| v1 (removed) | the catch-up and every background pass since the last compaction | 0 |
 
 Level 1 is one completion with one forced tool and `MaxTurns = 1`, parsed from that response; it is
 never split, never retried, and skipped on an overflow compaction so recovery is not delayed. The
@@ -145,8 +146,19 @@ repeated compactions, which rendering from records avoids.
   as `retracted` wherever it is shown (`ledger.RetractedIDs`). It withdraws only a plan or a
   condition: a bare retraction the newest `proposed` or `hypothetical` record of its exchange or the
   one before, a named one ("forget the Postgres migration", counted only with specifics) every such
-  record giving all its specifics. A retraction that names nothing it can withdraw is no retraction:
-  it stays a fact when it carries specifics and is not recorded otherwise. A statement of fact, a
+  record giving all its specifics, and one naming a phrase by fixed grammar ("scrap/drop/forget/
+  cancel/skip the X idea/plan", "no X after all", "not doing X", optionally followed by when it
+  came up, "from yesterday"; no specifics needed) every such record carrying X's own specifics
+  (`ledger.CarriesPhrase`) when X has any, else the newest such record whose words contain X's
+  content words (`ledger.ContainsWords`, plurals folded, a fixed list of function words left out
+  of X). Specifics elsewhere in the sentence never choose what a named phrase withdraws, and an X
+  made only of idiom words from a fixed list ("no problem after all", "no need after all", "not
+  doing well") names nothing. A phrase retraction opening with "actually" is a retraction, not a
+  correction, unless it names the phrase it replaces ("not X", "instead of X"); a bare or named
+  retraction followed by a new value ("actually, scrap that, the port is 8080", "actually, scrap
+  the 5K, I'll run the 10K") stays the correction it reads as. A retraction that names nothing it
+  can withdraw is no retraction: one that opened as a correction is that correction, another
+  stays a fact when it carries specifics and is not recorded otherwise. A statement of fact, a
   preference or a correction is replaced only by a correction, and only by one stated as fact: a
   correction worded as a plan or a condition ("let's use 5433 instead of 5432") keeps its status
   and replaces only a record of its own status, so withdrawing it later withdraws nothing else
@@ -423,10 +435,10 @@ off-path. The extension does not replace PiG's branch summary by default (option
 - **Provenance and status.** `notes` rows carry `status` (or `retracted` for a withdrawn record),
   `event_date`, and the first source entry id with its role and its time (`source`,
   `source_role`, `source_time`); the verbatim text stays in `recall`, which already returns it, so
-  rows grow by short cells, inside the existing result bound. These columns are listed under
-  either engine; v1 records leave the level-0 ones empty. No schema may declare these names; a
-  field a schema stored before took one reads as `schema_<name>` under v2 and keeps its name
-  (filling that column) under v1.
+  rows grow by short cells, inside the existing result bound. These columns are always listed;
+  v1 records leave the level-0 ones empty. No schema may declare these names; a field a schema
+  stored before took one reads as `schema_<name>` in a memory tool call and keeps its name (filling
+  that column) in a detector's query (`memquery.Env.ToolCall` unset).
 - **What rests on a record.** Under v2, `recall <record id>` lists `cited_by`: the reflections that
   cite it and still stand (`ledger.ActiveReflections`; a replaced one rests on nothing held), from the reverse links the fold computes (`FoldedLedger.CitedBy`, never stored), so
   retiring a record shows what loses support. A level-1 merge keeps its sources' entry ids, not
@@ -460,9 +472,9 @@ off-path. The extension does not replace PiG's branch summary by default (option
   never silently: `saved` lists it with state `refused` and its reason, and `/om:status` names
   it; `edit` (which rewrites it with the allowed fields, checked as every write) and `forget`
   still reach it, so it can be brought within the validator or retired.
-- The store under PiG's config root is shared by every session, whatever its engine. A v1
-  session ranks without v2's corrections, but a name another session staged is still refused to
-  its save, and a staged memory stays out of its index and `saved` until promoted.
+- The store under PiG's config root is shared by every session (and by an earlier release still
+  running v1 on it): a name another session staged is refused to a save, and a staged memory stays
+  out of the index and `saved` until promoted.
 - Matching a correction to a memory: the correction's subject words, hyphen-joined, are a whole
   hyphen-separated run of the memory's name, or the reverse. The flag counts corrections made after
   the memory's last save or edit, so an edit clears it; a flagged memory ranks after every other,
@@ -495,9 +507,10 @@ off-path. The extension does not replace PiG's branch summary by default (option
   (`level1-refused`, `level1-specifics-refused`, `level1-union-kept`, `level1-failed`, kernel counts that
   are not detectors), so one evidence unit is one compaction. A compaction whose cut range level 0
   recorded nothing from is an empty pass: no evidence. Every usage-ledger event counted under v2 carries
-  `engine: v2`, and v1's and v2's windows never mix (v1 reads only events without it, v2 only events with
-  it, the profile included; a rule carries the engine it was written for and applies, is judged and is
-  promoted only under it; a held definition carries the engine whose pass held it, below).
+  `engine: v2`, and only those are read (the profile included): v1's events, written without it, are
+  never evidence. A rule carries the engine it was written for and only v2's are applied, judged and
+  promoted (v1's still parse and are listed as history); a held definition carries the engine whose
+  pass held it, below.
   - The detectors with a v2 meaning are `uncited-assistant-specifics` (over the extraction),
     `dropped-then-queried` (queries in the read entries asking for records a compaction dropped),
     `decode-failure` (the session model's memory syntax errors) and `cross-scope-supersede` (the
@@ -508,10 +521,10 @@ off-path. The extension does not replace PiG's branch summary by default (option
     only for an extraction that recorded something, citing only entries it read), `switch-codec` and
     `long-spec` (profile switches). The harness never writes `switch-codec` under v2: its evidence is
     the codec decode failures, and under v2 nothing decodes rows the model wrote, so none is counted. `require-kind`, `split-chunk`, `prompt-line`, `protect-kind` and
-    `block-link` never act under v2, and a model's `propose` under v2 is held to the same list.
-  - The profile (`harness.ComputeWith` with the store's engine) reads only v2's events under v2 (and
-    only v1's under v1, so switching engines never carries tallies across) and applies them per
-    compaction: each setting gets at most one unit per compaction (the majority of its events since the
+    `block-link` never act (their names stay in the catalogue so v1's rules parse), and a level-1
+    rule proposal is held to the same list.
+  - The profile (`harness.ComputeWith`) reads only v2's events, so v1's tallies never carry over, and
+    applies them per compaction: each setting gets at most one unit per compaction (the majority of its events since the
     previous one), so a switch needs `MinEvidence` compactions. The session model's profile shapes the v2 render as it shapes v1's: its
     summary size (`ApplySummary` on the derived budget, never more), layout and codec (a written format,
     read from its layer), with the codec's instructions and `summaryCodec`/`summaryFormat` in
@@ -520,15 +533,13 @@ off-path. The extension does not replace PiG's branch summary by default (option
     selection's classes are the kernel's (anchors, runnable omissions, drops over what it shows).
 - Built (definitions proposed in level 1, and settlement; `internal/rules/proposal_v2.go`,
   `internal/hooks/definitions_v2.go`, `internal/consolidate/definitions.go`). The build and revision
-  passes stay off, and the memory tool's `harness` and `propose` writes are refused under v2
+  passes are deleted, and the memory tool's `harness` and `propose` writes are refused
   (`harness.ErrDefinedInLevel1`; `harness forget` and `rollback` still apply, and `define` still
-  registers a tool, which is no definition the memory runs with). Under v1 the `consolidation`
-  instructions are refused (`harness.ErrConsolidationV2Only`): only level 1 proposes them. Every hold
-  carries its engine (`layer.Definition.Engine`, set by `layer.Store.HoldLocked` from the store's
-  `Engine`, which `curated.Store.Layer` sets under v2), and each engine's store loads, reports and
-  settles only its own holds: a definition v1 held never reaches the level-1 prompt, never blocks an
-  offer and is never settled by a v2 compaction, and v1's passes never see a v2 hold. A newer hold of a
-  name the other engine held replaces it (one held file per name), keeping the original fallback.
+  registers a tool, which is no definition the memory runs with). Every hold carries its engine
+  (`layer.Definition.Engine`, set by `layer.Store.HoldLocked` from the store's `Engine`, which
+  `curated.Store.Layer` always sets to v2), and the store loads, reports and settles only v2's holds:
+  a definition v1 held never reaches the level-1 prompt, never blocks an offer and is never settled.
+  A newer hold of a name v1 held replaces it (one held file per name), keeping the original fallback.
   - **When.** `rules.ProposalDue` (code, no request): the session model's v2 evidence
     (`rules.V2EvidenceOf`: the counts of its last `MinEvidence` compactions that carried a rate and its
     v2 rules' states, compared by `Evidence.Digest` as the v1 revision pass compares) differs from the
@@ -576,7 +587,7 @@ off-path. The extension does not replace PiG's branch summary by default (option
     compaction's evidence, never the proposing request's output. A held definition that only meets
     empty compactions stays held (v1 reverts after `MinEvidence` empty passes, since there the empty
     pass is the definition's own stage's; an empty compaction says nothing about a definition).
-    Written v2 definitions get no probation yet (v1's `rules.JudgeDefinitions` reads v1 passes only).
+    Written v2 definitions get no probation yet (v1's probation, `rules.JudgeDefinitions`, removed in the cleanup, read v1 passes only).
 
 ## Migration
 
@@ -585,13 +596,14 @@ off-path. The extension does not replace PiG's branch summary by default (option
 | Setting | v2 |
 |---|---|
 | `observeAfterTokens`, `reflectAfterTokens`, `observerChunkMaxTokens`, `compactionCatchUpMaxChunks`, `consolidateWhenIdle`, `model`, `fallbackModel`, `observationsPoolTargetTokens`, `observationsPoolMaxTokens`, `compactionMaxRetainedTokens`, `compactAfterTokens` (and its mode and ratio), `workerMemoryMaxTokens`, `agentMaxTurns`, `agentMaxTokens`, `showWorkerNotifications` | removed; ignored, listed in `/om:status` while set |
+| `memoryEngine` (`v1` or `v2`) | removed in the cleanup; ignored, listed in `/om:status` while set (a stale `v1` never brings v1 back) |
 | `compactionSummaryMaxTokens` | an extra cap on the summary budget |
 | `consolidate` (new, default true) | turns level 1 off |
 | `memoryFormat`, `curatedMemory`, `curatedMemoryIndexTokens`, `kernelFloor`, `debugLog`, `passive` | unchanged |
 
 Built (`config.RemovedSettings`, `Config.RemovedSet`): a removed setting counts as set when a
-settings file read under trust gives it a value v1 applies (an invalid one is ignored by both
-engines already). v1 still reads them all.
+settings file read under trust gives it a value v1 applied (an invalid one was ignored by v1 as
+well; for `memoryEngine`, `v1` or `v2`). Nothing reads them since the cleanup.
 
 ### Records and boundaries
 
@@ -622,10 +634,11 @@ engines already). v1 still reads them all.
   with a notice, their text kept in the layer's history.
 - Detector counts carry a revision, so v1 counts never act as v2 evidence.
 - Held definitions carry the engine whose pass held it, so a definition v1 held stays v1's to settle
-  and v2 never runs with it; only written definitions are shared by both engines.
+  and v2 never runs with it; only written definitions were shared while both engines ran (and
+  still are with an earlier release still running v1 on the same store).
 - Built (`layer.Store.MigrateToV2`, run by `harness.MigrateLayerV2` at every v2 session start for
   the session model and for all models). Each migrated content is marked once by an
-  `OpMigrateV2` generation (kind/name and the digest it had), so a later edit under v1 is migrated
+  `OpMigrateV2` generation (kind/name and the digest it had), so a later edit (by an earlier release still running v1) is migrated
   again and replaces its stage's block; the fold is one put of the `consolidation` instructions,
   each text a block between a line naming the stage it came from and one closing it, and waits
   while `consolidation` is held. A block whose v1 addition is gone (forgotten, rolled back, now
@@ -633,15 +646,24 @@ engines already). v1 still reads them all.
   model's own `consolidation` replaces the all-models one entirely, so a model's fold starts from
   the all-models text when it has none of its own and also folds the additions it inherits from
   the all-models definitions (`From` in the notice); a model with nothing of its own writes none
-  and keeps inheriting. Deviation, until the cleanup:
-  "retired" means unused under v2 with a notice; the v1 files are not removed, because the written
-  layer is shared and v1 sessions still read them. The detector revisions and engine-tagged holds
-  were built in step 5.
+  and keeps inheriting. "Retired" means unused with a notice; the v1 files are not removed, even
+  after the cleanup: their text stays in the layer's history, and an earlier release may still
+  read the shared layer. v1's worker seeds no longer ship, so a v1 replace-mode text that recorded
+  its seed's digest is listed in `/om:status` as a stale override. v1 kept every kind but a
+  summary for its memory-worker model, so with a `model` setting naming another model the
+  observer's and reflector's additions live in that model's layer: while a settings file still
+  sets the removed `model`, its value names that layer (`harness.WorkerModelKey`), whose own
+  additions fold into the session model's `consolidation` as blocks naming it, beside the
+  session's own (`layer.Store.MigrateWorkerToV2`; markers carry it as `From`, so each session
+  model folds them once), and whose replace-mode and dropper texts are retired with a notice;
+  the memory tool's harness source lists that layer's definitions and `rollback model=<it>`
+  rolls it back. With the setting gone, that layer is not read. The detector revisions and
+  engine-tagged holds were built in step 5.
 
 ### Project memory
 
-The CLAUDE.md entries on the proactive trigger, the catch-up, the two compaction boundaries and the
-fallback model are rewritten in the same change that removes them.
+Built: the CLAUDE.md entries on the proactive trigger, the catch-up, the two compaction boundaries
+and the fallback model were rewritten in the cleanup that removed them.
 
 ## Status
 
@@ -650,8 +672,7 @@ the last compaction's level, its request count and any level-1 failure reason, r
 and by the model, staged and live curated memories, harness evidence units since the last revision,
 removed settings still set, and project trust as today.
 
-Built (`commands.statusLinesV2`): under v2 none of v1's worker clocks, pools or backoffs are
-shown. Records are counted by who appended them: level 1's batches (`consolidated`) are the
+Built (`commands.statusLines`): none of v1's worker clocks, pools or backoffs exist any more. Records are counted by who appended them: level 1's batches (`consolidated`) are the
 model's whatever origin a label kept, the rest by origin (code, model, host summaries, and v1's
 workers for records without one); the harness evidence is the non-empty v2 compactions since the session model's last
 level-1 offer (`rules.V2UnitsSinceProposal`): v2 has no revision pass, so the offer stands for
@@ -694,32 +715,47 @@ branch-summary requests at the price of picked lines instead of prose.
 
 ## Rollout
 
-- **Side by side, then switch.** v2 is built next to v1, selected by one setting, `memoryEngine`
-  (`v1` until the switch, then `v2`). Each step below runs in real PiG sessions under `memoryEngine:
-  v2` while v1 stays the default. When every step is in, v2 becomes the default and v1's workers,
-  scheduling, catch-up and worker-model settings are deleted in one cleanup.
+- **Side by side, then switch (done).** v2 was built next to v1, selected by one setting,
+  `memoryEngine`, and each step below ran in real PiG sessions under `memoryEngine: v2` while v1
+  stayed the default. With every step in, v2 replaced v1 and v1's workers, scheduling, catch-up and
+  worker-model settings were deleted in one cleanup.
 - **Where.** On the branch `claude/memory-v2`, with its own pull request based on the v1 branch
   (pull request 5, which stays as the v1 baseline).
-- **The bench harness** (`cmd/longmemeval`, `internal/bench`) depends on v1's workers and is deleted in
-  the cleanup; `docs/bench-results.md` stays as history.
+- **The bench harness** (`cmd/longmemeval`, `internal/bench`) depended on v1's workers and was
+  deleted in the cleanup; `docs/bench-results.md` stays as history.
+- **Done: the switch and the cleanup.** v2 is the only engine. Deleted: the observer, reflector,
+  dropper and builder workers and their prompts (kernel texts included; their ids stay
+  kernel-owned), the background scheduling and its idle-mode launches and aborts, the build and
+  revision passes and v1's probation of written definitions, the require-kind re-ask, the
+  compaction catch-up, the moved cut and the normal-versus-full fold split for new compactions,
+  the proactive trigger, `fallbackModel` and the worker-model resolution (`resolveCandidate`'s auth
+  rule stays for the session model), the v1-only remedies' application (their names still parse),
+  v1's summary renderers, the engine switches (`config.V2`, `curated.Store.V2`, `memquery.Env.V2`,
+  now `Env.ToolCall`, which tells a tool call from a detector's query) and every v1-only test.
+  What v2 writes keeps its `engine: v2` tag, so what v1 wrote stays apart, and everything v1 wrote
+  still loads: records and reflections, `om.folded` compactions with `foldThroughEntryId`, coverage
+  markers, layer files, held definitions and rules (listed, never run) and the curated store. A
+  stale `memoryEngine` is a removed setting.
 
 ## Order of work
 
-1. The request rule's machinery: the per-request debug event, the single-request completion path,
+All steps are done.
+
+1. Done. The request rule's machinery: the per-request debug event, the single-request completion path,
    owning every compaction (never delegate, minimal brief, request-context cancellation, recovered
    panics), decoding the whole preparation, and the summary budget from `tokensBefore`.
-2. Level 0: turn-end and compaction extraction (conversation and work facts, the model's own words),
+2. Done. Level 0: turn-end and compaction extraction (conversation and work facts, the model's own words),
    compression, code dropping, ordered selection with entry ids, runnable omitted-span queries, split
    turns, and thinning aged tool results through PiG's `context` event; remove the background loop, the catch-up,
    the moved cut and the proactive trigger (keeping only the auto-compaction-off trigger).
-3. Level 1: the consolidation request, its tool schema, validation, the union rule and the failure
+3. Done. Level 1: the consolidation request, its tool schema, validation, the union rule and the failure
    path.
-4. Curated staging, evidence promotion and the store validator; memory tool history and recall
+4. Done. Curated staging, evidence promotion and the store validator; memory tool history and recall
    changes.
-5. Harness on the new path: code-only detectors and remedies, compaction-counted evidence, definitions
+5. Done. Harness on the new path: code-only detectors and remedies, compaction-counted evidence, definitions
    proposed only in level 1.
-6. Migration of settings, records, layer definitions and project memory; docs; a real PiG session
+6. Done. Migration of settings, records, layer definitions and project memory; docs; a real PiG session
    counting requests and compactions.
-7. The past.dev additions: event dates, statuses, possible updates and negation conflicts in level 0;
+7. Done. The past.dev additions: event dates, statuses, possible updates and negation conflicts in level 0;
    recall pointers and the amended classes in selection; link verdicts in level 1; the point-in-time
    view, event-date stages, notes provenance and `cited_by` in the memory tool.

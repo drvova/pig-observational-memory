@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 )
@@ -41,9 +42,70 @@ var (
 	// bareRetraction withdraws what was just said; namedRetraction withdraws what it names, and
 	// counts only when the name carries specifics. Both open the sentence, after at most
 	// interjections ("ok, scrap that", "actually, never mind").
-	bareRetraction  = regexp.MustCompile(`(?i)^(?:(?:ok(?:ay)?|no|oh|actually|wait|hmm|sorry)\W+)*(?:(?:scrap|scratch|forget|disregard|cancel)\s+(?:that|this|the\s+plan)\b|never\s*mind\b)`)
-	namedRetraction = regexp.MustCompile(`(?i)^(?:(?:ok(?:ay)?|no|oh|actually|wait|hmm|sorry)\W+)*(?:scrap|scratch|forget|disregard|cancel)\s+(?:about\s+)?the\b`)
+	bareRetraction  = regexp.MustCompile(`(?i)^` + retractionOpening + `(?:(?:scrap|scratch|forget|disregard|cancel)\s+(?:that|this|the\s+plan)\b|never\s*mind\b)`)
+	namedRetraction = regexp.MustCompile(`(?i)^` + retractionOpening + `(?:scrap|scratch|forget|disregard|cancel)\s+(?:about\s+)?the\b`)
+	// phraseRetractions name what they withdraw by a phrase X, captured, that closes the sentence
+	// or a clause: "scrap/drop/forget/cancel/skip the X idea/plan", "no X after all", "not doing
+	// X". X counts by its content words (retractionWords), so it needs no specifics.
+	phraseRetractions = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^` + retractionOpening + `(?:let'?s\s+)?(?:scrap|scratch|drop|forget(?:\s+about)?|disregard|cancel|skip)\s+(?:the|my|our|that|this)\s+(` + retractionPhrase + `)\s+(?:idea|plan)s?(?:\s+after\s+all)?` + retractionWhen + retractionClose),
+		regexp.MustCompile(`(?i)^` + retractionOpening + `no\s+(` + retractionPhrase + `)\s+after\s+all` + retractionWhen + retractionClose),
+		regexp.MustCompile(`(?i)^` + retractionOpening + `(?:(?:i'?m|i\s+am|we'?re|we\s+are)\s+)?not\s+doing\s+(?:(?:the|my|our|that|this)\s+)?(` + retractionPhrase + `)(?:\s+(?:idea|plan)s?)?(?:\s+after\s+all|\s+any\s*more)?` + retractionWhen + retractionClose),
+	}
 )
+
+// The parts of the retraction grammar: the interjections a retraction may open with, the named
+// phrase (words, no clause punctuation), when it came up, and what closes it (a clause mark or
+// the sentence end).
+const (
+	retractionOpening = `(?:(?:ok(?:ay)?|no|oh|actually|wait|hmm|sorry)\W+)*`
+	retractionPhrase  = `[\p{L}\p{N}][\p{L}\p{N}'+#&/-]*(?:\s+[\p{L}\p{N}][\p{L}\p{N}'+#&/-]*)*?`
+	retractionClose   = `\s*(?:[,;:.!]|$)`
+	// retractionWhen is when the named phrase came up, which may follow it: "scrap the trail
+	// race idea from yesterday".
+	retractionWhen = `(?:\s+(?:from\s+)?(?:yesterday|earlier(?:\s+today)?|before|last\s+(?:week|night|time)|this\s+morning|the\s+other\s+day))?`
+)
+
+// retractionFunctionWords are the words of a named phrase that name nothing by themselves, so a
+// phrase is matched by its other words: "the whole trail race" names "trail race".
+var retractionFunctionWords = map[string]bool{
+	"a": true, "an": true, "the": true, "my": true, "our": true, "your": true, "his": true, "her": true,
+	"their": true, "its": true, "it": true, "this": true, "that": true, "these": true, "those": true,
+	"whole": true, "entire": true, "also": true, "any": true, "some": true, "all": true, "about": true,
+	"of": true, "for": true, "to": true, "in": true, "on": true, "at": true, "with": true, "and": true,
+	"or": true, "idea": true, "plan": true, "ideas": true, "plans": true,
+}
+
+// retractionIdiomWords are the words of a set phrase that reads like a named retraction but
+// withdraws nothing: "no problem after all", "no need after all", "not doing well". A phrase
+// whose content words are all among them names no record.
+var retractionIdiomWords = map[string]bool{
+	"problem": true, "problems": true, "prob": true, "probs": true, "worries": true, "worry": true,
+	"need": true, "rush": true, "way": true, "matter": true, "doubt": true, "harm": true,
+	"clue": true, "luck": true, "big": true, "deal": true, "biggie": true, "thanks": true,
+	"wonder": true, "sweat": true, "well": true, "good": true, "great": true, "bad": true,
+	"fine": true, "much": true, "anything": true, "nothing": true, "something": true,
+	"everything": true, "so": true, "too": true, "either": true, "anymore": true, "today": true,
+	"tonight": true, "tomorrow": true, "now": true,
+}
+
+// retractionWords are the content words of a named phrase, joined by spaces: its words but the
+// function words (retractionFunctionWords); "" when it has none, or when they are all idiom
+// words (retractionIdiomWords).
+func retractionWords(phrase string) string {
+	words := []string{}
+	idiom := true
+	for _, w := range strings.FieldsFunc(strings.ToLower(phrase), func(r rune) bool { return unicode.IsSpace(r) || r == '/' }) {
+		if w = strings.Trim(w, "'-"); w != "" && !retractionFunctionWords[w] {
+			words = append(words, w)
+			idiom = idiom && retractionIdiomWords[w]
+		}
+	}
+	if idiom {
+		return ""
+	}
+	return strings.Join(words, " ")
+}
 
 // statusOf is a statement's status by fixed wording: hypothetical, proposed, or "" for a
 // statement of fact. A question has none.
@@ -60,14 +122,29 @@ func statusOf(sentence string) string {
 	return ""
 }
 
-// isRetraction reports an explicit retraction that is not a question: "scrap that", "forget
-// this", "never mind", or "forget the <something specific>".
-func isRetraction(sentence string) bool {
+// namedPhrase is the phrase a retraction names by fixed grammar (phraseRetractions): the phrase
+// as written and its content words (retractionWords).
+type namedPhrase struct {
+	phrase, words string
+}
+
+// retractionOf reads an explicit retraction that is not a question: "scrap that", "forget
+// this", "never mind", "forget the <something specific>", or one naming a phrase ("scrap the
+// trail race idea", "no trail race after all", "not doing the trail race"), which it returns as
+// named (zero for the other forms); ok is false for a sentence that is none.
+func retractionOf(sentence string) (named namedPhrase, ok bool) {
 	sentence = strings.ReplaceAll(sentence, "’", "'")
 	if isQuestion(sentence) {
-		return false
+		return namedPhrase{}, false
 	}
-	return bareRetraction.MatchString(sentence) || namedRetraction.MatchString(sentence) && ledger.HasSpecifics(sentence)
+	for _, pattern := range phraseRetractions {
+		if m := pattern.FindStringSubmatch(sentence); m != nil {
+			if words := retractionWords(m[1]); words != "" {
+				return namedPhrase{m[1], words}, true
+			}
+		}
+	}
+	return namedPhrase{}, bareRetraction.MatchString(sentence) || namedRetraction.MatchString(sentence) && ledger.HasSpecifics(sentence)
 }
 
 // correctionTarget is what a correction replaces: the phrase it names ("not X", "instead of
@@ -132,7 +209,17 @@ func (x *extraction) user(i int) {
 		var kind ledger.ObservationKind
 		status := ""
 		target, correction := correctionOf(sentence)
-		retraction := !correction && isRetraction(sentence)
+		named, retraction := retractionOf(sentence)
+		// A retraction naming a phrase ("actually, scrap the trail race idea") is a retraction,
+		// not a correction restating a value; it keeps the correction it would be as a fallback
+		// for when it withdraws nothing (resolveRetractions). Only a correction naming the phrase
+		// it replaces ("not X", "instead of X") stands over it, and a bare or specifics-named
+		// retraction stays a correction ("actually, scrap that, the port is 8080").
+		var fallback *correctionTarget
+		if correction && target.phrase == "" && retraction && named.words != "" {
+			correction, fallback = false, &target
+		}
+		retraction = retraction && !correction
 		switch {
 		case correction:
 			kind, status = "correction", statusOf(sentence)
@@ -151,6 +238,12 @@ func (x *extraction) user(i int) {
 			r.correction = &target
 		}
 		r.retraction = retraction
+		if retraction {
+			r.named = named
+			if fallback != nil {
+				r.fallback, r.fallbackStatus = fallback, statusOf(sentence)
+			}
+		}
 	}
 }
 
@@ -257,8 +350,9 @@ func conversational(kind ledger.ObservationKind) bool {
 // A correction worded as a plan or a condition (proposed, hypothetical) replaces only records of
 // its own status (ledger.MaySupersede): it keeps its status, and a stated fact stays until a
 // correction stated as fact replaces it, so withdrawing the plan later withdraws nothing else.
-// A correction that matches none supersedes nothing.
-func (x *extraction) resolveCorrections() {
+// A correction that matches none supersedes nothing. Only the records resolve selects are
+// resolved; the others stand as earlier records.
+func (x *extraction) resolveCorrections(resolve func(*record) bool) {
 	type candidate struct {
 		id, content, subject, status string
 		assistant                    bool
@@ -274,7 +368,7 @@ func (x *extraction) resolveCorrections() {
 		x.superseded[c.id] = true
 	}
 	for _, r := range x.records {
-		if r.correction != nil {
+		if resolve(r) {
 			phrase := r.correction.phrase
 			for i := len(earlier) - 1; i >= 0; i-- {
 				c := earlier[i]
@@ -304,18 +398,26 @@ func (x *extraction) resolveCorrections() {
 // stated as a plan or under a condition (proposed, hypothetical), active and not yet
 // superseded:
 //   - a retraction carrying specifics withdraws every such record giving them all
-//     (ledger.AddedSpecifics): "forget the Postgres migration";
+//     (ledger.AddedSpecifics): "forget the Postgres migration"; for one naming a phrase by
+//     fixed grammar only the phrase's own specifics count (ledger.CarriesPhrase: "scrap the
+//     Postgres migration idea"), so specifics elsewhere in the sentence ("no rollback after
+//     all, build 42 passed", an annotated "from yesterday") never choose what it withdraws;
+//   - one naming a phrase without specifics ("scrap the trail race idea", "no trail race after
+//     all", "not doing the trail race") withdraws the newest such record whose words contain the
+//     phrase's content words (ledger.ContainsWords);
 //   - a bare one ("scrap that", "never mind") withdraws the newest such record of its own
 //     exchange or the exchange before it.
 //
-// A retraction that names none withdraws nothing and is no retraction: it stays a fact when it
-// carries specifics, and is not a record otherwise. A retraction never withdraws a statement of
+// A retraction that names none withdraws nothing and is no retraction: one that opened with a
+// correction marker becomes the correction it would have been (resolved by
+// resolveCorrections over the fallbacks), another stays a fact when it carries specifics, and
+// is not a record otherwise. A retraction never withdraws a statement of
 // fact, a preference or a correction, which only a correction replaces.
 func (x *extraction) resolveRetractions() {
 	positions := ledger.EntryIndexByID(x.in.Entries)
 	type candidate struct {
-		id, content string
-		anchor      int
+		id, content, status string
+		anchor              int
 	}
 	pending := func(o ledger.Observation) bool {
 		return conversational(o.Kind) && (o.Status == ledger.StatusProposed || o.Status == ledger.StatusHypothetical)
@@ -331,20 +433,39 @@ func (x *extraction) resolveRetractions() {
 				anchor = max(anchor, at)
 			}
 		}
-		earlier = append(earlier, candidate{o.ID, o.Content, anchor})
+		earlier = append(earlier, candidate{o.ID, o.Content, o.Status, anchor})
 	}
 	kept := x.records[:0]
 	for _, r := range x.records {
 		if r.retraction {
 			withdrawn := false
-			if ledger.HasSpecifics(r.obs.Content) {
+			// A named phrase chooses by its own specifics (ledger.PhraseSpecifics), else by its
+			// content words; only a retraction naming no phrase reads the sentence's specifics.
+			switch named := r.named; {
+			case named.words != "" && len(ledger.PhraseSpecifics(named.phrase)) > 0:
+				for _, c := range earlier {
+					if !x.superseded[c.id] && ledger.CarriesPhrase(c.content, named.phrase) {
+						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
+						x.superseded[c.id], withdrawn = true, true
+					}
+				}
+			case named.words != "":
+				for i := len(earlier) - 1; i >= 0; i-- {
+					c := earlier[i]
+					if !x.superseded[c.id] && ledger.MaySupersede(r.obs, ledger.Observation{Status: c.status}) && ledger.ContainsWords(c.content, named.words) {
+						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
+						x.superseded[c.id], withdrawn = true, true
+						break
+					}
+				}
+			case ledger.HasSpecifics(r.obs.Content):
 				for _, c := range earlier {
 					if !x.superseded[c.id] && len(ledger.AddedSpecifics(r.obs.Content, []string{c.content})) == 0 {
 						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
 						x.superseded[c.id], withdrawn = true, true
 					}
 				}
-			} else {
+			default:
 				from := x.previousExchange(r.exchange)
 				for i := len(earlier) - 1; i >= 0; i-- {
 					if c := earlier[i]; !x.superseded[c.id] && c.anchor >= from {
@@ -355,14 +476,19 @@ func (x *extraction) resolveRetractions() {
 				}
 			}
 			if !withdrawn {
-				if !ledger.HasSpecifics(r.obs.Content) {
+				switch {
+				case r.fallback != nil:
+					r.obs.Kind, r.obs.Status, r.retraction = "correction", r.fallbackStatus, false
+					r.correction = r.fallback
+				case !ledger.HasSpecifics(r.obs.Content):
 					continue
+				default:
+					r.obs.Kind, r.obs.Status, r.retraction = "fact", "", false
 				}
-				r.obs.Kind, r.obs.Status, r.retraction = "fact", "", false
 			}
 		}
 		if pending(r.obs) {
-			earlier = append(earlier, candidate{r.obs.ID, r.obs.Content, r.anchor})
+			earlier = append(earlier, candidate{r.obs.ID, r.obs.Content, r.obs.Status, r.anchor})
 		}
 		kept = append(kept, r)
 	}

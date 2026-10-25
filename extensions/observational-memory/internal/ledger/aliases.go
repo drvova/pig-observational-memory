@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
@@ -240,6 +241,25 @@ func (g *aliasGraph) apply(a SubjectAlias) (reason string, replaced SubjectAlias
 	return "", replaced, ok
 }
 
+// ContainsWords reports whether every word of part (a run of letters, digits and in-word
+// symbols, lowercased) is a word of whole, with either side's plural read as its singular
+// (singularCandidates): "a 10K trail race in April" contains "trail race" and "trail races".
+func ContainsWords(whole, part string) bool {
+	words := map[string]bool{}
+	for _, w := range subjectWords(whole) {
+		words[w] = true
+		for _, c := range singularCandidates(w) {
+			words[c] = true
+		}
+	}
+	for _, w := range subjectWords(part) {
+		if !words[w] && !slices.ContainsFunc(singularCandidates(w), func(c string) bool { return words[c] }) {
+			return false
+		}
+	}
+	return true
+}
+
 // containsSubjectWords reports whether every word of part is a word of whole, or a plural of
 // one (singularCandidates): "running shoes" contains "running" and "shoe".
 func containsSubjectWords(whole, part string) bool {
@@ -272,7 +292,8 @@ func containsSubjectWords(whole, part string) bool {
 // a later one. An alias from a subject to itself is a retraction: it removes the alias in
 // force for from, and is refused when there is none. The aliases in force form a forest, and
 // the result depends on the subjects only as a set and on the aliases only through the ledger
-// order of those with one from.
+// order of those with one from. Since memory v2 it has no caller outside tests: it states the
+// check AcceptNewSubjectAliases applies (level 1's aliases) and the tests hold both to it.
 func CheckSubjectAliases(subjects []string, aliases []SubjectAlias) (inForce []SubjectAlias, refused []AliasRefusal) {
 	g := newAliasGraph(readBases(subjects))
 	for _, a := range aliases {

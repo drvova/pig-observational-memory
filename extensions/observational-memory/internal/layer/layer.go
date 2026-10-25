@@ -253,11 +253,11 @@ type Store struct {
 	Validate func(Definition) error
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
-	// Engine is the memory engine whose holds the store applies and settles: "" for v1, or
-	// memory v2's ("v2", set by the curated store under memoryEngine v2). A hold through the
+	// Engine is the memory engine whose holds the store applies and settles: memory v2's ("v2",
+	// set by the curated store), or "" for memory v1's, which only reads them. A hold through the
 	// store is marked with it (Definition.Engine) and the store loads, reports and settles only
-	// the held definitions marked with it, so neither engine runs with or settles the other's
-	// unproven definitions.
+	// the held definitions marked with it, so a definition memory v1 held is never run or
+	// settled.
 	Engine string
 }
 
@@ -799,9 +799,6 @@ type Harness struct {
 	// first is when each kind/name was first put, by the manifests of every model and of the
 	// model itself.
 	first map[string]time.Time
-	// changed is when each kind/name's written content changed (a put, revert, forget or
-	// rollback that touched it), in order, by the same manifests.
-	changed map[string][]time.Time
 }
 
 // Seeded is model's harness with no definitions: every name resolves to its shipped seed. It
@@ -837,13 +834,6 @@ func (h Harness) FirstDefined(kind, name string) (time.Time, bool) {
 	return t, ok
 }
 
-// Changes are the times kind named name's written content changed, in order: every put,
-// revert, forget or rollback generation that touched it, in the manifests of every model and of
-// the model itself. A held definition changes nothing written until it is claimed.
-func (h Harness) Changes(kind, name string) []time.Time {
-	return append([]time.Time(nil), h.changed[SeedKey(kind, name)]...)
-}
-
 // SeedNames are the names of kind's seeds, in order.
 func (h Harness) SeedNames(kind string) []string {
 	out := []string{}
@@ -870,7 +860,7 @@ func (h Harness) List(kind string) []Definition {
 
 // Load is model's effective layer (Harness) with a report for every file it skipped.
 func (s Store) Load(model string) (Harness, []Report, error) {
-	h := Harness{Model: model, defs: map[string]Definition{}, seeds: s.seeds(), first: map[string]time.Time{}, changed: map[string][]time.Time{}}
+	h := Harness{Model: model, defs: map[string]Definition{}, seeds: s.seeds(), first: map[string]time.Time{}}
 	reports := []Report{}
 	models := []string{AllModels}
 	if model != AllModels && model != "" {
@@ -881,19 +871,12 @@ func (s Store) Load(model string) (Harness, []Report, error) {
 		if err != nil {
 			return Harness{}, nil, err
 		}
-		all := states(gens)
-		for i, g := range gens {
-			at, err := time.Parse(time.RFC3339Nano, g.Time)
-			if err != nil {
+		for _, g := range gens {
+			if g.Op != OpPut {
 				continue
 			}
-			before, after := all[i], all[i+1]
-			for key := range unionKeys(before, after) {
-				if before[key] != after[key] {
-					h.changed[key] = append(h.changed[key], at)
-				}
-			}
-			if g.Op != OpPut {
+			at, err := time.Parse(time.RFC3339Nano, g.Time)
+			if err != nil {
 				continue
 			}
 			key := SeedKey(g.Kind, g.Name)
@@ -901,9 +884,6 @@ func (s Store) Load(model string) (Harness, []Report, error) {
 				h.first[key] = at
 			}
 		}
-	}
-	for key := range h.changed {
-		sort.Slice(h.changed[key], func(i, j int) bool { return h.changed[key][i].Before(h.changed[key][j]) })
 	}
 	// Per model in precedence order: written then held for all models, then written then held
 	// for the model itself, so the model's own definition replaces one held for all models.
@@ -926,18 +906,6 @@ func (s Store) Load(model string) (Harness, []Report, error) {
 		}
 	}
 	return h, reports, nil
-}
-
-// unionKeys are the keys of a and b.
-func unionKeys(a, b map[string]string) map[string]bool {
-	out := make(map[string]bool, len(a)+len(b))
-	for k := range a {
-		out[k] = true
-	}
-	for k := range b {
-		out[k] = true
-	}
-	return out
 }
 
 // --- writing -------------------------------------------------------------------------

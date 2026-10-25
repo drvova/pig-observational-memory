@@ -13,7 +13,7 @@ import (
 // compaction, the original record by the original correction.
 func TestNotesFollowLevelOneReplacements(t *testing.T) {
 	for _, replaces := range []bool{true, false} {
-		env := Env{Entries: tf.RelabelledCorrectionBranch(replaces), V2: true}
+		env := Env{Entries: tf.RelabelledCorrectionBranch(replaces), ToolCall: true}
 		for _, c := range []struct {
 			query, id, supersededBy string
 		}{

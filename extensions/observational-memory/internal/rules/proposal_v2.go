@@ -12,7 +12,7 @@ import (
 )
 
 // Definitions proposed only in level 1, and their settlement (docs/memory-v2.md, "Self-built
-// harness"). Under memory v2 no build or revision pass runs: the model defines part of its own
+// harness"). No build or revision pass runs: the model defines part of its own
 // harness only inside the compaction's one level-1 request, and only when its harness evidence
 // changed since the last offer (ProposalDue), so a definition never adds a request. A held
 // definition is settled only on evidence its proposing request did not produce, after
@@ -47,18 +47,18 @@ func CheckV2Definition(kind, name string) error {
 		if name == agents.InstructionsConsolidation {
 			return nil
 		}
-		return fmt.Errorf("under memoryEngine v2 the only instructions are %q, the level-1 request's; no worker stage runs", agents.InstructionsConsolidation)
+		return fmt.Errorf("the only instructions are %q, the level-1 request's; no worker stage runs", agents.InstructionsConsolidation)
 	case layer.KindRemedy:
 		if slices.Contains(V2Remedies, name) {
 			return nil
 		}
-		return fmt.Errorf("under memoryEngine v2 a remedy definition is a catalogue named after a code remedy (%s); a rule is proposed in rules", strings.Join(V2Remedies, ", "))
+		return fmt.Errorf("a remedy definition is a catalogue named after a code remedy (%s); a rule is proposed in rules", strings.Join(V2Remedies, ", "))
 	case layer.KindFormat:
-		return fmt.Errorf("a format is not defined under memoryEngine v2: nothing decodes a summary back in its codec, so no count could prove or revert one")
+		return fmt.Errorf("a format is not defined: nothing decodes a summary back in its codec, so no count could prove or revert one")
 	case layer.KindSummary:
-		return fmt.Errorf("a summary definition does not select under memoryEngine v2: selection's ordered classes are the kernel's (anchors, runnable omissions, drops over what it shows)")
+		return fmt.Errorf("a summary definition does not select: selection's ordered classes are the kernel's (anchors, runnable omissions, drops over what it shows)")
 	case layer.KindSchema:
-		return fmt.Errorf("a schema changes nothing under memoryEngine v2: level 0 is code and level 1's tool fields are the kernel's")
+		return fmt.Errorf("a schema changes nothing: level 0 is code and level 1's tool fields are the kernel's")
 	case layer.KindTool:
 		return fmt.Errorf("a tool is defined with define <name> = <query> \"what it returns\", which registers it")
 	}
@@ -108,8 +108,8 @@ func V2EvidenceOf(store curated.Store, model string) (Evidence, error) {
 	if err != nil {
 		return Evidence{}, err
 	}
-	e := Evidence{Model: model, Counts: map[string]int{}, Events: len(events), Compactions: true}
-	passes := passesFor(curated.EngineV2, events, 0)
+	e := Evidence{Model: model, Counts: map[string]int{}, Events: len(events)}
+	passes := passesFrom(events, 0)
 	if len(passes) > MinEvidence {
 		passes = passes[len(passes)-MinEvidence:]
 	}
@@ -122,7 +122,7 @@ func V2EvidenceOf(store curated.Store, model string) (Evidence, error) {
 			}
 		}
 	}
-	for _, r := range ofEngine(For(store, model).Rules, curated.EngineV2) {
+	for _, r := range For(store, model).Rules {
 		e.Rules = append(e.Rules, r.Describe()+" "+r.State)
 	}
 	sort.Strings(e.Rules)
@@ -257,5 +257,5 @@ func V2UnitsSinceProposal(store curated.Store, model string) (units int, offered
 	if ok {
 		from = min(last.Events, len(events))
 	}
-	return len(passesFor(curated.EngineV2, events, from)), ok, nil
+	return len(passesFrom(events, from)), ok, nil
 }

@@ -2,7 +2,7 @@
 // what a note must capture, when one record may replace another, what the dropper protects and
 // how chunks are sized are rules the harness writes, tests and retires per model, not code
 // paths. A rule answers one detector (a deterministic check over a model's own notes and the
-// branch, counted after every memory-worker pass in the model's usage ledger) with one remedy
+// branch, counted over every compaction in the model's usage ledger) with one remedy
 // from a closed catalogue, and survives only while its detector's rate falls for that model.
 //
 // No rule can touch the invariants: compaction never discards unobserved entries, cut points
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ import (
 )
 
 // MinEvidence is the minimum-evidence rule rules follow, the same as the per-model harness's
-// switches (harness.MinEvidence): a decision needs at least this many observer passes, since
+// switches (harness.MinEvidence): a decision needs at least this many compactions, since
 // one is chance and two can be one mistake and its retry.
 const MinEvidence = 3
 
@@ -109,9 +110,9 @@ type Rule struct {
 	BaselineEvents, BaselineTokens int
 	// AfterEvents, AfterTokens and AfterPasses are the same over its probation.
 	AfterEvents, AfterTokens, AfterPasses int
-	// Engine is the memory engine the rule was written for: "" for v1, whose passes are the
-	// memory worker's, or curated.EngineV2, whose evidence units are compactions. A rule is
-	// applied, judged and promoted only under its own engine (For, evaluate).
+	// Engine is the memory engine the rule was written for: curated.EngineV2, whose evidence
+	// units are compactions, or "" for memory v1's, which is read and listed but never applied,
+	// judged or promoted (For, evaluate).
 	Engine string
 }
 
@@ -316,8 +317,8 @@ func parse(where, text string) (Rule, error) {
 	case "":
 	case curated.EngineV2:
 		// A v2 rule is held to what v2 runs: a v2 detector answered by a code-only remedy.
-		if !containsString(V2Detectors, r.Detector) || !remedyRuns(r.Engine, r.Remedy) {
-			return Rule{}, fmt.Errorf("%s: %s does not run under memoryEngine v2", where, r.Remedy)
+		if !containsString(V2Detectors, r.Detector) || !slices.Contains(V2Remedies, r.Remedy) {
+			return Rule{}, fmt.Errorf("%s: %s does not run under memory v2", where, r.Remedy)
 		}
 	default:
 		return Rule{}, fmt.Errorf("%s has an unknown engine %q", where, r.Engine)

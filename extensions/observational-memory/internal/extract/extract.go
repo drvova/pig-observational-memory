@@ -99,6 +99,14 @@ type record struct {
 	// retraction marks an explicit retraction (ledger.StatusRetracted), which stands only once
 	// it names what it withdraws (resolveRetractions).
 	retraction bool
+	// named is the phrase a retraction names by fixed grammar ("trail race" of "scrap the trail
+	// race idea"), zero for any other.
+	named namedPhrase
+	// fallback is the correction a retraction naming a phrase would have been (a correction
+	// marker with specifics, "actually, scrap the 5K idea, I'll run the 10K"), with its status
+	// (fallbackStatus); it stands when the retraction withdraws nothing (resolveRetractions).
+	fallback       *correctionTarget
+	fallbackStatus string
 	// undated marks a merged record whose parts named different event dates, or a part naming
 	// dates but no one date (ledger.NamesNoOneDate).
 	undated bool
@@ -193,8 +201,10 @@ func Extract(in Input) Result {
 	x.emitFiles()
 	x.merge()
 	x.assignIDs()
-	x.resolveCorrections()
+	x.resolveCorrections(func(r *record) bool { return r.correction != nil })
 	x.resolveRetractions()
+	// A phrase retraction that withdrew nothing became the correction it would have been.
+	x.resolveCorrections(func(r *record) bool { return r.correction != nil && r.correction == r.fallback })
 	x.linkRecords()
 	result := Result{Batches: x.batches(cite)}
 	if last >= 0 {

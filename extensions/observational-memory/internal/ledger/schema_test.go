@@ -1,7 +1,6 @@
 package ledger_test
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -45,41 +44,5 @@ func TestNoteSchemaRefusals(t *testing.T) {
 	}
 	if _, err := ledger.ParseNoteSchema(many); err == nil {
 		t.Fatal("too many fields were accepted")
-	}
-}
-
-// Values of the fields a schema adds are normalized or refused by their declaration, and a
-// note carries them through its stored JSON.
-func TestNoteSchemaFieldValues(t *testing.T) {
-	s, err := ledger.ParseNoteSchema("schema[4]{field,type,values,max}:\n  mood,enum,happy sad,\n  note,text,,5\n  amount,number,,\n  due,date,,")
-	if err != nil {
-		t.Fatal(err)
-	}
-	check := func(field, in, want string, ok bool) {
-		t.Helper()
-		f, _ := s.Field(field)
-		got, gotOK := f.Normalize(in)
-		if got != want || gotOK != ok {
-			t.Fatalf("%s %q: %q %v", field, in, got, gotOK)
-		}
-	}
-	check("mood", "HAPPY", "happy", true)
-	check("mood", "angry", "angry", false)
-	check("note", "  one   two three ", "one t", true)
-	check("amount", "-12.5", "-12.5", true)
-	check("amount", "12,5", "12,5", false)
-	check("due", "2026-02-30", "", false)
-	check("due", "2026-02-28", "2026-02-28", true)
-	o := ledger.Observation{ID: "aaaaaaaaaaaa", Content: "x", Timestamp: "2026-05-02 10:30", Relevance: "low", SourceEntryIDs: []string{"e"}, Fields: map[string]string{"mood": "happy", "Bad Name": "x"}}
-	raw, _ := json.Marshal(o)
-	var decoded any
-	_ = json.Unmarshal(raw, &decoded)
-	back, ok := ledger.ObservationFrom(decoded)
-	if !ok || len(back.Fields) != 1 || back.Fields["mood"] != "happy" {
-		t.Fatalf("back %+v", back)
-	}
-	plain, _ := json.Marshal(ledger.Observation{ID: "aaaaaaaaaaaa"})
-	if strings.Contains(string(plain), "fields") {
-		t.Fatalf("a note without schema fields stores them: %s", plain)
 	}
 }

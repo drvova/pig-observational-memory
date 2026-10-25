@@ -200,18 +200,8 @@ func IndexFor(store Store, project string, budgetTokens int) (string, []string) 
 	return RenderIndex(Rank(memories, store.RankUsage()), budgetTokens)
 }
 
-// RankUsage is the usage evidence Rank orders this store's memories by. The store under
-// PiG's config root is shared by every session whatever its engine, so under v1 the
-// corrected events a memory v2 session recorded are left out: a v1 index ranks as it did
-// before memory v2.
+// RankUsage is the usage evidence Rank orders this store's memories by.
 func (s Store) RankUsage() map[string]Evidence {
 	usage, _ := s.Usage()
-	if s.V2 {
-		return usage
-	}
-	for name, e := range usage {
-		e.Corrected = 0
-		usage[name] = e
-	}
 	return usage
 }

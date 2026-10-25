@@ -25,7 +25,7 @@ func OnContext(rt *runtime.Runtime, h host.Host, messages []host.ContextMessage)
 		}
 	}()
 	rt.EnsureConfig(h)
-	if cfg := rt.Config(); !cfg.V2() || cfg.Passive || len(messages) == 0 {
+	if cfg := rt.Config(); cfg.Passive || len(messages) == 0 {
 		return 0
 	}
 	entries, err := h.GetBranch()

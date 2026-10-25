@@ -66,45 +66,31 @@ func beforeCompactPayload() map[string]any {
 	}).(map[string]any)
 }
 
-// A panic outside the v2 hook (here the SDK context itself, which a zero sdk.Context makes
-// panic) is recovered into a compaction on PiG's cut under memory v2, so PiG never falls
-// through to its summarizer; under v1 it propagates exactly as before.
-func TestBeforeCompactRecoversPanicUnderV2(t *testing.T) {
+// The answer to a panic outside the hook is a compaction on PiG's cut built from the payload
+// alone, so PiG never falls through to its summarizer; a payload that names no cut to keep
+// cannot be answered, and the panic propagates.
+func TestBeforeCompactRecoversPanic(t *testing.T) {
 	rt := runtime.New()
-	cfg := config.Defaults
-	cfg.MemoryEngine = config.EngineV2
-	rt.SetConfig(cfg)
-	result, err := handleBeforeCompact(sdk.Context{}, rt, beforeCompactPayload())
-	if err != nil {
-		t.Fatal(err)
+	rt.SetConfig(config.Defaults)
+	result, ok := recoveredBeforeCompact(rt, beforeCompactPayload())
+	if !ok {
+		t.Fatal("no answer")
 	}
-	answer, _ := result.(map[string]any)
-	compaction, _ := answer["compaction"].(map[string]any)
+	compaction, _ := result["compaction"].(map[string]any)
 	if compaction["firstKeptEntryId"] != "u2" || compaction["tokensBefore"] != 150_000 || !strings.Contains(compaction["summary"].(string), "user: Fix the deploy script and check") {
 		t.Fatalf("result %+v", result)
 	}
 	if _, err := json.Marshal(result); err != nil {
 		t.Fatal(err)
 	}
-
-	// A payload that names no cut to keep cannot be answered: the panic propagates.
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("no firstKeptEntryId: the panic was swallowed")
-			}
-		}()
-		_, _ = handleBeforeCompact(sdk.Context{}, rt, map[string]any{"preparation": map[string]any{}})
-	}()
-
-	cfg.MemoryEngine = config.EngineV1
-	rt.SetConfig(cfg)
-	defer func() {
-		if recover() == nil {
-			t.Fatal("v1: the panic was swallowed")
-		}
-	}()
-	_, _ = handleBeforeCompact(sdk.Context{}, rt, beforeCompactPayload())
+	if _, ok := recoveredBeforeCompact(rt, map[string]any{"preparation": map[string]any{}}); ok {
+		t.Fatal("answered a payload with no firstKeptEntryId")
+	}
+	// The handler itself answers the same payload with a compaction on the same cut.
+	answer, err := handleBeforeCompact(sdk.Context{}, rt, beforeCompactPayload())
+	if c, _ := answer.(map[string]any)["compaction"].(map[string]any); err != nil || c["firstKeptEntryId"] != "u2" {
+		t.Fatalf("answer %+v, %v", answer, err)
+	}
 }
 
 // Without a usable payload, the recovered event keeps the preparation's cut and size.

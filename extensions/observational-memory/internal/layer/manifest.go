@@ -68,6 +68,9 @@ type Generation struct {
 	// written content after it is what it was before it.
 	Keep   []string `json:"keep,omitempty"`
 	Reason string   `json:"reason,omitempty"`
+	// From is the model whose definition an OpMigrateV2 marker migrated, when it is neither the
+	// generation's own model nor the one kept for all models (MigrateWorkerToV2).
+	From string `json:"from,omitempty"`
 	// Held marks a migration of a held definition: its held file changed, nothing written.
 	Held bool `json:"held,omitempty"`
 	// Evidence is the digest of the counted evidence a build or revision pass was given, and

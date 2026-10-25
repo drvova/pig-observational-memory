@@ -97,14 +97,14 @@ func TestLayerInstructionsAndStatus(t *testing.T) {
 	cfg := config.Defaults
 	store, _ := harness.StoreOf(h, cfg)
 	l := harness.Ledger{Store: store, Model: "p/m"}
-	if got := l.Instructions("observer"); got != "" {
+	if got := l.Layer().Instructions("observer"); got != "" {
 		t.Fatalf("instructions before any definition: %q", got)
 	}
 	ls := store.Layer()
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "observer", Model: "p/m", Text: "Record every figure with its unit.", Session: "s1"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := l.Instructions("observer"); got != "Record every figure with its unit." {
+	if got := l.Layer().Instructions("observer"); got != "Record every figure with its unit." {
 		t.Fatalf("instructions %q", got)
 	}
 	if _, err := ls.Hold(layer.Definition{Kind: layer.KindInstructions, Name: "dropper", Model: "p/m", Text: "Keep every plan.", Session: "s1"}); err != nil {
@@ -148,7 +148,8 @@ func TestProfileCodecsComeFromTheLayer(t *testing.T) {
 	}
 	for _, codec := range []string{"rows", "jsonl"} {
 		for i := 0; i < harness.MinEvidence; i++ {
-			_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDecode, Outcome: curated.OutcomeError, Codec: codec})
+			_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDecode, Outcome: curated.OutcomeError, Codec: codec, Engine: curated.EngineV2})
+			_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100})
 		}
 	}
 	p := l.Profile()
@@ -162,7 +163,8 @@ func TestProfileCodecsComeFromTheLayer(t *testing.T) {
 	other := harness.Ledger{Store: store, Model: "q/other"}
 	for _, codec := range []string{"rows", "jsonl"} {
 		for i := 0; i < harness.MinEvidence; i++ {
-			_ = store.RecordModel(curated.ModelEvent{Model: "q/other", Kind: curated.ModelKindDecode, Outcome: curated.OutcomeError, Codec: codec})
+			_ = store.RecordModel(curated.ModelEvent{Model: "q/other", Kind: curated.ModelKindDecode, Outcome: curated.OutcomeError, Codec: codec, Engine: curated.EngineV2})
+			_ = store.RecordModel(curated.ModelEvent{Model: "q/other", Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100})
 		}
 	}
 	if p := other.Profile(); p.Codec != "jsonl" || p.CodecValue() != tables.JSONLines {

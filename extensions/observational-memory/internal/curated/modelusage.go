@@ -12,8 +12,8 @@ import (
 )
 
 // ModelEvent is one counted event in a model's usage ledger (docs/memory-interface.md,
-// sections 6 and 7): a memory tool call, an observer rows decode, a defined tool's call, a
-// memory-worker pass with its detector counts. The per-model harness computes the model's
+// sections 6 and 7): a memory tool call, a rows decode, a defined tool's call, a compaction
+// with its detector counts (memory v1 counted its worker passes here too). The per-model harness computes the model's
 // profile, and the rules decide their state, from these events alone.
 type ModelEvent struct {
 	Time string `json:"time"`
@@ -72,8 +72,9 @@ const (
 	ModelKindDecode = "decode"
 	// ModelKindDefined is a call of a tool the agent defined.
 	ModelKindDefined = "defined"
-	// ModelKindPass is one memory-worker pass that advanced its coverage, with what the
-	// rules' detectors counted in it (docs/memory-interface.md, section 7).
+	// ModelKindPass is one compaction (Stage "compaction"), with what the rules' detectors
+	// counted since the previous one (docs/memory-interface.md, section 7); memory v1 recorded
+	// one per worker pass, without an engine.
 	ModelKindPass = "pass"
 	// ModelKindDetect is one run of memory v2's detectors over the source entries a level-0
 	// extraction read, at a turn end or inside a compaction, with its counts and the source

@@ -1,9 +1,9 @@
 // Package declare holds the shipped seeds of the declarative layer kinds and the interpreters
 // that read them (docs/memory-interface.md, section 8): a format declaration becomes a strict
 // codec (tables.Declared, accepted only once it round-trips the kernel's test tables), a
-// schema declaration validates note fields (ledger.NoteSchema), a summary declaration is run
-// through the query engine (memquery.Select) over the folded memory and laid out under the room
-// budget with the kernel's omission disclosure (ledger.RenderSectionsSummary).
+// schema declaration validates note fields (ledger.NoteSchema), and a summary declaration is
+// parsed and validated only (ParseSummary): the compaction summary is selection.Render, so no
+// summary definition, shipped or written (by v1 too), shapes it any more.
 //
 // Every definition is data: a declaration table, a query, or text. Nothing a model defines is
 // run as code; the interpreters here are the same for every model.
@@ -19,7 +19,6 @@
 package declare
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -36,7 +35,8 @@ const (
 	FormatJSONL = "jsonl"
 	// SchemaNotes is the note schema the observer validates against.
 	SchemaNotes = "observation"
-	// SummaryDefault is the summary the compaction hook renders.
+	// SummaryDefault is the name of the shipped summary declaration, kept so stored summary
+	// definitions still validate and stay listed; the compaction summary is selection.Render.
 	SummaryDefault = "default"
 )
 
@@ -74,10 +74,9 @@ func kindValues() string {
 }
 
 // SummarySeed is the shipped summary as a declaration (section 3): the reflections, then the
-// notes grouped by subject. The seed is laid out by the kernel's native tables layout
-// (ledger.RenderSummaryWithOptions), the reference interpretation of this declaration, with its
-// recency-then-specifics selection and its subject tables ordered by their newest record; a
-// summary a model defines is laid out by the generic one (RenderSummary).
+// notes grouped by subject. It ships only so stored summary definitions (a v1 user's
+// summary/default included) still validate and stay listed in the layer; nothing renders it or
+// them, since the compaction summary is selection.Render (docs/memory-v2.md).
 var SummarySeed = tables.Rows.Encode(tables.Table{
 	Name:   SummaryTable,
 	Fields: SummaryColumns,
@@ -113,28 +112,6 @@ func FormatCodec(name, text string) (tables.Codec, error) {
 		return nil, err
 	}
 	return c, nil
-}
-
-// Seed is one shipped seed with its digest, the digest an override of it records.
-type Seed struct {
-	Kind, Name, Text, Digest string
-}
-
-// Seeds lists every shipped seed (this package's, the worker instructions, the detectors and
-// the remedy catalogue), by kind and name.
-func Seeds() []Seed {
-	out := []Seed{}
-	for key, text := range layer.Shipped() {
-		kind, name, _ := strings.Cut(key, "/")
-		out = append(out, Seed{Kind: kind, Name: name, Text: text, Digest: layer.Digest(text)})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
 }
 
 // Active is a model's effective layer, interpreted.
@@ -203,39 +180,6 @@ func (a Active) CodecNames() []string {
 	return append(out, added...)
 }
 
-// Schema is the note schema the model's observer validates against: its own schema
-// definition, else the seed.
-func (a Active) Schema() ledger.NoteSchema {
-	if d, ok := a.h.Get(layer.KindSchema, SchemaNotes); ok {
-		if s, err := ledger.ParseNoteSchema(d.Text); err == nil {
-			return s
-		}
-	}
-	return seedSchema
-}
-
-var seedSchema = func() ledger.NoteSchema {
-	s, err := ledger.ParseNoteSchema(SchemaSeed)
-	if err != nil {
-		panic(fmt.Sprintf("declare: the seed schema does not parse: %v", err))
-	}
-	return s
-}()
-
-// Summary is the summary the model defined, and true; false while the seed stands, which the
-// kernel's native tables layout renders.
-func (a Active) Summary() (Summary, bool) {
-	d, ok := a.h.Get(layer.KindSummary, SummaryDefault)
-	if !ok {
-		return Summary{}, false
-	}
-	s, err := ParseSummary(d.Text)
-	if err != nil {
-		return Summary{}, false
-	}
-	return s, true
-}
-
 // Instructions are the model's own instructions for a worker stage, "" while the seed stands.
 // The worker prompt puts them after the kernel's fixed rules (agents.ComposeStage), never in
 // their place: after the seed instructions for an addition, in the seed's place for a
@@ -245,48 +189,6 @@ func (a Active) Instructions(stage string) string {
 		return d.Text
 	}
 	return ""
-}
-
-// ReplacesSeed reports whether the model's own instructions for a worker stage replace the
-// seed instructions (layer.ModeReplace) instead of extending them; false while the seed stands,
-// for an addition, and for a definition recorded before modes.
-func (a Active) ReplacesSeed(stage string) bool {
-	d, ok := a.h.Get(layer.KindInstructions, stage)
-	return ok && d.Replaces()
-}
-
-// RenderSummary renders the compaction summary for this model (RenderSummaryReport without
-// its report).
-func (a Active) RenderSummary(reflections []ledger.Reflection, observations []ledger.Observation, maxTokens int, options ledger.RenderOptions) ledger.RenderedSummary {
-	rendered, _ := a.RenderSummaryReport(reflections, observations, maxTokens, options)
-	return rendered
-}
-
-// RenderSummaryReport renders the compaction summary for this model: the native layout while
-// the summary seed stands or the layout is lines (ledger.RenderSummaryWithOptions), else the
-// model's summary query laid out by the kernel (Summary.Render). When the model's summary shows
-// no record although the memory holds some (its queries select none, or none that fits the
-// budget), the seed's native layout renders the summary instead, and the report says so,
-// naming the definition: a definition can never take the extension's summary out of play. The
-// report is "" when the rendered summary is the one the layer selects.
-func (a Active) RenderSummaryReport(reflections []ledger.Reflection, observations []ledger.Observation, maxTokens int, options ledger.RenderOptions) (ledger.RenderedSummary, string) {
-	if options.Format != ledger.FormatLines {
-		if s, ok := a.Summary(); ok {
-			rendered := s.Render(reflections, observations, maxTokens, options)
-			if len(reflections)+len(observations) == 0 || len(rendered.Reflections)+len(rendered.Observations) > 0 {
-				return rendered, ""
-			}
-			why := "selects no record of the memory"
-			if maxTokens > 0 {
-				if full := s.Render(reflections, observations, 0, options); len(full.Reflections)+len(full.Observations) > 0 {
-					why = fmt.Sprintf("shows no record within the ~%d-token budget", maxTokens)
-				}
-			}
-			report := fmt.Sprintf("the %s/%s definition for %s %s; the seed layout renders this summary instead", layer.KindSummary, SummaryDefault, a.Model(), why)
-			return ledger.RenderSummaryWithOptions(reflections, observations, maxTokens, options), report
-		}
-	}
-	return ledger.RenderSummaryWithOptions(reflections, observations, maxTokens, options), ""
 }
 
 func containsString(values []string, value string) bool {

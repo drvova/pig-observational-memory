@@ -33,7 +33,7 @@ func TestV2HistoryCurrentTurnMarkupAndOrder(t *testing.T) {
 	if ids := strings.Join(column(t, v1, "id"), " "); ids != "u1 a1 t1 u2 u3 a3" {
 		t.Fatalf("v1 history %s", ids)
 	}
-	v2 := Env{Entries: entries, V2: true}
+	v2 := Env{Entries: entries, ToolCall: true}
 	if ids := strings.Join(decodeV2(t, run(t, v2, "history").Text), " "); ids != "u2 t1 a1 u1" {
 		t.Fatalf("v2 history %s: the current turn (u3 on) left out, newest first", ids)
 	}
@@ -42,7 +42,7 @@ func TestV2HistoryCurrentTurnMarkupAndOrder(t *testing.T) {
 		tf.RawMessage("u3", "<system-reminder>zebra</system-reminder>Which flour did I name?", at("2023-05-29")),
 		tf.RawMessage("u4", "next", at("2023-05-29")),
 	)
-	env := Env{Entries: earlier, V2: true}
+	env := Env{Entries: earlier, ToolCall: true}
 	if ids := decodeV2(t, run(t, env, `history | search "flour"`).Text); strings.Join(ids, " ") != "u3" {
 		t.Fatalf("user words searched: %v", ids)
 	}
@@ -57,7 +57,7 @@ func TestV2HistoryCurrentTurnMarkupAndOrder(t *testing.T) {
 // A v2 history search with no hit says how many entries hold each word instead of an empty
 // table; v1 returns the empty table.
 func TestV2HistoryNoHitCounts(t *testing.T) {
-	env := Env{Entries: append(branch(), tf.RawMessage("u9", "now", at("2023-05-29"))), V2: true}
+	env := Env{Entries: append(branch(), tf.RawMessage("u9", "now", at("2023-05-29"))), ToolCall: true}
 	r := run(t, env, `history | search "sourdough zebra"`)
 	if !strings.HasPrefix(r.Text, "No history entry matches") || !strings.Contains(r.Text, `"sourdough" 2`) || !strings.Contains(r.Text, `"zebra" 0`) {
 		t.Fatalf("no-hit counts %q", r.Text)
@@ -79,7 +79,7 @@ func historyTurns(n int) []session.Entry {
 // A cut v2 result leads with matched N, showing M and the query for the next older page,
 // bounded by branch position; running the pages in turn lists every match once, newest first.
 func TestV2HistoryPagesNewestFirst(t *testing.T) {
-	env := Env{Entries: historyTurns(45), V2: true}
+	env := Env{Entries: historyTurns(45), ToolCall: true}
 	query := `history | search "step" | limit 20`
 	seen := []string{}
 	for page := 0; page < 5 && query != ""; page++ {
@@ -125,7 +125,7 @@ func TestV2RecallPages(t *testing.T) {
 	}
 	long := strings.Join(lines, "\n")
 	entries := append(branch(), tf.MessageEntry("big", map[string]any{"role": "toolResult", "toolName": "bash", "content": []any{map[string]any{"type": "text", "text": long}}}, at("2023-05-29")))
-	env := Env{Entries: entries, V2: true}
+	env := Env{Entries: entries, ToolCall: true}
 	whole := run(t, Env{Entries: entries}, "recall big").Text
 	if strings.Contains(whole, "[characters") {
 		t.Fatal("v1 recall without offset is not paged")
@@ -180,7 +180,7 @@ func TestV2OffPathFallback(t *testing.T) {
 		}, "o1"),
 	}
 	file := append(append([]session.Entry{}, onBranch...), off...)
-	env := Env{Entries: append(onBranch, tf.RawMessage("u9", "kiln?", at("2023-05-29"))), V2: true, SessionEntries: file}
+	env := Env{Entries: append(onBranch, tf.RawMessage("u9", "kiln?", at("2023-05-29"))), ToolCall: true, SessionEntries: file}
 	if ids := strings.Join(decodeV2(t, run(t, env, `history | search "kiln"`).Text), "|"); ids != "o1 (off-path)|o2 (off-path)" {
 		t.Fatalf("off-path history %q", ids)
 	}
@@ -196,7 +196,7 @@ func TestV2OffPathFallback(t *testing.T) {
 	}
 	// v1 has no fallback.
 	v1 := env
-	v1.V2 = false
+	v1.ToolCall = false
 	if rows := decode(t, run(t, v1, `history | search "kiln"`).Text)[0].Rows; len(rows) != 1 || rows[0][0] != "u9" {
 		t.Fatalf("v1 history %v", rows)
 	}
@@ -210,9 +210,8 @@ func TestV2OffPathFallback(t *testing.T) {
 // forget retires. Quotes from the assistant confirm nothing.
 func TestV2SaveStagingAndSavedState(t *testing.T) {
 	store := testStore(t)
-	store.V2 = true
-	s1 := Env{Entries: branch(), V2: true, Saved: &curated.Call{Store: store, Project: "/repo/a", Source: "s1"}}
-	s2 := Env{Entries: branch(), V2: true, Saved: &curated.Call{Store: store, Project: "/repo/a", Source: "s2"}}
+	s1 := Env{Entries: branch(), ToolCall: true, Saved: &curated.Call{Store: store, Project: "/repo/a", Source: "s1"}}
+	s2 := Env{Entries: branch(), ToolCall: true, Saved: &curated.Call{Store: store, Project: "/repo/a", Source: "s2"}}
 
 	if r := run(t, s1, `save type=user name=sunday-bake description="The user bakes on Sundays." quote="I bake sourdough every Sunday"`); !strings.HasPrefix(r.Text, "Saved memory sunday-bake") {
 		t.Fatalf("a user-quoted save is live: %q", r.Text)
@@ -281,8 +280,7 @@ func TestV2SaveStagingAndSavedState(t *testing.T) {
 // A user-quoted helped feedback is the evidence a staged memory needs.
 func TestV2FeedbackQuoteIsEvidence(t *testing.T) {
 	store := testStore(t)
-	store.V2 = true
-	env := Env{Entries: branch(), V2: true, Saved: &curated.Call{Store: store, Source: "s1"}}
+	env := Env{Entries: branch(), ToolCall: true, Saved: &curated.Call{Store: store, Source: "s1"}}
 	run(t, env, `save type=user name=sunday-bake description="Bakes on Sundays."`)
 	run(t, env, `feedback name=sunday-bake outcome=helped quote="Nice, a weekly sourdough bake"`)
 	if settled, _ := store.Settle(curated.SettleInput{}); len(settled.Promoted) != 0 {
@@ -302,7 +300,7 @@ func TestV2RecallRecordLeavesThinkingOut(t *testing.T) {
 	entries := append(branch(), tf.ObservationsRecordedEntry("om9", []ledger.Observation{
 		observation("c1cccccccccc", "2023-05-20 12:00", "The user bakes weekly.", func(o *ledger.Observation) { o.SourceEntryIDs = []string{"a1"} }),
 	}, "a1"))
-	if text := run(t, Env{Entries: entries, V2: true}, "recall c1cccccccccc").Text; strings.Contains(text, "secret plan") || !strings.Contains(text, "weekly sourdough bake") {
+	if text := run(t, Env{Entries: entries, ToolCall: true}, "recall c1cccccccccc").Text; strings.Contains(text, "secret plan") || !strings.Contains(text, "weekly sourdough bake") {
 		t.Fatalf("v2 recall of a record returns thinking: %q", text)
 	}
 	if text := run(t, Env{Entries: entries}, "recall c1cccccccccc").Text; !strings.Contains(text, "secret plan") {
@@ -313,7 +311,7 @@ func TestV2RecallRecordLeavesThinkingOut(t *testing.T) {
 // The no-hit counts match a word as the search does, over every column: a word found only in
 // the role column counts its rows.
 func TestV2NoHitCountsMatchLikeSearch(t *testing.T) {
-	env := Env{Entries: append(branch(), tf.RawMessage("u9", "now", at("2023-05-29"))), V2: true}
+	env := Env{Entries: append(branch(), tf.RawMessage("u9", "now", at("2023-05-29"))), ToolCall: true}
 	r := run(t, env, `history | search "assistant zebra"`)
 	if !strings.Contains(r.Text, `"assistant" 1`) || !strings.Contains(r.Text, "on the current branch") {
 		t.Fatalf("no-hit counts %q", r.Text)
@@ -324,14 +322,13 @@ func TestV2NoHitCountsMatchLikeSearch(t *testing.T) {
 // refused, so the model can edit it within the validator or forget it.
 func TestV2SavedListsRefusedMemories(t *testing.T) {
 	store := testStore(t)
-	store.V2 = true
 	if err := os.MkdirAll(store.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store.Dir, "tagged.md"), []byte("---\ntype: user\ndescription: Tabs.\ntags: style\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := Env{Entries: branch(), V2: true, Saved: &curated.Call{Store: store, Project: "/repo/a", Source: "s1"}}
+	env := Env{Entries: branch(), ToolCall: true, Saved: &curated.Call{Store: store, Project: "/repo/a", Source: "s1"}}
 	table := decode(t, run(t, env, "saved").Text)[0]
 	if len(table.Rows) != 1 {
 		t.Fatalf("saved rows %v", table.Rows)

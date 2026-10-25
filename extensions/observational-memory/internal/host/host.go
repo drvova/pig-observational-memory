@@ -133,7 +133,7 @@ type ModelStream interface {
 	Result() map[string]any
 }
 
-// Models is the model registry the memory workers use.
+// Models is the model registry the level-1 request resolves the session model in.
 type Models interface {
 	Find(provider, id string) Model
 	GetApiKeyAndHeaders(model Model) (Auth, error)

@@ -103,7 +103,7 @@ func TestV2MigrationFromV1Session(t *testing.T) {
 	h.Home = t.TempDir()
 	h.UI = true
 	store, ok := harness.StoreOf(h, rt.Config())
-	if !ok || !store.V2 {
+	if !ok || store.Layer().Engine != curated.EngineV2 {
 		t.Fatal("no v2 store")
 	}
 	model := harness.ModelKey(h.SessionModel())
@@ -124,7 +124,7 @@ func TestV2MigrationFromV1Session(t *testing.T) {
 	}
 
 	// Layer definitions: migrated at session start, once.
-	migrated := harness.MigrateLayerV2(h, store, model)
+	migrated := harness.MigrateLayerV2(h, store, model, "")
 	if len(migrated) != 3 || !migrated[0].Folded || migrated[0].Name != agents.InstructionsObserver || migrated[1].Folded || migrated[2].Folded {
 		t.Fatalf("migrations %+v", migrated)
 	}
@@ -132,7 +132,7 @@ func TestV2MigrationFromV1Session(t *testing.T) {
 	if err != nil || consolidation.Mode != layer.ModeExtend || !strings.Contains(consolidation.Text, "Always record the port of every service.") || strings.Contains(consolidation.Text, "Reflect only") {
 		t.Fatalf("consolidation %+v (%v)", consolidation, err)
 	}
-	if again := harness.MigrateLayerV2(h, store, model); len(again) != 0 {
+	if again := harness.MigrateLayerV2(h, store, model, ""); len(again) != 0 {
 		t.Fatalf("migrated twice: %+v", again)
 	}
 	for _, name := range []string{agents.InstructionsObserver, agents.InstructionsReflector, agents.InstructionsDropper} {

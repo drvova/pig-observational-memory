@@ -26,20 +26,34 @@ func ModelKey(model host.Model) string {
 	return id
 }
 
-// WorkerModelKey is the memory-worker model's key for the session: config model when the
-// registry has it, else the session model, as the runtime's primary resolution picks it. The
-// observer and dropper passes are recorded under this model, so the rules they read and the
-// rules a probation can decide are this model's.
+// WorkerModelKey is the key memory v1 kept its memory-worker model's definitions under, read
+// from the removed `model` setting (config.Config.RemovedWorkerModel) as v1 resolved it: the
+// registry's model for the setting's provider (else the session model's) and id when the
+// registry has it, else provider/id; "" with no such setting or when it names the session
+// model, whose layer is migrated anyway. It is read only to migrate and list that layer.
 func WorkerModelKey(h host.Host, cfg config.Config) string {
+	ref := cfg.RemovedWorkerModel
+	if ref == nil || ref.ID == "" {
+		return ""
+	}
 	session := h.SessionModel()
-	if cfg.Model != nil && cfg.Model.ID != "" {
-		if models := h.Models(); models != nil {
-			if configured := models.Find(runtime.EffectiveProvider(cfg.Model, session), cfg.Model.ID); configured != nil {
-				return ModelKey(configured)
-			}
+	provider := ref.Provider
+	if provider == "" {
+		provider = host.ModelProvider(session)
+	}
+	key := ref.ID
+	if provider != "" {
+		key = provider + "/" + ref.ID
+	}
+	if models := h.Models(); models != nil {
+		if configured := models.Find(provider, ref.ID); configured != nil {
+			key = ModelKey(configured)
 		}
 	}
-	return ModelKey(session)
+	if key == ModelKey(session) {
+		return ""
+	}
+	return key
 }
 
 // StoreOf is the curated store the harness keeps its ledgers in, with this process's kernel
@@ -57,7 +71,6 @@ func StoreOf(h host.Host, cfg config.Config) (curated.Store, bool) {
 	}
 	store := curated.New(curated.DefaultDir(home))
 	store.Floor = floorOf(store, cfg.KernelFloor)
-	store.V2 = cfg.V2()
 	return store, true
 }
 
@@ -85,19 +98,15 @@ func For(h host.Host, cfg config.Config, model host.Model) (Ledger, bool) {
 func (l Ledger) Profile() Profile { return l.ProfileWith(l.Layer()) }
 
 // ProfileWith is Profile with the model's layer already loaded (active), so one pass reads its
-// codecs from the same generation as the rest of its layer. It reads the events of the store's
-// engine only (ComputeWith): a v2 store's profile is memory v2's, a v1 store's v1's.
+// codecs from the same generation as the rest of its layer. It reads memory v2's events only
+// (ComputeWith): memory v1's tallies never carry over.
 func (l Ledger) ProfileWith(active declare.Active) Profile {
 	events, err := l.Store.ModelEvents(l.Model)
 	if err != nil {
 		return Default(l.Model)
 	}
 	definitions, _ := l.Store.ListDefinitions()
-	engine := ""
-	if l.Store.V2 {
-		engine = curated.EngineV2
-	}
-	p := ApplyRules(ComputeWith(l.Model, engine, events, definitions, active.CodecNames()), rules.For(l.Store, l.Model))
+	p := ApplyRules(ComputeWith(l.Model, events, definitions, active.CodecNames()), rules.For(l.Store, l.Model))
 	if c, ok := active.Codec(p.Codec); ok {
 		p.codec = c
 	}
@@ -126,23 +135,13 @@ func LayerFor(h host.Host, cfg config.Config, model host.Model) declare.Active {
 // Rules are the rules that apply to the ledger's model.
 func (l Ledger) Rules() rules.Active { return rules.For(l.Store, l.Model) }
 
-// Record appends e for the ledger's model, marked as counted under memory v2 when the store
-// is v2's (curated.ModelEvent.Engine), so v1's and v2's evidence never mix. A failed write is
+// Record appends e for the ledger's model, marked as counted under memory v2
+// (curated.ModelEvent.Engine), so memory v1's evidence never mixes in. A failed write is
 // dropped: counting must never fail the call it counts.
 func (l Ledger) Record(e curated.ModelEvent) {
 	e.Model = l.Model
-	if l.Store.V2 {
-		e.Engine = curated.EngineV2
-	}
+	e.Engine = curated.EngineV2
 	_ = l.Store.RecordModel(e)
-}
-
-// ProfileFor is model's profile in h's store, the default profile when there is no ledger.
-func ProfileFor(h host.Host, cfg config.Config, model host.Model) Profile {
-	if l, ok := For(h, cfg, model); ok {
-		return l.Profile()
-	}
-	return Default(ModelKey(model))
 }
 
 // DefinedQueries are the stored queries of memoryTools (MemoryToolNames) by name: a call of a
@@ -170,15 +169,15 @@ func DefinedQueries(h host.Host, cfg config.Config, memoryTools []string) map[st
 // MemoryToolNames are the tools whose calls are memory plumbing, not conversation: the memory
 // tool and the tools the agent defined with it that this process registered
 // (runtime.Runtime.DefinedTools, harness.Manager.Registered), the memory tool first and the
-// rest in name order. The observer and every worker that reads source leave their calls and
-// results out (serialize.SourceAddressedOptions.SkipTools): the memory tool's writes persist in
-// the curated store, and observing them would feed memory back into itself.
+// rest in name order. Level-0 extraction leaves their calls and results out (extract.Input's
+// SkipTools): the memory tool's writes persist in the curated store, and extracting them would
+// feed memory back into itself.
 //
 // The list is the registered tools, not the store's definitions: a stored definition whose
 // name another tool holds is never registered (Manager.RegisterStored), so that tool's calls
 // stay conversation. It only grows within a process: a forgotten definition's tool stays
 // registered, so calls of it already on the branch stay skipped and needing no coverage, as
-// they did when they were made. A pass resolves it once and uses that list throughout.
+// they did when they were made. An extraction resolves it once and uses that list throughout.
 func MemoryToolNames(rt *runtime.Runtime) []string {
 	defined := rt.DefinedTools()
 	names := make([]string, 0, len(defined)+1)

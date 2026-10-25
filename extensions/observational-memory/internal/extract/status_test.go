@@ -272,3 +272,219 @@ func TestMergeKeepsNoGuessedEventDate(t *testing.T) {
 		}
 	}
 }
+
+// A retraction naming a phrase without specifics withdraws the newest plan or condition whose
+// words contain the phrase's content words, however far back; it never withdraws a statement
+// of fact or a correction stated as fact, a question is none, and one naming nothing it can
+// withdraw is no record. The wording is a real session's.
+func TestNamedPhraseRetractions(t *testing.T) {
+	const race = "Maybe I'll also do a 10K trail race in April, not decided yet."
+	branch := func(retraction string) []session.Entry {
+		return []session.Entry{
+			user("u1", "I run 3 times a week, 25 km in total. "+race),
+			assistant("a1", "Noted."),
+			user("u2", "I ran my first trail race in 2024. I'll buy new road shoes in March."),
+			assistant("a2", "Sounds good."),
+			user("u3", retraction),
+		}
+	}
+	for _, wording := range []string{
+		"Actually, scrap the trail race idea.",
+		"Scrap the trail race plan.",
+		"Drop the trail race idea.",
+		"Forget the whole trail race idea, it was silly.",
+		"Ok, cancel the trail race plan.",
+		"Let's skip the trail race idea.",
+		"No trail race after all.",
+		"Actually, no trail races after all.",
+		"I’m not doing the trail race.",
+		"Not doing the trail race after all.",
+	} {
+		t.Run(wording, func(t *testing.T) {
+			r := run(branch(wording))
+			plan := find(t, r, "fact", "10K trail race")
+			if plan.Status != ledger.StatusProposed {
+				t.Fatalf("plan %+v", plan)
+			}
+			fact := find(t, r, "fact", "first trail race")
+			shoes := find(t, r, "fact", "road shoes")
+			retraction := find(t, r, "correction", wording[len(wording)-12:])
+			if retraction.Status != ledger.StatusRetracted || !slices.Equal(retraction.Supersedes, []string{plan.ID}) {
+				t.Fatalf("retraction %+v, plan %s, fact %s, shoes %s", retraction, plan.ID, fact.ID, shoes.ID)
+			}
+			if !ledger.MaySupersede(retraction, plan) || ledger.MaySupersede(retraction, fact) {
+				t.Fatalf("status rule: %+v", retraction)
+			}
+			if drops := Drops(r.Observations(), []ledger.Observation{retraction}, nil, nil); !slices.Equal(drops, []string{plan.ID}) {
+				t.Fatalf("drops %v", drops)
+			}
+		})
+	}
+	t.Run("question", func(t *testing.T) {
+		r := run(branch("Should I scrap the trail race idea?"))
+		absent(t, r, "scrap the trail race")
+		if p := find(t, r, "fact", "10K trail race"); p.Status != ledger.StatusProposed {
+			t.Fatalf("plan %+v", p)
+		}
+		for _, o := range r.Observations() {
+			if len(o.Supersedes) != 0 {
+				t.Fatalf("a question withdrew %+v", o)
+			}
+		}
+	})
+	t.Run("names nothing pending", func(t *testing.T) {
+		r := run(branch("Scrap the triathlon idea."))
+		absent(t, r, "triathlon")
+		if p := find(t, r, "fact", "10K trail race"); p.Status != ledger.StatusProposed {
+			t.Fatalf("plan %+v", p)
+		}
+	})
+	t.Run("never a fact or a stated correction", func(t *testing.T) {
+		r := run([]session.Entry{
+			user("u1", "I ran a trail race in 2024."),
+			user("u2", "Actually the trail race was 21 km, not 15 km."),
+			user("u3", "No trail race after all."),
+		})
+		absent(t, r, "after all")
+		for _, o := range r.Observations() {
+			if len(o.Supersedes) != 0 && o.Kind != "correction" {
+				t.Fatalf("withdrew %+v", o)
+			}
+		}
+	})
+	t.Run("newest only, conditions too", func(t *testing.T) {
+		r := run([]session.Entry{
+			user("u1", "I'll do a trail race in May on the 12th."),
+			user("u2", "If I do the trail race in June, I need 2 new pairs of shoes."),
+			user("u3", "Drop the trail race plan."),
+		})
+		may := find(t, r, "fact", "in May")
+		june := find(t, r, "fact", "in June")
+		if june.Status != ledger.StatusHypothetical {
+			t.Fatalf("june %+v", june)
+		}
+		retraction := find(t, r, "correction", "Drop the trail race plan.")
+		if !slices.Equal(retraction.Supersedes, []string{june.ID}) || slices.Contains(retraction.Supersedes, may.ID) {
+			t.Fatalf("retraction %+v", retraction)
+		}
+	})
+	t.Run("across extractions", func(t *testing.T) {
+		plan := tf.Observation("aaaaaaaaaaa1", func(o *ledger.Observation) {
+			o.Content, o.Kind, o.Status, o.Origin, o.SourceEntryIDs = race, "fact", ledger.StatusProposed, ledger.OriginCode, []string{"u1"}
+		})
+		entries := []session.Entry{
+			user("u1", race),
+			tf.ObservationsRecordedEntry("om1", []ledger.Observation{plan}, "u1"),
+			user("u2", "I ran 30 km this week."),
+			user("u3", "Actually, scrap the trail race idea."),
+		}
+		r := run(entries, func(in *Input) { in.Start = 2 })
+		if retraction := find(t, r, "correction", "scrap the trail race idea"); !slices.Equal(retraction.Supersedes, []string{plan.ID}) {
+			t.Fatalf("retraction %+v", retraction)
+		}
+	})
+}
+
+// What a phrase retraction must not take over: a correction opening with "actually" whose
+// retraction names no phrase stays a correction (and restates its subject's value), an idiom
+// ("no problem after all") withdraws nothing, specifics elsewhere in the sentence never choose
+// what a named phrase withdraws, a relative date after the phrase is when it came up, and a
+// phrase retraction opening with "actually" that withdraws nothing is the correction it was.
+func TestPhraseRetractionBounds(t *testing.T) {
+	pending := func(t *testing.T, r Result, substring string) ledger.Observation {
+		t.Helper()
+		plan := find(t, r, "fact", substring)
+		for _, o := range r.Observations() {
+			if slices.Contains(o.Supersedes, plan.ID) {
+				t.Fatalf("%q withdrew the plan", o.Content)
+			}
+		}
+		return plan
+	}
+	t.Run("correction naming no phrase", func(t *testing.T) {
+		for _, c := range []struct{ said, correction, status string }{
+			{"I'll run a 5K in May.", "Actually, scrap the 5K, I'll run the 10K instead.", ledger.StatusProposed},
+			{"I'll run a 5K in May.", "Actually, forget the 5K race, it's a 10K.", ""},
+			{"The service listens on port 3000.", "Actually, scrap that, the port is 8080.", ""},
+			{"We will deploy build 42 on Friday.", "Actually, scrap that, deploy build 43 on Friday.", ""},
+		} {
+			r := run([]session.Entry{user("u1", c.said), assistant("a1", "ok"), user("u2", c.correction)})
+			if o := find(t, r, "correction", c.correction); o.Status != c.status {
+				t.Fatalf("%q: %+v", c.correction, o)
+			}
+		}
+	})
+	t.Run("scrap that restates the subject", func(t *testing.T) {
+		known := tf.ObservationsRecordedEntry("om0", []ledger.Observation{tf.Observation("aaaaaaaaaaaa", func(o *ledger.Observation) {
+			o.Content, o.Subject, o.SourceEntryIDs = "User is planning the offsite budget.", "offsite budget", []string{"u0"}
+		})}, "u0")
+		r := run([]session.Entry{
+			user("u0", "planning"),
+			known,
+			user("u1", "The offsite budget is 5000 USD."),
+			assistant("a1", "ok"),
+			user("u2", "Actually, scrap that, the offsite budget is 6000 USD."),
+		}, func(in *Input) { in.Start = 2 })
+		earlier := find(t, r, "fact", "5000 USD")
+		if c := find(t, r, "correction", "6000 USD"); !slices.Equal(c.Supersedes, []string{earlier.ID}) {
+			t.Fatalf("correction %+v, earlier %s", c, earlier.ID)
+		}
+	})
+	t.Run("idioms", func(t *testing.T) {
+		for _, idiom := range []string{"No problem after all.", "No worries after all.", "No need after all.", "I'm not doing well."} {
+			r := run([]session.Entry{
+				user("u1", "Maybe I'll fix the problem tomorrow, if we need 2 days we will do well."),
+				assistant("a1", "ok"),
+				user("u2", idiom),
+			})
+			pending(t, r, "fix the problem")
+			absent(t, r, idiom)
+		}
+	})
+	t.Run("specifics elsewhere in the sentence", func(t *testing.T) {
+		for _, c := range []struct{ plan, said string }{
+			{"We will ship build 42 on Friday.", "No rollback after all, build 42 passed."},
+			{"We will ship v2.3 on Friday.", "I'm not doing the migration, we ship v2.3 on Friday."},
+		} {
+			r := run([]session.Entry{user("u1", c.plan), assistant("a1", "ok"), user("u2", c.said)})
+			pending(t, r, c.plan)
+			if o := find(t, r, "fact", c.said); o.Status != "" || len(o.Supersedes) != 0 {
+				t.Fatalf("%q: %+v", c.said, o)
+			}
+		}
+	})
+	t.Run("phrase specifics", func(t *testing.T) {
+		r := run([]session.Entry{
+			user("u1", "We will migrate the orders table to Postgres."),
+			user("u2", "We will migrate the users table to MySQL."),
+			user("u3", "Scrap the Postgres migration idea."),
+		})
+		postgres := find(t, r, "fact", "Postgres.")
+		pending(t, r, "MySQL")
+		if o := find(t, r, "correction", "Scrap the Postgres"); !slices.Equal(o.Supersedes, []string{postgres.ID}) {
+			t.Fatalf("retraction %+v", o)
+		}
+	})
+	t.Run("relative date", func(t *testing.T) {
+		r := run([]session.Entry{
+			userAt("u1", "Maybe I'll also do a 10K trail race in April, not decided yet.", "2026-05-06T10:00:00Z"),
+			assistant("a1", "ok"),
+			userAt("u2", "Scrap the trail race idea from yesterday.", "2026-05-07T10:00:00Z"),
+		})
+		plan := find(t, r, "fact", "10K trail race")
+		if o := find(t, r, "correction", "Scrap the trail race idea"); o.Status != ledger.StatusRetracted || !slices.Equal(o.Supersedes, []string{plan.ID}) {
+			t.Fatalf("retraction %+v", o)
+		}
+	})
+	t.Run("actually, withdrawing nothing", func(t *testing.T) {
+		r := run([]session.Entry{
+			user("u1", "I'll run a 5K in May."),
+			assistant("a1", "ok"),
+			user("u2", "Actually, scrap the triathlon idea, I'll run the 10K in June."),
+		})
+		pending(t, r, "5K")
+		if o := find(t, r, "correction", "triathlon"); o.Status != ledger.StatusProposed || len(o.Supersedes) != 0 {
+			t.Fatalf("fallback %+v", o)
+		}
+	})
+}

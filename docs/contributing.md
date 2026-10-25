@@ -4,7 +4,7 @@ This page says where changes go, what a pull request should contain, and which c
 
 ## Where changes land
 
-The extension is the Go module in `extensions/observational-memory`, run as a [PiG](https://github.com/MichaelKinsy/PiG) extension. [pig.md](pig.md) shows its package layout. A change that makes it behave differently from the TypeScript extension adds an entry to the migration notes there, so users moving over know what to expect.
+The extension is the Go module in `extensions/observational-memory`, run as a [PiG](https://github.com/MichaelKinsy/PiG) extension. [pig.md](pig.md) shows its package layout. A change that makes it behave differently from the TypeScript extension adds an entry to the migration notes there, so users moving over know what to expect; a design change updates [memory-v2.md](memory-v2.md).
 
 ## What a pull request contains
 
@@ -15,8 +15,9 @@ The extension is the Go module in `extensions/observational-memory`, run as a [P
 
 Two areas need extra care, because a mistake there loses memory silently:
 
-* **Token accounting.** Compaction, consolidation and memory storage count tokens in separate domains. A change to one must keep the trigger, `/om:status`, the docs and the tests aligned.
-* **Coverage markers.** A coverage marker claims that every source entry up to it was read. Any code that appends one must have read every source entry after the previous marker. Compaction must never discard source entries the observer has not covered.
+* **Token accounting.** The compaction trigger, the summary budget and memory storage count tokens in separate domains. A change to one must keep the trigger, `/om:status`, the docs and the tests aligned.
+* **Coverage markers.** A coverage marker claims that every source entry up to it was read. Any code that appends one must have read every source entry after the previous marker. Compaction must never discard source entries no extraction read.
+* **Requests.** The extension makes no model request outside a compaction and at most one inside it. Every request goes through `agents.Request`; tests count them with `testfix.CountRequests`.
 
 `AGENTS.md` holds the full list of these invariants.
 

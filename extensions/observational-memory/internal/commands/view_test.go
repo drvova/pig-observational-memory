@@ -220,9 +220,9 @@ func TestViewClipboardNotices(t *testing.T) {
 	}
 }
 
-// Under memory v2 /om:view leaves out a reflection level 1 replaced (Reflection.Supersedes), in
-// both modes; v1 shows it.
-func TestViewV2LeavesOutReplacedReflections(t *testing.T) {
+// /om:view leaves out a reflection level 1 replaced (Reflection.Supersedes), in both modes, as
+// the summaries and the memory tool do.
+func TestViewLeavesOutReplacedReflections(t *testing.T) {
 	obs := testfix.Observation("aaaaaaaaaaa1")
 	r1 := testfix.Reflection("bbbbbbbbbbb1", []string{obs.ID}, func(r *ledger.Reflection) { r.Content = "Deploys use port 8080" })
 	r2 := testfix.Reflection("bbbbbbbbbbb2", []string{obs.ID}, func(r *ledger.Reflection) {
@@ -236,13 +236,9 @@ func TestViewV2LeavesOutReplacedReflections(t *testing.T) {
 		testfix.CompactionEntry("c1", testfix.CompactionArgs{Summary: "memory", FirstKeptEntryID: "u2", Details: testfix.MemoryDetails(testfix.MemoryDetailsArgs{FullFold: true, Observations: []ledger.Observation{obs}, Reflections: []ledger.Reflection{r1, r2}})}),
 	}
 	for _, mode := range []string{"", "full"} {
-		v2, usage := commands.ViewOutputFor(entries, mode, true)
-		if usage || strings.Contains(v2, "port 8080") || !strings.Contains(v2, "port 9090") {
-			t.Fatalf("v2 %q:\n%s", mode, v2)
-		}
-		v1, _ := commands.ViewOutputFor(entries, mode, false)
-		if !strings.Contains(v1, "port 8080") || !strings.Contains(v1, "port 9090") {
-			t.Fatalf("v1 %q:\n%s", mode, v1)
+		out, usage := commands.ViewOutput(entries, mode)
+		if usage || strings.Contains(out, "port 8080") || !strings.Contains(out, "port 9090") {
+			t.Fatalf("%q:\n%s", mode, out)
 		}
 	}
 }

@@ -17,24 +17,21 @@ import (
 // memorySection names the system prompt section the index occupies.
 const memorySection = "curated-memory"
 
-// toolNoteLine is memory v2's one system-prompt line asking the session model to say, before a
+// toolNoteLine is the extension's one system-prompt line asking the session model to say, before a
 // tool call, what it is doing and why: level 0 keeps the text before an assistant message's first
 // tool call verbatim on that call's record (docs/memory-v2.md, "The model's own words"). The
 // model writes those words to the user, so the line names no memory, compaction or resuming,
 // which the model would otherwise repeat to the user before every call. It costs no request.
 const toolNoteLine = "Before each tool call, say in one short sentence what you are doing and why."
 
-// memorySectionText is the extension's system-prompt section: the curated index when curated
-// memory is on, led under memory v2 by toolNoteLine (a fixed line, so the prompt prefix stays
-// stable). set is false when there is nothing to show and the section is removed.
-func memorySectionText(index string, curatedOn, v2 bool) (text string, set bool) {
-	if !v2 {
-		return index, curatedOn
-	}
+// memorySectionText is the extension's system-prompt section: toolNoteLine (a fixed line, so
+// the prompt prefix stays stable), followed by the curated index when curated memory is on and
+// the index is not empty. The section is always set.
+func memorySectionText(index string, curatedOn bool) string {
 	if !curatedOn || index == "" {
-		return toolNoteLine, true
+		return toolNoteLine
 	}
-	return toolNoteLine + "\n\n" + index, true
+	return toolNoteLine + "\n\n" + index
 }
 
 // memoryPin is the index the current conversation was given. PiG keeps the
@@ -57,26 +54,24 @@ func curatedCall(h host.Host) (curated.Call, config.Config, bool) {
 	return curated.Call{Store: store, Project: projectRoot(h.Cwd()), Source: h.SessionID()}, cfg, true
 }
 
-// settleCurated runs memory v2's curated evidence check (harness.SettleCurated) at
-// session_start and agent_settled: code only, no request. Under v1, or with curated memory off,
-// it does nothing.
+// settleCurated runs the curated evidence check (harness.SettleCurated) at session_start and
+// agent_settled: code only, no request. With curated memory off it does nothing.
 func settleCurated(h host.Host) {
-	call, cfg, on := curatedCall(h)
-	if !on || !cfg.V2() {
+	call, _, on := curatedCall(h)
+	if !on {
 		return
 	}
 	_, _ = harness.SettleCurated(h, call)
 }
 
 // migrateLayerV2 migrates the written v1 worker instructions to memory v2 at session_start
-// (harness.MigrateLayerV2): code only, no request. Under v1, or without a store, it does
-// nothing.
+// (harness.MigrateLayerV2): code only, no request. Without a store it does nothing.
 func migrateLayerV2(h host.Host) {
 	call, cfg, on := curatedCall(h)
-	if !on || !cfg.V2() {
+	if !on {
 		return
 	}
-	harness.MigrateLayerV2(h, call.Store, harness.ModelKey(h.SessionModel()))
+	harness.MigrateLayerV2(h, call.Store, harness.ModelKey(h.SessionModel()), harness.WorkerModelKey(h, cfg))
 }
 
 // memoryToolSpec is the memory tool with description, run by the harness's manager.
@@ -106,8 +101,8 @@ func memoryToolSpec(manager *harness.Manager, description string) host.ToolSpec 
 // registerMemory wires the memory tool (docs/memory-interface.md, section 5), the
 // per-model harness and the tools the agent defines (section 6), and the
 // curated memory index section of the system prompt. rt reads the defined
-// tools the manager registered, the memory tools every worker leaves out of
-// what it reads (harness.MemoryToolNames).
+// tools the manager registered, the memory tools level-0 extraction leaves out
+// of what it reads (harness.MemoryToolNames).
 func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	manager := harness.NewManager(func(h host.ToolHost) (curated.Call, bool) {
 		call, _, on := curatedCall(h)
@@ -115,9 +110,9 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	})
 	manager.MemoryTool = func(description string) host.ToolSpec { return memoryToolSpec(manager, description) }
 	manager.IndexShown = memoryPin.Shown
-	manager.Config = func(h host.ToolHost) config.Config {
+	manager.WorkerKey = func(h host.ToolHost) string {
 		_, cfg, _ := curatedCall(h)
-		return cfg
+		return harness.WorkerModelKey(h, cfg)
 	}
 	rt.SetDefinedTools(manager.Registered)
 
@@ -140,11 +135,7 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 		}
 		// A section, not a returned systemPrompt: a returned prompt is forced
 		// for the whole run and drops the sections other extensions set.
-		if text, set := memorySectionText(index, on, cfg.V2()); set {
-			sections.Set(memorySection, text)
-		} else {
-			sections.Delete(memorySection)
-		}
+		sections.Set(memorySection, memorySectionText(index, on))
 		return nil, nil
 	})
 	// A new or resumed conversation, and one restarting from a compaction
@@ -158,8 +149,8 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 		settleCurated(h)
 		return nil, nil
 	})
-	// Memory v2 checks the evidence for staged memories, and the user corrections that flag
-	// saved ones, when the agent settles; the index is not re-rendered until its next render.
+	// The evidence for staged memories, and the user corrections that flag saved ones, are
+	// checked when the agent settles; the index is not re-rendered until its next render.
 	ext.OnEvent(sdk.EventAgentSettled, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		settleCurated(sdkhost.New(ctx))
 		return nil, nil

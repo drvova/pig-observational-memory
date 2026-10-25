@@ -23,7 +23,7 @@ func v2StoreSetup(t *testing.T, entries []ledger.Entry) (*runtime.Runtime, *test
 	rt, h := v2Setup(t, entries)
 	h.Home = t.TempDir()
 	store, ok := harness.StoreOf(h, rt.Config())
-	if !ok || !store.V2 {
+	if !ok || store.Layer().Engine != curated.EngineV2 {
 		t.Fatal("no v2 store")
 	}
 	return rt, h, store, harness.ModelKey(h.Model)

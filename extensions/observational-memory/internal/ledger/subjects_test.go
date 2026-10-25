@@ -1,15 +1,11 @@
 package ledger_test
 
 import (
-	"fmt"
 	"math/rand"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
-	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 // realSessionSubjects are the subjects an observer wrote for related notes in a real session.
@@ -170,141 +166,5 @@ func TestCanonicalSubjectsNoNestingIsIdentity(t *testing.T) {
 		if c.Subject != s || c.ExtraScope != "" {
 			t.Errorf("%q maps to %#v", s, c)
 		}
-	}
-}
-
-// The tables view groups by canonical subject, the qualifier joined into scope; the stored
-// records keep their subjects.
-func TestTablesFormatGroupsCanonicalSubjects(t *testing.T) {
-	observations := []ledger.Observation{}
-	for i, subject := range realSessionSubjects {
-		subject := subject
-		observations = append(observations, tf.Observation(padID(string(rune('a'+i)), 'a'), func(o *ledger.Observation) {
-			o.Timestamp = "2026-05-0" + string(rune('1'+i)) + " 10:00"
-			o.Content = "Note about " + subject + "."
-			o.Kind, o.Subject = "fact", subject
-			if subject == "running shoes" {
-				o.Scope = "trail"
-			}
-		}))
-	}
-	stored := append([]ledger.Observation{}, observations...)
-	text := ledger.RenderSummaryWithOptions(nil, observations, 0, ledger.RenderOptions{}).Text
-	if !reflect.DeepEqual(observations, stored) {
-		t.Fatal("rendering changed the records")
-	}
-	decoded, err := tables.Rows.Decode(strings.TrimPrefix(text, ledger.TablesUsageInstructions+"\n\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := []string{}
-	var running tables.Table
-	for _, table := range decoded {
-		names = append(names, table.Name)
-		if table.Name == "notes.running" {
-			running = table
-		}
-	}
-	if got := strings.Join(names, " "); got != "notes.running notes.half_marathon_training notes.fitness_routine notes.health_metrics" {
-		t.Fatalf("tables %q", got)
-	}
-	scopes := []string{}
-	for r := range running.Rows {
-		scope, _ := running.Cell(r, "scope")
-		scopes = append(scopes, scope)
-	}
-	if got := strings.Join(scopes, ","); got != ",training,gear,trail; shoes" {
-		t.Fatalf("scopes %q", got)
-	}
-}
-
-// The observer's memory lists the canonical subjects most used first, counted over every
-// observation; within a budget it lists only what the kept observations do not show.
-func TestBoundObserverMemoryListsCanonicalSubjects(t *testing.T) {
-	observations := []ledger.Observation{}
-	for i, subject := range append(realSessionSubjects, "running", "") {
-		observations = append(observations, tf.Observation(padID(string(rune('a'+i)), 'a'), func(o *ledger.Observation) { o.Subject = subject }))
-	}
-	memory := ledger.BoundObserverMemory(nil, observations, 0)
-	lines := []string{}
-	for _, s := range memory.Subjects {
-		lines = append(lines, s.Line())
-	}
-	if got := strings.Join(lines, "|"); got != "running: 5|fitness routine: 1|half marathon training: 1|health metrics: 1" {
-		t.Fatalf("subjects %q", got)
-	}
-	// Every observation fits: only the subject with several notes is worth a line.
-	roomy := ledger.BoundObserverMemory(nil, observations, 2000)
-	if len(roomy.Subjects) != 1 || roomy.Subjects[0] != (ledger.SubjectCount{Subject: "running", Count: 5}) || roomy.OmittedSubjects != 3 {
-		t.Fatalf("roomy subjects %+v omitted %d", roomy.Subjects, roomy.OmittedSubjects)
-	}
-	// Below the header's cost there is no list.
-	if tight := ledger.BoundObserverMemory(nil, observations, 20); tight.Subjects != nil || tight.OmittedSubjects != 4 {
-		t.Fatalf("tight subjects %+v omitted %d", tight.Subjects, tight.OmittedSubjects)
-	}
-	// The observer reads the kept observations with their canonical subject.
-	for _, line := range roomy.ObserverLines() {
-		if strings.Contains(line, "subject: running shoes") {
-			t.Fatalf("raw nested subject shown: %s", line)
-		}
-	}
-	// Without subjects the slice is the worker memory's.
-	plain := []ledger.Observation{tf.Observation(padID("a", 'a'))}
-	if got, want := ledger.BoundObserverMemory(nil, plain, 50), ledger.BoundWorkerMemory(nil, plain, 50, false); got.Subjects != nil || len(got.Observations) != len(want.Observations) {
-		t.Fatalf("plain %+v", got)
-	}
-}
-
-// Many distinct subjects do not crowd out the reflections, and the rendered prompt (subject
-// header included) stays within the budget.
-func TestBoundObserverMemorySubjectsKeepReflections(t *testing.T) {
-	observations := []ledger.Observation{}
-	for i := range 400 {
-		observations = append(observations, tf.Observation(fmt.Sprintf("%012x", i+1), func(o *ledger.Observation) {
-			o.Subject = fmt.Sprintf("topic %d", i)
-			o.Content = "Short note."
-		}))
-	}
-	reflections := []ledger.Reflection{}
-	for i := range 20 {
-		reflections = append(reflections, ledger.Reflection{ID: fmt.Sprintf("r%011x", i+1), Content: "A durable reflection about the user."})
-	}
-	const budget = 2000
-	memory := ledger.BoundObserverMemory(reflections, observations, budget)
-	if len(memory.Reflections) != len(reflections) {
-		t.Fatalf("kept %d of %d reflections", len(memory.Reflections), len(reflections))
-	}
-	if len(memory.Subjects) == 0 {
-		t.Fatal("no subject listed")
-	}
-	tokens := 0
-	for _, r := range memory.Reflections {
-		tokens += tokens4(ledger.ReflectionToSummaryLine(r))
-	}
-	for _, line := range memory.ObserverLines() {
-		tokens += tokens4(line)
-	}
-	tokens += tokens4(ledger.SubjectsHeader) + 1
-	for _, s := range memory.Subjects {
-		tokens += tokens4(s.Line())
-	}
-	if tokens > budget {
-		t.Fatalf("rendered %d tokens, budget %d", tokens, budget)
-	}
-}
-
-// tokens4 is the worker memory's line cost.
-func tokens4(line string) int { return (len([]rune(line))+3)/4 + 1 }
-
-// The observer line shows the canonical subject, and what the written subject adds after the
-// stored scope.
-func TestCanonicalObserverLine(t *testing.T) {
-	o := tf.Observation(padID("a", 'a'), func(o *ledger.Observation) { o.Kind, o.Subject, o.Scope = "fact", "running shoes", "trail" })
-	canonical := ledger.CanonicalSubjects([]string{"running", "running shoes"})
-	if got := ledger.ObservationToCanonicalObserverLine(o, canonical[o.Subject]); !strings.HasSuffix(got, "{kind: fact; subject: running; scope: trail; shoes}") {
-		t.Fatalf("line %q", got)
-	}
-	if got, want := ledger.ObservationToObserverLine(o), ledger.ObservationToSummaryLine(o)+" {kind: fact; subject: running shoes; scope: trail}"; got != want {
-		t.Fatalf("raw line %q, want %q", got, want)
 	}
 }

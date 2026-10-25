@@ -96,16 +96,10 @@ func NothingVisibleNote(entries []ledger.Entry) string {
 // ViewUsage is the /om:view usage line.
 const ViewUsage = "Usage: /om:view [full]"
 
-// ViewOutput renders /om:view for a mode ("", "visible" or "full"); usage is
-// true when the mode is unknown.
+// ViewOutput renders /om:view for a mode ("", "visible" or "full"); usage is true when the
+// mode is unknown. It leaves out the reflections level 1 replaced (ledger.ActiveReflections),
+// as the summaries and the memory tool do. It only reads.
 func ViewOutput(entries []ledger.Entry, mode string) (output string, usage bool) {
-	return ViewOutputFor(entries, mode, false)
-}
-
-// ViewOutputFor is ViewOutput under the engine v2 names: memory v2 leaves out the reflections
-// level 1 replaced (ledger.ActiveReflections), as its summaries and memory tool do. It only
-// reads.
-func ViewOutputFor(entries []ledger.Entry, mode string, v2 bool) (output string, usage bool) {
 	var projection ledger.Projection
 	scope := "visible"
 	switch mode {
@@ -116,9 +110,7 @@ func ViewOutputFor(entries []ledger.Entry, mode string, v2 bool) (output string,
 	default:
 		return ViewUsage, true
 	}
-	if v2 {
-		projection.Reflections = ledger.ActiveReflections(projection.Reflections)
-	}
+	projection.Reflections = ledger.ActiveReflections(projection.Reflections)
 	return RenderContentOnlyProjection(projection, scope), false
 }
 
@@ -156,7 +148,7 @@ func RunView(rt *runtime.Runtime, h host.Host, args string, copyText CopyFunc) e
 			return nil
 		}
 	}
-	output, usage := ViewOutputFor(entries, mode, rt.Config().V2())
+	output, usage := ViewOutput(entries, mode)
 	if usage {
 		h.Notify(output, "info")
 		return nil

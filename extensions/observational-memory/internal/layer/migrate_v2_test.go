@@ -78,7 +78,9 @@ func TestMigrateToV2(t *testing.T) {
 }
 
 // block is a v1 stage's folded block.
-func block(name, text string) string { return foldHeader(name) + "\n" + text + "\n" + foldFooter(name) }
+func block(name, text string) string {
+	return foldHeader(name, "") + "\n" + text + "\n" + foldFooter(name, "")
+}
 
 // A model's own consolidation instructions replace the all-models ones entirely, so a model's
 // fold carries what v1 had it inherit: with a reflector addition kept for all models and the
@@ -120,7 +122,7 @@ func TestMigrateToV2KeepsInheritedAdditions(t *testing.T) {
 	if again, _ := s.MigrateToV2(model, "consolidation", extend, retire); len(again) != 1 || again[0].Name != "reflector" {
 		t.Fatalf("edit kept for all models not migrated: %+v", again)
 	}
-	if c, _ := s.Get(model, KindInstructions, "consolidation"); strings.Count(c.Text, foldHeader("reflector")) != 1 || !strings.Contains(c.Text, "Reflect on deploys and releases.") {
+	if c, _ := s.Get(model, KindInstructions, "consolidation"); strings.Count(c.Text, foldHeader("reflector", "")) != 1 || !strings.Contains(c.Text, "Reflect on deploys and releases.") {
 		t.Fatalf("consolidation %q", c.Text)
 	}
 
@@ -131,5 +133,73 @@ func TestMigrateToV2KeepsInheritedAdditions(t *testing.T) {
 	}
 	if _, err := s.Get(other, KindInstructions, "consolidation"); err == nil {
 		t.Fatal("a model with nothing of its own got a consolidation of its own")
+	}
+}
+
+// v1 kept every kind but a summary for its memory-worker model, so with a separate `model` the
+// observer's and reflector's additions live in the worker's layer. MigrateWorkerToV2 folds the
+// worker's own additions into the session model's consolidation instructions as blocks naming
+// the worker, beside the session's own block of the same stage, retires its replace-mode and
+// dropper texts, marks each content once per session model, follows a later v1 edit, removes
+// the block once v1's addition is gone, and leaves the worker's files as they were.
+func TestMigrateWorkerToV2(t *testing.T) {
+	const worker = "p/haiku"
+	s := newStore(t, map[string]string{SeedKey(KindInstructions, "consolidation"): "seed"})
+	at := func(m string, d Definition) Definition { d.Model = m; return d }
+	mustPut(t, s, instr("observer", "Note every port."))
+	mustPut(t, s, at(worker, instr("observer", "Note every version.")))
+	mustPut(t, s, at(worker, instr("reflector", "Mode: replace\nOnly deploys.")))
+	mustPut(t, s, at(worker, instr("dropper", "Never drop a port.")))
+	extend, retire := []string{"observer", "reflector"}, []string{"dropper"}
+
+	if none, err := s.MigrateWorkerToV2(model, model, "consolidation", extend, retire); err != nil || len(none) != 0 {
+		t.Fatalf("the session model as worker: %+v (%v)", none, err)
+	}
+	if _, err := s.MigrateToV2(model, "consolidation", extend, retire); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.MigrateWorkerToV2(model, worker, "consolidation", extend, retire)
+	if err != nil || len(got) != 3 || !got[0].Folded || !got[0].Worker || got[0].From != worker || got[0].Name != "observer" || got[1].Folded || got[2].Folded {
+		t.Fatalf("migrations %+v (%v)", got, err)
+	}
+	if !strings.Contains(got[0].Message(), "kept for its memory model "+worker) || !strings.Contains(got[2].Message(), "kept for its memory model "+worker) {
+		t.Fatalf("messages %q / %q", got[0].Message(), got[2].Message())
+	}
+	workerBlock := foldHeader("observer", worker) + "\nNote every version.\n" + foldFooter("observer", worker)
+	c, err := s.Get(model, KindInstructions, "consolidation")
+	if err != nil || c.Text != block("observer", "Note every port.")+"\n\n"+workerBlock {
+		t.Fatalf("consolidation %q (%v)", c.Text, err)
+	}
+	if again, _ := s.MigrateWorkerToV2(model, worker, "consolidation", extend, retire); len(again) != 0 {
+		t.Fatalf("migrated twice: %+v", again)
+	}
+	if again, _ := s.MigrateToV2(model, "consolidation", extend, retire); len(again) != 0 {
+		t.Fatalf("the worker's markers re-ran the session's migration: %+v", again)
+	}
+	for _, name := range []string{"observer", "reflector", "dropper"} {
+		if _, err := s.Get(worker, KindInstructions, name); err != nil {
+			t.Fatalf("the worker's %s removed: %v", name, err)
+		}
+	}
+	// Another session model folds the worker's additions too, once.
+	if other, _ := s.MigrateWorkerToV2("p/other", worker, "consolidation", extend, retire); len(other) != 3 || !other[0].Folded {
+		t.Fatalf("other session model: %+v", other)
+	}
+	// A later v1 edit replaces the worker's block; v1 forgetting it removes the block.
+	mustPut(t, s, at(worker, instr("observer", "Note every version and port.")))
+	if later, _ := s.MigrateWorkerToV2(model, worker, "consolidation", extend, retire); len(later) != 1 || !later[0].Folded {
+		t.Fatalf("later edit: %+v", later)
+	}
+	if c, _ := s.Get(model, KindInstructions, "consolidation"); strings.Count(c.Text, foldHeader("observer", worker)) != 1 || !strings.Contains(c.Text, "Note every version and port.") || !strings.Contains(c.Text, "Note every port.") {
+		t.Fatalf("after the edit %q", c.Text)
+	}
+	if _, _, err := s.Forget(worker, KindInstructions, "observer", "s2"); err != nil {
+		t.Fatal(err)
+	}
+	if removed, _ := s.MigrateWorkerToV2(model, worker, "consolidation", extend, retire); len(removed) != 1 || !removed[0].Removed || !removed[0].Worker {
+		t.Fatalf("removal: %+v", removed)
+	}
+	if c, _ := s.Get(model, KindInstructions, "consolidation"); strings.Contains(c.Text, foldHeader("observer", worker)) || !strings.Contains(c.Text, "Note every port.") {
+		t.Fatalf("after the removal %q", c.Text)
 	}
 }

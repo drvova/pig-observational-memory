@@ -9,13 +9,6 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 )
 
-func newV2Store(t *testing.T) curated.Store {
-	t.Helper()
-	store := newStore(t)
-	store.V2 = true
-	return store
-}
-
 // v2Compaction records one memory v2 compaction of p/m after a detector run counting counts over
 // tokens source tokens.
 func v2Compaction(t *testing.T, store curated.Store, tokens int, counts map[string]int, level1 map[string]int) []Transition {
@@ -23,7 +16,7 @@ func v2Compaction(t *testing.T, store curated.Store, tokens int, counts map[stri
 	if err := RecordDetection(store, "p/m", Findings{Counts: counts}, tokens); err != nil {
 		t.Fatal(err)
 	}
-	ts, err := AfterPass(store, "p/m", Pass{Stage: StageCompaction, Engine: curated.EngineV2, Counts: level1})
+	ts, err := AfterPass(store, "p/m", Pass{Counts: level1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,12 +46,12 @@ func TestDetectV2CountsOnlyV2Detectors(t *testing.T) {
 // compaction (counts and tokens), adds level 1's code checks and the memory syntax errors
 // counted under v2 since then, and ignores what v1 counted.
 func TestV2CompactionSumsDetectorRunsSinceTheLastOne(t *testing.T) {
-	store := newV2Store(t)
+	store := newStore(t)
 	_ = RecordDetection(store, "p/m", Findings{Counts: map[string]int{DetectUncitedAssistantSpecifics: 1}}, 40)
 	_ = RecordDetection(store, "p/m", Findings{Counts: map[string]int{DetectUncitedAssistantSpecifics: 2, DetectDroppedThenQueried: 1}, DroppedKinds: map[string]int{"fact": 1}}, 60)
 	_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindMemory, Syntax: true, Outcome: curated.OutcomeError, Engine: curated.EngineV2})
 	_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindMemory, Syntax: true, Outcome: curated.OutcomeError}) // v1's
-	if _, err := AfterPass(store, "p/m", Pass{Stage: StageCompaction, Engine: curated.EngineV2, Counts: map[string]int{CountLevel1Refused: 2, CountLevel1UnionKept: 0}}); err != nil {
+	if _, err := AfterPass(store, "p/m", Pass{Counts: map[string]int{CountLevel1Refused: 2, CountLevel1UnionKept: 0}}); err != nil {
 		t.Fatal(err)
 	}
 	events, _ := store.ModelEvents("p/m")
@@ -67,8 +60,8 @@ func TestV2CompactionSumsDetectorRunsSinceTheLastOne(t *testing.T) {
 	if p.Kind != curated.ModelKindPass || p.Stage != StageCompaction || p.Engine != curated.EngineV2 || p.Tokens != 100 || !reflect.DeepEqual(p.Counts, want) || p.Kinds["fact"] != 1 {
 		t.Fatalf("pass %+v", p)
 	}
-	if !isCompactionPass(p) || isObserverPass(p) || isGradedPass(p) {
-		t.Fatal("a v2 compaction must be v2 evidence only")
+	if !isCompactionPass(p) {
+		t.Fatal("a compaction is evidence")
 	}
 	// The next compaction starts a new unit: the runs before it are not counted again.
 	v2Compaction(t, store, 10, nil, nil)
@@ -78,7 +71,7 @@ func TestV2CompactionSumsDetectorRunsSinceTheLastOne(t *testing.T) {
 	}
 	// An empty compaction is no evidence, and the runs before it count for none.
 	_ = RecordDetection(store, "p/m", Findings{Counts: map[string]int{DetectUncitedAssistantSpecifics: 5}}, 30)
-	if _, err := AfterPass(store, "p/m", Pass{Stage: StageCompaction, Engine: curated.EngineV2, Empty: true}); err != nil {
+	if _, err := AfterPass(store, "p/m", Pass{Empty: true}); err != nil {
 		t.Fatal(err)
 	}
 	events, _ = store.ModelEvents("p/m")
@@ -87,11 +80,11 @@ func TestV2CompactionSumsDetectorRunsSinceTheLastOne(t *testing.T) {
 	}
 }
 
-// Under v2 the harness writes keep-head for a rising uncited count, never require-kind (a
-// re-ask is a request), and only after MinEvidence compactions; the rule is v2's, so v1's For
-// never applies it and v2's does, and v1's rules never apply under v2.
+// The harness writes keep-head for a rising uncited count, never require-kind (a re-ask is a
+// request), and only after MinEvidence compactions; the rule is v2's, and a rule memory v1
+// wrote never applies.
 func TestV2HarnessWritesKeepHeadOnCompactions(t *testing.T) {
-	store := newV2Store(t)
+	store := newStore(t)
 	uncited := map[string]int{DetectUncitedAssistantSpecifics: 1}
 	if _, err := Add(store, Rule{Detector: DetectThinChunk, Remedy: RemedySplitChunk, Models: []string{"p/m"}, State: StateEstablished}); err != nil {
 		t.Fatal(err)
@@ -115,11 +108,6 @@ func TestV2HarnessWritesKeepHeadOnCompactions(t *testing.T) {
 	if !v2.Has(RemedyKeepHead) || v2.Has(RemedySplitChunk) || v2.Has(RemedyRequireKind) {
 		t.Fatalf("v2 rules %+v", v2.Rules)
 	}
-	v1Store := store
-	v1Store.V2 = false
-	if v1 := For(v1Store, "p/m"); v1.Has(RemedyKeepHead) || !v1.Has(RemedySplitChunk) {
-		t.Fatalf("v1 rules %+v", v1.Rules)
-	}
 	// The stored v2 rule reads back whole, engine included.
 	all, _ := List(store)
 	found := false
@@ -137,37 +125,35 @@ func TestV2HarnessWritesKeepHeadOnCompactions(t *testing.T) {
 	}
 }
 
-// v1's evaluation never reads a v2 compaction: three v2 passes with rising counts write no v1
-// rule, and a v1 rule on probation is not judged by them.
-func TestV1EvaluateIgnoresV2Passes(t *testing.T) {
-	v2pass := curated.ModelEvent{Kind: curated.ModelKindPass, Stage: StageCompaction, Engine: curated.EngineV2, Tokens: 100, Counts: map[string]int{DetectThinChunk: 1, DetectUncitedAssistantSpecifics: 1}, Revisions: Revisions()}
-	events := []curated.ModelEvent{v2pass, v2pass, v2pass}
-	if changed, _ := Evaluate("p/m", events, nil, t0); len(changed) != 0 {
-		t.Fatalf("v1 wrote %+v from v2 passes", changed)
+// Memory v1's observer passes are never evidence: three of them with rising counts write no
+// rule, and a rule on probation is not judged by them; a v1 rule file reads as it always did.
+func TestV1PassesAreNeverEvidence(t *testing.T) {
+	events := []curated.ModelEvent{v1Pass(100, map[string]int{DetectUncitedAssistantSpecifics: 1}), v1Pass(100, map[string]int{DetectUncitedAssistantSpecifics: 1}), v1Pass(100, map[string]int{DetectUncitedAssistantSpecifics: 1})}
+	if changed, _ := evaluateSeed("p/m", events, nil, t0); len(changed) != 0 {
+		t.Fatalf("wrote %+v from v1 passes", changed)
 	}
-	probation := Rule{ID: "r1", Detector: DetectThinChunk, Remedy: RemedySplitChunk, Models: []string{"p/m"}, State: StateProbation, BaselineEvents: 3, BaselineTokens: 300}
-	if changed, _ := Evaluate("p/m", events, []Rule{probation}, t0); len(changed) != 0 {
-		t.Fatalf("v2 passes judged a v1 rule: %+v", changed)
+	probation := Rule{ID: "r1", Detector: DetectUncitedAssistantSpecifics, Remedy: RemedyKeepHead, Models: []string{"p/m"}, State: StateProbation, BaselineEvents: 3, BaselineTokens: 300, Engine: curated.EngineV2}
+	if changed, _ := evaluateSeed("p/m", events, []Rule{probation}, t0); len(changed) != 0 {
+		t.Fatalf("v1 passes judged a rule: %+v", changed)
 	}
-	// And a v1 rule file reads and writes as it always did: no engine column.
-	if text := encode(probation); strings.Contains(text, "engine") {
+	v1Rule := Rule{Detector: DetectThinChunk, Remedy: RemedySplitChunk}
+	if text := encode(v1Rule); strings.Contains(text, "engine") {
 		t.Fatalf("v1 rule text %s", text)
 	}
-	if (Rule{Detector: DetectThinChunk, Remedy: RemedySplitChunk}).Signature() != strings.Join([]string{DetectThinChunk, RemedySplitChunk, "", "", ""}, "\x1f") {
+	if v1Rule.Signature() != strings.Join([]string{DetectThinChunk, RemedySplitChunk, "", "", ""}, "\x1f") {
 		t.Fatal("a v1 rule's signature changed")
 	}
 }
 
-// A model's proposal under v2 must answer a v2 detector with a code-only remedy; it is held as a
-// v2 rule.
+// A model's proposal must answer a v2 detector with a code-only remedy; it is held as a v2 rule.
 func TestV2ProposalsTakeOnlyCodeRemedies(t *testing.T) {
-	store := newV2Store(t)
+	store := newStore(t)
 	for _, p := range []Proposal{
 		{Detector: DetectUncitedAssistantSpecifics, Remedy: RemedyRequireKind},
 		{Detector: DetectThinChunk, Remedy: RemedySplitChunk},
 		{Detector: DetectCrossScopeSupersede, Remedy: RemedyPromptLine, Text: "Never supersede across scopes."},
 	} {
-		if _, err := Propose(store, "p/m", nil, p); err == nil || !strings.Contains(err.Error(), "memoryEngine v2") {
+		if _, err := Propose(store, "p/m", nil, p); err == nil || !strings.Contains(err.Error(), "a rule answers") {
 			t.Fatalf("%+v: %v", p, err)
 		}
 	}

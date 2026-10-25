@@ -93,15 +93,11 @@ func TestV2ThinsAgedToolResultsWithoutRequests(t *testing.T) {
 	}
 }
 
-func TestThinningOffUnderV1AndPassive(t *testing.T) {
-	for _, mode := range []string{"v1", "passive"} {
+func TestThinningOffWhenPassive(t *testing.T) {
+	for _, mode := range []string{"passive"} {
 		rt, h := v2Setup(t, thinBranch())
 		cfg := rt.Config()
-		if mode == "v1" {
-			cfg.MemoryEngine = config.EngineV1
-		} else {
-			cfg.Passive = true
-		}
+		cfg.Passive = true
 		rt.SetConfig(cfg)
 		messages := contextMessages(t, thinBranch())
 		before, _ := json.Marshal(messages)
@@ -204,10 +200,6 @@ func TestV2NothingToCompactSuspendsUntilTheTipChanges(t *testing.T) {
 	branch, _ := h.GetBranch()
 	if ActiveV2CompactionSuspension(rt, h, branch) == nil {
 		t.Fatal("no suspension recorded")
-	}
-	// A v1 backoff check never reads a v2 suspension.
-	if ActiveCompactionBackoff(rt, h, branch) != nil {
-		t.Fatal("v1 read the v2 suspension")
 	}
 	h.SetBranch(append(branch, userMessage("u2", "more")))
 	waitDone(t, MaybeTriggerCompaction(rt, h))

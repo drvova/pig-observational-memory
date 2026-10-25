@@ -49,7 +49,7 @@ func logEvents(t *testing.T, dir, event string) []map[string]any {
 
 func resolveLogged(models host.Models, model host.Model) runtime.ResolveResult {
 	ctx := debuglog.With(context.Background(), debuglog.Context{Enabled: true})
-	return withConfig(nil).ResolveModel(ctx, runtime.ResolveCtx{Model: model, Models: models})
+	return withConfig(nil).ResolveSessionModel(ctx, runtime.ResolveCtx{Model: model, Models: models})
 }
 
 func expectData(t *testing.T, data map[string]any, want map[string]any) {

@@ -168,16 +168,17 @@ func notesRelation(env Env, view *pointInTime) *relation {
 	// note carries one; a note without one has it empty. A field a schema added before the
 	// kernel took its name (raw_subject, subject_scope, and under memory v2 status, event_date
 	// and the source fields) is listed as schema_<name>, so its values stay readable beside the
-	// kernel's field. Under v1, whose records leave the level-0 fields empty, a stored schema
-	// field with one of those names keeps its name: its values fill that column (kept), so a
-	// query or summary written against it reads what it read before.
+	// kernel's field. Outside a tool call (a detector's or summary's query over records that may
+	// be memory v1's, which leave the level-0 fields empty), a stored schema field with one of
+	// those names keeps its name: its values fill that column (kept), so a query or summary
+	// written against it reads what it read before.
 	added := []string{}
 	columns := map[string]string{}
 	kept := map[int]string{}
 	for _, o := range active {
 		for name := range o.Fields {
 			column := name
-			if contains(LevelZeroNoteFields, name) && !env.V2 {
+			if contains(LevelZeroNoteFields, name) && !env.ToolCall {
 				kept[slices.Index(NoteFields, name)] = name
 				continue
 			}
@@ -309,7 +310,7 @@ func reflectionsRelation(env Env, view *pointInTime) *relation {
 // included (serialize.HistoryText); the calls and results of the memory tool and of the
 // tools the agent defined with it are left out.
 //
-// Under memory v2 (Env.V2) history reads the text extraction reads (historyText: no thinking,
+// On a tool call (Env.ToolCall) history reads the text extraction reads (historyText: no thinking,
 // no harness markup in a user message), leaves out the current turn, and lists newest first;
 // the off-path fallback lists the session file's entries off the branch in file order, each id
 // labelled OffPathLabel.
@@ -317,11 +318,11 @@ func historyRelation(env Env) *relation {
 	rel := &relation{name: SourceHistory, fields: HistoryFields, rows: [][]string{}, from: []string{}, to: []string{}, clip: map[string]bool{"content": true}}
 	skip := env.memoryTools()
 	entries := env.Entries
-	if env.V2 && !env.offPath {
+	if env.ToolCall && !env.offPath {
 		entries = entries[:currentTurnStart(entries)]
 	}
 	for _, entry := range entries {
-		role, text, ok := historyText(entry, env.V2, skip)
+		role, text, ok := historyText(entry, env.ToolCall, skip)
 		if !ok {
 			continue
 		}
@@ -337,7 +338,7 @@ func historyRelation(env Env) *relation {
 		rel.rows = append(rel.rows, []string{id, when, role, text})
 		rel.from, rel.to = append(rel.from, day), append(rel.to, day)
 	}
-	if env.V2 && !env.offPath {
+	if env.ToolCall && !env.offPath {
 		reverseRelation(rel)
 	}
 	return rel
@@ -361,7 +362,7 @@ func entryTimestamp(entry ledger.Entry) any {
 
 // savedRelation lists the curated memories visible from this project, ranked as the index
 // ranks them, then the defined queries. A staged memory is listed only in the sessions that
-// staged it (curated.SeenBy); under memory v2 each row carries its state (FieldState).
+// staged it (curated.SeenBy); on a tool call each row carries its state (FieldState).
 func savedRelation(env Env) (*relation, error) {
 	if env.Saved == nil {
 		return nil, errCuratedOff
@@ -379,7 +380,7 @@ func savedRelation(env Env) (*relation, error) {
 	}
 	usage := store.RankUsage()
 	fields := SavedFields
-	if env.V2 {
+	if env.ToolCall {
 		fields = SavedFieldsV2
 	}
 	rel := &relation{name: SourceSaved, fields: fields, rows: [][]string{}, from: []string{}, to: []string{}}
@@ -390,13 +391,13 @@ func savedRelation(env Env) (*relation, error) {
 		}
 		day := m.Updated.Format("2006-01-02")
 		row := []string{m.Name, m.Type, scope, day, m.Description, m.Body}
-		if env.V2 {
+		if env.ToolCall {
 			row = append(row, memoryState(m, usage[m.Name]))
 		}
 		rel.rows = append(rel.rows, row)
 		rel.from, rel.to = append(rel.from, day), append(rel.to, day)
 	}
-	if env.V2 {
+	if env.ToolCall {
 		// A memory file the validator refuses is not loaded, but never silently: its row names
 		// it and why, so the model can edit it within the validator or forget it.
 		refused, _ := store.Refused(env.Saved.Project)
@@ -412,7 +413,7 @@ func savedRelation(env Env) (*relation, error) {
 	for _, d := range definitions {
 		day := d.Created.Format("2006-01-02")
 		row := []string{d.Name, savedQueryType, "global", day, d.Description, d.Query}
-		if env.V2 {
+		if env.ToolCall {
 			row = append(row, "")
 		}
 		rel.rows = append(rel.rows, row)
@@ -466,7 +467,7 @@ func harnessRelation(env Env) (*relation, error) {
 func runRecall(env Env, id string) (string, *recall.Details, []string, error) {
 	if ledger.MemoryIDPattern.MatchString(id) {
 		recallEntries := env.Entries
-		if env.V2 {
+		if env.ToolCall {
 			// Thinking is never returned or counted under v2, by the record's sources either.
 			recallEntries = serialize.WithoutThinking(env.Entries)
 		}
@@ -487,7 +488,7 @@ func runRecall(env Env, id string) (string, *recall.Details, []string, error) {
 			continue
 		}
 		render := serialize.RenderRecallSourceEntry
-		if env.V2 {
+		if env.ToolCall {
 			render = serialize.RenderRecallSourceEntryText
 		}
 		rendered, ok := render(entry)

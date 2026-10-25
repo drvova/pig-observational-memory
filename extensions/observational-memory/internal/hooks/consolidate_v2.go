@@ -94,7 +94,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	if !resolved.OK {
 		return skip("the session model is unavailable: " + resolved.Reason)
 	}
-	resolved = workerHeadersFor(h, resolved)
+	resolved = sessionHeadersFor(h, resolved)
 	window := host.ModelContextWindow(resolved.Model)
 	if window <= 0 {
 		return skip(level1NoWindow)
@@ -162,7 +162,6 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 
 	answer, err := agents.RunSingleRequest(ctx, h.Models().Stream, agents.SingleRequestConfig{
 		Stage:     consolidate.Stage,
-		Engine:    cfg.Engine(),
 		Model:     resolved.Model,
 		APIKey:    resolved.APIKey,
 		Headers:   resolved.Headers,

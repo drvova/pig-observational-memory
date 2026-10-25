@@ -1,4 +1,4 @@
-// Package serialize renders session entries as the memory workers and the
+// Package serialize renders session entries as level-0 extraction, the level-1 input and the
 // memory tool read them.
 package serialize
 
@@ -480,12 +480,6 @@ func ObserverRenders(entry session.Entry, skipTools ...string) bool {
 		return false
 	}
 	return strings.TrimSpace(SerializeBranchEntries([]session.Entry{entry}, skipTools...)) != ""
-}
-
-// ObserverRendersFunc is ObserverRenders with skipTools bound, as the ledger's
-// needs-coverage predicates take it.
-func ObserverRendersFunc(skipTools []string) func(session.Entry) bool {
-	return func(entry session.Entry) bool { return ObserverRenders(entry, skipTools...) }
 }
 
 // SerializeSourceAddressedBranchEntries serializes complete source entries up

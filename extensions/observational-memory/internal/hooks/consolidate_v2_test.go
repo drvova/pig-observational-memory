@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
@@ -180,7 +179,7 @@ func TestV2Level1CancelledBeforeStart(t *testing.T) {
 	rt, h, entries := level1Setup(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	outcome := HandleBeforeCompactRequest(context.Background(), ctx, rt, h, v2Event(entries, "u2", 20_000, "manual"))
+	outcome := HandleBeforeCompactRequest(ctx, rt, h, v2Event(entries, "u2", 20_000, "manual"))
 	if outcome.Compaction != nil || outcome.Cancel || counter.Total() != 0 {
 		t.Fatalf("outcome %+v, requests %v", outcome, counter.ByStage())
 	}
@@ -194,7 +193,7 @@ func TestV2Level1AbortedDuringRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan BeforeCompactOutcome)
 	go func() {
-		done <- HandleBeforeCompactRequest(context.Background(), ctx, rt, h, v2Event(entries, "u2", 20_000, "manual"))
+		done <- HandleBeforeCompactRequest(ctx, rt, h, v2Event(entries, "u2", 20_000, "manual"))
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for h.ModelsFake.Streams.Calls() == 0 && time.Now().Before(deadline) {
@@ -270,19 +269,16 @@ func TestV2Level1UnionKeepsFacts(t *testing.T) {
 	}
 }
 
-// Level 1 runs on the session model only: a configured `model` and `fallbackModel`, both
-// registered with auth, are never asked, and a failed request is not retried on either.
-func TestV2Level1IgnoresConfiguredAndFallbackModels(t *testing.T) {
+// Level 1 runs on the session model only: other models registered with auth (memory v1's
+// `model` and `fallbackModel` would have named them) are never asked, and a failed request is
+// not retried on any of them.
+func TestV2Level1RunsOnTheSessionModelOnly(t *testing.T) {
 	counter := testfix.CountRequests(t)
 	rt, h, entries := level1Setup(t, testfix.AssistantError("error", "overloaded"), mergeReply("Staging deploys run from the Makefile on port 8080"))
 	configured := testfix.Model("openai", "memory", map[string]any{"contextWindow": 200_000, "maxTokens": 32_000})
 	fallback := testfix.Model("openai", "fallback", map[string]any{"contextWindow": 200_000, "maxTokens": 32_000})
 	h.ModelsFake.Add(configured, testfix.KeyAuth("key"))
 	h.ModelsFake.Add(fallback, testfix.KeyAuth("key"))
-	cfg := rt.Config()
-	cfg.Model = &config.ConfiguredModel{Provider: "openai", ID: "memory"}
-	cfg.FallbackModel = &config.ConfiguredModel{Provider: "openai", ID: "fallback"}
-	rt.SetConfig(cfg)
 
 	compaction := level1CompactionOf(t, runV2Hook(rt, h, v2Event(entries, "u2", 20_000, "threshold")))
 

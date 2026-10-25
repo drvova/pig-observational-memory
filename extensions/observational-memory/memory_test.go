@@ -149,20 +149,16 @@ func TestCuratedCallReadsProjectSettingsOnlyWhenTrusted(t *testing.T) {
 	}
 }
 
-// Memory v2 leads the section with its one tool-note line, also when curated memory is off; v1's
-// section is the index alone, removed when curated memory is off.
+// The section leads with the one tool-note line, also when curated memory is off.
 func TestMemorySectionText(t *testing.T) {
-	if text, set := memorySectionText("INDEX", true, false); !set || text != "INDEX" {
-		t.Fatalf("v1 on: %q %v", text, set)
+	if text := memorySectionText("INDEX", true); text != toolNoteLine+"\n\nINDEX" {
+		t.Fatalf("on: %q", text)
 	}
-	if _, set := memorySectionText("", false, false); set {
-		t.Fatal("v1 off kept the section")
+	if text := memorySectionText("", false); text != toolNoteLine {
+		t.Fatalf("off: %q", text)
 	}
-	if text, set := memorySectionText("INDEX", true, true); !set || text != toolNoteLine+"\n\nINDEX" {
-		t.Fatalf("v2 on: %q", text)
-	}
-	if text, set := memorySectionText("", false, true); !set || text != toolNoteLine {
-		t.Fatalf("v2 off: %q", text)
+	if text := memorySectionText("", true); text != toolNoteLine {
+		t.Fatalf("empty index: %q", text)
 	}
 }
 
@@ -181,9 +177,9 @@ func TestToolNoteLineNamesNoMemoryMachinery(t *testing.T) {
 	}
 }
 
-// The context handler follows the engine: subscribed once under v2, unsubscribed under v1, so
-// v1 is sent no request context at all.
-func TestContextSubscriptionFollowsTheEngine(t *testing.T) {
+// The context handler follows the configuration: subscribed once while wanted, unsubscribed in
+// passive mode, so a passive session is sent no request context at all.
+func TestContextSubscriptionFollowsPassive(t *testing.T) {
 	subscribed, unsubscribed := 0, 0
 	c := &contextSubscription{subscribe: func() func() {
 		subscribed++
@@ -193,27 +189,22 @@ func TestContextSubscriptionFollowsTheEngine(t *testing.T) {
 	c.sync(true)
 	c.sync(true)
 	if subscribed != 1 || unsubscribed != 0 {
-		t.Fatalf("v2: subscribed %d, unsubscribed %d", subscribed, unsubscribed)
+		t.Fatalf("wanted: subscribed %d, unsubscribed %d", subscribed, unsubscribed)
 	}
 	c.sync(false)
 	c.sync(false)
 	if subscribed != 1 || unsubscribed != 1 {
-		t.Fatalf("v1: subscribed %d, unsubscribed %d", subscribed, unsubscribed)
+		t.Fatalf("not wanted: subscribed %d, unsubscribed %d", subscribed, unsubscribed)
 	}
 	rt := runtime.New()
 	cfg := config.Defaults
 	rt.SetConfig(cfg)
-	if wantsContext(rt) {
-		t.Fatal("v1 wants the context")
-	}
-	cfg.MemoryEngine = config.EngineV2
-	rt.SetConfig(cfg)
 	if !wantsContext(rt) {
-		t.Fatal("v2 does not want the context")
+		t.Fatal("the extension does not want the context")
 	}
 	cfg.Passive = true
 	rt.SetConfig(cfg)
 	if wantsContext(rt) {
-		t.Fatal("passive v2 wants the context")
+		t.Fatal("passive mode wants the context")
 	}
 }

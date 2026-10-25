@@ -165,15 +165,6 @@ func TestFullFoldPressureInclusive(t *testing.T) {
 	}
 }
 
-func TestDiffProjection(t *testing.T) {
-	visible := ledger.Projection{Observations: []ledger.Observation{tf.Observation("aaaaaaaaaaaa")}, Reflections: []ledger.Reflection{}}
-	full := ledger.Projection{Observations: []ledger.Observation{tf.Observation("aaaaaaaaaaaa"), tf.Observation("bbbbbbbbbbbb")}, Reflections: []ledger.Reflection{tf.Reflection("eeeeeeeeeeee", []string{"bbbbbbbbbbbb"})}}
-	diff := ledger.DiffProjection(visible, full)
-	if !reflect.DeepEqual(tf.IDs(diff.ObservationsOnlyInFull), []string{"bbbbbbbbbbbb"}) || !reflect.DeepEqual(tf.RefIDs(diff.ReflectionsOnlyInFull), []string{"eeeeeeeeeeee"}) {
-		t.Fatal("diff wrong")
-	}
-}
-
 func movedCutBranch(details any) []ledger.Entry {
 	obsA := tf.Observation("aaaaaaaaaaaa", withSources("raw-3"), withTokens(50))
 	obsB := tf.Observation("bbbbbbbbbbbb", withSources("raw-3"), withTokens(50))

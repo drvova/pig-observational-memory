@@ -3,6 +3,7 @@ package rules
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,88 +32,6 @@ func (t Transition) Message() string {
 		return fmt.Sprintf("Observational memory: rule %s added on probation for %s (%s)", r.Describe(), r.Model(), r.Reason)
 	}
 	return fmt.Sprintf("Observational memory: rule %s is now %s for %s (%s)", r.Describe(), t.To, r.Model(), r.Reason)
-}
-
-// isObserverPass reports whether e is an observer pass: a pass that observed source and recorded
-// notes, the only kind with a rate the rules are decided by. An observer pass that recorded
-// nothing (isEmptyPass) is counted for probation only (gradedPasses).
-func isObserverPass(e curated.ModelEvent) bool {
-	return e.Kind == curated.ModelKindPass && e.Tokens > 0 && e.Outcome != curated.OutcomeEmpty && e.Engine == ""
-}
-
-// isEmptyPass reports whether e is a worker pass that ran and recorded nothing (Pass.Empty).
-func isEmptyPass(e curated.ModelEvent) bool {
-	return e.Kind == curated.ModelKindPass && e.Outcome == curated.OutcomeEmpty && e.Engine == ""
-}
-
-// isGradedPass reports whether e is a pass probation and the revision pass read: an observer
-// pass, recorded or empty, so a definition that silences the observer is counted
-// (CountEmptyPass) rather than invisible.
-func isGradedPass(e curated.ModelEvent) bool {
-	return e.Kind == curated.ModelKindPass && e.Tokens > 0 && e.Engine == ""
-}
-
-// gradedPasses are the indexes of the graded passes (isGradedPass) in events at or after from.
-func gradedPasses(events []curated.ModelEvent, from int) []int {
-	out := []int{}
-	for i := max(0, from); i < len(events); i++ {
-		if isGradedPass(events[i]) {
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
-// EmptyPassesSince counts model's passes of stage that ran and recorded nothing (Pass.Empty)
-// after since, with no recorded pass of stage between them and now: the passes a held
-// definition ran through without anything proving it.
-func EmptyPassesSince(store curated.Store, model, stage string, since time.Time) (int, error) {
-	events, err := store.ModelEvents(model)
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, e := range events {
-		if e.Kind != curated.ModelKindPass || e.Stage != stage {
-			continue
-		}
-		if t, ok := eventTime(e); !ok || !t.After(since) {
-			continue
-		}
-		if isEmptyPass(e) {
-			n++
-		} else {
-			n = 0
-		}
-	}
-	return n, nil
-}
-
-// observerPasses are the indexes of the observer passes in events at or after from.
-func observerPasses(events []curated.ModelEvent, from int) []int {
-	return passesFor("", events, from)
-}
-
-// evidencePass reports whether e is a pass that carries a rate under engine: an observer pass
-// (isObserverPass) for v1 (""), a compaction for memory v2 (isCompactionPass). A pass of one
-// engine is never evidence under the other.
-func evidencePass(engine string, e curated.ModelEvent) bool {
-	if engine == curated.EngineV2 {
-		return isCompactionPass(e)
-	}
-	return isObserverPass(e)
-}
-
-// passesFor are the indexes of engine's evidence passes (evidencePass) in events at or after
-// from.
-func passesFor(engine string, events []curated.ModelEvent, from int) []int {
-	out := []int{}
-	for i := max(0, from); i < len(events); i++ {
-		if evidencePass(engine, events[i]) {
-			out = append(out, i)
-		}
-	}
-	return out
 }
 
 // countRevisions are the revisions of the pass counts whose meaning changed after the usage
@@ -152,16 +71,23 @@ func countedNow(e curated.ModelEvent, key string) bool {
 	return r == CountRevision(key)
 }
 
-// countedPasses are the observer passes at or after from that counted key by its current
-// revision (countedNow): the passes a rule for key is written, baselined and judged on.
-func countedPasses(events []curated.ModelEvent, from int, key string) []int {
-	return countedPassesFor("", events, from, key)
+// passesFrom are the indexes of the compactions that carry a rate (isCompactionPass) in events
+// at or after from. A memory v1 worker pass is never evidence.
+func passesFrom(events []curated.ModelEvent, from int) []int {
+	out := []int{}
+	for i := max(0, from); i < len(events); i++ {
+		if isCompactionPass(events[i]) {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
-// countedPassesFor is countedPasses over engine's evidence passes (passesFor).
-func countedPassesFor(engine string, events []curated.ModelEvent, from int, key string) []int {
+// countedPasses are the compactions at or after from that counted key by its current revision
+// (countedNow): the passes a rule for key is written, baselined and judged on.
+func countedPasses(events []curated.ModelEvent, from int, key string) []int {
 	out := []int{}
-	for _, i := range passesFor(engine, events, from) {
+	for _, i := range passesFrom(events, from) {
 		if countedNow(events[i], key) {
 			out = append(out, i)
 		}
@@ -187,15 +113,10 @@ func window(events []curated.ModelEvent, indexes []int, detector string) (count,
 	return count, tokens
 }
 
-// baseline is the detector's events and tokens over the last MinEvidence observer passes
-// before end that counted it by its current revision (countedPasses).
+// baseline is the detector's events and tokens over the last MinEvidence compactions before end
+// that counted it by its current revision (countedPasses).
 func baseline(events []curated.ModelEvent, end int, detector string) (int, int) {
-	return baselineFor("", events, end, detector)
-}
-
-// baselineFor is baseline over engine's evidence passes (passesFor).
-func baselineFor(engine string, events []curated.ModelEvent, end int, detector string) (int, int) {
-	passes := countedPassesFor(engine, events[:min(end, len(events))], 0, detector)
+	passes := countedPasses(events[:min(end, len(events))], 0, detector)
 	if len(passes) > MinEvidence {
 		passes = passes[len(passes)-MinEvidence:]
 	}
@@ -210,49 +131,35 @@ func fell(beforeEvents, beforeTokens, afterEvents, afterTokens int) bool {
 	return afterEvents*beforeTokens < beforeEvents*afterTokens
 }
 
-// Evaluate decides the rules of model from its usage ledger events (curated.Store.ModelEvents,
-// in the order written) and every rule in the store, at now. It is pure. It returns the rules
-// it changed or added, and the transitions to notify. The rules:
+// evaluate decides the rules of model from its usage ledger events (curated.Store.ModelEvents,
+// in the order written) and every rule in the store, at now, with the model's remedy catalogue
+// (CatalogOf its layer). It is pure. It returns the rules it changed or added, and the
+// transitions to notify. Only memory v2's rules (Rule.Engine) are decided, on compactions
+// alone (passesFrom); a rule memory v1 wrote is never decided again. The rules:
 //
-//   - Every window below holds only the observer passes that counted the rule's count by its
-//     current revision (countedPasses): a pass counted by an earlier revision of a count whose
-//     meaning changed is no evidence for it, so a baseline never mixes two meanings of a count.
-//   - Probation: a rule on probation for model is decided once MinEvidence observer passes were
+//   - Every window below holds only the compactions that counted the rule's count by its
+//     current revision (countedPasses): a compaction counted by an earlier revision of a count
+//     whose meaning changed is no evidence for it, so a baseline never mixes two meanings.
+//   - Probation: a rule on probation for model is decided once MinEvidence compactions were
 //     counted after it was written. It is established when its detector's rate over them
-//     (events per observed source token) is below its baseline rate (the same over the
-//     MinEvidence observer passes before it), and retired otherwise: a rule survives only by
-//     bringing down the count it was written for. A baseline with no events cannot fall, so a
-//     rule for a behaviour the model did not show is retired.
+//     (events per source token) is below its baseline rate (the same over the MinEvidence
+//     compactions before it), and retired otherwise: a rule survives only by bringing down the
+//     count it was written for. A baseline with no events cannot fall, so a rule for a
+//     behaviour the model did not show is retired.
 //   - Harness rules: when a detector counted events in each of the model's last MinEvidence
-//     observer passes since its last rule for that detector was written or decided (the count
-//     kept rising, pass after pass), and no rule for that detector is on probation for the
-//     model, the harness writes the first remedy in the Catalogue for that detector that no
-//     rule for the model has tried yet (a default the model is not excluded from counts as
-//     tried). With every remedy tried, it writes none. switch-codec is skipped while none of
-//     the decode failures in those passes were rows the codec could not decode (only memory
-//     queries that did not parse), and it is judged on those codec failures alone
-//     (CountCodecDecodeFailure).
+//     compactions since its last rule for that detector was written or decided, and no rule
+//     for that detector is on probation for the model, the harness writes the first remedy in
+//     the catalogue for that detector that runs (V2Remedies) and no rule for the model has
+//     tried yet (a default the model is not excluded from counts as tried). With every remedy
+//     tried, it writes none. switch-codec is skipped while none of the decode failures in
+//     those compactions were rows the codec could not decode, and it is judged on those codec
+//     failures alone (CountCodecDecodeFailure).
 //   - Defaults: a rule established, with one signature, for DefaultAfterModels models becomes
 //     a default for all, established, excluding the models for which it was retired.
-func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Time) ([]Rule, []Transition) {
-	return EvaluateWith(model, events, all, now, SeedCatalog())
-}
-
-// EvaluateWith is Evaluate with the model's own remedy catalogue (CatalogOf its layer): the
-// remedies the harness tries for each detector, in its order and with its parameters.
-func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now time.Time, catalog Catalog) ([]Rule, []Transition) {
-	return evaluate("", model, events, all, now, catalog)
-}
-
-// evaluate is EvaluateWith under engine: only engine's rules (Rule.Engine) are decided, every
-// window holds only engine's evidence passes (passesFor: v1's observer passes, memory v2's
-// compactions), and the harness writes only rules for engine's detectors with engine's
-// remedies (detectorsOf, remedyRuns), so a count of one engine never decides a rule of the
-// other.
-func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now time.Time, catalog Catalog) ([]Rule, []Transition) {
+func evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Time, catalog Catalog) ([]Rule, []Transition) {
 	var changed []Rule
 	var transitions []Transition
-	rules := ofEngine(all, engine)
+	rules := ofV2(all)
 	replace := func(r Rule) {
 		for i := range rules {
 			if rules[i].ID == r.ID {
@@ -271,7 +178,7 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 		if !containsString(KernelKeys(), countKey(r.Detector, r.Remedy)) {
 			continue
 		}
-		passes := countedPassesFor(engine, events, r.Start, countKey(r.Detector, r.Remedy))
+		passes := countedPasses(events, r.Start, countKey(r.Detector, r.Remedy))
 		if len(passes) < MinEvidence {
 			continue
 		}
@@ -291,7 +198,7 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 		transitions = append(transitions, Transition{Rule: r, To: r.State})
 	}
 	// Harness rules.
-	for _, detector := range detectorsOf(engine) {
+	for _, detector := range V2Detectors {
 		floor := 0
 		busy := false
 		tried := map[string]bool{}
@@ -311,7 +218,7 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 		if busy {
 			continue
 		}
-		passes := countedPassesFor(engine, events, floor, detector)
+		passes := countedPasses(events, floor, detector)
 		if len(passes) < MinEvidence {
 			continue
 		}
@@ -332,7 +239,7 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 		}
 		remedy := ""
 		for _, candidate := range catalog.Tries(detector) {
-			if tried[candidate] || !remedyRuns(engine, candidate) {
+			if tried[candidate] || !slices.Contains(V2Remedies, candidate) {
 				continue
 			}
 			// A remedy judged on a narrower count needs that count in the evidence: query
@@ -352,7 +259,7 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 		if err != nil {
 			continue
 		}
-		r.Models, r.State, r.Created, r.Start, r.Engine = []string{model}, StateProbation, now, len(events), engine
+		r.Models, r.State, r.Created, r.Start, r.Engine = []string{model}, StateProbation, now, len(events), curated.EngineV2
 		r.BaselineEvents, r.BaselineTokens = window(events, last, countKey(detector, remedy))
 		r.Reason = fmt.Sprintf("%s counted in each of the last %d passes (%d events in %d tokens)", detector, MinEvidence, r.BaselineEvents, r.BaselineTokens)
 		r.ID = newID(r)
@@ -394,7 +301,7 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 			proposer = ProposerModel
 		}
 		d := Rule{Detector: base.Detector, Remedy: base.Remedy, Kind: base.Kind, Fullness: base.Fullness, Text: base.Text,
-			Models: []string{AllModels}, Excluded: retired[sig], State: StateEstablished, Proposer: proposer, Created: now, Engine: engine}
+			Models: []string{AllModels}, Excluded: retired[sig], State: StateEstablished, Proposer: proposer, Created: now, Engine: curated.EngineV2}
 		d.Reason = fmt.Sprintf("established for %d models", len(models))
 		d.ID = newID(d)
 		replace(d)
@@ -404,132 +311,34 @@ func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now
 	return changed, transitions
 }
 
-// Pass is one memory-worker pass, as AfterPass records it.
+// Pass is one compaction, as AfterPass records it: the model's evidence unit.
 type Pass struct {
-	Stage string
-	// Tokens is the pass's observed source tokens (SourceTokens of the covered entries).
-	Tokens int
-	// Findings are the note detectors' findings; nil for a reflector or dropper pass.
-	Findings *Findings
-	// Layer is the model's effective layer the pass ran with, whose catalogue the rules are
-	// decided by; nil loads it from the store.
+	// Layer is the model's effective layer the compaction ran with, whose catalogue the rules
+	// are decided by; nil loads it from the store.
 	Layer *layer.Harness
-	// Empty marks a pass that ran and recorded nothing (an observer chunk with no notes, a
-	// reflector with no reflections, a dropper that dropped nothing). It is recorded with the
-	// outcome empty and, for an observer pass, CountEmptyPass and the detectors' findings over
-	// the chunk it left unnoted, so probation sees a definition that silences a worker; it
-	// decides no rule (it is no observer pass the rules count).
+	// Empty marks a compaction whose cut range level 0 recorded nothing from: it is recorded
+	// with the outcome empty and no tokens, so it is no evidence.
 	Empty bool
-	// Engine is the memory engine the pass ran under: "" for v1's worker passes, or
-	// curated.EngineV2 for a memory v2 compaction (Stage StageCompaction), which AfterPass
-	// records as one evidence unit (afterCompaction).
-	Engine string
-	// Counts are kernel counts the pass adds beside its findings: under v2, what the code
-	// checks of the compaction's level-1 output counted (CountLevel1Refused and the rest, and
+	// Counts are kernel counts the compaction adds beside its detector runs: what the code
+	// checks of its level-1 output counted (CountLevel1Refused and the rest, and
 	// DetectCrossScopeSupersede for the cross-scope supersedes it proposed).
 	Counts map[string]int
-	// Level1 marks a memory v2 compaction whose level-1 request answered: Counts carry the code
-	// checks of its output (curated.ModelEvent.Level1).
+	// Level1 marks a compaction whose level-1 request answered: Counts carry the code checks
+	// of its output (curated.ModelEvent.Level1).
 	Level1 bool
-	// RanHeld are, under v2, the held definitions the compaction ran with
-	// (curated.ModelEvent.RanHeld).
+	// RanHeld are the held definitions the compaction ran with (curated.ModelEvent.RanHeld).
 	RanHeld []string
 }
 
-// AfterPass records one pass of model in its usage ledger (with decode-failure counted from
-// the ledger since its previous observer pass) and evaluates the rules for model, writing the
-// ones that changed. The ledger is read, counted, appended to and evaluated under one hold of
-// the store's lock, so two processes finishing a pass at once never count the same failures
-// twice. It returns the transitions to notify. A failed write returns what was decided so far:
-// counting never fails the pass it counts.
+// AfterPass records one compaction of model in its usage ledger as its evidence unit and
+// evaluates the rules for model, writing the ones that changed (afterCompaction). It returns
+// the transitions to notify. A failed write returns what was decided so far: counting never
+// fails the compaction it counts.
 func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, error) {
 	if model == "" {
 		return nil, errors.New("a pass needs a model id")
 	}
-	if pass.Engine == curated.EngineV2 {
-		return afterCompaction(store, model, pass)
-	}
-	e := curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: pass.Stage, Tokens: pass.Tokens, Counts: map[string]int{}}
-	if pass.Empty {
-		// An empty pass is evidence for probation only: no rule is decided by it. An observer
-		// one carries what the kernel's checks found in the chunk it left unnoted.
-		e.Outcome = curated.OutcomeEmpty
-		if pass.Stage != StageObserver || pass.Tokens <= 0 {
-			e.Tokens = 0
-			return nil, store.RecordModel(e)
-		}
-		e.Counts[CountEmptyPass] = 1
-		if pass.Findings != nil {
-			e.Revisions = Revisions()
-			for d, n := range pass.Findings.Counts {
-				if n > 0 {
-					e.Counts[d] = n
-				}
-			}
-			for d, n := range pass.Findings.Defined {
-				if n > 0 {
-					e.Counts[DefinedCountKey(d)] = n
-				}
-			}
-		}
-		return nil, store.RecordModel(e)
-	}
-	if pass.Findings != nil {
-		e.Revisions = Revisions()
-		for d, n := range pass.Findings.Counts {
-			if n > 0 {
-				e.Counts[d] = n
-			}
-		}
-		if len(pass.Findings.DroppedKinds) > 0 {
-			e.Kinds = pass.Findings.DroppedKinds
-		}
-		for d, n := range pass.Findings.Defined {
-			if n > 0 {
-				e.Counts[DefinedCountKey(d)] = n
-			}
-		}
-	}
-	catalog := SeedCatalog()
-	if pass.Layer != nil {
-		catalog = CatalogOf(*pass.Layer)
-	} else if h, _, err := store.Layer().Load(model); err == nil {
-		catalog = CatalogOf(h)
-	}
-	var transitions []Transition
-	migrate(store)
-	err := store.Locked(func() error {
-		events, err := store.ModelEvents(model)
-		if err != nil {
-			return err
-		}
-		// Only an observer pass carries a rate, so only one carries the decode failures.
-		if codec, syntax := DecodeFailuresSince(events); codec+syntax > 0 && isObserverPass(e) {
-			e.Counts[DetectDecodeFailure] = codec + syntax
-			if codec > 0 {
-				e.Counts[CountCodecDecodeFailure] = codec
-			}
-		}
-		if err := store.RecordModelLocked(e); err != nil {
-			return err
-		}
-		if events, err = store.ModelEvents(model); err != nil {
-			return err
-		}
-		all, err := list(store)
-		if err != nil {
-			return err
-		}
-		changed, ts := EvaluateWith(model, events, all, store.Now().UTC(), catalog)
-		for _, r := range changed {
-			if err := write(store, r); err != nil {
-				return err
-			}
-		}
-		transitions = ts
-		return nil
-	})
-	return transitions, err
+	return afterCompaction(store, model, pass)
 }
 
 // Proposal is a rule a model proposes with the memory tool's propose write.
@@ -541,11 +350,12 @@ type Proposal struct {
 // Propose holds a rule model proposed, on probation for model: it applies to the model's next
 // pass and is written once that pass is clean (layer.Store.Claim), as every definition from the
 // model is (docs/memory-interface.md, section 8). It is checked like a harness
-// rule (Check), and refused when the same rule is already applied to model or was retired for
-// it (the detector decided), or when its text is not the model's own: text found in a tool
-// result, a custom message or a summary on the branch came from a file, a web page or tool
-// output, and rule text never does. Its baseline is the detector's count over the model's
-// last MinEvidence observer passes; only the detector decides it from there.
+// rule (Check), answers a v2 detector with a code-only remedy (V2Remedies), and is refused when
+// the same rule is already applied to model or was retired for it (the detector decided), or
+// when its text is not the model's own: text found in a tool result, a custom message or a
+// summary on the branch came from a file, a web page or tool output, and rule text never does.
+// Its baseline is the detector's count over the model's last MinEvidence compactions; only the
+// detector decides it from there.
 func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposal) (Rule, error) {
 	if model == "" {
 		return Rule{}, errors.New("a rule needs a model id, and the session model has none")
@@ -554,14 +364,12 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 	if err != nil {
 		return Rule{}, err
 	}
-	// Under memory v2 a rule answers a v2 detector with a code-only remedy (V2Remedies), and
-	// is decided on compactions.
-	if engine := engineOf(store); engine != "" {
-		if !containsString(V2Detectors, r.Detector) || !remedyRuns(engine, r.Remedy) {
-			return Rule{}, fmt.Errorf("under memoryEngine v2 a rule answers %s with %s", strings.Join(V2Detectors, ", "), strings.Join(V2Remedies, ", "))
-		}
-		r.Engine = engine
+	// A rule answers a v2 detector with a code-only remedy (V2Remedies), and is decided on
+	// compactions.
+	if !containsString(V2Detectors, r.Detector) || !slices.Contains(V2Remedies, r.Remedy) {
+		return Rule{}, fmt.Errorf("a rule answers %s with %s", strings.Join(V2Detectors, ", "), strings.Join(V2Remedies, ", "))
 	}
+	r.Engine = curated.EngineV2
 	// The same provenance check every definition from the model passes (CheckFromModel): the
 	// whole text, or any quotation of MinCopiedWords words inside it, found in output on the
 	// branch is refused; the catalogue's own line for the remedy is not a quotation.
@@ -593,7 +401,7 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 			return err
 		}
 		r.Created, r.Start = store.Now().UTC(), len(events)
-		r.BaselineEvents, r.BaselineTokens = baselineFor(r.Engine, events, len(events), countKey(r.Detector, r.Remedy))
+		r.BaselineEvents, r.BaselineTokens = baseline(events, len(events), countKey(r.Detector, r.Remedy))
 		r.Reason = fmt.Sprintf("proposed by the model; %d events in %d tokens over its last passes", r.BaselineEvents, r.BaselineTokens)
 		r.ID = newID(r)
 		saved = r
@@ -670,28 +478,26 @@ func containedIn(haystacks []string, needle string) bool {
 
 // For reads the rules that apply to model in store, from its effective layer: the written and
 // held rules kept for every model and for model, so a held proposal applies to the pass that
-// proves it. Only the rules of the store's engine apply (engineOf: memory v2's when the store
-// is v2's), so a v1 rule (require-kind, split-chunk, a dropper's protect-kind) never acts under
-// v2, and a v2 rule never under v1. None when the store cannot be read.
+// proves it. Only memory v2's rules apply (ofV2), so a rule memory v1 wrote (require-kind,
+// split-chunk, a dropper's protect-kind) never acts. None when the store cannot be read.
 func For(store curated.Store, model string) Active {
 	migrate(store)
 	h, _, err := store.Layer().Load(model)
 	if err != nil {
 		return Active{}
 	}
-	return ActiveFor(ofEngine(rulesOf(h.List(layer.KindRemedy)), engineOf(store)), model)
+	return ActiveFor(ofV2(rulesOf(h.List(layer.KindRemedy))), model)
 }
 
-// StatusLines is the rules section of /om:status: every active rule of the store's engine
-// (engineOf) with its counts, and for each of models (in order) its detector counts over its
-// last MinEvidence evidence passes: observer passes under v1, compactions under memory v2.
+// StatusLines is the rules section of /om:status: every active memory v2 rule (ofV2) with its
+// counts, and for each of models (in order) its detector counts over its last MinEvidence
+// compactions.
 func StatusLines(store curated.Store, models []string) []string {
-	engine := engineOf(store)
 	all, err := List(store)
 	if err != nil {
 		return nil
 	}
-	all = ofEngine(all, engine)
+	all = ofV2(all)
 	lines := []string{}
 	active := 0
 	for _, r := range all {
@@ -720,7 +526,7 @@ func StatusLines(store curated.Store, models []string) []string {
 		if err != nil {
 			continue
 		}
-		passes := passesFor(engine, events, 0)
+		passes := passesFrom(events, 0)
 		if len(passes) == 0 {
 			continue
 		}
@@ -728,7 +534,7 @@ func StatusLines(store curated.Store, models []string) []string {
 			passes = passes[len(passes)-MinEvidence:]
 		}
 		parts := []string{}
-		for _, d := range countsOf(engine) {
+		for _, d := range append(append([]string{}, V2Detectors...), Level1Counts...) {
 			if count, _ := window(events, passes, d); count > 0 {
 				parts = append(parts, fmt.Sprintf("%s %d", d, count))
 			}
@@ -738,11 +544,7 @@ func StatusLines(store curated.Store, models []string) []string {
 		if len(parts) > 0 {
 			counts = strings.Join(parts, ", ")
 		}
-		unit := "passes"
-		if engine == curated.EngineV2 {
-			unit = "compactions"
-		}
-		out = append(out, fmt.Sprintf("  Detector counts for %s over its last %d %s (%d tokens): %s", model, len(passes), unit, tokens, counts))
+		out = append(out, fmt.Sprintf("  Detector counts for %s over its last %d compactions (%d tokens): %s", model, len(passes), tokens, counts))
 	}
 	return out
 }

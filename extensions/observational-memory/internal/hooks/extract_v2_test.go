@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
@@ -100,22 +99,11 @@ func TestV2TurnEndExtractsWithoutRequests(t *testing.T) {
 	}
 }
 
-// v1 turn ends extract nothing, and passive mode turns v2's off.
-func TestTurnEndExtractionOnlyUnderV2(t *testing.T) {
+// Passive mode turns turn-end extraction off.
+func TestTurnEndExtractionOffWhenPassive(t *testing.T) {
 	turn := codingTurn("x", "Fix the loader for config version 3.")
 	rt, h := v2Setup(t, turn)
 	cfg := rt.Config()
-	cfg.MemoryEngine = config.EngineV1
-	cfg.ObserveAfterTokens = 1_000_000
-	cfg.ReflectAfterTokens = 1_000_000
-	rt.SetConfig(cfg)
-	OnTurnEnd(rt, h)
-	if len(h.Appended) != 0 {
-		t.Fatalf("v1 appended %+v", h.Appended)
-	}
-
-	rt, h = v2Setup(t, turn)
-	cfg = rt.Config()
 	cfg.Passive = true
 	rt.SetConfig(cfg)
 	OnTurnEnd(rt, h)

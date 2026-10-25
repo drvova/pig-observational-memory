@@ -77,17 +77,9 @@ func FloorStatus(store curated.Store) string {
 	return "Kernel floor: engaged"
 }
 
-// Instructions are the model's own instructions for a worker stage from its layer (an
-// instructions definition named after the stage, held or written), "" when the seed stands. A
-// stale replacement is skipped, so the seed stands. The worker prompt puts them after the
-// kernel's fixed rules (agents.ComposeStage): after the seed, or in its place for a replacement.
-func (l Ledger) Instructions(stage string) string {
-	return l.Layer().Instructions(stage)
-}
-
 // layerStatusLines are a model's harness lines of /om:status (docs/memory-interface.md, section
-// 8): its generation and its last build or revision pass (under memory v2, its last level-1
-// offer), its definitions by kind with their
+// 8): its generation and its last level-1 offer (or memory v1's last build or revision pass
+// before any), its definitions by kind with their
 // state (held, written, probation, established), its held definitions, and every file its load
 // skipped (a stale override, whose seed stands, or a refused file).
 func layerStatusLines(store curated.Store, model string) []string {
@@ -132,24 +124,18 @@ func layerStatusLines(store curated.Store, model string) []string {
 		}
 		byKind[r.Kind] = append(byKind[r.Kind], item)
 	}
-	last, built, _ := ls.LastPass(model)
+	_, built, _ := ls.LastPass(model)
 	if len(gens) == 0 && defined == 0 && len(stale)+len(skipped) == 0 && !built {
 		return nil
 	}
 	line := fmt.Sprintf("Layer (%s): generation %d, %d definitions", model, len(gens), defined)
 	proposal, proposed, _ := ls.LastProposal(model)
 	switch {
-	case store.V2 && proposed:
-		// Under memory v2 no build or revision pass runs: definitions are offered inside level 1.
+	case proposed:
+		// No build or revision pass runs: definitions are offered inside level 1.
 		line += fmt.Sprintf(", definitions last offered in level 1 at generation %d", proposal.N)
-	case store.V2 && model != layer.AllModels:
-		line += ", definitions are offered in level 1 when the harness evidence changes"
-	case built && last.Op == layer.OpRevise:
-		line += fmt.Sprintf(", last revised at generation %d", last.N)
-	case built:
-		line += fmt.Sprintf(", built at generation %d", last.N)
 	case model != layer.AllModels:
-		line += ", no build pass yet"
+		line += ", definitions are offered in level 1 when the harness evidence changes"
 	}
 	if len(held) > 0 {
 		line += ", held: " + strings.Join(held, ", ")

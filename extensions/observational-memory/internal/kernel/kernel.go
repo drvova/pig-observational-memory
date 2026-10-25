@@ -1,8 +1,8 @@
 // Package kernel is the part of the memory the model cannot change (docs/memory-interface.md,
 // section 8), after nodecode's kernel floor: storage and the om.* record kinds, the compaction
 // invariants, the query engine and its bounds, the memory tool, the event ledger and the
-// kernel events it counts, the room ceiling, subject canonicalization, and the text that states these rules in every
-// worker prompt.
+// kernel events it counts, the room ceiling, subject canonicalization, and the text that states
+// these rules in the level-1 prompt.
 //
 // One ownership predicate, Owns, names it, and Check applies it to a definition. Every path that
 // accepts a definition into the model-built layer (internal/layer) calls Check when the
@@ -49,7 +49,7 @@ const (
 	OwnerEventLedger = "the event ledger (a kernel event)"
 	OwnerRoom        = "the room ceiling"
 	OwnerInvariant   = "the compaction invariants (a setting or boundary)"
-	OwnerPromptRules = "the kernel's fixed worker-prompt rules"
+	OwnerPromptRules = "the kernel's fixed prompt rules"
 	OwnerNoteSchema  = "the note schema's kernel fields"
 	OwnerSubjects    = "the kernel's subject canonicalization"
 )
@@ -130,6 +130,7 @@ var owned = func() []entry {
 	add(roomNames, OwnerRoom, ledgerKinds...)
 	add(invariantSettings, OwnerInvariant)
 	add(TextIDs(), OwnerPromptRules)
+	add(retiredTextIDs, OwnerPromptRules)
 	add(noteKernelFields, OwnerNoteSchema, kindSchema)
 	add(levelZeroNoteNames, OwnerNoteSchema, kindSchema)
 	add(subjectNames, OwnerSubjects)

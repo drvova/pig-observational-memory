@@ -20,18 +20,13 @@ func v2Model() host.Model {
 	return testfix.Model("anthropic", "session", map[string]any{"contextWindow": 200_000, "maxTokens": 32_000})
 }
 
-// v2Setup is a memory v2 runtime over entries, with the catch-up configured as v1 would run it
-// and the session model registered with auth, so any request the extension made would reach
-// the fake registry. Level 1 is off (consolidate: false), so these are level 0's tests; the
-// level-1 tests turn it on (level1Setup).
+// v2Setup is a runtime over entries with the session model registered with auth, so any
+// request the extension made would reach the fake registry. Level 1 is off (consolidate:
+// false), so these are level 0's tests; the level-1 tests turn it on (level1Setup).
 func v2Setup(t *testing.T, entries []ledger.Entry) (*runtime.Runtime, *testfix.FakeHost) {
 	t.Helper()
 	cfg := config.Defaults
-	cfg.MemoryEngine = config.EngineV2
 	cfg.ConsolidateOff = true
-	cfg.ObserveAfterTokens = 1
-	cfg.ReflectAfterTokens = 1
-	cfg.CompactionCatchUpMaxChunks = 2
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := testfix.NewFakeHost(entries...)
@@ -80,8 +75,8 @@ func expectV2Compaction(t *testing.T, outcome BeforeCompactOutcome, firstKept st
 	return c
 }
 
-// The records fit: the summary is the ledger's records, PiG's cut is kept although the
-// observer is behind it (v1 would move the cut or catch up), and no request is made.
+// The records fit: the summary is the ledger's records, PiG's cut is kept although v1's
+// observer coverage is behind it (v1 moved the cut or caught up), and no request is made.
 func TestV2HookKeepsPiGCutAndRendersRecords(t *testing.T) {
 	counter := testfix.CountRequests(t)
 	entries := laggingBranch(strings.Repeat("unobserved tool output ", 2_000))
@@ -224,18 +219,18 @@ func TestV2HookRecoversPanic(t *testing.T) {
 	}
 }
 
-// Only the request's own cancellation makes the hook answer nothing; a cancelled agent run
-// (a manual /compact aborts it) still gets a compaction.
+// Only the request's own cancellation makes the hook answer nothing; the hook is never handed
+// the agent run's signal, which a manual /compact aborts.
 func TestV2HookCancellation(t *testing.T) {
 	entries := laggingBranch()
 	rt, h := v2Setup(t, entries)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if outcome := HandleBeforeCompactRequest(context.Background(), cancelled, rt, h, v2Event(entries, "u2", 20_000, "manual")); outcome.Cancel || outcome.Compaction != nil || outcome.ToResult() != nil {
+	if outcome := HandleBeforeCompactRequest(cancelled, rt, h, v2Event(entries, "u2", 20_000, "manual")); outcome.Cancel || outcome.Compaction != nil || outcome.ToResult() != nil {
 		t.Fatalf("cancelled request answered %+v", outcome)
 	}
-	expectV2Compaction(t, HandleBeforeCompactRequest(cancelled, context.Background(), rt, h, v2Event(entries, "u2", 20_000, "manual")), "u2", h)
+	expectV2Compaction(t, HandleBeforeCompactRequest(context.Background(), rt, h, v2Event(entries, "u2", 20_000, "manual")), "u2", h)
 }
 
 // A second hook while one runs is not cancelled under v2.
@@ -270,10 +265,9 @@ func TestV2HookCustomInstructions(t *testing.T) {
 	}
 }
 
-// Between compactions memory v2 makes no request: the turn, run and settle handlers launch
-// nothing, the build and revision passes and the catch-up do not run, and the proactive
-// trigger is off while PiG's own compaction is on. The same branch under v1 does make
-// requests, so the count is meaningful.
+// Between compactions the extension makes no request: the turn, run and settle handlers start
+// no model call, and the trigger is off while PiG's own compaction is on; the compaction itself
+// makes none at level 0.
 func TestV2MakesNoRequestsBetweenCompactions(t *testing.T) {
 	entries := []ledger.Entry{
 		userMessage("u1", strings.Repeat("a long request ", 400)),
@@ -282,57 +276,16 @@ func TestV2MakesNoRequestsBetweenCompactions(t *testing.T) {
 		userMessage("u2", strings.Repeat("more ", 400)),
 		assistantMessage("a2", strings.Repeat("more answer ", 400)),
 	}
-
-	t.Run("v1 baseline", func(t *testing.T) {
-		counter := testfix.CountRequests(t)
-		rt, h := v2Setup(t, entries)
-		cfg := rt.Config()
-		cfg.MemoryEngine = ""
-		rt.SetConfig(cfg)
-		waitDone(t, MaybeLaunchConsolidation(rt, h))
-		if counter.Stage("observer") == 0 || counter.Engine(config.EngineV1) != counter.Total() {
-			t.Fatalf("v1 made no observer request, or mislabelled one: %v", counter.ByStage())
-		}
-	})
-
 	counter := testfix.CountRequests(t)
 	rt, h := v2Setup(t, entries)
-	cfg := rt.Config()
-	cfg.CompactAfterTokens = 1
-	rt.SetConfig(cfg)
 	OnAgentStart(rt, h)
 	OnTurnEnd(rt, h)
 	OnAgentSettledEvent(rt, h)
-	if done := MaybeLaunchConsolidation(rt, h); done != nil {
-		t.Fatal("v2 launched a consolidation")
-	}
-	if err := RunConsolidationPipeline(context.Background(), rt, h); err != nil {
-		t.Fatal(err)
-	}
-	gap := ledger.UnobservedSourceSpan{FirstIndex: 3, LastIndex: 4, EntryCount: 2}
-	if result := CatchUpObserver(context.Background(), CatchUpArgs{Runtime: rt, Host: h, Entries: entries, Gap: gap, MaxChunks: 2}); result.ChunksRecorded != 0 {
-		t.Fatalf("catch-up ran: %+v", result)
-	}
 	if done := MaybeTriggerCompaction(rt, h); done != nil {
-		t.Fatal("the proactive trigger fired with PiG's auto-compaction on")
+		t.Fatal("the trigger fired with PiG's auto-compaction on")
 	}
 	expectV2Compaction(t, runV2Hook(rt, h, v2Event(entries, "u2", 20_000, "threshold")), "u2", h)
-	if counter.Total() != 0 || h.ModelsFake.Streams.Calls() != 0 || h.CompactCalls != 0 || rt.ConsolidationInFlight() {
+	if counter.Total() != 0 || h.ModelsFake.Streams.Calls() != 0 || h.CompactCalls != 0 {
 		t.Fatalf("requests %v calls %d compactions %d", counter.ByStage(), h.ModelsFake.Streams.Calls(), h.CompactCalls)
-	}
-}
-
-// Every worker request is labelled with the engine in effect, so a v1 worker that ever ran
-// under memory v2 would be reported as v2 rather than hidden under the default.
-func TestWorkerArgsCarryTheEngine(t *testing.T) {
-	for _, engine := range []string{config.EngineV1, config.EngineV2} {
-		cfg := config.Defaults
-		cfg.MemoryEngine = engine
-		rt, h := v2Setup(t, nil)
-		rt.SetConfig(cfg)
-		worker := runtime.ResolveResult{OK: true, Model: h.Model}
-		if got := workerArgs(context.Background(), cfg, h, worker, "observer").Engine; got != engine {
-			t.Fatalf("engine %q, want %q", got, engine)
-		}
 	}
 }

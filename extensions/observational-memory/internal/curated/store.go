@@ -61,7 +61,7 @@ type Memory struct {
 	// Pinned is set only by the user, by writing pinned: true in the memory's file: no write
 	// of the memory tool or of level 1 sets or clears it, and a correction never flags it.
 	Pinned bool
-	// Retired is when a forget retired the memory under memory v2; a retired memory is
+	// Retired is when a forget retired the memory; a retired memory is
 	// listed and found nowhere, and its name may be saved again.
 	Retired time.Time
 }
@@ -73,24 +73,17 @@ type Store struct {
 	Now func() time.Time
 	// Floor is the kernel floor the store's layer checks definitions under; nil is engaged.
 	Floor *kernel.Floor
-	// V2 applies memory v2's curated rules (docs/memory-v2.md, "Curated memory"): the one
-	// validator (Check) on every write and load, and forget retiring instead of removing.
-	V2 bool
 }
 
 // New returns the store at dir.
 func New(dir string) Store { return Store{Dir: dir, Now: time.Now} }
 
 // Layer is the model-built layer kept in the store (docs/memory-interface.md, section 8):
-// <store>/harness, locked with the store's lock and checked under its floor. Under memory v2
-// (V2) it applies, settles and marks only memory v2's holds (layer.Store.Engine), and v1's
-// store only v1's: the written layer is shared, an unproven definition is its engine's.
+// <store>/harness, locked with the store's lock and checked under its floor. It applies,
+// settles and marks only memory v2's holds (layer.Store.Engine): a definition memory v1 held
+// stays v1's and is never run.
 func (s Store) Layer() layer.Store {
-	l := layer.Store{Dir: filepath.Join(s.Dir, "harness"), Lock: s, Floor: s.Floor, Now: s.Now}
-	if s.V2 {
-		l.Engine = EngineV2
-	}
-	return l
+	return layer.Store{Dir: filepath.Join(s.Dir, "harness"), Lock: s, Floor: s.Floor, Now: s.Now, Engine: EngineV2}
 }
 
 // DefaultDir is the store under the PiG config root.
@@ -123,8 +116,8 @@ func (s Store) path(name string) string { return filepath.Join(s.Dir, name+".md"
 // ErrNotFound is returned for a memory name the store does not hold.
 var ErrNotFound = errors.New("no memory by that name")
 
-// Get reads one memory. Under memory v2 a file that fails the validator (fields no memory
-// takes, or Check) is refused: it is not loaded, and List reports it (Refused).
+// Get reads one memory. A file that fails the validator (fields no memory takes, or Check) is
+// refused: it is not loaded, and List reports it (Refused).
 func (s Store) Get(name string) (Memory, error) {
 	m, unknown, err := s.read(name)
 	if err != nil {
@@ -136,7 +129,7 @@ func (s Store) Get(name string) (Memory, error) {
 	return m, nil
 }
 
-// read parses one memory file without memory v2's load check, with the front matter keys no
+// read parses one memory file without the load check, with the front matter keys no
 // memory takes: what Update and Forget start from, so a memory the validator refuses can
 // still be brought within it or retired.
 func (s Store) read(name string) (Memory, []string, error) {
@@ -153,27 +146,24 @@ func (s Store) read(name string) (Memory, []string, error) {
 	return parse(name, string(data))
 }
 
-// loadCheck is memory v2's validator on a load: no fields a memory does not take (unknown),
-// and Check. It passes everything under v1.
+// loadCheck is the validator on a load: no fields a memory does not take (unknown), and
+// Check.
 func (s Store) loadCheck(m Memory, unknown []string) error {
-	if !s.V2 {
-		return nil
-	}
 	if len(unknown) > 0 {
 		return fmt.Errorf("memory %q has fields no memory takes: %s", m.Name, strings.Join(unknown, ", "))
 	}
 	return Check(m)
 }
 
-// RefusedMemory is a memory file the validator refuses on load (memory v2), and why.
+// RefusedMemory is a memory file the validator refuses on load, and why.
 type RefusedMemory struct {
 	Name, Reason string
 }
 
 // Refused lists the memory files that apply in project (or whose project cannot be read) and
-// are not retired, but that Get refuses: under memory v2, the ones failing the validator, which
-// List leaves out. A forget retires such a memory, and an edit that brings it within the
-// validator makes it readable again. None under v1 but unparseable files.
+// are not retired, but that Get refuses: the ones failing the validator, which List leaves out.
+// A forget retires such a memory, and an edit that brings it within the validator makes it
+// readable again.
 func (s Store) Refused(project string) ([]RefusedMemory, error) {
 	names, err := s.fileNames()
 	if err != nil {
@@ -224,7 +214,7 @@ func (s Store) GetAs(name, project, session string) (Memory, error) {
 	return m, nil
 }
 
-// readIn is GetIn without memory v2's load check (read): what Update and Forget start from.
+// readIn is GetIn without the load check (read): what Update and Forget start from.
 func (s Store) readIn(name, project string) (Memory, error) {
 	m, _, err := s.read(name)
 	if err != nil {
@@ -405,21 +395,17 @@ func (s Store) Update(name, project string, edit Edit, source string) (Memory, e
 	return updated, s.Record(name, EventEdit)
 }
 
-// Forget removes the memory name, as seen from project; under memory v2 it
-// retires it instead (Memory.Retired), keeping the file. Its usage history
-// stays in the ledger. It reads the memory without memory v2's load check, so a memory the
-// validator refuses can still be retired.
+// Forget retires the memory name, as seen from project (Memory.Retired), keeping the file.
+// Its usage history stays in the ledger. It reads the memory without the load check, so a
+// memory the validator refuses can still be retired.
 func (s Store) Forget(name, project string) error {
 	err := s.locked(func() error {
 		m, err := s.readIn(name, project)
 		if err != nil {
 			return err
 		}
-		if s.V2 {
-			m.Retired = s.Now().UTC()
-			return s.write(m)
-		}
-		return os.Remove(s.path(name))
+		m.Retired = s.Now().UTC()
+		return s.write(m)
 	})
 	if err != nil {
 		return err
@@ -542,12 +528,10 @@ func (s Store) Locked(fn func() error) error { return s.locked(fn) }
 
 // --- files ---------------------------------------------------------------------
 
-// writeChecked writes m after the store's validator (Check under memory v2).
+// writeChecked writes m after the store's validator (Check).
 func (s Store) writeChecked(m Memory) error {
-	if s.V2 {
-		if err := Check(m); err != nil {
-			return err
-		}
+	if err := Check(m); err != nil {
+		return err
 	}
 	return s.write(m)
 }

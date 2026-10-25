@@ -11,7 +11,7 @@ import (
 )
 
 // The store's ledgers (usage.jsonl and models/<model>.jsonl) are append-only and read on every
-// memory tool call, agent start and memory-worker pass. Each process keeps what it parsed of
+// memory tool call, agent start and compaction. Each process keeps what it parsed of
 // each ledger with the offset it reached, so a later read parses only the lines appended since
 // (by any process) instead of the whole ledger again.
 var (

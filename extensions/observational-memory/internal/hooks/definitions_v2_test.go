@@ -1,7 +1,6 @@
 package hooks
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -27,7 +26,7 @@ func level1StoreSetup(t *testing.T) (*runtime.Runtime, *testfix.FakeHost, curate
 	rt, h, _ := level1Setup(t)
 	h.Home = t.TempDir()
 	store, ok := harness.StoreOf(h, rt.Config())
-	if !ok || !store.V2 {
+	if !ok || store.Layer().Engine != curated.EngineV2 {
 		t.Fatal("no v2 store")
 	}
 	return rt, h, store, harness.ModelKey(h.Model)
@@ -247,25 +246,21 @@ func TestV2Level1DefinitionsAreChecked(t *testing.T) {
 	}
 }
 
-// Each engine applies, settles and is blocked only by its own holds. A consolidation addition
-// is refused outside v2; a definition v1 held (one held before that refusal, and a detector)
-// never reaches the level-1 prompt, never blocks an offer and is never settled by a v2
-// compaction (a v2 proposal of the same name replaces it); and a definition v2 held is
-// invisible to v1 and its Claim.
-func TestV2AndV1HoldsNeverMix(t *testing.T) {
+// Only memory v2's holds apply. A definition memory v1 held (a store whose layer reads holds
+// without an engine, as v1's did) never reaches the level-1 prompt, never blocks an offer and is
+// never settled by a compaction (a v2 proposal of the same name replaces it); and a v2 hold is
+// invisible to such a store and its Claim.
+func TestV1HoldsNeverRun(t *testing.T) {
 	counter := testfix.CountRequests(t)
 	rt, h, store, model := level1StoreSetup(t)
-	v1 := store
-	v1.V2 = false
-	if err := harness.CheckModelDefinition(v1, nil, layer.Definition{Kind: layer.KindInstructions, Name: agents.InstructionsConsolidation, Model: model, Text: "Merge aggressively; prefer reflections."}); !errors.Is(err, harness.ErrConsolidationV2Only) {
-		t.Fatalf("v1 accepted the consolidation instructions: %v", err)
-	}
+	v1 := store.Layer()
+	v1.Engine = ""
 	const v1Text = "Merge aggressively; prefer reflections."
 	for _, d := range []layer.Definition{
 		{Kind: layer.KindInstructions, Name: agents.InstructionsConsolidation, Model: model, Text: v1Text},
 		{Kind: layer.KindDetector, Name: "missed-paths", Model: model, Text: "detector[1]{check,query,description}:\n  ,notes | count,notes counted"},
 	} {
-		if _, err := v1.Layer().Hold(d); err != nil {
+		if _, err := v1.Hold(d); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -288,7 +283,7 @@ func TestV2AndV1HoldsNeverMix(t *testing.T) {
 	if state := consolidationState(t, store, model); state != layer.StateWritten {
 		t.Fatalf("v2's own addition: %s, want written", state)
 	}
-	held, err := v1.Layer().Held(model)
+	held, err := v1.Held(model)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,10 +295,10 @@ func TestV2AndV1HoldsNeverMix(t *testing.T) {
 	if _, err := store.Layer().Hold(layer.Definition{Kind: layer.KindDetector, Name: "v2-only", Model: model, Text: "detector[1]{check,query,description}:\n  ,notes | count,v2 counted"}); err != nil {
 		t.Fatal(err)
 	}
-	if held, _ := v1.Layer().Held(model); len(held) != 1 || held[0].Name != "missed-paths" {
+	if held, _ := v1.Held(model); len(held) != 1 || held[0].Name != "missed-paths" {
 		t.Fatalf("v1 sees a v2 hold: %+v", held)
 	}
-	notices, err := v1.Layer().Claim(model, true, "")
+	notices, err := v1.Claim(model, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}

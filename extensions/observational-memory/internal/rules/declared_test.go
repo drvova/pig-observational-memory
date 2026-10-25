@@ -11,19 +11,16 @@ import (
 )
 
 // The catalogue seeds are the catalogue section 7 ships: the same remedies tried in the same
-// order for each detector, with the same parameters the harness rules carried.
+// order for each detector.
 func TestCatalogueSeedsAreTheShippedCatalogue(t *testing.T) {
 	c := SeedCatalog()
-	kinds := map[string]int{"plan": 2, "fact": 1}
 	for _, detector := range Detectors {
 		if got := c.Tries(detector); !reflect.DeepEqual(got, Catalogue[detector]) {
 			t.Fatalf("%s: tries %v, catalogue %v", detector, got, Catalogue[detector])
 		}
-		for _, remedy := range Catalogue[detector] {
-			if got, want := c.Rule(detector, remedy, kinds), harnessRule(detector, remedy, kinds); !reflect.DeepEqual(got, want) {
-				t.Fatalf("%s/%s: rule %+v, harness %+v", detector, remedy, got, want)
-			}
-		}
+	}
+	if r := c.Rule(DetectUncitedAssistantSpecifics, RemedyKeepHead, nil); !reflect.DeepEqual(r, Rule{Detector: DetectUncitedAssistantSpecifics, Remedy: RemedyKeepHead, Proposer: ProposerHarness}) {
+		t.Fatalf("keep-head rule %+v", r)
 	}
 	for _, detector := range Detectors {
 		if e, ok := c.Entry(detector, RemedyPromptLine); !ok || e.Text != catalogueText[detector] {
@@ -50,23 +47,31 @@ func TestModelCatalogueAppliesToItsModel(t *testing.T) {
 	if got := c.Tries(DetectUnresolvedRelativeDate); len(got) != 0 {
 		t.Fatalf("the model's catalogue left out unresolved-relative-date, yet %v", got)
 	}
-	thin := map[string]int{DetectThinChunk: 1}
-	events := []curated.ModelEvent{pass(100, thin), pass(100, thin), pass(100, thin)}
-	changed, _ := EvaluateWith("p/m", events, nil, t0, c)
-	if len(changed) != 1 || changed[0].Remedy != RemedyPromptLine || changed[0].Text != "Keep every figure of the chunk in a note." {
-		t.Fatalf("changed %+v", changed)
-	}
 	if other, _, _ := ls.Load("q/other"); !reflect.DeepEqual(CatalogOf(other).Tries(DetectThinChunk), Catalogue[DetectThinChunk]) {
 		t.Fatal("the model's catalogue reached another model")
 	}
-	// AfterPass reads the model's catalogue from its layer.
+	// For decode failures this model tries long-spec first (its switch-codec ranks after it):
+	// the harness writes it, not the seed's switch-codec, and AfterPass reads the catalogue from
+	// the model's layer.
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindRemedy, Name: RemedySwitchCodec, Model: "p/m", Text: "catalogue[1]{detector,rank}:\n  decode-failure,3"}); err != nil {
+		t.Fatal(err)
+	}
+	h, _, _ = ls.Load("p/m")
+	c = CatalogOf(h)
+	if got := c.Tries(DetectDecodeFailure); !reflect.DeepEqual(got, []string{RemedyLongSpec, RemedySwitchCodec}) {
+		t.Fatalf("tries %v", got)
+	}
+	codec := map[string]int{DetectDecodeFailure: 1, CountCodecDecodeFailure: 1}
+	changed, _ := evaluate("p/m", []curated.ModelEvent{pass(100, codec), pass(100, codec), pass(100, codec)}, nil, t0, c)
+	if len(changed) != 1 || changed[0].Remedy != RemedyLongSpec {
+		t.Fatalf("changed %+v", changed)
+	}
 	for i := 0; i < MinEvidence; i++ {
-		if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 100, Findings: &Findings{Counts: thin}}); err != nil {
-			t.Fatal(err)
-		}
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDecode, Outcome: curated.OutcomeError, Engine: curated.EngineV2})
+		v2Compaction(t, store, 100, nil, nil)
 	}
 	all, _ := List(store)
-	if len(all) != 1 || all[0].Remedy != RemedyPromptLine || all[0].Text != "Keep every figure of the chunk in a note." {
+	if len(all) != 1 || all[0].Remedy != RemedyLongSpec {
 		t.Fatalf("rules %+v", all)
 	}
 	for name, d := range map[string]layer.Definition{
@@ -132,8 +137,8 @@ func TestDetectorDeclarations(t *testing.T) {
 		{ID: "bbbbbbbbbbbb", Content: "User plans dinner.", Kind: "plan", Timestamp: "2026-05-02 10:31", Relevance: "low"},
 		{ID: "cccccccccccc", Content: "User owns a cat.", Kind: "fact", Timestamp: "2026-05-02 10:32", Relevance: "low"},
 	}
-	f := DetectObserverPass(ObserverPass{Notes: notes, Detectors: defs})
-	if f.Defined["plans"] != 2 || f.Defined["thin-chunk"] != f.Counts[DetectThinChunk] {
+	f := DetectV2(ObserverPass{Notes: notes, Detectors: defs})
+	if f.Defined["plans"] != 2 || f.Defined["thin-chunk"] != 0 {
 		t.Fatalf("defined %+v counts %+v", f.Defined, f.Counts)
 	}
 	// A query by subject reads the pass's notes grouped as the memory tool groups them: over
@@ -144,14 +149,17 @@ func TestDetectorDeclarations(t *testing.T) {
 	h, _, _ = ls.Load("p/m")
 	running := []ledger.Observation{{ID: "dddddddddddd", Content: "User ran 10k.", Kind: "event", Subject: "half marathon training", Timestamp: "2026-05-02 10:33", Relevance: "low"}}
 	known := []ledger.Observation{{ID: "eeeeeeeeeeee", Content: "User runs weekly.", Kind: "fact", Subject: "running", Timestamp: "2026-05-01 10:00", Relevance: "low"}}
-	aliased := DetectObserverPass(ObserverPass{Notes: running, Known: known, Aliases: []ledger.SubjectAlias{{From: "half marathon training", To: "running"}}, Detectors: ModelDetectors(h)})
+	aliased := DetectV2(ObserverPass{Notes: running, Known: known, Aliases: []ledger.SubjectAlias{{From: "half marathon training", To: "running"}}, Detectors: ModelDetectors(h)})
 	if aliased.Defined["running-notes"] != 1 {
 		t.Fatalf("aliased detector counted %+v", aliased.Defined)
 	}
-	if plain := DetectObserverPass(ObserverPass{Notes: running, Known: known, Detectors: ModelDetectors(h)}); plain.Defined["running-notes"] != 0 {
+	if plain := DetectV2(ObserverPass{Notes: running, Known: known, Detectors: ModelDetectors(h)}); plain.Defined["running-notes"] != 0 {
 		t.Fatalf("unaliased detector counted %+v", plain.Defined)
 	}
-	if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 10, Findings: &f}); err != nil {
+	if err := RecordDetection(store, "p/m", f, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AfterPass(store, "p/m", Pass{}); err != nil {
 		t.Fatal(err)
 	}
 	events, _ := store.ModelEvents("p/m")
@@ -178,9 +186,9 @@ func TestCatalogueLinesKeepTheirAuthor(t *testing.T) {
 	}
 	var established []Rule
 	for _, m := range []string{"p/a", "p/b", "p/c"}[:DefaultAfterModels] {
-		established = append(established, Rule{ID: "r-" + m, Detector: DetectThinChunk, Remedy: RemedyPromptLine, Text: "Keep every figure of the chunk in a note.", Models: []string{m}, State: StateEstablished, Proposer: ProposerModel})
+		established = append(established, Rule{ID: "r-" + m, Detector: DetectThinChunk, Remedy: RemedyPromptLine, Text: "Keep every figure of the chunk in a note.", Models: []string{m}, State: StateEstablished, Proposer: ProposerModel, Engine: curated.EngineV2})
 	}
-	changed, _ := EvaluateWith("p/a", nil, established, t0, SeedCatalog())
+	changed, _ := evaluateSeed("p/a", nil, established, t0)
 	if len(changed) != 1 || !changed[0].Default() || changed[0].Proposer != ProposerModel {
 		t.Fatalf("default %+v", changed)
 	}

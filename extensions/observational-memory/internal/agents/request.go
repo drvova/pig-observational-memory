@@ -11,7 +11,7 @@ import (
 )
 
 // RequestEvent is the debug event every model request the extension makes logs, from its
-// single stream call site (Request): the stage, the memory engine, and the input and output
+// single stream call site (Request): the stage, the model, and the input and output
 // tokens when the provider reported them (docs/memory-v2.md, "Measuring it").
 const RequestEvent = debuglog.RequestEvent
 
@@ -38,7 +38,7 @@ func requestFor(systemPrompt string, messages, toolSchemas []any, maxTokens int,
 // Request makes one model request: it starts the stream, drains it and returns the
 // assistant message, and logs one event for it (RequestEvent, or the stage's stream_error
 // event for a failed response; logRequest). It is the extension's only stream call
-// site: the worker loop and the single-request path both go through it. A nil stream is an
+// site (RunSingleRequest goes through it). A nil stream is an
 // error with no request made; a context cancelled before the result is ErrAborted.
 //
 // Cancelling ctx only stops the draining here: the SDK's stream (ModelRegistry.StreamSimple,
@@ -47,10 +47,9 @@ func requestFor(systemPrompt string, messages, toolSchemas []any, maxTokens int,
 // cancelled (PiG cancels that request's host calls, modelStream included). So a request
 // whose ctx is the handler's own request context (memory v2's session_before_compact hook,
 // sdkhost.Host.RequestContext) stops in PiG with it, while one cancelled only on the
-// extension's side (a worker run aborted by Runtime.AbortConsolidation) still runs to its
-// end and is billed. Either way it was made: an aborted request still logs its event, with
+// extension's side would still run to its end and be billed. Either way it was made: an aborted request still logs its event, with
 // "aborted": true, and counts as a request.
-func Request(ctx context.Context, stream StreamFunc, stage, engine string, model host.Model, request map[string]any) (map[string]any, error) {
+func Request(ctx context.Context, stream StreamFunc, stage string, model host.Model, request map[string]any) (map[string]any, error) {
 	if stream == nil {
 		return nil, errors.New("model stream unavailable")
 	}
@@ -62,7 +61,7 @@ func Request(ctx context.Context, stream StreamFunc, stage, engine string, model
 		// Drain: the terminal event carries the message.
 	}
 	if ctx.Err() != nil {
-		logRequest(ctx, stage, engine, model, nil, true)
+		logRequest(ctx, stage, model, nil, true)
 		return nil, ErrAborted
 	}
 	message := modelStream.Result()
@@ -72,17 +71,15 @@ func Request(ctx context.Context, stream StreamFunc, stage, engine string, model
 	if _, hasRole := message["role"]; !hasRole {
 		message["role"] = "assistant"
 	}
-	logRequest(ctx, stage, engine, model, message, false)
+	logRequest(ctx, stage, model, message, false)
 	return message, nil
 }
 
 // logRequest logs the request's event: RequestEvent, or for a response that ended with
 // stopReason "error" or "aborted" the stage's stream_error event, which carries the same
 // request fields, so each request logs exactly one event. Both carry "request": true.
-// The engine is reported as the caller gave it: a caller that left it unset shows as "",
-// never as either engine.
-func logRequest(ctx context.Context, stage, engine string, model host.Model, message map[string]any, aborted bool) {
-	data := map[string]any{"request": true, "stage": stage, "engine": engine, "model": host.ModelProvider(model) + "/" + host.ModelID(model)}
+func logRequest(ctx context.Context, stage string, model host.Model, message map[string]any, aborted bool) {
+	data := map[string]any{"request": true, "stage": stage, "model": host.ModelProvider(model) + "/" + host.ModelID(model)}
 	event := RequestEvent
 	if aborted {
 		data["aborted"] = true
@@ -125,7 +122,6 @@ func ForcedToolChoice(model host.Model, name string) any {
 // SingleRequestConfig is one single-request completion: one forced tool, one response.
 type SingleRequestConfig struct {
 	Stage   string
-	Engine  string
 	Model   host.Model
 	APIKey  *string
 	Headers map[string]any
@@ -191,7 +187,7 @@ func RunSingleRequest(ctx context.Context, stream StreamFunc, cfg SingleRequestC
 	} else if host.ModelReasoning(cfg.Model) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != "off" {
 		request["reasoning"] = cfg.ThinkingLevel
 	}
-	message, err := Request(ctx, stream, cfg.Stage, cfg.Engine, cfg.Model, request)
+	message, err := Request(ctx, stream, cfg.Stage, cfg.Model, request)
 	if err != nil {
 		// Request is aborted only after it started the stream; its other errors start none.
 		return SingleRequestResult{Made: errors.Is(err, ErrAborted)}, err

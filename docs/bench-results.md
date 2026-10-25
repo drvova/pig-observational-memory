@@ -1,6 +1,8 @@
 # LongMemEval results
 
-A full run of [LongMemEval](https://github.com/xiaowu0162/LongMemEval)'s `longmemeval_s` set: 500 questions over 25,112 conversation sessions, set up the way Mastra's observational memory benchmark is. The sessions are replayed in time order through this extension's own observer, reflector and dropper, and each question is answered from the rendered memory. Each answer is graded with LongMemEval's official per-type judge prompts. How to run it is in [bench.md](bench.md).
+> **History:** these results measured memory v1 (the background observer, reflector and dropper); v1 and the benchmark harness that produced them were removed, so the commands below no longer exist.
+
+A full run of [LongMemEval](https://github.com/xiaowu0162/LongMemEval)'s `longmemeval_s` set: 500 questions over 25,112 conversation sessions, set up the way Mastra's observational memory benchmark is. The sessions are replayed in time order through this extension's own observer, reflector and dropper, and each question is answered from the rendered memory. Each answer is graded with LongMemEval's official per-type judge prompts.
 
 ## Results
 
@@ -52,7 +54,7 @@ Caveats: each model graded its own answers, and the judges differ. On one questi
 
 ## Deterministic memory fixes, measured on the same memory
 
-Three code-only changes (no prompt changes): the dropper's preservation floor, dated reflection lines, and specifics-aware summary eviction (see [concepts](concepts.md)). To measure them on exactly the memory a model built, `longmemeval replay` rebuilt every question's memory from the DeepSeek run's checkpoints with the new code, applying the floor to the drops the dropper had recorded, with no model calls ([bench.md](bench.md#replaying-a-finished-run)). Opus 5.5 then answered and graded, as in the run above, on two sets:
+Three code-only changes (no prompt changes): the dropper's preservation floor, dated reflection lines, and specifics-aware summary eviction (see [concepts](concepts.md)). To measure them on exactly the memory a model built, `longmemeval replay` rebuilt every question's memory from the DeepSeek run's checkpoints with the new code, applying the floor to the drops the dropper had recorded, with no model calls. Opus 5.5 then answered and graded, as in the run above, on two sets:
 
 | Set | Opus correct, original memory | Opus correct, replayed memory | Gained | Lost |
 |---|---|---|---|---|

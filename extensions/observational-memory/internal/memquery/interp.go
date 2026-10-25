@@ -86,20 +86,21 @@ type Env struct {
 	DefinedTools []string
 	// CitedBy makes recall of an observation list the reflections citing it
 	// (FoldedLedger.CitedBy): memory v2's lineage (docs/memory-v2.md, "Memory tool"). The
-	// per-model harness sets it under memoryEngine v2.
+	// per-model harness sets it on every memory tool call.
 	CitedBy bool
 	// Records, when set, are the memory the notes and reflections sources read instead of the
 	// ledger folded from Entries: a compaction's projection for a summary query, or one
 	// pass's notes for a detector query (docs/memory-interface.md, section 8).
 	Records *Records
-	// V2 runs memory v2's memory-tool behaviour (docs/memory-v2.md, "Memory tool"): history
+	// ToolCall runs the memory tool's own behaviour (docs/memory-v2.md, "Memory tool"): history
 	// leaves out the current turn and harness markup, lists newest first, says how many entries
 	// match each word when none matches them all, and a cut result leads with matched N,
 	// showing M and, for history, the query for the next older page; recall pages a long text
 	// (RecallPageChars) and leaves thinking out of an entry; history, notes and recall fall back
 	// to SessionEntries when the current branch has nothing; saved shows each memory's state.
-	// The per-model harness sets it under memoryEngine v2.
-	V2 bool
+	// The per-model harness sets it on every memory tool and defined tool call; a detector's
+	// or summary's query (Records set) leaves it unset and reads as the query engine always did.
+	ToolCall bool
 	// SessionEntries are every entry of the session file, in file order: memory v2's off-path
 	// fallback (docs/memory-v2.md, "Branches"). Nil when the host cannot read them.
 	SessionEntries []session.Entry
@@ -201,7 +202,7 @@ func Run(env Env, query string) Result {
 	details.Kind = q.Source
 	if q.Source == SourceRecall {
 		text, recalled, cited, err := runRecall(env, q.ID)
-		if err != nil && env.V2 && len(env.SessionEntries) > 0 {
+		if err != nil && env.ToolCall && len(env.SessionEntries) > 0 {
 			// Memory v2's fallback: an id not on the current branch is read from the session
 			// file, labelled off-path.
 			if offText, offRecalled, _, offErr := runRecall(env.fallback(), q.ID); offErr == nil {
@@ -211,7 +212,7 @@ func Run(env Env, query string) Result {
 		if err != nil {
 			return fail(err)
 		}
-		if env.V2 || q.Paged {
+		if env.ToolCall || q.Paged {
 			if text, err = page(text, q); err != nil {
 				return fail(err)
 			}
@@ -305,7 +306,7 @@ type readOutput struct {
 	hits []string
 }
 
-// runRead runs a source and its stages. Under memory v2 a history or notes query that finds
+// runRead runs a source and its stages. On a tool call a history or notes query that finds
 // nothing on the branch is run again over the session file (fallback), and a history search
 // that finds nothing there either says how many entries match each word (noMatchCounts).
 func runRead(env Env, q *Query) (readOutput, error) {
@@ -313,7 +314,7 @@ func runRead(env Env, q *Query) (readOutput, error) {
 	if err != nil {
 		return readOutput{}, err
 	}
-	if env.V2 && len(rel.rows) == 0 && (q.Source == SourceHistory || q.Source == SourceNotes) && env.Records == nil {
+	if env.ToolCall && len(rel.rows) == 0 && (q.Source == SourceHistory || q.Source == SourceNotes) && env.Records == nil {
 		if len(env.SessionEntries) > 0 {
 			if off, offWords, offGroup, err := evalRead(env.fallback(), q, true); err == nil && len(off.rows) > 0 {
 				rel, words, group = off, offWords, offGroup
@@ -334,7 +335,7 @@ func runRead(env Env, q *Query) (readOutput, error) {
 	}
 	if rel.matched > len(rel.rows) {
 		marker := fmt.Sprintf("matched %d, showing %d", rel.matched, len(rel.rows))
-		if !env.V2 {
+		if !env.ToolCall {
 			out.text += "\n" + marker
 			return out, nil
 		}

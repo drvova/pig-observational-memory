@@ -3,13 +3,10 @@ package rules
 import (
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -42,13 +39,10 @@ const (
 // answers both. It is not a detector of its own.
 const CountCodecDecodeFailure = DetectDecodeFailure + ":codec"
 
-// CountEmptyPass is the count an observer pass that ran over a chunk and recorded nothing
-// carries (Pass.Empty), one per such pass. It is kernel code, read by probation
-// (GradingKeys) and the revision pass's evidence, so a definition that silences the observer is
-// counted like any other failure; no rule is written or judged on it. It is not a detector.
-const CountEmptyPass = "observer-empty"
-
-// Detectors lists the detectors in the order the spec's table names them.
+// Detectors lists the detectors in the order the spec's table names them. It is what rule and
+// detector definitions are validated against, so it keeps unresolved-relative-date and
+// thin-chunk, which only memory v1 counted, for v1's rules and definitions to still parse;
+// the detectors v2 runs are V2Detectors.
 var Detectors = []string{DetectUncitedAssistantSpecifics, DetectCrossScopeSupersede, DetectUnresolvedRelativeDate, DetectThinChunk, DetectDroppedThenQueried, DetectDecodeFailure}
 
 // detectorDescriptions say what each kernel check counts.
@@ -80,14 +74,11 @@ func init() {
 	}
 }
 
-// The worker stages a pass is recorded for.
-const (
-	StageObserver  = "observer"
-	StageReflector = "reflector"
-	StageDropper   = "dropper"
-)
+// StageObserver is the stage memory v1's observer passes were recorded for, which JudgedKind
+// still reads to list a v1-written definition's probation.
+const StageObserver = "observer"
 
-// ObserverPass is what the detectors read after an observer chunk was recorded.
+// ObserverPass is what the detectors read: under memory v2, one level-0 extraction (DetectV2).
 type ObserverPass struct {
 	// Branch is the branch the pass read.
 	Branch []ledger.Entry
@@ -126,33 +117,6 @@ type Findings struct {
 	Defined map[string]int
 }
 
-// DetectObserverPass runs every note detector over one observer pass. It is pure: the same
-// pass always gives the same findings. decode-failure is counted from the usage ledger instead
-// (DecodeFailuresSince).
-func DetectObserverPass(p ObserverPass) Findings {
-	f := Findings{Counts: map[string]int{}, DroppedKinds: map[string]int{}}
-	f.Uncited = UncitedAssistantSpecifics(p)
-	f.CrossScope = CrossScopeSupersedes(p.Notes, p.Known)
-	f.Counts[DetectUncitedAssistantSpecifics] = len(f.Uncited)
-	f.Counts[DetectCrossScopeSupersede] = len(f.CrossScope)
-	f.Counts[DetectUnresolvedRelativeDate] = UnresolvedRelativeDates(p.Notes)
-	if ThinChunk(p.Covered, p.Notes) {
-		f.Counts[DetectThinChunk] = 1
-	}
-	asked := DroppedThenQueried(p.Branch, p.Covered, p.Defined)
-	f.Counts[DetectDroppedThenQueried] = len(asked)
-	for _, o := range asked {
-		f.DroppedKinds[kindName(o.Kind)]++
-	}
-	for _, d := range p.Detectors {
-		if f.Defined == nil {
-			f.Defined = map[string]int{}
-		}
-		f.Defined[d.Name] = d.Count(p, f.Counts)
-	}
-	return f
-}
-
 func kindName(kind ledger.ObservationKind) string {
 	if kind == "" {
 		return Unclassified
@@ -167,18 +131,6 @@ func AssistantText(entry ledger.Entry) (string, bool) {
 		return "", false
 	}
 	return blockText(entry.Message["content"]), true
-}
-
-// conversationText is a user or assistant message's text; tool output, custom messages and
-// summaries are not conversation.
-func conversationText(entry ledger.Entry) (string, bool) {
-	if text, ok := AssistantText(entry); ok {
-		return text, true
-	}
-	if entry.Type == "message" && entry.Message != nil && entry.Message["role"] == "user" {
-		return blockText(entry.Message["content"]), true
-	}
-	return "", false
 }
 
 func blockText(content any) string {
@@ -317,71 +269,6 @@ func isRole(entry ledger.Entry, role string) bool {
 	return entry.Type == "message" && entry.Message != nil && entry.Message["role"] == role
 }
 
-// CrossScopeSupersedes are the supersedes links from notes to notes (in notes or known) whose
-// scopes differ, as "note>superseded". An empty scope is no qualifier, so it differs from no
-// scope: only two named scopes that differ tell two figures apart.
-func CrossScopeSupersedes(notes, known []ledger.Observation) []string {
-	scope := map[string]string{}
-	for _, o := range known {
-		scope[o.ID] = o.Scope
-	}
-	for _, o := range notes {
-		scope[o.ID] = o.Scope
-	}
-	out := []string{}
-	for _, o := range notes {
-		for _, target := range o.Supersedes {
-			if other, ok := scope[target]; ok && scopesDiffer(o.Scope, other) {
-				out = append(out, o.ID+">"+target)
-			}
-		}
-	}
-	return out
-}
-
-func scopesDiffer(a, b string) bool {
-	a, b = ledger.NormalizeScope(a), ledger.NormalizeScope(b)
-	return a != "" && b != "" && a != b
-}
-
-// UnresolvedRelativeDates counts the relative-date phrases in notes that the renderer resolves
-// against the note's own time: phrases the note left relative.
-func UnresolvedRelativeDates(notes []ledger.Observation) int {
-	count := 0
-	for _, o := range notes {
-		anchor, ok := serialize.ParseTimestamp(o.Timestamp)
-		if !ok {
-			anchor = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-		}
-		count += strings.Count(ledger.ResolveRelativeDates(o.Content, anchor), " [=") - strings.Count(o.Content, " [=")
-	}
-	return count
-}
-
-// ThinChunk reports whether a chunk's notes are far shorter than their source: the user and
-// assistant text it covered has specifics no note carries, and the notes together are shorter
-// than a bare list of those left-out specifics. Notes that could not even have listed what
-// they dropped did not compress the chunk; they skipped it. The bound is the chunk's own
-// left-out detail, not a ratio picked for a score.
-func ThinChunk(covered []ledger.Entry, notes []ledger.Observation) bool {
-	contents := make([]string, 0, len(notes))
-	noteTokens := 0
-	for _, o := range notes {
-		contents = append(contents, o.Content)
-		noteTokens += tokens.EstimateStringTokens(o.Content)
-	}
-	missing := []string{}
-	for _, entry := range covered {
-		if text, ok := conversationText(entry); ok {
-			missing = append(missing, ledger.MissingSpecifics(text, contents)...)
-		}
-	}
-	if len(missing) == 0 {
-		return false
-	}
-	return noteTokens < tokens.EstimateStringTokens(strings.Join(missing, ", "))
-}
-
 // DroppedThenQueried are the dropped records the memory tool calls in covered asked for: a
 // recall of a record the dropper had retired before the call, or a search whose words all
 // appear in such a record. Each record counts once per call, of the memory tool or of a tool
@@ -494,32 +381,6 @@ func MemoryQueries(entry ledger.Entry, defined map[string]string) []string {
 		}
 	}
 	return out
-}
-
-// DecodeFailuresSince counts the decode failures in a model's usage ledger since its latest
-// observer pass: codec is the rows tables the codec could not decode, syntax the memory
-// queries that did not parse. Reflector and dropper passes are not boundaries: they carry no
-// rate (isObserverPass), so a failure counted on one would never be judged.
-func DecodeFailuresSince(events []curated.ModelEvent) (codec, syntax int) {
-	start := 0
-	for i, e := range events {
-		if isObserverPass(e) {
-			start = i + 1
-		}
-	}
-	for _, e := range events[start:] {
-		if e.Engine != "" {
-			// Counted under memory v2: evidence for its compactions only (afterCompaction).
-			continue
-		}
-		switch {
-		case e.Kind == curated.ModelKindDecode && e.Outcome == curated.OutcomeError:
-			codec++
-		case e.Kind == curated.ModelKindMemory && e.Syntax:
-			syntax++
-		}
-	}
-	return codec, syntax
 }
 
 // SourceTokens is the estimated tokens of entries: a pass's observed source tokens.

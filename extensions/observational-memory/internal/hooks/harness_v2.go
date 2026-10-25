@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
@@ -175,7 +174,7 @@ func recordCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, e
 	}
 	sort.Strings(ranHeld)
 	catalog := l.Layer().Harness()
-	transitions, err := rules.AfterPass(l.Store, l.Model, rules.Pass{Stage: rules.StageCompaction, Engine: curated.EngineV2, Counts: counts, Level1: counts != nil, Empty: empty, Layer: &catalog, RanHeld: ranHeld})
+	transitions, err := rules.AfterPass(l.Store, l.Model, rules.Pass{Counts: counts, Level1: counts != nil, Empty: empty, Layer: &catalog, RanHeld: ranHeld})
 	logData := map[string]any{"model": l.Model, "empty": empty, "counts": counts, "transitions": len(transitions)}
 	if err != nil {
 		logData["errorMessage"] = err.Error()

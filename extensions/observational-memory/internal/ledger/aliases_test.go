@@ -9,7 +9,6 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -51,50 +50,6 @@ func TestCanonicalSubjectsRealSessionWithAlias(t *testing.T) {
 		if got := ledger.CanonicalSubjectsWithAliases(realSessionSubjects, aliases); !reflect.DeepEqual(got, plain) {
 			t.Errorf("aliases %v changed the grouping: %#v", aliases, got)
 		}
-	}
-}
-
-// The tables view of the real session with the alias has one running table holding the half
-// marathon notes, and the records keep the subject the observer wrote.
-func TestTablesFormatGroupsAliasedSubjects(t *testing.T) {
-	observations := []ledger.Observation{}
-	for i, subject := range realSessionSubjects {
-		subject := subject
-		observations = append(observations, tf.Observation(padID(string(rune('a'+i)), 'a'), func(o *ledger.Observation) {
-			o.Timestamp = "2026-05-0" + string(rune('1'+i)) + " 10:00"
-			o.Content = "Note about " + subject + "."
-			o.Kind, o.Subject = "fact", subject
-		}))
-	}
-	stored := append([]ledger.Observation{}, observations...)
-	options := ledger.RenderOptions{Aliases: []ledger.SubjectAlias{alias("half marathon training", "running")}}
-	text := ledger.RenderSummaryWithOptions(nil, observations, 0, options).Text
-	if !reflect.DeepEqual(observations, stored) {
-		t.Fatal("rendering changed the records")
-	}
-	decoded, err := tables.Rows.Decode(strings.TrimPrefix(text, ledger.TablesUsageInstructions+"\n\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	names, scopes := []string{}, []string{}
-	for _, table := range decoded {
-		names = append(names, table.Name)
-		if table.Name == "notes.running" {
-			for r := range table.Rows {
-				scope, _ := table.Cell(r, "scope")
-				scopes = append(scopes, scope)
-			}
-		}
-	}
-	if got := strings.Join(names, " "); got != "notes.running notes.fitness_routine notes.health_metrics" {
-		t.Fatalf("tables %q", got)
-	}
-	if got := strings.Join(scopes, ","); got != ",training,gear,shoes,half marathon training" {
-		t.Fatalf("scopes %q", got)
-	}
-	// Refused aliases render byte for byte as none.
-	if got, want := ledger.RenderSummaryWithOptions(nil, observations, 0, ledger.RenderOptions{Aliases: []ledger.SubjectAlias{alias("running", "absent")}}).Text, ledger.RenderSummaryWithOptions(nil, observations, 0, ledger.RenderOptions{}).Text; got != want {
-		t.Fatalf("a refused alias changed the view:\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -324,22 +279,6 @@ func TestCanonicalSubjectsWithAliasesIdempotent(t *testing.T) {
 	}
 }
 
-// The observer's subject list counts under the aliases too.
-func TestCountCanonicalSubjectsWithAliases(t *testing.T) {
-	observations := []ledger.Observation{}
-	for i, subject := range append(append([]string{}, realSessionSubjects...), "running/pace") {
-		observations = append(observations, tf.Observation(padID(string(rune('a'+i)), 'a'), func(o *ledger.Observation) { o.Subject = subject }))
-	}
-	memory := ledger.BoundObserverMemoryWithAliases(nil, observations, []ledger.SubjectAlias{alias("half marathon training", "running")}, 0)
-	lines := []string{}
-	for _, s := range memory.Subjects {
-		lines = append(lines, s.Line())
-	}
-	if got := strings.Join(lines, "|"); got != "running: 6|fitness routine: 1|health metrics: 1" {
-		t.Fatalf("subjects %q", got)
-	}
-}
-
 // Alias entries fold like the other records: through the boundary the observations fold
 // through, into the compaction's details, and back out of them once the raw entries are
 // compacted; they never move a coverage marker.
@@ -358,8 +297,8 @@ func TestAliasesFoldAcrossCompaction(t *testing.T) {
 		claimedAliasEntry("alias-2", "raw-2", late),
 		tf.RawMessage("raw-3", "three"),
 	}
-	before := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
-	if before != "raw-2" || ledger.LatestCoverageMarkerID(entries[:6], ledger.OMReflectionsRecorded) != "" {
+	before := latestMarker(entries, ledger.OMObservationsRecorded)
+	if before != "raw-2" || latestMarker(entries[:6], ledger.OMReflectionsRecorded) != "" {
 		t.Fatalf("coverage %q", before)
 	}
 	if folded := ledger.FoldLedger(entries, ""); !reflect.DeepEqual(folded.Aliases, []ledger.SubjectAlias{early, late}) {
@@ -399,7 +338,7 @@ func TestAliasesFoldAcrossCompaction(t *testing.T) {
 	if canonical["half marathon training"].Subject != "running" || canonical["gym"].Subject != "fitness routine" {
 		t.Fatalf("compacted grouping %#v", canonical)
 	}
-	if got := ledger.LatestCoverageMarkerID(compacted, ledger.OMObservationsRecorded); got != before {
+	if got := latestMarker(compacted, ledger.OMObservationsRecorded); got != before {
 		t.Fatalf("coverage moved to %q", got)
 	}
 	// Details without aliases carry no aliases key, so they stay byte for byte as before.
@@ -521,4 +460,9 @@ func TestLegacySlashSubjectsReadAsWritten(t *testing.T) {
 	if got["/"] != (ledger.Canonical{Subject: "/"}) || got["ci / cd"] != (ledger.Canonical{Subject: "ci", ExtraScope: "cd"}) {
 		t.Fatalf("legacy subjects %#v", got)
 	}
+}
+
+// padID repeats fill after prefix up to an observation id's 12 characters.
+func padID(prefix string, fill rune) string {
+	return prefix + strings.Repeat(string(fill), 12-len(prefix))
 }
