@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"testing"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
@@ -632,4 +634,72 @@ func (h *FakeHost) RegisteredSpec(name string) (host.ToolSpec, bool) {
 		}
 	}
 	return host.ToolSpec{}, false
+}
+
+// RequestCounter counts the model requests the extension makes, per stage, from the debug
+// event every request logs at the single stream call site (debuglog.IsRequest).
+type RequestCounter struct {
+	mu      sync.Mutex
+	byStage map[string]int
+	engines map[string]int
+}
+
+// CountRequests counts every model request from now until the test ends. The count is
+// process-wide (debuglog.Subscribe), so a test that uses it must not call t.Parallel and must
+// wait for the runs it starts. Assert on Total (0 between memory v2 compactions, at most 1 per
+// compaction) rather than on Engine: a per-engine count says nothing about requests made under
+// another label.
+func CountRequests(t testing.TB) *RequestCounter {
+	t.Helper()
+	counter := &RequestCounter{byStage: map[string]int{}, engines: map[string]int{}}
+	unsubscribe := debuglog.Subscribe(func(event string, data map[string]any) {
+		if !debuglog.IsRequest(data) {
+			return
+		}
+		stage, _ := data["stage"].(string)
+		engine, _ := data["engine"].(string)
+		counter.mu.Lock()
+		defer counter.mu.Unlock()
+		counter.byStage[stage]++
+		counter.engines[engine]++
+	})
+	t.Cleanup(unsubscribe)
+	return counter
+}
+
+// Total is how many requests were made.
+func (c *RequestCounter) Total() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	total := 0
+	for _, n := range c.byStage {
+		total += n
+	}
+	return total
+}
+
+// Stage is how many requests stage made.
+func (c *RequestCounter) Stage(stage string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.byStage[stage]
+}
+
+// Engine is how many requests were reported under engine (LoopConfig.Engine and
+// SingleRequestConfig.Engine, "" when a caller left it unset).
+func (c *RequestCounter) Engine(engine string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.engines[engine]
+}
+
+// ByStage is the request count of every stage that made one.
+func (c *RequestCounter) ByStage() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]int, len(c.byStage))
+	for stage, n := range c.byStage {
+		out[stage] = n
+	}
+	return out
 }

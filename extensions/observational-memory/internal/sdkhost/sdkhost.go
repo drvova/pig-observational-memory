@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
@@ -41,6 +42,23 @@ func New(ctx sdk.Context) *Host {
 
 // Context is the wrapped SDK context.
 func (h *Host) Context() sdk.Context { return h.ctx }
+
+// RequestContext is the cancellation of the request this host's handler answers (the SDK
+// Context's Done and Err), as a context.Context. It is not the agent run's signal
+// (Context.Signal): a manual /compact aborts the run but not its session_before_compact
+// request.
+func (h *Host) RequestContext() context.Context { return requestContext{ctx: h.ctx} }
+
+// requestContext adapts an SDK Context's request cancellation to context.Context.
+type requestContext struct{ ctx sdk.Context }
+
+func (r requestContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (r requestContext) Done() <-chan struct{} { return r.ctx.Done() }
+
+func (r requestContext) Err() error { return r.ctx.Err() }
+
+func (r requestContext) Value(any) any { return nil }
 
 // GetBranch reads the current branch's entries.
 func (h *Host) GetBranch() ([]session.Entry, error) {
@@ -174,6 +192,9 @@ func (m models) Refresh(_ context.Context, options host.RefreshOptions) error {
 	return err
 }
 
+// Stream starts a model stream on the wrapped context's request. The SDK call takes no
+// signal: the provider request stops in PiG only when that request is cancelled (PiG cancels
+// its host calls, modelStream included), not when the caller stops reading the events.
 func (m models) Stream(model host.Model, request map[string]any) host.ModelStream {
 	return m.registry.StreamSimple(model, request, nil)
 }

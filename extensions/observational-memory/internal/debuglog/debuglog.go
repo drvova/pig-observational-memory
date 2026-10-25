@@ -4,10 +4,12 @@ package debuglog
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
@@ -123,8 +125,75 @@ type record struct {
 	Data        map[string]any `json:"data"`
 }
 
-// Log appends one event when the scope on ctx is enabled. It never fails.
+// RequestEvent is the event logged for every model request the extension makes, at its single
+// stream call site (agents.Request): data carries the stage, the engine, and the input and
+// output tokens when the provider reported them. A request whose response failed logs its
+// stage's stream_error event instead, with the same data; every request's event carries
+// "request": true (IsRequest).
+const RequestEvent = "model.request"
+
+// IsRequest reports whether a logged event's data is a model request's (RequestEvent, or a
+// failed request's stream_error event).
+func IsRequest(data map[string]any) bool {
+	request, _ := data["request"].(bool)
+	return request
+}
+
+// Observer receives every event Log is given, whether or not the log is
+// enabled, with its own copy of the event's data.
+type Observer func(event string, data map[string]any)
+
+var (
+	observersMu  sync.Mutex
+	observers    = map[int]Observer{}
+	nextObserver int
+)
+
+// Subscribe adds an observer of every logged event, enabled or not, and
+// returns the function that removes it. Tests use it to count what the
+// extension does (testfix.CountRequests); production code adds none.
+//
+// Observers are process-wide, not scoped to a context: an observer sees the
+// events of every goroutine, the background runs a test starts without a
+// context of its own included, which is what makes a count of zero meaningful.
+// The price is that a test observing events must not run in parallel with
+// another test that logs (no t.Parallel) and must wait for the work it started.
+func Subscribe(observer Observer) (unsubscribe func()) {
+	observersMu.Lock()
+	defer observersMu.Unlock()
+	id := nextObserver
+	nextObserver++
+	observers[id] = observer
+	return func() {
+		observersMu.Lock()
+		defer observersMu.Unlock()
+		delete(observers, id)
+	}
+}
+
+func notifyObservers(event string, data map[string]any) {
+	observersMu.Lock()
+	if len(observers) == 0 {
+		observersMu.Unlock()
+		return
+	}
+	current := make([]Observer, 0, len(observers))
+	for _, observer := range observers {
+		current = append(current, observer)
+	}
+	observersMu.Unlock()
+	for _, observer := range current {
+		func() {
+			defer func() { _ = recover() }()
+			observer(event, maps.Clone(data))
+		}()
+	}
+}
+
+// Log appends one event when the scope on ctx is enabled, and passes it to the
+// observers (Subscribe) either way. It never fails.
 func Log(ctx context.Context, event string, data map[string]any) {
+	notifyObservers(event, data)
 	c, ok := From(ctx)
 	if !ok || !c.Enabled {
 		return

@@ -580,11 +580,13 @@ func newRunID(prefix string) string {
 }
 
 // MaybeLaunchConsolidation launches a consolidation run when any stage is due.
-// It returns the run's completion channel, or nil when nothing launched.
+// It returns the run's completion channel, or nil when nothing launched. Memory
+// v2 launches none: outside a compaction it makes no model request
+// (docs/memory-v2.md, "The rule").
 func MaybeLaunchConsolidation(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 	rt.EnsureConfig(h)
 	cfg := rt.Config()
-	if cfg.Passive || rt.ConsolidationInFlight() {
+	if cfg.Passive || cfg.V2() || rt.ConsolidationInFlight() {
 		return nil
 	}
 	entries, err := h.GetBranch()
@@ -604,8 +606,11 @@ func MaybeLaunchConsolidation(rt *runtime.Runtime, h host.Host) <-chan struct{} 
 // RunConsolidationPipeline runs the harness build pass when the memory model has no layer yet,
 // the observer, reflector and dropper stages, and then a revision pass when one is due
 // (docs/memory-interface.md, section 8). An aborted run (Runtime.AbortConsolidation) stops at
-// its next check.
+// its next check. Under memory v2 it runs nothing.
 func RunConsolidationPipeline(ctx context.Context, rt *runtime.Runtime, h host.Host) error {
+	if rt.Config().V2() {
+		return nil
+	}
 	resolver := &modelResolver{rt: rt, h: h}
 	if store, model, due := buildDue(h, rt.Config()); due {
 		rt.SetConsolidationPhase(runtime.PhaseHarness)
@@ -674,6 +679,7 @@ func workerArgs(ctx context.Context, cfg config.Config, h host.Host, worker runt
 		MaxOutputTokens: cfg.AgentMaxTokens,
 		ThinkingLevel:   workerThinkingLevel(cfg, worker),
 		Stream:          h.Models().Stream,
+		Engine:          cfg.Engine(),
 	}
 }
 

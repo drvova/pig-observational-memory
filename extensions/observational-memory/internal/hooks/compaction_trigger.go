@@ -77,11 +77,14 @@ func ActiveCompactionBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.
 
 // MaybeTriggerCompaction triggers proactive compaction when the observed-source
 // threshold is reached and Pi is idle. The returned channel closes once the
-// deferred step ran; it is nil when nothing was scheduled.
+// deferred step ran; it is nil when nothing was scheduled. Memory v2 triggers a
+// compaction only where PiG never would, with its automatic compaction off
+// (docs/memory-v2.md, "Auto-compaction off"); until step 2 of its order of work
+// that is still this v1 threshold, not PiG's window - reserveTokens.
 func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
 	rt.EnsureConfig(h)
 	cfg := rt.LiveConfig(h.Cwd())
-	if cfg.Passive || !rt.TryStartCompact() {
+	if cfg.Passive || (cfg.V2() && cfg.PiAutoCompactionEnabled) || !rt.TryStartCompact() {
 		return nil
 	}
 	// The claim is released on every return until the deferred step owns it.

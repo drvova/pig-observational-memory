@@ -68,6 +68,14 @@ on the same transcript.
   own context (`sdk.Context` `Done`/`Err`), never on `ctx.Signal()`, which is the agent run's signal
   and is already cancelled when a manual `/compact` aborts the run. Only a cancelled request context
   makes the hook return nothing.
+  Known limit (SDK v0.5.1): cancelling a Go context only stops the extension draining the stream;
+  `ModelRegistry.StreamSimple` takes no signal and never sends `cancelModelStream`. The provider
+  request stops in PiG only because PiG cancels every host call of a cancelled request, the
+  `modelStream` call included, and that holds only for a stream started from the hook's own
+  `sdk.Context`. A request cancelled on the extension's side alone runs to its end and is billed, so
+  an aborted request is always counted as made (`"aborted": true` on its request event), never as
+  not made; the hook checks the request context before level 1 and starts no request once it is
+  cancelled.
 - **PiG's cut, exactly.** `firstKeptEntryId` is always `preparation.firstKeptEntryId`, and the fold
   boundary equals it. The moved cut, the compaction catch-up, `compactionMaxRetainedTokens` and the
   normal-versus-full fold split go. Level 0 extracts every entry PiG summarizes and appends its
@@ -166,6 +174,10 @@ trigger so one prefix holds for many exchanges):
   write) between the last assistant messages of consecutive runs, ignoring negative differences. With no
   usage on the branch, nothing is subtracted.
 - **Never larger than it removed.** The summary is at most `est(cut range + previous summary)`.
+
+An unknown `reserveTokens` (absent from the preparation, or 0) is read as PiG's default (16384,
+`config.PiGDefaultReserveTokens`), never as no reserve, which would raise the threshold bound by the
+whole reserve.
 
 When the budget is zero or less, the minimal brief applies; it is smaller than the range it replaces,
 so the compaction still frees room.
@@ -374,6 +386,17 @@ branch-summary requests at the price of picked lines instead of prose.
 | nodecode, cells | no silent caps; runnable recall pointers; the model's own notes as the surviving record; newest-per-name state with tombstones; thinning aged tool results; re-rendering the index only when the prefix breaks; held definitions settled by evidence the proposer did not produce (`organism/provisional.lisp`); the kernel lock (`organism/evolve.lisp` lock-floor and engage-floor, with lower-floor as its recorded unlock — distinct from the history visibility floor in `engine/context.lisp`) | eviction instead of compaction; its tuned ratios and caps; the pre-eviction warning and the context-fill line on every tool result (an extra message, and nodecode's own A/B was flat); the model-editable `context.txt`; the experience cell's reflection (`cells/tools/nodecode-experience/reflect.lisp`: one forked, tool-using reflection per operator turn that ran a tool or failed, unbudgeted by default); session naming, goal judges and board wakes |
 | letta-code | staged memory, a store validator | an out-of-band curator request |
 | PiG v0.5.1 | what the hook can return and when it runs; the summarizer's request paths; the threshold inequality; output clamp and safety margin | — |
+
+## Rollout
+
+- **Side by side, then switch.** v2 is built next to v1, selected by one setting, `memoryEngine`
+  (`v1` until the switch, then `v2`). Each step below runs in real PiG sessions under `memoryEngine:
+  v2` while v1 stays the default. When every step is in, v2 becomes the default and v1's workers,
+  scheduling, catch-up and worker-model settings are deleted in one cleanup.
+- **Where.** On the branch `claude/memory-v2`, with its own pull request based on the v1 branch
+  (pull request 5, which stays as the v1 baseline).
+- **The bench harness** (`cmd/longmemeval`, `internal/bench`) depends on v1's workers and is deleted in
+  the cleanup; `docs/bench-results.md` stays as history.
 
 ## Order of work
 
