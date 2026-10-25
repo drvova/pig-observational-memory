@@ -172,3 +172,35 @@ func TestSettleV2(t *testing.T) {
 		t.Fatal("a re-held text was settled on passes that ran with the old one")
 	}
 }
+
+// V2UnitsSinceProposal counts the non-empty v2 compaction passes after the usage ledger length
+// the last level-1 offer recorded (from the start before any), never a v1 observer pass.
+func TestV2UnitsSinceProposal(t *testing.T) {
+	store := newV2Store(t)
+	if units, offered, err := V2UnitsSinceProposal(store, "p/m"); err != nil || units != 0 || offered {
+		t.Fatalf("empty: %d %v (%v)", units, offered, err)
+	}
+	v2Compaction(t, store, 100, nil, map[string]int{CountLevel1UnionKept: 1})
+	v2Compaction(t, store, 100, nil, nil)
+	if units, offered, _ := V2UnitsSinceProposal(store, "p/m"); units != 2 || offered {
+		t.Fatalf("before an offer: %d %v", units, offered)
+	}
+	evidence, _, err := ProposalDue(store, "p/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.Layer().HoldPass("p/m", nil, layer.Generation{Op: layer.OpPropose, Evidence: evidence.Digest(), Events: evidence.Events}); err != nil {
+		t.Fatal(err)
+	}
+	if units, offered, _ := V2UnitsSinceProposal(store, "p/m"); units != 0 || !offered {
+		t.Fatalf("at the offer: %d %v", units, offered)
+	}
+	v2Compaction(t, store, 100, nil, nil)
+	if _, err := AfterPass(store, "p/m", Pass{Stage: StageObserver, Tokens: 50, Findings: &Findings{Counts: map[string]int{DetectThinChunk: 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	v2Compaction(t, store, 100, nil, map[string]int{CountLevel1UnionKept: 2})
+	if units, offered, _ := V2UnitsSinceProposal(store, "p/m"); units != 2 || !offered {
+		t.Fatalf("after the offer: %d %v", units, offered)
+	}
+}

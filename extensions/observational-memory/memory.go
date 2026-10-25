@@ -67,6 +67,17 @@ func settleCurated(h host.Host) {
 	_, _ = harness.SettleCurated(h, call)
 }
 
+// migrateLayerV2 migrates the written v1 worker instructions to memory v2 at session_start
+// (harness.MigrateLayerV2): code only, no request. Under v1, or without a store, it does
+// nothing.
+func migrateLayerV2(h host.Host) {
+	call, cfg, on := curatedCall(h)
+	if !on || !cfg.V2() {
+		return
+	}
+	harness.MigrateLayerV2(h, call.Store, harness.ModelKey(h.SessionModel()))
+}
+
 // memoryToolSpec is the memory tool with description, run by the harness's manager.
 func memoryToolSpec(manager *harness.Manager, description string) host.ToolSpec {
 	return host.ToolSpec{
@@ -142,6 +153,7 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 		memoryPin.Reset()
 		h := sdkhost.New(ctx)
 		manager.RegisterStored(h)
+		migrateLayerV2(h)
 		settleCurated(h)
 		return nil, nil
 	})

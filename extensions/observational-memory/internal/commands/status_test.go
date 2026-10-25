@@ -15,6 +15,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
@@ -531,4 +532,63 @@ func TestStatusV2LastCompactionLevel(t *testing.T) {
 	expectLacks(t, statusOutput(t, statusRuntime(cfg), testfix.NewFakeHost(testfix.RawMessage("u1", "hello"))), "Last compaction:")
 	cfg.MemoryEngine = config.EngineV1
 	expectLacks(t, statusOutput(t, statusRuntime(cfg), compacted(ledger.ConsolidationReport{Reason: "x"})), "Last compaction:")
+}
+
+// Under memory v2 the status shows the Status section's contents only: the records by who
+// appended them (level 1's labels of a code record and of a host summary are the model's, and
+// the host summary counts once), the reflections standing (one replaced by another is not), the
+// removed settings still set, the compaction lines and the harness evidence since the last
+// level-1 offer, and none of v1's worker clocks or pools.
+func TestStatusV2ShowsOnlyV2Contents(t *testing.T) {
+	cfg := statusConfig()
+	cfg.MemoryEngine = config.EngineV2
+	cfg.RemovedSet = []string{"observeAfterTokens", "fallbackModel"}
+	code := testfix.Observation("aaaaaaaaaaa1", func(o *ledger.Observation) { o.Origin = ledger.OriginCode })
+	model := testfix.Observation("aaaaaaaaaaa2", func(o *ledger.Observation) { o.Origin = ledger.OriginModel })
+	host := testfix.Observation("aaaaaaaaaaa3", func(o *ledger.Observation) { o.Origin = ledger.OriginHost })
+	v1 := testfix.Observation("aaaaaaaaaaa4")
+	codeLabel := testfix.Observation("aaaaaaaaaaa5", func(o *ledger.Observation) { o.Origin, o.Subject = ledger.OriginCode, "deploy" })
+	hostLabel := testfix.Observation("aaaaaaaaaaa6", func(o *ledger.Observation) { o.Origin, o.Subject = ledger.OriginHost, "release" })
+	labels := []ledger.Observation{codeLabel, hostLabel}
+	r1 := testfix.Reflection("bbbbbbbbbbb1", []string{"aaaaaaaaaaa2"})
+	r2 := testfix.Reflection("bbbbbbbbbbb2", []string{"aaaaaaaaaaa2"}, func(r *ledger.Reflection) { r.Supersedes = []string{r1.ID} })
+	h := testfix.NewFakeHost(
+		testfix.RawMessage("u1", "hello"),
+		testfix.ObservationsRecordedEntry("om1", []ledger.Observation{code, model, host, v1}, "u1"),
+		testfix.ObservationsDroppedEntry("om2", []string{"aaaaaaaaaaa4"}, "u1"),
+		testfix.ObservationsRecordedEntry("om3", labels, "u1", map[string]any{"data": map[string]any{"observations": labels, "coversUpToId": "u1", "consolidated": true}}),
+		testfix.ObservationsDroppedEntry("om4", []string{"aaaaaaaaaaa1", "aaaaaaaaaaa3"}, "u1"),
+		testfix.ReflectionsRecordedEntry("om5", []ledger.Reflection{r1, r2}, "u1"),
+	)
+	h.Home = t.TempDir()
+	h.Model = testfix.Model("anthropic", "m", map[string]any{"contextWindow": 100_000})
+	output := statusOutput(t, statusRuntime(cfg), h)
+	expectContains(t, output,
+		"Removed settings, ignored under memory v2: observeAfterTokens, fallbackModel",
+		"Records: 6 recorded (1 by code, 3 by the model, 1 host summary, 1 by memory v1's workers) / 3 dropped / 3 active",
+		"Reflections: 2 recorded / 1 standing",
+		"Compaction: PiG's auto-compaction is on",
+		"Memories: 0 live (0 pinned), 0 staged",
+		"Evidence: 0 compactions counted since the start (no level-1 offer yet)",
+	)
+	expectLacks(t, output, "Next observation", "Next reflection", "Observer backlog", "observation pool", "Reflection pool")
+	cfg.MemoryEngine = config.EngineV1
+	expectLacks(t, statusOutput(t, statusRuntime(cfg), h), "Removed settings", "Records:", "Evidence:")
+}
+
+// After a level-1 offer, the v2 evidence counts from it.
+func TestStatusV2EvidenceSinceTheLastOffer(t *testing.T) {
+	cfg := statusConfig()
+	cfg.MemoryEngine = config.EngineV2
+	h := testfix.NewFakeHost(testfix.RawMessage("u1", "hello"))
+	h.Home = t.TempDir()
+	h.Model = testfix.Model("anthropic", "m", map[string]any{"contextWindow": 100_000})
+	store, ok := harness.StoreOf(h, cfg)
+	if !ok {
+		t.Fatal("no store")
+	}
+	if _, _, _, err := store.Layer().HoldPass(harness.ModelKey(h.SessionModel()), nil, layer.Generation{Op: layer.OpPropose}); err != nil {
+		t.Fatal(err)
+	}
+	expectContains(t, statusOutput(t, statusRuntime(cfg), h), "Evidence: 0 compactions counted since the last level-1 offer")
 }

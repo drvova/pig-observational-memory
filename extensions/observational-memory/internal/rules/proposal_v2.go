@@ -239,3 +239,23 @@ func pluralWord(n int, word string) string {
 	}
 	return word + "s"
 }
+
+// V2UnitsSinceProposal is the number of model's memory v2 evidence units (non-empty compaction
+// passes) counted since its last level-1 proposal (layer.OpPropose, read from the usage ledger
+// length it recorded), or since the start with none; offered reports whether there was one.
+// /om:status shows it (docs/memory-v2.md, "Status").
+func V2UnitsSinceProposal(store curated.Store, model string) (units int, offered bool, err error) {
+	events, err := store.ModelEvents(model)
+	if err != nil {
+		return 0, false, err
+	}
+	from := 0
+	last, ok, err := store.Layer().LastProposal(model)
+	if err != nil {
+		return 0, false, err
+	}
+	if ok {
+		from = min(last.Events, len(events))
+	}
+	return len(passesFor(curated.EngineV2, events, from)), ok, nil
+}

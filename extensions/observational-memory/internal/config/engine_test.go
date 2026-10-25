@@ -85,3 +85,34 @@ func TestResolveV2SummaryBudget(t *testing.T) {
 		}
 	}
 }
+
+// The settings memory v2 removes are listed while a settings file read sets them to a valid value
+// (an invalid one is ignored by both engines), in the Migration table's order, once each; an
+// untrusted project's are never read.
+func TestRemovedSettingsListed(t *testing.T) {
+	f := setup(t)
+	if got := f.load(env{}); len(got.RemovedSet) != 0 {
+		t.Fatalf("defaults list removed settings: %v", got.RemovedSet)
+	}
+	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"model": map[string]any{"id": "x"}, "observeAfterTokens": 100, "memoryFormat": "lines"}})
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"fallbackModel": map[string]any{"id": "y"}, "agentMaxTurns": -1, "observeAfterTokens": 5, "compactionSummaryMaxTokens": 900}})
+	got := f.loadAs(config.ProjectTrusted, env{})
+	if want := []string{"observeAfterTokens", "model", "fallbackModel"}; !equalStrings(got.RemovedSet, want) {
+		t.Fatalf("removed settings %v, want %v", got.RemovedSet, want)
+	}
+	if got := f.loadAs(config.ProjectUntrusted, env{}); !equalStrings(got.RemovedSet, []string{"observeAfterTokens", "model"}) {
+		t.Fatalf("untrusted project's removed settings read: %v", got.RemovedSet)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

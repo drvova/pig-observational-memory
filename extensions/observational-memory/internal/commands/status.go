@@ -148,6 +148,92 @@ func lastCompactionLine(cfg config.Config, entries []ledger.Entry) string {
 	return line
 }
 
+// removedSettingsLine lists the settings memory v2 removed that are still set; "" under v1 or
+// when none is.
+func removedSettingsLine(cfg config.Config) string {
+	if !cfg.V2() || len(cfg.RemovedSet) == 0 {
+		return ""
+	}
+	return "Removed settings, ignored under memory v2: " + strings.Join(cfg.RemovedSet, ", ")
+}
+
+// recordsLines are memory v2's memory lines: the records by who appended them (level 1's
+// batches are the model's, whatever origin a label kept; otherwise code, the host summaries
+// the ledger did not back, and v1's workers by origin), dropped and active, and the
+// reflections standing (ledger.ActiveReflections).
+func recordsLines(entries []ledger.Entry) []string {
+	folded := ledger.FoldLedger(entries, "")
+	byLevel1 := ledger.ConsolidatedObservationIDs(entries)
+	by := map[string]int{}
+	for _, o := range folded.Observations {
+		switch {
+		case byLevel1[o.ID] || o.Origin == ledger.OriginModel:
+			by[ledger.OriginModel]++
+		default:
+			by[o.Origin]++
+		}
+	}
+	line := fmt.Sprintf("Records: %d recorded (%d by code, %d by the model", len(folded.Observations), by[ledger.OriginCode], by[ledger.OriginModel])
+	if n := by[ledger.OriginHost]; n > 0 {
+		noun := "summaries"
+		if n == 1 {
+			noun = "summary"
+		}
+		line += fmt.Sprintf(", %d host %s", n, noun)
+	}
+	if n := by[""]; n > 0 {
+		line += fmt.Sprintf(", %d by memory v1's workers", n)
+	}
+	line += fmt.Sprintf(") / %d dropped / %d active", len(folded.DroppedObservationIDs), len(folded.ActiveObservations))
+	return []string{line, fmt.Sprintf("Reflections: %d recorded / %d standing", len(folded.Reflections), len(ledger.ActiveReflections(folded.Reflections)))}
+}
+
+// statusLinesV2 is the /om:status report under memory v2 (docs/memory-v2.md, "Status"): PiG's
+// threshold and the context against it, whether auto-compaction is on, the last compaction's
+// level, request count and level-1 failure reason, the records by who added them, the curated
+// memories staged and live, the harness evidence since the last level-1 offer, the removed
+// settings still set and the project's trust. v1's worker clocks, pools and backoffs are not
+// shown: nothing runs them.
+func statusLinesV2(rt *runtime.Runtime, h host.Host, cfg config.Config, entries []ledger.Entry) []string {
+	lines := []string{}
+	if cfg.Passive {
+		lines = append(lines, "── Mode ──", "Passive: turn-end extraction, level 1, thinning and the extension's compaction trigger are off; PiG's compactions, commands and recall remain active", "")
+	}
+	settings := []string{}
+	for _, line := range []string{projectSettingsLine(cfg), removedSettingsLine(cfg)} {
+		if line != "" {
+			settings = append(settings, line)
+		}
+	}
+	if len(settings) > 0 {
+		lines = append(append(append(lines, "── Settings ──"), settings...), "")
+	}
+	lines = append(append(lines, "── Memory ──"), recordsLines(entries)...)
+	lines = append(lines, "", "── Compaction ──", compactionLine(cfg, h, 0, 0))
+	if line := lastCompactionLine(cfg, entries); line != "" {
+		lines = append(lines, line)
+	}
+	if suspension := hooks.ActiveV2CompactionSuspension(rt, h, entries); suspension != nil {
+		lines = append(lines, fmt.Sprintf("Compaction trigger suspended: %s; asks again once the branch grows", suspension.Reason))
+	}
+	if state := rt.Snapshot(); state.CompactInFlight || state.CompactHookInFlight {
+		lines = append(lines, "", "── In flight ──")
+		if state.CompactInFlight {
+			lines = append(lines, "Auto-compaction: running")
+		}
+		if state.CompactHookInFlight {
+			lines = append(lines, "Compaction hook: running")
+		}
+	}
+	if curatedLines := harness.CuratedStatusLines(h, cfg); len(curatedLines) > 0 {
+		lines = append(append(lines, ""), curatedLines...)
+	}
+	if harnessLines := harness.StatusLines(h, cfg); len(harnessLines) > 0 {
+		lines = append(append(lines, ""), harnessLines...)
+	}
+	return lines
+}
+
 // StatusLines renders the /om:status report.
 func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	rt.EnsureConfig(h)
@@ -155,6 +241,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	entries, err := h.GetBranch()
 	if err != nil {
 		return nil, err
+	}
+	if cfg.V2() {
+		return statusLinesV2(rt, h, cfg, entries), nil
 	}
 	folded := ledger.FoldLedger(entries, "")
 	visible := ledger.VisibleProjection(entries, "")

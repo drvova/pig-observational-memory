@@ -345,3 +345,36 @@ func MigrateInstructions(h host.Host, store curated.Store, model string) {
 		}
 	}
 }
+
+// MigrateLayerV2 migrates the written v1 worker instructions, for model and for every model, to
+// memory v2 (layer.Store.MigrateToV2, docs/memory-v2.md, "Migration > Layer definitions"): the
+// observer's and reflector's additions fold into the consolidation instructions as an
+// addition, and a replace-mode text and the dropper's are retired, and tells the user of each.
+// The v1 files stay as they are for memory v1, which shares the written layer. It runs only for
+// a memory v2 store, and makes no request. A failure changes nothing and is retried at the next
+// session start.
+func MigrateLayerV2(h host.Host, store curated.Store, model string) []layer.V2Migration {
+	if !store.V2 {
+		return nil
+	}
+	MigrateInstructions(h, store, model)
+	models := []string{layer.AllModels}
+	if model != layer.AllModels && model != "" {
+		models = append(models, model)
+	}
+	var out []layer.V2Migration
+	for _, m := range models {
+		migrated, err := store.Layer().MigrateToV2(m, agents.InstructionsConsolidation,
+			[]string{agents.InstructionsObserver, agents.InstructionsReflector}, []string{agents.InstructionsDropper})
+		if err != nil {
+			continue
+		}
+		for _, mg := range migrated {
+			if h.HasUI() {
+				h.Notify(mg.Message(), "info")
+			}
+		}
+		out = append(out, migrated...)
+	}
+	return out
+}

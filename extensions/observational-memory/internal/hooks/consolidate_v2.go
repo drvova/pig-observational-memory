@@ -112,9 +112,15 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	for _, entry := range cut {
 		cutIDs[entry.ID] = true
 	}
+	// A host record (a summary the ledger does not back, extract.HostSummary) is a candidate
+	// while the compaction it cites leaves with this one, so level 1 may restate it into
+	// records under the union rule (docs/memory-v2.md, "Migration > Records and boundaries").
+	if last := ledger.FindLastCompactionIndex(entries); last >= 0 && last < ledger.EntryIndexForID(entries, event.FirstKeptEntryID) {
+		cutIDs[entries[last].ID] = true
+	}
 	candidates, active := []ledger.Observation{}, []ledger.Observation{}
 	for _, o := range projection.Observations {
-		if o.Origin == ledger.OriginCode && citesAny(o.SourceEntryIDs, cutIDs) {
+		if (o.Origin == ledger.OriginCode || o.Origin == ledger.OriginHost) && citesAny(o.SourceEntryIDs, cutIDs) {
 			candidates = append(candidates, o)
 		} else {
 			active = append(active, o)

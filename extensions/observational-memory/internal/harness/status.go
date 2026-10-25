@@ -24,7 +24,8 @@ func StatusLines(h host.Host, cfg config.Config) []string {
 	}
 	session := h.SessionModel()
 	models := []host.Model{session}
-	if cfg.Model != nil && cfg.Model.ID != "" {
+	// Under memory v2 the session model is the only one (model is a removed setting).
+	if cfg.Model != nil && cfg.Model.ID != "" && !cfg.V2() {
 		provider := cfg.Model.Provider
 		if provider == "" {
 			provider = host.ModelProvider(session)
@@ -64,6 +65,15 @@ func StatusLines(h host.Host, cfg config.Config) []string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("Profile (%s %s, %d events): codec %s, layout %s, summary %s, %s", role, key, p.Events, p.Codec, p.SummaryFormat(cfg), summary, spec))
+		if cfg.V2() {
+			if units, offered, err := rules.V2UnitsSinceProposal(store, key); err == nil {
+				since := "since the start (no level-1 offer yet)"
+				if offered {
+					since = "since the last level-1 offer"
+				}
+				lines = append(lines, fmt.Sprintf("  Evidence: %d compactions counted %s", units, since))
+			}
+		}
 		if len(p.DisabledTools) > 0 {
 			lines = append(lines, "  Defined tools off for this model: "+strings.Join(p.DisabledTools, ", "))
 		}

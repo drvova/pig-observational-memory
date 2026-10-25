@@ -46,3 +46,30 @@ func TestExtractionProgressIndex(t *testing.T) {
 		t.Fatalf("progress %d", got)
 	}
 }
+
+// Memory v2's extraction starts after v1's coverage, inside the compaction range, and never
+// before the latest full fold's boundary: a v1 compaction that moved its cut back (firstKept u2)
+// and folded through u3 leaves u2 and u3 to no extraction even with no coverage marker on the
+// branch; the boundary entry itself is read when nothing covered it.
+func TestExtractionStartIndex(t *testing.T) {
+	details := tf.MemoryDetails(tf.MemoryDetailsArgs{FullFold: true, FoldThroughEntryID: "u3"})
+	entries := []ledger.Entry{
+		tf.RawMessage("u1", "a"),
+		tf.RawMessage("u2", "b"),
+		tf.RawMessage("u3", "c"),
+		tf.CompactionEntry("c1", tf.CompactionArgs{FirstKeptEntryID: "u2", Details: details}),
+		tf.RawMessage("u4", "d"),
+	}
+	if got := ledger.ExtractionStartIndex(entries); got != 2 {
+		t.Fatalf("start %d, want the fold boundary u3 (2)", got)
+	}
+	entries = append(entries[:2], append([]ledger.Entry{tf.ObservationsRecordedEntry("om1", []ledger.Observation{tf.Observation("aaaaaaaaaaaa")}, "u3")}, entries[2:]...)...)
+	if got := ledger.ExtractionStartIndex(entries); got != 4 {
+		t.Fatalf("start %d, want after v1's coverage of u3 (index 4)", got)
+	}
+	// A native compaction has no fold boundary: the range start stands.
+	native := []ledger.Entry{tf.RawMessage("u1", "a"), tf.RawMessage("u2", "b"), tf.CompactionEntry("c1", tf.CompactionArgs{FirstKeptEntryID: "u2"}), tf.RawMessage("u3", "c")}
+	if got := ledger.ExtractionStartIndex(native); got != 1 {
+		t.Fatalf("start %d, want the range start u2 (1)", got)
+	}
+}

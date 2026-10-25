@@ -67,6 +67,10 @@ const (
 	// OriginModel is a record the session model wrote: a memory tool note, or a record memory
 	// v2's level-1 consolidation request labelled or merged at a compaction.
 	OriginModel = "model"
+	// OriginHost is a compaction summary the ledger does not back (a native PiG summary, or one
+	// from before install), stored once as one record citing that compaction's entry when memory
+	// v2 compacts after it (docs/memory-v2.md, "Migration > Records and boundaries").
+	OriginHost = "host"
 )
 
 // The outcomes of an attempt record (Observation.Outcome).
@@ -103,7 +107,7 @@ type Observation struct {
 	// Fields are the values of the fields the writing model's own note schema adds
 	// (NoteSchema), by field name; none for a record written under the seed schema.
 	Fields map[string]string `json:"fields,omitempty"`
-	// Origin is who wrote the record under memory v2 (OriginCode, OriginModel); "" for a
+	// Origin is who wrote the record under memory v2 (OriginCode, OriginModel, OriginHost); "" for a
 	// record a v1 worker wrote.
 	Origin string `json:"origin,omitempty"`
 	// FromUser marks a level-1 merge whose sources all stood for the user's own corrections or

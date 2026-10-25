@@ -559,6 +559,10 @@ off-path. The extension does not replace PiG's branch summary by default (option
 | `consolidate` (new, default true) | turns level 1 off |
 | `memoryFormat`, `curatedMemory`, `curatedMemoryIndexTokens`, `kernelFloor`, `debugLog`, `passive` | unchanged |
 
+Built (`config.RemovedSettings`, `Config.RemovedSet`): a removed setting counts as set when a
+settings file read under trust gives it a value v1 applies (an invalid one is ignored by both
+engines already). v1 still reads them all.
+
 ### Records and boundaries
 
 - On the first v2 compaction, extraction skips entries up to the latest v1 coverage marker and the
@@ -568,6 +572,18 @@ off-path. The extension does not replace PiG's branch summary by default (option
   id, stored only if no record cites it yet), rendered whole if it fits and otherwise as an omitted
   span; level 1 may restate it into records under the union rule. v1 compactions with `om.folded`
   details are ledger-backed, not host records.
+- Built. `ledger.ExtractionStartIndex` starts every v2 extraction after the furthest coverage
+  marker, inside the compaction range and at the latest full fold's boundary at the earliest (the
+  boundary entry itself is read unless coverage reached it: a v1 boundary equal to its cut is a
+  retained entry). `extract.HostSummary` builds the host record (id from `host` and the
+  compaction's entry id, kind unset so it never claims the user's class, its content on one line
+  as every record's is, so a native summary's markdown headings never read as summary sections
+  and the line ends with its anchor), appended by the compaction hook under `extractMu` on the
+  fresh branch, a hook whose cut is not on the branch included (it reads nothing else); its batch claims coverage through the
+  entry before that compaction's retention boundary, the last one the summary stands for, so it
+  folds into the compaction and no retained entry reads as extracted. It is a level-1 candidate
+  while that compaction entry precedes the cut; a label or merge keeps citing the entry, so it is
+  never stored again.
 
 ### Layer definitions
 
@@ -577,6 +593,20 @@ off-path. The extension does not replace PiG's branch summary by default (option
 - Detector counts carry a revision, so v1 counts never act as v2 evidence.
 - Held definitions carry the engine whose pass held it, so a definition v1 held stays v1's to settle
   and v2 never runs with it; only written definitions are shared by both engines.
+- Built (`layer.Store.MigrateToV2`, run by `harness.MigrateLayerV2` at every v2 session start for
+  the session model and for all models). Each migrated content is marked once by an
+  `OpMigrateV2` generation (kind/name and the digest it had), so a later edit under v1 is migrated
+  again and replaces its stage's block; the fold is one put of the `consolidation` instructions,
+  each text a block between a line naming the stage it came from and one closing it, and waits
+  while `consolidation` is held. A block whose v1 addition is gone (forgotten, rolled back, now
+  a replacement) is removed; a block the model's own definitions took out is not put back. A
+  model's own `consolidation` replaces the all-models one entirely, so a model's fold starts from
+  the all-models text when it has none of its own and also folds the additions it inherits from
+  the all-models definitions (`From` in the notice); a model with nothing of its own writes none
+  and keeps inheriting. Deviation, until the cleanup:
+  "retired" means unused under v2 with a notice; the v1 files are not removed, because the written
+  layer is shared and v1 sessions still read them. The detector revisions and engine-tagged holds
+  were built in step 5.
 
 ### Project memory
 
@@ -589,6 +619,15 @@ fallback model are rewritten in the same change that removes them.
 the last compaction's level, its request count and any level-1 failure reason, records added by code
 and by the model, staged and live curated memories, harness evidence units since the last revision,
 removed settings still set, and project trust as today.
+
+Built (`commands.statusLinesV2`): under v2 none of v1's worker clocks, pools or backoffs are
+shown. Records are counted by who appended them: level 1's batches (`consolidated`) are the
+model's whatever origin a label kept, the rest by origin (code, model, host summaries, and v1's
+workers for records without one); the harness evidence is the non-empty v2 compactions since the session model's last
+level-1 offer (`rules.V2UnitsSinceProposal`): v2 has no revision pass, so the offer stands for
+"the last revision", and it resets at every offer, one that defined nothing included, as
+`rules.ProposalDue`'s baseline does. `/om:view` stays read-only and leaves out the
+reflections level 1 replaced.
 
 ## Measuring it
 

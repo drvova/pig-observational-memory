@@ -92,6 +92,8 @@ func (g Generation) Describe() string {
 		return fmt.Sprintf("%d: level-1 proposal", g.N)
 	case OpEstablish:
 		return fmt.Sprintf("%d: establish %s/%s (%s)", g.N, g.Kind, g.Name, g.Reason)
+	case OpMigrateV2:
+		return fmt.Sprintf("%d: memory v2 migration of %s/%s (%s)", g.N, g.Kind, g.Name, g.Reason)
 	case OpMigrate:
 		what := ""
 		if g.Held {

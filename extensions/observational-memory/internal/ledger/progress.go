@@ -73,6 +73,21 @@ func ExtractionProgressIndex(entries []Entry) int {
 	return max(LatestCoverageIndex(entries, OMObservationsRecorded), LatestCoverageIndex(entries, OMExtracted))
 }
 
+// ExtractionStartIndex is the branch index memory v2's level-0 extraction starts reading at:
+// after the furthest entry an earlier extraction or a v1 observer covered
+// (ExtractionProgressIndex), never before the current compaction range, and never before the
+// latest full fold's boundary (LatestFullFoldBoundaryID), so the first v2 compaction after a
+// v1 one never re-extracts what that compaction folded (docs/memory-v2.md, "Migration >
+// Records and boundaries"). The boundary entry itself is read unless coverage reached it: a v1
+// fold boundary equal to its cut is a retained entry no record may cover yet.
+func ExtractionStartIndex(entries []Entry) int {
+	start := max(ExtractionProgressIndex(entries)+1, CompactionRangeStartIndex(entries))
+	if fold := EntryIndexForID(entries, LatestFullFoldBoundaryID(entries)); fold > start {
+		start = fold
+	}
+	return start
+}
+
 // LatestCoverageIndex is the branch index of the furthest entry a marker of
 // customType covers, or -1.
 func LatestCoverageIndex(entries []Entry, customType string) int {

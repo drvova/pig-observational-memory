@@ -43,7 +43,7 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 	if err != nil {
 		return
 	}
-	start := max(ledger.ExtractionProgressIndex(entries)+1, ledger.CompactionRangeStartIndex(entries))
+	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
@@ -68,14 +68,24 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 // records of its range are on the session, since turn ends never read a range again once it is
 // compacted. Under extractMu, the range left to read is measured on a fresh branch (the event's
 // is a snapshot another hook may have extended since), so two hooks never append the same
-// records. A cut not on the branch reads nothing: its entries have no ids for records to cite.
+// records. A cut not on the branch reads nothing: its entries have no ids for records to cite;
+// only the host summary is stored (appendHostSummaryV2).
 func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) []ledger.Entry {
 	entries := event.BranchEntries
-	if ledger.EntryIndexForID(entries, event.FirstKeptEntryID) < ledger.CompactionRangeStartIndex(entries) {
-		return entries
-	}
 	extractMu.Lock()
 	defer extractMu.Unlock()
+	if ledger.EntryIndexForID(entries, event.FirstKeptEntryID) < ledger.CompactionRangeStartIndex(entries) {
+		// Nothing to read, but a native summary this compaction replaces in context is still
+		// stored, measured on the fresh branch, so a later compaction can fold it.
+		branch, err := h.GetBranch()
+		if err != nil {
+			branch = entries
+		}
+		if host, ok := appendHostSummaryV2(ctx, h, branch, ledger.FoldLedger(branch, "")); ok {
+			return append(append(make([]ledger.Entry, 0, len(entries)+1), entries...), host)
+		}
+		return entries
+	}
 	fresh := false
 	if branch, err := h.GetBranch(); err == nil {
 		if cut := ledger.EntryIndexForID(branch, event.FirstKeptEntryID); cut >= 0 && cut >= ledger.CompactionRangeStartIndex(branch) {
@@ -94,7 +104,7 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 	for _, p := range event.Preparation.FileOps.Edited {
 		ops = append(ops, extract.FileOp{Path: p, State: "edited"})
 	}
-	start := max(ledger.ExtractionProgressIndex(entries)+1, rangeStart)
+	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
@@ -113,10 +123,33 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 		// one read from the event's snapshot may repeat a turn end's run already recorded.
 		record()
 	}
+	if host, ok := appendHostSummaryV2(ctx, h, entries, folded); ok {
+		appended = append(appended, host)
+	}
 	if len(appended) == 0 {
 		return entries
 	}
 	return append(append(make([]ledger.Entry, 0, len(entries)+len(appended)), entries...), appended...)
+}
+
+// appendHostSummaryV2 stores the latest compaction's summary as one record when the ledger does
+// not back that compaction (extract.HostSummary: a native PiG summary, or one from before
+// install), once, and returns it as a branch entry so this compaction folds it: rendered whole
+// when it fits, else an omitted span, and a level-1 candidate. The caller holds extractMu and
+// passes the branch it measured, so two hooks never store it twice.
+func appendHostSummaryV2(ctx context.Context, h host.Host, entries []ledger.Entry, folded ledger.FoldedLedger) (ledger.Entry, bool) {
+	record, coversUpToID, ok := extract.HostSummary(entries, folded)
+	if !ok {
+		return ledger.Entry{}, false
+	}
+	data := ledger.BuildObservationsRecordedData([]ledger.Observation{record}, coversUpToID)
+	err := h.AppendEntry(ledger.OMObservationsRecorded, data)
+	logData := map[string]any{"record": record.ID, "compaction": record.SourceEntryIDs[0], "coversUpToId": coversUpToID, "tokens": record.TokenCount}
+	if err != nil {
+		logData["errorMessage"] = err.Error()
+	}
+	debuglog.Log(ctx, "extract.v2.host_summary", logData)
+	return session.Entry{Type: "custom", ID: "om-v2-host-summary", CustomType: ledger.OMObservationsRecorded, Data: jsonValue(data)}, true
 }
 
 // appendExtraction appends an extraction's batches, then an om.extracted marker through the

@@ -134,6 +134,33 @@ type Config struct {
 	// ConsolidateOff is set by consolidate: false, which turns memory v2's
 	// level-1 consolidation request off. Read it through Consolidates.
 	ConsolidateOff bool
+	// RemovedSet are the RemovedSettings a settings file that was read sets to
+	// a valid value, in RemovedSettings order: memory v2 ignores them and /om:status
+	// lists them while they are set (docs/memory-v2.md, "Migration > Settings").
+	RemovedSet []string
+}
+
+// RemovedSettings are the settings memory v2 removes (docs/memory-v2.md, "Migration >
+// Settings"): v1's worker scheduling, worker models, pools, moved cut, catch-up and proactive
+// trigger. Under v2 they are read (v1 still runs with them) but nothing uses them.
+var RemovedSettings = []string{
+	"observeAfterTokens",
+	"reflectAfterTokens",
+	"observerChunkMaxTokens",
+	"compactionCatchUpMaxChunks",
+	"consolidateWhenIdle",
+	"model",
+	"fallbackModel",
+	"observationsPoolTargetTokens",
+	"observationsPoolMaxTokens",
+	"compactionMaxRetainedTokens",
+	"compactAfterTokens",
+	"compactAfterTokensMode",
+	"compactAfterTokensRatio",
+	"workerMemoryMaxTokens",
+	"agentMaxTurns",
+	"agentMaxTokens",
+	"showWorkerNotifications",
 }
 
 // Engine is the memory engine in effect: MemoryEngine, or EngineV1 when unset.
@@ -500,6 +527,8 @@ type partial struct {
 	// explicit lower: false, which overrides a lower-priority source's request.
 	floor    *FloorRequest
 	floorSet bool
+	// removed are the RemovedSettings the source sets to a valid value.
+	removed []string
 }
 
 var numberKeys = []string{
@@ -548,6 +577,26 @@ func normalizeSettings(value map[string]any) partial {
 	p.model = normalizeModel(value["model"])
 	p.fallback = normalizeModel(value["fallbackModel"])
 	p.floor, p.floorSet = normalizeFloor(value["kernelFloor"])
+	// A removed setting counts as set when its value is one v1 applies: an invalid one is
+	// ignored by both engines already.
+	valid := map[string]bool{
+		"compactionCatchUpMaxChunks": p.catchUp != nil,
+		"compactAfterTokensMode":     p.mode != nil,
+		"compactAfterTokensRatio":    p.ratio != nil,
+		"model":                      p.model != nil,
+		"fallbackModel":              p.fallback != nil,
+	}
+	for key := range p.ints {
+		valid[key] = true
+	}
+	for key := range p.bools {
+		valid[key] = true
+	}
+	for _, key := range RemovedSettings {
+		if valid[key] {
+			p.removed = append(p.removed, key)
+		}
+	}
 	return p
 }
 
@@ -640,6 +689,18 @@ func (p partial) apply(cfg *Config, target *int, targetSet *bool) {
 	}
 	if p.floorSet {
 		cfg.KernelFloor = p.floor
+	}
+	if len(p.removed) > 0 {
+		set := map[string]bool{}
+		for _, key := range append(append([]string{}, cfg.RemovedSet...), p.removed...) {
+			set[key] = true
+		}
+		cfg.RemovedSet = nil
+		for _, key := range RemovedSettings {
+			if set[key] {
+				cfg.RemovedSet = append(cfg.RemovedSet, key)
+			}
+		}
 	}
 }
 
