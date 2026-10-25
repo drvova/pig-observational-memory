@@ -315,6 +315,12 @@ type V2SummaryBudgetInputs struct {
 // reserve of 0 is read as unknown too, which only makes the budget smaller.
 const PiGDefaultReserveTokens = 16_384
 
+// PiGContextSafetyTokens is PiG's context safety margin (PiG v0.5.1, ai/simple_options.go
+// contextSafetyTokens, which ClampMaxTokensToContext keeps free on every request). Memory v2's
+// level-1 request is made only when est(prompt + input) + output cap + this margin fits the
+// window, so PiG never has to clamp its output below the cap.
+const PiGContextSafetyTokens = 4096
+
 // ResolveV2SummaryBudget is the memory v2 summary budget:
 //
 //	threshold = contextWindow - reserveTokens - tokensBefore + removed - nextRunHeadroom

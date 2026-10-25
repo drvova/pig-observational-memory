@@ -64,7 +64,8 @@ var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNo
 const (
 	// OriginCode is a record level-0 extraction picked from the session by code.
 	OriginCode = "code"
-	// OriginModel is a record the session model wrote (a memory tool note).
+	// OriginModel is a record the session model wrote: a memory tool note, or a record memory
+	// v2's level-1 consolidation request labelled or merged at a compaction.
 	OriginModel = "model"
 )
 
@@ -120,6 +121,10 @@ type Reflection struct {
 	Content                  string   `json:"content"`
 	SupportingObservationIDs []string `json:"supportingObservationIds"`
 	TokenCount               int      `json:"tokenCount"`
+	// Supersedes holds the ids of earlier reflections this one replaces (memory v2's level 1,
+	// ActiveReflections); empty for a reflection that adds rather than replaces, and for every
+	// reflection a v1 worker wrote.
+	Supersedes []string `json:"supersedes,omitempty"`
 }
 
 // ObservationsRecordedData is an om.observations.recorded payload.
@@ -164,6 +169,35 @@ type MemoryDetails struct {
 	// Engine is the memory engine that wrote the compaction ("v2"); "" for v1. A v2
 	// compaction keeps PiG's cut, so its fold boundary is its firstKeptEntryId.
 	Engine string `json:"engine,omitempty"`
+	// Consolidation is what memory v2's level-1 request did at this compaction, nil for v1.
+	Consolidation *ConsolidationReport `json:"consolidation,omitempty"`
+}
+
+// ConsolidationReport is what memory v2's level-1 consolidation request did at one compaction
+// (docs/memory-v2.md, "Level 1"), as /om:status shows it.
+type ConsolidationReport struct {
+	// Requested is set when the request was made (counted even when it failed or was aborted).
+	Requested bool `json:"requested"`
+	// Applied is set when its output was validated and recorded: the compaction is level 1.
+	Applied bool `json:"applied"`
+	// Reason is why no request was made, or why the request failed; "" when it was applied.
+	Reason string `json:"reason,omitempty"`
+	// Records, Merges, Reflections and Aliases count what was recorded; Dropped the records
+	// the recorded ones replaced; Refused the proposals validation refused.
+	Records     int `json:"records,omitempty"`
+	Merges      int `json:"merges,omitempty"`
+	Reflections int `json:"reflections,omitempty"`
+	Aliases     int `json:"aliases,omitempty"`
+	Dropped     int `json:"dropped,omitempty"`
+	Refused     int `json:"refused,omitempty"`
+}
+
+// Level is the compaction's level: 1 when the level-1 output was applied, else 0.
+func (r *ConsolidationReport) Level() int {
+	if r != nil && r.Applied {
+		return 1
+	}
+	return 0
 }
 
 // IsRelevance reports whether v is a relevance level.
@@ -401,12 +435,21 @@ func ReflectionFrom(v any) (Reflection, bool) {
 	if !IsMemoryID(m["id"]) || content == "" || strings.ContainsAny(content, "\r\n") || !okIDs || !okCount {
 		return Reflection{}, false
 	}
-	return Reflection{
+	reflection := Reflection{
 		ID:                       m["id"].(string),
 		Content:                  content,
 		SupportingObservationIDs: ids,
 		TokenCount:               count,
-	}, true
+	}
+	// Read leniently, like an observation's supersedes: a bad element drops only itself.
+	if list, ok := m["supersedes"].([]any); ok {
+		for _, raw := range list {
+			if id, ok := raw.(string); ok && IsMemoryID(id) && id != reflection.ID && !slicesContains(reflection.Supersedes, id) {
+				reflection.Supersedes = append(reflection.Supersedes, id)
+			}
+		}
+	}
+	return reflection, true
 }
 
 // IsReflection reports a valid decoded reflection.
@@ -527,7 +570,10 @@ func MemoryDetailsFrom(v any) (MemoryDetails, bool) {
 	// Aliases are read leniently, like the structured fields: a malformed one is skipped
 	// rather than discarding the memory it groups.
 	aliases := subjectAliasList(m["aliases"])
-	return MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID, SummaryCodec: summaryCodec, SummaryFormat: summaryFormat, Aliases: aliases}, true
+	details := MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID, SummaryCodec: summaryCodec, SummaryFormat: summaryFormat, Aliases: aliases}
+	details.Engine, _ = m["engine"].(string)
+	details.Consolidation = consolidationReportFrom(m["consolidation"])
+	return details, true
 }
 
 // IsMemoryDetails reports valid decoded memory details.
@@ -618,4 +664,65 @@ func BuildObservationsDroppedData(observationIDs []string, coversUpToID string) 
 		return nil
 	}
 	return &ObservationsDroppedData{ObservationIDs: observationIDs, CoversUpToID: coversUpToID}
+}
+
+// consolidationReportFrom reads a decoded ConsolidationReport leniently; nil when v is not one.
+func consolidationReportFrom(v any) *ConsolidationReport {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	report := &ConsolidationReport{}
+	report.Requested, _ = m["requested"].(bool)
+	report.Applied, _ = m["applied"].(bool)
+	report.Reason, _ = m["reason"].(string)
+	count := func(key string) int {
+		n, _ := tokenCount(m[key])
+		return n
+	}
+	report.Records, report.Merges, report.Reflections = count("records"), count("merges"), count("reflections")
+	report.Aliases, report.Dropped, report.Refused = count("aliases"), count("dropped"), count("refused")
+	return report
+}
+
+// slicesContains reports whether list holds s.
+func slicesContains(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ActiveReflections is reflections without the ones another reflection in the list supersedes
+// (Reflection.Supersedes), in order: what memory v2 renders after its level 1 replaced a
+// reflection. A supersede cycle leaves every reflection on it out only when something outside
+// the cycle supersedes it; reflections that only supersede each other all stay.
+func ActiveReflections(reflections []Reflection) []Reflection {
+	superseded := map[string]bool{}
+	byID := make(map[string]Reflection, len(reflections))
+	for _, r := range reflections {
+		byID[r.ID] = r
+	}
+	for _, r := range reflections {
+		for _, id := range r.Supersedes {
+			if id == r.ID {
+				continue
+			}
+			// A reflection the superseded one supersedes back (directly) keeps both: neither
+			// claim is the later word.
+			if other, ok := byID[id]; ok && slicesContains(other.Supersedes, r.ID) {
+				continue
+			}
+			superseded[id] = true
+		}
+	}
+	out := make([]Reflection, 0, len(reflections))
+	for _, r := range reflections {
+		if !superseded[r.ID] {
+			out = append(out, r)
+		}
+	}
+	return out
 }

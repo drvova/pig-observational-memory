@@ -614,6 +614,20 @@ func (r *Runtime) resolvePrimaryModel(ctx context.Context, rc ResolveCtx) (resul
 	return r.resolveCandidate(ctx, rc, model), notFound
 }
 
+// ResolveSessionModel resolves the session model alone, with the same auth rule as every other
+// path (resolveCandidate): memory v2's level-1 request runs on the session model, with no worker
+// model setting, and never on fallbackModel (a v1 setting v2 ignores), so it has exactly one
+// candidate and never a second request. It shows no notice: a failure is reported by the caller.
+func (r *Runtime) ResolveSessionModel(ctx context.Context, rc ResolveCtx) ResolveResult {
+	if rc.Model == nil {
+		return ResolveResult{Reason: "no session model"}
+	}
+	if rc.Models == nil {
+		return ResolveResult{Reason: "no model registry"}
+	}
+	return r.resolveCandidate(ctx, rc, rc.Model)
+}
+
 // ResolveFallbackModel resolves config.fallbackModel with the same auth rules
 // as the primary path. It fails when unset, identical to the effective
 // primary, absent from the registry, or carrying no usable credentials.

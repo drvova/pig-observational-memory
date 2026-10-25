@@ -151,6 +151,10 @@ type SingleRequestResult struct {
 	Usage map[string]any
 	// StreamError is set when the response ended with stopReason "error" or "aborted".
 	StreamError *StreamError
+	// Made is set when the stream was started, so the request counts as made: always with a
+	// Message, and for a request aborted after it started (ErrAborted with no Message). A
+	// context cancelled before the call, no stream or no output cap leaves it false.
+	Made bool
 }
 
 // ErrNoOutputCap is RunSingleRequest's error when neither the configuration nor the model
@@ -189,9 +193,10 @@ func RunSingleRequest(ctx context.Context, stream StreamFunc, cfg SingleRequestC
 	}
 	message, err := Request(ctx, stream, cfg.Stage, cfg.Engine, cfg.Model, request)
 	if err != nil {
-		return SingleRequestResult{}, err
+		// Request is aborted only after it started the stream; its other errors start none.
+		return SingleRequestResult{Made: errors.Is(err, ErrAborted)}, err
 	}
-	result := SingleRequestResult{Message: message}
+	result := SingleRequestResult{Message: message, Made: true}
 	if usage, ok := message["usage"].(map[string]any); ok {
 		result.Usage = usage
 	}

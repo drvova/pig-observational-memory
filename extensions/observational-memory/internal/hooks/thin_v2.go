@@ -36,22 +36,17 @@ func OnContext(rt *runtime.Runtime, h host.Host, messages []host.ContextMessage)
 	if c < 0 {
 		return 0
 	}
-	// The plan is derived once per compaction, from the branch and settings as they stand at
-	// the first request after it, and reused until the next compaction: a reserveTokens edit,
-	// a defined tool registered or forgotten, or a result landing later changes no request's
-	// bytes between two compactions.
+	// The plan is derived once per compaction, from the branch and defined tools as they stand
+	// at the first request after it, and reused until the next compaction: a defined tool
+	// registered or forgotten, or a result landing later, changes no request's bytes between two
+	// compactions.
 	key := sessionIdentityOf(h) + "\x00" + entries[c].ID
 	plan, cached := rt.CachedThinPlan(key)
 	if !cached {
-		// PiG's reserveTokens as its settings hold it now.
-		cfg := rt.LiveConfig(h.Cwd())
-		model := h.SessionModel()
 		plan = thin.Compute(thin.Input{
-			Entries:       entries[:c+1],
-			ContextWindow: host.ModelContextWindow(model),
-			ReserveTokens: cfg.PiCompaction.ReserveTokensFor(host.ModelProvider(model), host.ModelID(model)),
-			SkipTools:     harness.MemoryToolNames(rt),
-			Cwd:           h.Cwd(),
+			Entries:   entries[:c+1],
+			SkipTools: harness.MemoryToolNames(rt),
+			Cwd:       h.Cwd(),
 		})
 		rt.SetThinPlan(key, plan)
 	}

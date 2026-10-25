@@ -101,6 +101,44 @@ func compactionLine(cfg config.Config, h host.Host, progress, threshold int) str
 	return "Compaction: PiG's auto-compaction is off; only the extension's level-0 compaction runs, at " + against
 }
 
+// lastCompactionLine is memory v2's status line on the latest compaction: its level, whether
+// level 1 made its request, what it recorded, and why it did not run or failed; "" under v1,
+// before any compaction, and for a compaction memory v2 did not write.
+func lastCompactionLine(cfg config.Config, entries []ledger.Entry) string {
+	if !cfg.V2() {
+		return ""
+	}
+	index := ledger.FindLastCompactionIndex(entries)
+	if index < 0 {
+		return ""
+	}
+	details, ok := ledger.MemoryDetailsFrom(entries[index].Details)
+	if !ok || details.Engine != config.EngineV2 || details.Consolidation == nil {
+		return "Last compaction: not written by memory v2"
+	}
+	report := details.Consolidation
+	requests := 0
+	if report.Requested {
+		requests = 1
+	}
+	line := fmt.Sprintf("Last compaction: level %d, %d request", report.Level(), requests)
+	if requests != 1 {
+		line += "s"
+	}
+	switch {
+	case report.Applied:
+		line += fmt.Sprintf("; level 1 recorded %d labelled records, %d merges, %d reflections, %d aliases, dropped %d replaced records", report.Records, report.Merges, report.Reflections, report.Aliases, report.Dropped)
+		if report.Refused > 0 {
+			line += fmt.Sprintf(", refused %d proposals", report.Refused)
+		}
+	case report.Requested:
+		line += "; level 1 failed (" + report.Reason + "), level 0 stands"
+	default:
+		line += "; level 1 not run: " + report.Reason
+	}
+	return line
+}
+
 // StatusLines renders the /om:status report.
 func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	rt.EnsureConfig(h)
@@ -158,6 +196,11 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		fmt.Sprintf("Next observation: ~%s / %s tokens (%d%%)", jsfmt.Locale(obsProgress), jsfmt.Locale(cfg.ObserveAfterTokens), pct(obsProgress, cfg.ObserveAfterTokens)),
 		fmt.Sprintf("Next reflection:  ~%s / %s observed tokens (%d%%)", jsfmt.Locale(reflectionProgress), jsfmt.Locale(cfg.ReflectAfterTokens), pct(reflectionProgress, cfg.ReflectAfterTokens)),
 		compactionLine(cfg, h, compactionProgress, compactThreshold),
+	)
+	if line := lastCompactionLine(cfg, entries); line != "" {
+		lines = append(lines, line)
+	}
+	lines = append(lines,
 		fmt.Sprintf("Observer backlog: ~%s unobserved source tokens since the compaction boundary", jsfmt.Locale(unobservedSinceCompaction)),
 		fmt.Sprintf("Visible observation pool: ~%s / %s tokens (%d%%)", jsfmt.Locale(visibleObservationTokens), jsfmt.Locale(cfg.ObservationsPoolMaxTokens), pct(visibleObservationTokens, cfg.ObservationsPoolMaxTokens)),
 		fmt.Sprintf("Active observation pool: ~%s / %s target tokens (%d%%)", jsfmt.Locale(activePool.ObservationTokens), jsfmt.Locale(cfg.ObservationsPoolTargetTokens), pct(activePool.ObservationTokens, cfg.ObservationsPoolTargetTokens)),

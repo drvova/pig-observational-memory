@@ -38,7 +38,8 @@ var renderV2Records = selection.Render
 // never declining and never cancelling: overflow, an empty ledger and a budget too small for
 // any record all get one. It keeps PiG's cut exactly (firstKeptEntryId, with the fold boundary
 // equal to it), makes no model request at level 0, and recovers a panic into the minimal
-// brief. Only a cancelled request context makes it return nothing.
+// brief, carrying the level-1 request's usage and report when one was made. Only a cancelled
+// request context makes it return nothing.
 func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) (outcome BeforeCompactOutcome) {
 	if request == nil {
 		request = context.Background()
@@ -55,6 +56,7 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 		defer rt.LeaveCompactHook()
 	}
 	ctx := request
+	var level1 level1Result
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -66,21 +68,30 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 			return
 		}
 		compaction := v2RecoveredCompaction(rt, event)
+		// A request made before the panic was paid for: PiG's compaction_end and /om:status
+		// still show it.
+		report := level1.report
+		if !report.Applied && report.Reason == "" {
+			report.Reason = fmt.Sprint("panic: ", recovered)
+		}
+		compaction.Details.Consolidation = &report
+		compaction.Usage = level1.usage
 		outcome = BeforeCompactOutcome{Compaction: &compaction}
 	}()
 	ctx = debuglog.With(request, debugScope(rt, h))
-	compaction := buildCompactionV2(ctx, rt, h, event)
+	compaction := buildCompactionV2(ctx, request, rt, h, event, &level1)
 	if request.Err() != nil {
 		return BeforeCompactOutcome{}
 	}
 	return BeforeCompactOutcome{Compaction: &compaction}
 }
 
-// buildCompactionV2 is level 0's compaction: it extracts whatever of the cut range no turn end
-// read (extractCutV2), renders the ledger's records under the summary budget, else the minimal
+// buildCompactionV2 is memory v2's compaction: it extracts whatever of the cut range no turn end
+// read (extractCutV2), runs level 1 when it may (consolidateV2, at most one request, on the
+// request context), renders the ledger's records under the summary budget, else the minimal
 // brief of the cut range, and drops by rule what the rendered records supersede or the
-// rendered reflections cite.
-func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) CompactionResult {
+// rendered reflections cite. spent receives level 1's result as it stands, even on a panic.
+func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, spent *level1Result) CompactionResult {
 	cfg := rt.Config()
 	cut := v2SourceEntries(v2CutRange(event.BranchEntries, event))
 	// The records of the cut range, appended before rendering so the protection of unextracted
@@ -99,7 +110,8 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 		NextRunHeadroom: headroom,
 	})
 
-	// PiG's customInstructions reach a level-0 summary as a block after the memory, when it fits.
+	// PiG's customInstructions reach the level-1 input, or a level-0 summary as a block after the
+	// memory when it fits (docs/memory-v2.md, "The rule", 2).
 	instructionsBlock := ""
 	if instructions := strings.TrimSpace(event.CustomInstructions); instructions != "" {
 		instructionsBlock = "\n\n---\n\n" + instructions
@@ -109,9 +121,26 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 		memoryBudget = budget - tokens.EstimateStringTokens(instructionsBlock)
 	}
 
+	// Level 1: at most one request, in place of PiG's summarizer; its records, reflections,
+	// aliases and drops are appended before rendering, so the summary folds them. On any
+	// failure it appends nothing and level 0 stands. Its current memory is bounded by the room
+	// the render has, the instructions' block left out.
+	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, spent)
+	if len(level1.entries) > 0 {
+		entries = append(append(make([]ledger.Entry, 0, len(entries)+len(level1.entries)), entries...), level1.entries...)
+	}
+	instructionsToLevel1 := level1.report.Applied && instructionsBlock != ""
+	if level1.report.Applied {
+		// The instructions shaped level 1's output; appended too, they would sit in every later
+		// context as a stale directive, so the memory gets their room.
+		instructionsBlock, memoryBudget = "", budget
+	}
+
 	// The fold boundary is PiG's cut: every record covered through it is folded, drops and
-	// reflections included, with no normal-versus-full split.
+	// reflections included, with no normal-versus-full split. A reflection level 1 replaced
+	// leaves the memory (ledger.ActiveReflections).
 	projection := ledger.FullProjection(entries, event.FirstKeptEntryID)
+	projection.Reflections = ledger.ActiveReflections(projection.Reflections)
 	summary, kind := "", ""
 	var rendered selection.Result
 	if memoryBudget > 0 && len(projection.Reflections)+len(projection.Observations) > 0 {
@@ -154,7 +183,8 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 	}
 
 	data := map[string]any{
-		"level":            0,
+		"level":            level1.report.Level(),
+		"level1Requested":  level1.report.Requested,
 		"summary":          kind,
 		"budgetTokens":     budget,
 		"removedTokens":    removed,
@@ -179,13 +209,25 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 	if instructionsBlock != "" {
 		data["instructionsKept"] = instructionsKept
 	}
+	if instructionsToLevel1 {
+		data["instructionsToLevel1"] = true
+	}
+	if level1.report.Reason != "" {
+		data["level1Reason"] = level1.report.Reason
+	}
 	debuglog.Log(ctx, "compaction.v2", data)
 
+	details := v2Details(projection, event.FirstKeptEntryID)
+	report := level1.report
+	details.Consolidation = &report
 	return CompactionResult{
 		Summary:          summary,
 		FirstKeptEntryID: event.FirstKeptEntryID,
 		TokensBefore:     event.TokensBefore,
-		Details:          v2Details(projection, event.FirstKeptEntryID),
+		Details:          details,
+		// The level-1 request's provider usage, failed or not, so PiG's compaction_end shows
+		// what the compaction cost; nil at level 0, which made no request.
+		Usage: level1.usage,
 	}
 }
 

@@ -56,6 +56,9 @@ func TestSingleRequestMakesExactlyOneRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !result.Made {
+				t.Fatal("a request whose stream started is not counted as made")
+			}
 			if rec.Calls() != 1 || counter.Total() != 1 || counter.Stage("consolidate") != 1 || counter.Engine(config.EngineV2) != 1 {
 				t.Fatalf("calls %d, counted %v", rec.Calls(), counter.ByStage())
 			}
@@ -79,8 +82,9 @@ func TestSingleRequestCancelledMakesNone(t *testing.T) {
 	rec := &tf.StreamRecorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := agents.RunSingleRequest(ctx, rec.Stream, singleConfig(tf.Model("p", "m")), "system", "user", consolidateTool); err != agents.ErrAborted {
-		t.Fatalf("err %v", err)
+	result, err := agents.RunSingleRequest(ctx, rec.Stream, singleConfig(tf.Model("p", "m")), "system", "user", consolidateTool)
+	if err != agents.ErrAborted || result.Made {
+		t.Fatalf("err %v made %v", err, result.Made)
 	}
 	if rec.Calls() != 0 || counter.Total() != 0 {
 		t.Fatalf("calls %d counted %d", rec.Calls(), counter.Total())
@@ -194,14 +198,19 @@ func TestSingleRequestAbortedMidStreamIsCounted(t *testing.T) {
 	rec := &tf.StreamRecorder{Block: true}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	made := make(chan bool, 1)
 	go func() {
-		_, err := agents.RunSingleRequest(ctx, rec.Stream, singleConfig(tf.Model("p", "m")), "system", "user", consolidateTool)
+		result, err := agents.RunSingleRequest(ctx, rec.Stream, singleConfig(tf.Model("p", "m")), "system", "user", consolidateTool)
+		made <- result.Made
 		done <- err
 	}()
 	for rec.Calls() == 0 {
 		runtime.Gosched()
 	}
 	cancel()
+	if !<-made {
+		t.Fatal("a request aborted after its stream started is not counted as made")
+	}
 	if err := <-done; err != agents.ErrAborted {
 		t.Fatalf("err %v", err)
 	}

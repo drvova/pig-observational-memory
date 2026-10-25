@@ -22,11 +22,13 @@ func v2Model() host.Model {
 
 // v2Setup is a memory v2 runtime over entries, with the catch-up configured as v1 would run it
 // and the session model registered with auth, so any request the extension made would reach
-// the fake registry.
+// the fake registry. Level 1 is off (consolidate: false), so these are level 0's tests; the
+// level-1 tests turn it on (level1Setup).
 func v2Setup(t *testing.T, entries []ledger.Entry) (*runtime.Runtime, *testfix.FakeHost) {
 	t.Helper()
 	cfg := config.Defaults
 	cfg.MemoryEngine = config.EngineV2
+	cfg.ConsolidateOff = true
 	cfg.ObserveAfterTokens = 1
 	cfg.ReflectAfterTokens = 1
 	cfg.CompactionCatchUpMaxChunks = 2

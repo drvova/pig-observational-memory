@@ -61,7 +61,6 @@ func resultTextOf(messages []host.ContextMessage, callID string) string {
 func TestV2ThinsAgedToolResultsWithoutRequests(t *testing.T) {
 	counter := testfix.CountRequests(t)
 	rt, h := v2Setup(t, thinBranch())
-	h.Model = testfix.Model("anthropic", "session", map[string]any{"contextWindow": 2_000, "maxTokens": 1_000})
 	entries := thinBranch()
 
 	first := contextMessages(t, entries)
@@ -97,7 +96,6 @@ func TestV2ThinsAgedToolResultsWithoutRequests(t *testing.T) {
 func TestThinningOffUnderV1AndPassive(t *testing.T) {
 	for _, mode := range []string{"v1", "passive"} {
 		rt, h := v2Setup(t, thinBranch())
-		h.Model = testfix.Model("anthropic", "session", map[string]any{"contextWindow": 2_000, "maxTokens": 1_000})
 		cfg := rt.Config()
 		if mode == "v1" {
 			cfg.MemoryEngine = config.EngineV1
@@ -218,24 +216,33 @@ func TestV2NothingToCompactSuspendsUntilTheTipChanges(t *testing.T) {
 	}
 }
 
-// The plan is derived once per compaction: a change between two compactions (here the window,
-// as a reserveTokens edit or a forgotten defined tool would be) leaves every request's bytes as
-// they were; the next compaction derives a new plan.
+// The plan is derived once per compaction: a change between two compactions (here a defined
+// tool registered under the thinned result's tool name) leaves every request's bytes as they
+// were; the next compaction derives a new plan, thinning every answered result it retained.
 func TestV2ThinPlanFixedUntilTheNextCompaction(t *testing.T) {
+	counter := testfix.CountRequests(t)
 	rt, h := v2Setup(t, thinBranch())
-	h.Model = testfix.Model("anthropic", "session", map[string]any{"contextWindow": 2_000, "maxTokens": 1_000})
 	entries := thinBranch()
 	if n := OnContext(rt, h, contextMessages(t, entries)); n != 1 {
 		t.Fatalf("thinned %d", n)
 	}
-	h.Model = testfix.Model("anthropic", "session", map[string]any{"contextWindow": 2_000_000, "maxTokens": 1_000})
+	rt.SetDefinedTools(func() []string { return []string{"bash"} })
 	if n := OnContext(rt, h, contextMessages(t, entries)); n != 1 {
 		t.Fatalf("the plan changed without a compaction: thinned %d", n)
 	}
+	rt.SetDefinedTools(nil)
 	compacted := append(append([]ledger.Entry{}, entries...), testfix.CompactionEntry("k2", testfix.CompactionArgs{FirstKeptEntryID: "pu", Summary: "summary two"}))
 	h.SetBranch(compacted)
-	if n := OnContext(rt, h, contextMessages(t, compacted)); n != 0 {
+	// pc1 and qc1 are answered; qc3 is the newest round, and the "ok" results would not shrink.
+	messages := contextMessages(t, compacted)
+	if n := OnContext(rt, h, messages); n != 2 {
 		t.Fatalf("the next compaction kept the old plan: thinned %d", n)
+	}
+	if !strings.HasPrefix(resultTextOf(messages, "qc1"), "[thinned] ") || strings.HasPrefix(resultTextOf(messages, "qc3"), "[thinned] ") {
+		t.Fatal("the next compaction's plan is not every answered result")
+	}
+	if counter.Total() != 0 || h.ModelsFake.Streams.Calls() != 0 {
+		t.Fatalf("requests %v", counter.ByStage())
 	}
 }
 

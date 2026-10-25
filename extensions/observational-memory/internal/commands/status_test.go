@@ -503,3 +503,30 @@ func TestStatusV2Compaction(t *testing.T) {
 	output = statusOutput(t, statusRuntime(cfg), h)
 	expectContains(t, output, "Compaction: PiG's auto-compaction is off; only the extension's level-0 compaction runs, at PiG's threshold 90,000", "context unknown until the next response reports usage")
 }
+
+// Under memory v2 the status says the latest compaction's level, its request count and why
+// level 1 did not run or failed, read from the compaction's details.
+func TestStatusV2LastCompactionLevel(t *testing.T) {
+	cfg := statusConfig()
+	cfg.MemoryEngine = config.EngineV2
+	compacted := func(report ledger.ConsolidationReport) *testfix.FakeHost {
+		details := ledger.MemoryDetails{Type: ledger.OMFolded, Version: 1, FullFold: true, Observations: []ledger.Observation{}, Reflections: []ledger.Reflection{}, FoldThroughEntryID: "u2", Engine: config.EngineV2, Consolidation: &report}
+		return testfix.NewFakeHost(testfix.RawMessage("u1", "hello"), testfix.CompactionEntry("c1", testfix.CompactionArgs{FirstKeptEntryID: "u2", Details: testfix.ToJSONValue(details)}), testfix.RawMessage("u2", "next"))
+	}
+	for _, c := range []struct {
+		name   string
+		report ledger.ConsolidationReport
+		want   string
+	}{
+		{"applied", ledger.ConsolidationReport{Requested: true, Applied: true, Records: 2, Merges: 1, Reflections: 1, Dropped: 3, Refused: 1}, "Last compaction: level 1, 1 request; level 1 recorded 2 labelled records, 1 merges, 1 reflections, 0 aliases, dropped 3 replaced records, refused 1 proposals"},
+		{"failed", ledger.ConsolidationReport{Requested: true, Reason: "the output accounts for nothing"}, "Last compaction: level 0, 1 request; level 1 failed (the output accounts for nothing), level 0 stands"},
+		{"skipped", ledger.ConsolidationReport{Reason: "consolidate is false"}, "Last compaction: level 0, 0 requests; level 1 not run: consolidate is false"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			expectContains(t, statusOutput(t, statusRuntime(cfg), compacted(c.report)), c.want)
+		})
+	}
+	expectLacks(t, statusOutput(t, statusRuntime(cfg), testfix.NewFakeHost(testfix.RawMessage("u1", "hello"))), "Last compaction:")
+	cfg.MemoryEngine = config.EngineV1
+	expectLacks(t, statusOutput(t, statusRuntime(cfg), compacted(ledger.ConsolidationReport{Reason: "x"})), "Last compaction:")
+}

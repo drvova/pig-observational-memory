@@ -18,11 +18,14 @@ const (
 	// TextBuilderRules opens the build and revision passes' prompt: what the kernel owns and
 	// how a definition is checked, held and graded.
 	TextBuilderRules = "kernel-builder"
+	// TextConsolidateRules opens memory v2's level-1 consolidation prompt (docs/memory-v2.md,
+	// "Level 1"): the one request at a compaction and every contract its validation enforces.
+	TextConsolidateRules = "kernel-consolidate"
 )
 
 // TextIDs lists the kernel text ids.
 func TextIDs() []string {
-	return []string{TextObserverRules, TextReflectorRules, TextDropperRules, TextBuilderRules}
+	return []string{TextObserverRules, TextReflectorRules, TextDropperRules, TextBuilderRules, TextConsolidateRules}
 }
 
 // Text is the fixed text a kernel text id names, "" for an unknown id.
@@ -36,9 +39,31 @@ func Text(id string) string {
 		return dropperRules
 	case TextBuilderRules:
 		return builderRules
+	case TextConsolidateRules:
+		return consolidateRules
 	}
 	return ""
 }
+
+// consolidateRules opens memory v2's level-1 prompt. Code validates every rule it states
+// (internal/consolidate): what breaks one is refused and the level-0 records stand.
+const consolidateRules = `You consolidate the memory of a coding session at a compaction. The conversation shown is about to leave the context; code has already extracted its records (the CANDIDATES), and the summary that replaces the conversation is rendered by code from the records, never from your prose. You make one call to the consolidate_memory tool; nothing follows it.
+
+What you may do, all optional, in that one call:
+- records: label one candidate each, by its id: kind (not for attempt, file, commit or note records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
+- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit or note records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
+- reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
+- aliases: declare that one existing subject is about the same topic as another (from, to).
+
+Rules code enforces (a proposal that breaks one is refused and the records it names stay as they are):
+- Cite only ids printed in this input. A record or merge citing any other id is refused.
+- Keep every specific: a merge, a supersede and a replacing reflection must carry every name, number, date, path and quantity of what they replace, written as the source writes it. Text that drops one is refused.
+- A record is labelled once and merged once. A second proposal naming the same id is refused, and so is labelling or merging a record another proposal supersedes, or superseding one another proposal replaced.
+- supersedes only on an explicit correction or replacement, never across different scopes, and never in a cycle.
+- A reflection's supporting records leave the summary when it is shown, so a supporting record whose specifics the reflection does not carry is not counted as support.
+- Subjects are short lowercase noun phrases; a path (a/b/c, at most three segments) nests a subject under a broader one. Reuse the subjects already listed.
+- Records not mentioned stay exactly as code extracted them. Leaving a record alone is always safe; inventing is never allowed.
+- Memory listed as omitted is not shown and cannot be cited.`
 
 const observerRules = `You are the observation agent for a coding assistant.
 

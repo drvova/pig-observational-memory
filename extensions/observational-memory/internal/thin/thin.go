@@ -22,11 +22,6 @@ import (
 type Input struct {
 	// Entries is the current branch.
 	Entries []session.Entry
-	// ContextWindow is the session model's context window; 0 when unknown, which thins
-	// nothing (no threshold to keep the next context under).
-	ContextWindow int
-	// ReserveTokens is PiG's compaction.reserveTokens for the session model.
-	ReserveTokens int
 	// SkipTools are the memory tool and the tools the agent defined with it: their results
 	// are memory reads, never thinned.
 	SkipTools []string
@@ -38,44 +33,27 @@ type Input struct {
 type Plan map[string]string
 
 // Compute is the thinning plan for the branch (docs/memory-v2.md, "Thinning aged tool
-// results"). Candidates are the tool results in the latest compaction's retained tail (from its
-// firstKeptEntryId up to the compaction entry) that an assistant message after them, still
-// before the compaction, answered: never the newest round of that tail (the results of its last
+// results"): every tool result in the latest compaction's retained tail (from its
+// firstKeptEntryId up to the compaction entry) that an assistant message after it, still
+// before the compaction, answered. Never the newest round of that tail (the results of its last
 // assistant message that made tool calls, even when a final reply followed), never a result that
 // landed after the compaction (a fresh one), never a user message (the split turn's opening
-// request among them), never a memory tool result. Without a compaction there is nothing to
-// thin.
-//
-// They are thinned oldest first while the context right after the compaction stays inside the
-// summary budget's headroom: thinning stops once that context is at or below PiG's threshold
-// (window - reserveTokens) less the largest per-run growth measured before the compaction
-// (ledger.NextRunHeadroom). The context after the compaction is the compaction entry's
-// tokensBefore less the estimate of what it removed (the cut range and the previous summary)
-// plus its summary; without tokensBefore it is the summary and the retained tail.
+// request among them), never a memory tool result, never a result whose call is not on the
+// branch, never one whose tool call id names another result in the tail, and never one whose
+// thinned text would not be shorter. Without a compaction there is nothing to thin.
 func Compute(in Input) Plan {
 	entries := in.Entries
 	c := ledger.FindLastCompactionIndex(entries)
-	if c < 0 || in.ContextWindow <= 0 {
+	if c < 0 {
 		return nil
 	}
-	compaction := entries[c]
-	kept := ledger.EntryIndexForID(entries[:c], compaction.FirstKeptEntryID)
+	kept := ledger.EntryIndexForID(entries[:c], entries[c].FirstKeptEntryID)
 	if kept < 0 {
 		return nil
 	}
-	candidates := candidatesIn(entries, kept, c, in)
-	if len(candidates) == 0 {
-		return nil
-	}
-	next := contextAfter(entries, kept, c)
-	limit := in.ContextWindow - in.ReserveTokens - ledger.NextRunHeadroom(entries[:c])
 	plan := Plan{}
-	for _, candidate := range candidates {
-		if next <= limit {
-			break
-		}
+	for _, candidate := range candidatesIn(entries, kept, c, in) {
 		plan[candidate.callID] = candidate.text
-		next -= candidate.saving
 	}
 	if len(plan) == 0 {
 		return nil
@@ -83,11 +61,9 @@ func Compute(in Input) Plan {
 	return plan
 }
 
-// candidate is one tool result that may be thinned.
+// candidate is one tool result to thin.
 type candidate struct {
 	callID, text string
-	// saving is the estimated tokens thinning it removes.
-	saving int
 }
 
 // candidatesIn are the thinnable tool results of entries[kept:c], oldest first.
@@ -139,11 +115,10 @@ func candidatesIn(entries []session.Entry, kept, c int, in Input) []candidate {
 		}
 		failed, _ := entry.Message["isError"].(bool)
 		text := Text(extract.CallLine(in.Cwd, name, args, resultText(entry.Message["content"]), failed), entry.ID)
-		saving := tokens.EstimateEntryTokens(entry) - tokens.EstimateStringTokens(text)
-		if saving <= 0 {
+		if tokens.EstimateStringTokens(text) >= tokens.EstimateEntryTokens(entry) {
 			continue
 		}
-		out = append(out, candidate{callID: callID, text: text, saving: saving})
+		out = append(out, candidate{callID: callID, text: text})
 	}
 	return out
 }
@@ -192,38 +167,6 @@ func callArguments(entries []session.Entry, kept, result int, callID string) (ma
 		}
 	}
 	return nil, false
-}
-
-// contextAfter is the estimated context right after the compaction at entries[c] (see
-// Compute).
-func contextAfter(entries []session.Entry, kept, c int) int {
-	compaction := entries[c]
-	summary, _ := compaction.Summary.(string)
-	before := entries[:c]
-	if tokensBefore := wholeNumber(compaction.Raw["tokensBefore"]); tokensBefore > 0 {
-		start := ledger.CompactionRangeStartIndex(before)
-		previous := ""
-		if p := ledger.FindLastCompactionIndex(before); p >= 0 {
-			previous, _ = before[p].Summary.(string)
-		}
-		removed := tokens.EstimateStringTokens(previous)
-		if start < kept {
-			removed += sourceTokens(entries[start:kept])
-		}
-		return tokensBefore - removed + tokens.EstimateStringTokens(summary)
-	}
-	return tokens.EstimateStringTokens(summary) + sourceTokens(entries[kept:c])
-}
-
-// sourceTokens is the estimated context the source entries of entries carry.
-func sourceTokens(entries []session.Entry) int {
-	total := 0
-	for _, entry := range entries {
-		if ledger.IsSourceEntry(entry) {
-			total += tokens.EstimateEntryTokens(entry)
-		}
-	}
-	return total
 }
 
 // Apply shortens, in place, the tool result messages of a request's context that plan names,
@@ -286,17 +229,4 @@ func resultText(content any) string {
 		return text
 	}
 	return ""
-}
-
-// wholeNumber reads a JSON number as an int, 0 when it is not one.
-func wholeNumber(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case int64:
-		return int(n)
-	}
-	return 0
 }

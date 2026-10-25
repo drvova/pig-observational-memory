@@ -214,14 +214,19 @@ query the renderer prints, including after a fork.
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every
-round after that. The extension shortens each tool result in the retained tail that the model has
-already answered after to its level-0 record line (tool, key argument, outcome) and the memory query
-that returns the original, never the newest round, never a fresh result, never the split turn's opening
-request. It does so as a deterministic per-request transform (PiG's `context` event), a pure function of
-the ledger, switched on from the latest compaction entry, so the bytes are stable between requests and
-the prompt cache prefix breaks only where a compaction already broke it. Thinning stops once the next
-context leaves the headroom above. The session file keeps every original for `recall`. Smaller context
-means PiG compacts less often, so thinning lowers PiG's own request count.
+round after that. Once per compaction, the extension shortens every tool result in the retained tail
+that the model has already answered after to its level-0 record line (tool, key argument, outcome) and
+the memory query that returns the original, never the newest round, never a fresh result, never the
+split turn's opening request, never the result of a memory tool or a tool the agent defined with it, never a
+result whose call is off the branch or whose tool call id names another result in the tail, never one
+whose thinned text would not be shorter. There is no stop and no limit to tune: every answered result is
+thinned, and every original stays recallable. It does so as a deterministic per-request transform (PiG's
+`context` event), a function of the branch up to the latest compaction entry and of the memory and
+defined tool names, decided at the first request after that compaction and cached in the process, so the
+bytes are stable between requests (after a restart they are decided again, and change once only if the
+defined tools changed) and the prompt cache prefix breaks only where a compaction already broke it.
+The session file keeps every original for `recall`. Smaller context means PiG compacts less often, so
+thinning lowers PiG's own request count.
 
 ### Level 1: one request at compaction (on by default, `consolidate: false` turns it off)
 
@@ -241,8 +246,12 @@ means PiG compacts less often, so thinning lowers PiG's own request count.
   provenance):
   - a record or merge citing an id outside its input is rejected and its candidates stand;
   - a merge's source ids are set by code to the union of its candidates' ids;
-  - a merge or supersede whose text drops a specific of its sources (`ledger.MissingSpecifics`) is
-    refused and the sources stay;
+  - a merge or supersede whose text drops a specific of its sources (`ledger.Specifics`, compared as
+    whole items with `ledger.AddedSpecifics`, so `30` is not carried by `300`) is refused and the
+    sources stay; records whose fields code keeps (attempt, file, commit, note) and records with
+    different scopes are never merged;
+  - a reflection cites only records whose specifics it carries, checked against the record that
+    stands for each id when it renders (a merge or label replacing it);
   - output that accounts for nothing, or has no valid record, is a failure.
 - **Union.** Any level-0 candidate carrying specifics that level 1 does not account for is kept. A
   weak model can improve the memory, never lose a fact from it (Mastra documents no code-level check

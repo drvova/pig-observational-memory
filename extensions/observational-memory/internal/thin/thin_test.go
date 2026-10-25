@@ -2,6 +2,8 @@ package thin_test
 
 import (
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -51,10 +53,8 @@ func branch() []session.Entry {
 	}
 }
 
-// tight is an input whose window leaves the post-compaction context inside the headroom, so
-// every candidate is thinned.
-func tight(entries []session.Entry) thin.Input {
-	return thin.Input{Entries: entries, ContextWindow: 1_000, ReserveTokens: 900, Cwd: "/repo"}
+func input(entries []session.Entry) thin.Input {
+	return thin.Input{Entries: entries, Cwd: "/repo"}
 }
 
 func contextOf(entries []session.Entry) []map[string]any {
@@ -77,7 +77,7 @@ func deepCopy(m map[string]any) map[string]any {
 
 func TestThinsAnsweredRetainedResultsOnly(t *testing.T) {
 	entries := branch()
-	plan := thin.Compute(tight(entries))
+	plan := thin.Compute(input(entries))
 	// c2 is the newest round: the final "Fixed." answered it, but it stays whole.
 	if len(plan) != 1 || plan["c1"] == "" || plan["c2"] != "" {
 		t.Fatalf("plan %v", plan)
@@ -87,7 +87,7 @@ func TestThinsAnsweredRetainedResultsOnly(t *testing.T) {
 	}
 	// The read the final answer came from, thinned once a later round answered after it.
 	later := append(append([]session.Entry{}, entries[:9]...), call("a9", "c9", "bash", map[string]any{"command": "go test ./..."}), result("r9", "c9", "bash", big, false), reply("a10", "Green."), compaction("k1", "u1", "summary", 0))
-	if got := thin.Compute(tight(later)); !strings.Contains(got["c2"], `read "x.go" worked`) || got["c9"] != "" {
+	if got := thin.Compute(input(later)); !strings.Contains(got["c2"], `read "x.go" worked`) || got["c9"] != "" {
 		t.Fatalf("plan with a later round %v", got)
 	}
 	// The query the thinned text names returns the original.
@@ -121,7 +121,7 @@ func TestThinsAnsweredRetainedResultsOnly(t *testing.T) {
 
 func TestByteStableUntilTheNextCompaction(t *testing.T) {
 	entries := branch()
-	first, second := thin.Compute(tight(entries)), thin.Compute(tight(entries))
+	first, second := thin.Compute(input(entries)), thin.Compute(input(entries))
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("two calls differ")
 	}
@@ -133,12 +133,12 @@ func TestByteStableUntilTheNextCompaction(t *testing.T) {
 	}
 	// More rounds after the compaction change nothing: r3 is answered now but landed after it.
 	grown := append(append([]session.Entry{}, entries...), reply("a5", "done"), user("u3", "next"), call("a6", "c4", "bash", map[string]any{"command": "make"}), result("r4", "c4", "bash", big, false), reply("a7", "ok"))
-	if got := thin.Compute(tight(grown)); !reflect.DeepEqual(got, first) {
+	if got := thin.Compute(input(grown)); !reflect.DeepEqual(got, first) {
 		t.Fatalf("plan changed without a compaction: %v", got)
 	}
 	// A new compaction keeping u2 onward thins what it retained and answered.
 	compacted := append(append([]session.Entry{}, grown...), compaction("k2", "u2", "summary two", 0))
-	got := thin.Compute(tight(compacted))
+	got := thin.Compute(input(compacted))
 	if reflect.DeepEqual(got, first) || got["c3"] == "" || got["c4"] != "" || got["c1"] != "" {
 		t.Fatalf("plan after the next compaction %v", got)
 	}
@@ -152,21 +152,15 @@ func TestNeverTheNewestRoundOrAFreshResult(t *testing.T) {
 		call("a2", "c2", "bash", map[string]any{"command": "make test"}), result("r2", "c2", "bash", big, false),
 		compaction("k1", "u1", "summary", 0),
 	}
-	plan := thin.Compute(tight(entries))
+	plan := thin.Compute(input(entries))
 	if plan["c2"] != "" || plan["c1"] == "" {
 		t.Fatalf("plan %v", plan)
 	}
 }
 
-func TestNoCompactionNoWindowNoThinning(t *testing.T) {
-	entries := branch()
-	if plan := thin.Compute(tight(entries[:9])); plan != nil {
+func TestNoCompactionNoThinning(t *testing.T) {
+	if plan := thin.Compute(input(branch()[:9])); plan != nil {
 		t.Fatalf("thinned before any compaction: %v", plan)
-	}
-	in := tight(entries)
-	in.ContextWindow = 0
-	if plan := thin.Compute(in); plan != nil {
-		t.Fatalf("thinned with an unknown window: %v", plan)
 	}
 }
 
@@ -174,52 +168,51 @@ func TestMemoryToolResultsAreNotThinned(t *testing.T) {
 	entries := branch()
 	entries[6] = call("a2", "c2", memquery.ToolName, map[string]any{"query": "notes"})
 	entries[7] = result("r2", "c2", memquery.ToolName, big, false)
-	in := tight(entries)
+	in := input(entries)
 	in.SkipTools = []string{memquery.ToolName}
 	if plan := thin.Compute(in); plan["c2"] != "" || plan["c1"] == "" {
 		t.Fatalf("plan %v", plan)
 	}
 }
 
-// Thinning stops once the context after the compaction is out of the headroom: below PiG's
-// threshold less the largest per-run growth.
-func TestStopsOnceOutOfTheHeadroom(t *testing.T) {
-	entries := branch()
-	resultTokens := tokens.EstimateEntryTokens(entries[7])
-	summary := tokens.EstimateStringTokens("summary")
-	retained := 0
-	for _, entry := range entries[3:9] {
-		retained += tokens.EstimateEntryTokens(entry)
+// Every answered result in the retained tail is thinned, however much room the context has:
+// there is no stop and no window or compaction size to read. A result whose thinned text would
+// not be shorter, and one whose call is off the branch, stay whole.
+func TestThinsEveryAnsweredResult(t *testing.T) {
+	entries := []session.Entry{
+		user("u0", "start"), call("a0", "c0", "bash", map[string]any{"command": "ls"}),
+		user("u1", "go"), result("r0", "c0", "bash", big, false),
 	}
-	next := summary + retained
-	in := thin.Input{Entries: entries, Cwd: "/repo"}
-
-	// Plenty of room: nothing is thinned.
-	in.ContextWindow, in.ReserveTokens = next+1_000, 1_000
-	if plan := thin.Compute(in); plan != nil {
-		t.Fatalf("thinned with room: %v", plan)
+	want := []string{}
+	for i := 1; i <= 5; i++ {
+		id := strconv.Itoa(i)
+		entries = append(entries, call("a"+id, "c"+id, "bash", map[string]any{"command": "make " + id}), result("r"+id, "c"+id, "bash", big, false))
+		want = append(want, "c"+id)
 	}
-	// Over the threshold by less than the oldest result saves: only that one is thinned.
-	in.ContextWindow = next + 1_000 - resultTokens/2
-	if plan := thin.Compute(in); len(plan) != 1 || plan["c1"] == "" {
-		t.Fatalf("plan %v", plan)
+	entries = append(entries,
+		call("a6", "c6", "bash", map[string]any{"command": "true"}), result("r6", "c6", "bash", "ok", false),
+		call("a7", "c7", "bash", map[string]any{"command": "make last"}), result("r7", "c7", "bash", big, false),
+		reply("a8", "Done."),
+		compaction("k1", "u1", "summary", 1_000_000),
+	)
+	plan := thin.Compute(input(entries))
+	got := []string{}
+	for id := range plan {
+		got = append(got, id)
 	}
-
-	// With tokensBefore, the context after is tokensBefore - removed + summary.
-	withBefore := append([]session.Entry{}, entries...)
-	removed := 0
-	for _, entry := range entries[:3] {
-		removed += tokens.EstimateEntryTokens(entry)
+	slices.Sort(got)
+	// c0's call was cut by the compaction, c6's "ok" would not shrink, c7 is the newest round.
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thinned %v, want %v", got, want)
 	}
-	withBefore[9] = compaction("k1", "u1", "summary", 50_000)
-	in.Entries = withBefore
-	in.ContextWindow, in.ReserveTokens = 50_000-removed+summary+1_000, 1_000
-	if plan := thin.Compute(in); plan != nil {
-		t.Fatalf("thinned with room: %v", plan)
+	for _, id := range want {
+		if !strings.HasPrefix(plan[id], "[thinned] ") || tokens.EstimateStringTokens(plan[id]) >= tokens.EstimateStringTokens(big) {
+			t.Fatalf("%s thinned to %q", id, plan[id])
+		}
 	}
-	in.ContextWindow -= 1
-	if plan := thin.Compute(in); len(plan) != 1 {
-		t.Fatalf("plan %v", plan)
+	messages := contextOf(entries)
+	if n := thin.Apply(messages, plan); n != len(want) {
+		t.Fatalf("applied %d", n)
 	}
 }
 
@@ -227,9 +220,9 @@ func TestStopsOnceOutOfTheHeadroom(t *testing.T) {
 // retained call id; a request holding that id twice thins neither.
 func TestReusedCallIDAfterTheCompaction(t *testing.T) {
 	entries := branch()
-	first := thin.Compute(tight(entries))
+	first := thin.Compute(input(entries))
 	reused := append(append([]session.Entry{}, entries...), reply("a5", "ok"), call("a6", "c1", "bash", map[string]any{"command": "make"}), result("r4", "c1", "bash", big, false))
-	if got := thin.Compute(tight(reused)); !reflect.DeepEqual(got, first) {
+	if got := thin.Compute(input(reused)); !reflect.DeepEqual(got, first) {
 		t.Fatalf("a reused id after the compaction changed the plan: %v", got)
 	}
 	messages := contextOf(reused)
