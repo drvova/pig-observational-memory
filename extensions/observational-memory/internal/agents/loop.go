@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 )
 
@@ -57,6 +56,10 @@ type LoopConfig struct {
 	ThinkingLevel string
 	// MaxTurns ends the loop after that many completed turns; 0 is unlimited.
 	MaxTurns int
+	// Engine is the memory engine in effect (config.Config.Engine), reported with each
+	// request (RequestEvent). Every caller sets it from the resolved configuration; it is
+	// reported as given, so an unset engine shows as "" rather than as either engine.
+	Engine string
 }
 
 // StreamError is an assistant message that ended with stopReason "error" or
@@ -148,45 +151,17 @@ func RunLoop(ctx context.Context, stream StreamFunc, cfg LoopConfig, systemPromp
 		if ctx.Err() != nil {
 			return result, ErrAborted
 		}
-		request := map[string]any{
-			"systemPrompt": systemPrompt,
-			"messages":     append([]any{}, messages...),
-			"tools":        toolSchemas,
-			"maxTokens":    BoundedMaxTokens(cfg.Model, maxTokens),
-		}
-		if cfg.APIKey != nil {
-			request["apiKey"] = *cfg.APIKey
-		}
-		if len(cfg.Headers) > 0 {
-			request["headers"] = cfg.Headers
-		}
-		if len(cfg.Env) > 0 {
-			request["env"] = cfg.Env
-		}
+		request := requestFor(systemPrompt, append([]any{}, messages...), toolSchemas, BoundedMaxTokens(cfg.Model, maxTokens), cfg.APIKey, cfg.Headers, cfg.Env)
 		if host.ModelReasoning(cfg.Model) && cfg.ThinkingLevel != "" && cfg.ThinkingLevel != "off" {
 			request["reasoning"] = cfg.ThinkingLevel
 		}
-		modelStream := stream(cfg.Model, request)
-		if modelStream == nil {
-			return result, errors.New("model stream unavailable")
-		}
-		for range modelStream.Events(ctx) {
-			// Drain: the terminal event carries the message.
-		}
-		if ctx.Err() != nil {
-			return result, ErrAborted
-		}
-		message := modelStream.Result()
-		if message == nil {
-			message = map[string]any{"role": "assistant", "content": []any{}, "stopReason": "error", "errorMessage": "model stream ended without a message"}
-		}
-		if _, hasRole := message["role"]; !hasRole {
-			message["role"] = "assistant"
+		message, err := Request(ctx, stream, cfg.Stage, cfg.Engine, cfg.Model, request)
+		if err != nil {
+			return result, err
 		}
 		stop := stopReasonOf(message)
 		if stop == "error" || stop == "aborted" {
 			errorMessage, _ := message["errorMessage"].(string)
-			debuglog.Log(ctx, cfg.Stage+".stream_error", map[string]any{"stopReason": stop, "errorMessage": errorMessage})
 			result.StreamError = &StreamError{Stage: cfg.Stage, StopReason: stop, ErrorMessage: errorMessage}
 			return result, nil
 		}

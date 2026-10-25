@@ -216,7 +216,7 @@ func runHarnessPass(ctx context.Context, rt *runtime.Runtime, h host.Host, resol
 		key := harness.ModelKey(worker.Model)
 		args := agents.BuilderArgs{
 			WorkerArgs: agents.WorkerArgs{Model: worker.Model, APIKey: worker.APIKey, Headers: worker.Headers, Env: worker.Env,
-				MaxTurns: cfg.AgentMaxTurns, MaxOutputTokens: cfg.AgentMaxTokens, ThinkingLevel: workerThinkingLevel(cfg, worker), Stream: h.Models().Stream},
+				MaxTurns: cfg.AgentMaxTurns, MaxOutputTokens: cfg.AgentMaxTokens, ThinkingLevel: workerThinkingLevel(cfg, worker), Stream: h.Models().Stream, Engine: cfg.Engine()},
 			ModelKey:    key,
 			Revision:    revision,
 			KernelNames: kernelNames(),

@@ -68,6 +68,14 @@ on the same transcript.
   own context (`sdk.Context` `Done`/`Err`), never on `ctx.Signal()`, which is the agent run's signal
   and is already cancelled when a manual `/compact` aborts the run. Only a cancelled request context
   makes the hook return nothing.
+  Known limit (SDK v0.5.1): cancelling a Go context only stops the extension draining the stream;
+  `ModelRegistry.StreamSimple` takes no signal and never sends `cancelModelStream`. The provider
+  request stops in PiG only because PiG cancels every host call of a cancelled request, the
+  `modelStream` call included, and that holds only for a stream started from the hook's own
+  `sdk.Context`. A request cancelled on the extension's side alone runs to its end and is billed, so
+  an aborted request is always counted as made (`"aborted": true` on its request event), never as
+  not made; the hook checks the request context before level 1 and starts no request once it is
+  cancelled.
 - **PiG's cut, exactly.** `firstKeptEntryId` is always `preparation.firstKeptEntryId`, and the fold
   boundary equals it. The moved cut, the compaction catch-up, `compactionMaxRetainedTokens` and the
   normal-versus-full fold split go. Level 0 extracts every entry PiG summarizes and appends its
@@ -166,6 +174,10 @@ trigger so one prefix holds for many exchanges):
   write) between the last assistant messages of consecutive runs, ignoring negative differences. With no
   usage on the branch, nothing is subtracted.
 - **Never larger than it removed.** The summary is at most `est(cut range + previous summary)`.
+
+An unknown `reserveTokens` (absent from the preparation, or 0) is read as PiG's default (16384,
+`config.PiGDefaultReserveTokens`), never as no reserve, which would raise the threshold bound by the
+whole reserve.
 
 When the budget is zero or less, the minimal brief applies; it is smaller than the range it replaces,
 so the compaction still frees room.

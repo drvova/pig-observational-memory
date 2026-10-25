@@ -101,8 +101,10 @@ You can omit everything. Defaults work for ordinary sessions, and if `model` is 
 | `curatedMemory` | boolean | `true` | Gives the agent its own long-lived memory across sessions: the `memory` tool's `saved` source and its `save`, `edit`, `forget`, `feedback` and `define` writes, an evidence-ranked index in the system prompt, the tools the agent defines, the per-model harness's usage ledgers, and the rules it writes (remedy definitions in the model-built layer, `<store>/harness/`; the `propose` write), and the harness the memory model builds there (its build and revision passes, the `harness` and `rollback` writes and the `harness` source). Off, the tool still reads notes, reflections, history and `recall <id>`, every model keeps the default profile, and no rule is counted or applied. See [Curated memory](concepts.md#curated-memory), [The per-model harness](concepts.md#the-per-model-harness) and [Rules the harness writes](concepts.md#rules-the-harness-writes). |
 | `kernelFloor` | object | unset | Lowers the kernel floor: `{"lower": true, "requestedBy": "<who>", "reason": "<why>"}`. Read from the global settings only (a project's settings can set `"lower": false` but never lower it). Both `requestedBy` and `reason` are required and are appended to `<store>/harness/floor.jsonl` before the lowering takes effect; a request missing either, or one that cannot be recorded, is refused and the floor stays engaged (`/om:status` says why). Lowered, layer definitions may name kernel-owned names; the memory tool and the room ceiling stay code either way. This setting is the only way the floor is lowered: no `memory` tool write (`harness`, `rollback`, `propose`) and no build or revision pass reaches it. Removing the setting (or `"lower": false`) engages the floor again, recorded the same way. See [The kernel and the layer](concepts.md#the-kernel-and-the-layer). |
 | `curatedMemoryIndexTokens` | positive integer | `2000` | Estimated token budget for the index's memory lines; past it, the first memories are described within half and the next named on one `also:` line. |
+| `memoryEngine` | enum | `"v1"` | Selects the memory engine while [memory v2](memory-v2.md) is built side by side: `"v1"` is the design this page describes; `"v2"` makes no model request outside a compaction and owns every compaction PiG prepares. See [`memoryEngine`](#memoryengine). |
+| `consolidate` | boolean | `true` | Memory v2 only: lets a compaction make its one level-1 consolidation request. `false` keeps every compaction at level 0 (code only, no request). Not used yet: level 1 is not built. |
 
-Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`. Valid `memoryFormat` values are `tables` and `lines`; any other value is ignored.
+Valid `model.thinking` values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Valid `compactAfterTokensMode` values are `calibrated` and `ratio`. Valid `memoryFormat` values are `tables` and `lines`; any other value is ignored. Valid `memoryEngine` values are `v1` and `v2`; any other value is ignored.
 
 Invalid values are ignored. Positive-integer settings must be finite integers greater than zero. `compactAfterTokensRatio` must be a finite number strictly between `0` and `1`. `observationsPoolTargetTokens` must also be below `observationsPoolMaxTokens`; if omitted or invalid, it is derived as `floor(observationsPoolMaxTokens / 2)`.
 
@@ -365,6 +367,33 @@ Truthy values: `1`, `true`, `yes`, `on`.
 Falsy values: `0`, `false`, `no`, `off`.
 
 Unrecognized values are ignored.
+
+## `memoryEngine`
+
+Default: `"v1"`. Read through the trusted path like every other setting: an untrusted project's settings never switch the engine.
+
+[Memory v2](memory-v2.md) is built next to v1 and selected by this setting until it becomes the default. With `"v1"` nothing on this page changes. With `"v2"`, so far (the first step of its order of work):
+
+* **No requests between compactions.** The observer, reflector and dropper never run, nor do the harness build and revision passes, the require-kind re-ask or the compaction catch-up. The settings that tune them are read but have no effect.
+* **The proactive trigger runs only with PiG's automatic compaction off** (Pi's `compaction.enabled: false`), where PiG never compacts on its own. It is still v1's [`compactAfterTokens`](#compactaftertokens) trigger, not yet the v2 rule (compact only when the reported context exceeds `contextWindow - reserveTokens`, never while usage is unknown); that trigger comes in step 2 of the order of work, so for now this path can compact earlier than PiG's threshold, though without a model request.
+* **Every compaction PiG prepares is owned.** The hook always returns a compaction, never declines to PiG's summarizer and never cancels: overflow, an empty ledger and a budget too small for any record included. It keeps PiG's cut exactly (`firstKeptEntryId`, and the fold boundary equal to it) and makes no model request. The summary is the ledger's records under the v2 summary budget (below), in [`memoryFormat`](#settings-reference) with the native layout (a summary format or codec the per-model layer declares is not used under v2 until the harness moves to the new path, step 5 of the order of work); when no record fits or none exists, a minimal brief of the removed range (its opening user request and one `* tool "key arg" (entry id)` line per tool call, thinking and tool bodies dropped); when even that does not fit, or the budget is zero or less, the opening request line and an `omitted` pointer to the whole range, shortened further (the count and first and last ids, then the count alone) until it is no larger than the removed range. Only a range of a token or two can get a larger summary, the fixed line `omitted.`. The brief counts and names the conversation entries removed, not the extension's own bookkeeping entries. A panic while building the summary is recovered into the brief. Custom instructions passed with the compaction ride along after the memory when they fit the budget. Only a cancelled `session_before_compact` request makes the hook answer nothing; a cancelled agent run (a manual `/compact` aborts it) does not.
+
+The v2 summary budget is derived from what PiG reports, with no tuned constants:
+
+```
+removed   = est(entries from the previous boundary up to firstKeptEntryId) + est(previous summary)
+threshold = contextWindow - reserveTokens - tokensBefore + removed - headroom
+budget    = min(threshold, maxOutputTokens, removed)
+budget    = min(budget, compactionSummaryMaxTokens if set)
+```
+
+`reserveTokens` and `tokensBefore` come from PiG's compaction preparation (an unknown `reserveTokens` counts as PiG's default, 16384), `contextWindow` and `maxOutputTokens` from the session model (each bound applies only when known), and `headroom` is the largest growth of input usage (input plus cache read and cache write) between the last assistant messages of consecutive runs since the previous compaction, `0` without usage. The headroom comes off PiG's threshold bound only: the output and removed bounds do not depend on the next run's growth. The summary is therefore never larger than what it removed and leaves room for one more run like the largest so far before PiG's threshold. Not yet in step 1: when PiG had no usage to anchor `tokensBefore` (its chars/4 estimate leaves out tool schemas), the known tool-schema overhead is not yet subtracted from the threshold bound; that comes with level 0 (step 2 of the order of work).
+
+With [`debugLog`](#debuglog) on, every model request the extension makes logs one `model.request` event (stage, engine, and input, output and cache tokens when the provider reported them; a failed request logs its stage's `stream_error` event with the same fields), under either engine, and each v2 compaction logs `compaction.v2` with its budget inputs and which summary it chose.
+
+## `consolidate`
+
+Default: `true`. Memory v2 only, and not used yet: it will let a compaction make one level-1 request (one completion with one forced tool, never retried) in place of PiG's own summarizer requests. `false` keeps every compaction at level 0, code only.
 
 ## `debugLog`
 

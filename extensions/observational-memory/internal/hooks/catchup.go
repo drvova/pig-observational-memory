@@ -38,7 +38,8 @@ type CatchUpArgs struct {
 // cut, one observer chunk at a time, appending coverage as it goes. It runs
 // inside session_before_compact, where Pi waits for the hook and no session
 // request is in flight. A chunk that yields no observations, fails, or hits the
-// chunk cap stops the catch-up; nothing is appended for a failed chunk.
+// chunk cap stops the catch-up; nothing is appended for a failed chunk. Memory v2 never
+// catches up (docs/memory-v2.md, "Owning every compaction PiG prepares").
 func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 	result := CatchUpResult{}
 	if args.MaxChunks <= 0 {
@@ -46,6 +47,10 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 	}
 	rt, h := args.Runtime, args.Host
 	cfg := rt.Config()
+	if cfg.V2() {
+		result.StoppedBecause = "memory_engine_v2"
+		return result
+	}
 	resolved := rt.ResolveModel(ctx, runtime.ResolveCtx{Model: h.SessionModel(), Models: h.Models(), HasUI: h.HasUI(), Notify: h.Notify})
 	if !resolved.OK {
 		debuglog.Log(ctx, "compaction.catch_up.model_unavailable", map[string]any{"reason": resolved.Reason})

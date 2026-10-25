@@ -53,6 +53,17 @@ const (
 // default.
 var MemoryFormatValues = []string{MemoryFormatTables, MemoryFormatLines}
 
+// The memoryEngine values (docs/memory-v2.md, "Rollout"): v1 is the background
+// observer, reflector and dropper design; v2 makes no model request outside a
+// compaction and owns every compaction PiG prepares.
+const (
+	EngineV1 = "v1"
+	EngineV2 = "v2"
+)
+
+// EngineValues are the valid memoryEngine values; the first is the default.
+var EngineValues = []string{EngineV1, EngineV2}
+
 // Config is the resolved extension configuration. Optional token budgets are 0
 // when unset; the resolve* functions derive them from a context window then.
 type Config struct {
@@ -114,7 +125,28 @@ type Config struct {
 	// ProjectSettingsIgnored is true when the project has a settings file
 	// that was not read because the project is not trusted.
 	ProjectSettingsIgnored bool
+	// MemoryEngine is the configured memoryEngine, one of EngineValues; ""
+	// (unset) is EngineV1. Read it through Engine.
+	MemoryEngine string
+	// ConsolidateOff is set by consolidate: false, which turns memory v2's
+	// level-1 consolidation request off. Read it through Consolidates.
+	ConsolidateOff bool
 }
+
+// Engine is the memory engine in effect: MemoryEngine, or EngineV1 when unset.
+func (c Config) Engine() string {
+	if c.MemoryEngine == EngineV2 {
+		return EngineV2
+	}
+	return EngineV1
+}
+
+// V2 reports whether memory v2 is in effect (memoryEngine: "v2").
+func (c Config) V2() bool { return c.Engine() == EngineV2 }
+
+// Consolidates reports whether memory v2 makes its level-1 consolidation
+// request at a compaction: consolidate, true unless set to false.
+func (c Config) Consolidates() bool { return !c.ConsolidateOff }
 
 // TrustState is the host's answer to whether the current project is trusted.
 // Project settings are read only when it is ProjectTrusted; every other value,
@@ -247,6 +279,68 @@ func ResolveSummaryBudget(cfg Config, contextWindow, overheadTokens, retainedTok
 	return budget
 }
 
+// V2SummaryBudgetInputs are what the memory v2 summary budget is derived from
+// (docs/memory-v2.md, "The summary budget"). Every value comes from PiG or the
+// branch; 0 means unknown, except for RemovedTokens and NextRunHeadroom.
+type V2SummaryBudgetInputs struct {
+	// ContextWindow is the session model's context window.
+	ContextWindow int
+	// ReserveTokens is PiG's compaction.reserveTokens from the preparation's
+	// settings (model overrides applied by PiG). 0 or less is unknown, and
+	// PiGDefaultReserveTokens stands in for it.
+	ReserveTokens int
+	// TokensBefore is PiG's estimate of the context before the compaction.
+	TokensBefore int
+	// RemovedTokens is the estimate of what the compaction removes: the cut
+	// range plus the previous summary.
+	RemovedTokens int
+	// MaxOutputTokens is the session model's output limit.
+	MaxOutputTokens int
+	// NextRunHeadroom is the largest per-run growth of the context since the
+	// previous compaction (ledger.NextRunHeadroom); 0 without usage.
+	NextRunHeadroom int
+}
+
+// PiGDefaultReserveTokens is PiG's default compaction.reserveTokens (PiG v0.5.1,
+// compaction.DefaultCompactionSettings). ResolveV2SummaryBudget uses it when the
+// preparation carried no reserve: assuming no reserve would raise the threshold
+// bound by the whole reserve and let the next context land above PiG's
+// threshold, so an unknown reserve fails closed to PiG's default. A configured
+// reserve of 0 is read as unknown too, which only makes the budget smaller.
+const PiGDefaultReserveTokens = 16_384
+
+// ResolveV2SummaryBudget is the memory v2 summary budget:
+//
+//	threshold = contextWindow - reserveTokens - tokensBefore + removed - nextRunHeadroom
+//	            (when the window is known; reserveTokens is PiGDefaultReserveTokens when unknown)
+//	budget    = min(threshold, maxOutputTokens when known, removed)
+//	budget    = min(budget, compactionSummaryMaxTokens when set)
+//
+// The threshold bound keeps the next context, and one more run like the
+// largest since the previous compaction, under PiG's own compaction
+// threshold; the headroom belongs to that bound alone. The output bound keeps
+// the summary no larger than one summary output of PiG's, and the removed
+// bound keeps it no larger than what it replaces. A result of 0 or less means
+// the minimal brief.
+func ResolveV2SummaryBudget(cfg Config, in V2SummaryBudgetInputs) int {
+	removed := max(0, in.RemovedTokens)
+	budget := removed
+	if in.ContextWindow > 0 {
+		reserve := in.ReserveTokens
+		if reserve <= 0 {
+			reserve = PiGDefaultReserveTokens
+		}
+		budget = min(budget, in.ContextWindow-reserve-max(0, in.TokensBefore)+removed-max(0, in.NextRunHeadroom))
+	}
+	if in.MaxOutputTokens > 0 {
+		budget = min(budget, in.MaxOutputTokens)
+	}
+	if cfg.CompactionSummaryMaxTokens > 0 {
+		budget = min(budget, cfg.CompactionSummaryMaxTokens)
+	}
+	return budget
+}
+
 // WorkerMemoryFallbackMaxTokens is the worker prior-memory budget when unset and the window is unknown.
 const WorkerMemoryFallbackMaxTokens = 16_000
 
@@ -325,6 +419,19 @@ func isMemoryFormat(v any) (string, bool) {
 	return "", false
 }
 
+func isEngine(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	for _, engine := range EngineValues {
+		if engine == s {
+			return engine, true
+		}
+	}
+	return "", false
+}
+
 func isCompactAfterTokensMode(v any) (CompactAfterTokensMode, bool) {
 	s, ok := v.(string)
 	if !ok {
@@ -372,6 +479,7 @@ type partial struct {
 	catchUp  *int
 	mode     *CompactAfterTokensMode
 	format   *string
+	engine   *string
 	ratio    *float64
 	bools    map[string]bool
 	model    *ConfiguredModel
@@ -417,7 +525,10 @@ func normalizeSettings(value map[string]any) partial {
 	if format, ok := isMemoryFormat(value["memoryFormat"]); ok {
 		p.format = &format
 	}
-	for _, key := range []string{"consolidateWhenIdle", "showWorkerNotifications", "passive", "debugLog", "curatedMemory"} {
+	if engine, ok := isEngine(value["memoryEngine"]); ok {
+		p.engine = &engine
+	}
+	for _, key := range []string{"consolidateWhenIdle", "showWorkerNotifications", "passive", "debugLog", "curatedMemory", "consolidate"} {
 		if b, ok := value[key].(bool); ok {
 			p.bools[key] = b
 		}
@@ -490,6 +601,9 @@ func (p partial) apply(cfg *Config, target *int, targetSet *bool) {
 	if p.format != nil {
 		cfg.MemoryFormat = *p.format
 	}
+	if p.engine != nil {
+		cfg.MemoryEngine = *p.engine
+	}
 	for key, b := range p.bools {
 		switch key {
 		case "consolidateWhenIdle":
@@ -502,6 +616,8 @@ func (p partial) apply(cfg *Config, target *int, targetSet *bool) {
 			cfg.DebugLog = b
 		case "curatedMemory":
 			cfg.CuratedMemory = b
+		case "consolidate":
+			cfg.ConsolidateOff = !b
 		}
 	}
 	if p.model != nil {

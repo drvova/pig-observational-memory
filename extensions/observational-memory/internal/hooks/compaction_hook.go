@@ -153,6 +153,38 @@ type BeforeCompactEvent struct {
 	// asked the summary to carry; appended to the rendered memory (upstream
 	// issue #55).
 	CustomInstructions string
+	// Preparation is the rest of PiG's CompactionPreparation. Memory v2 reads
+	// it; v1 ignores it.
+	Preparation CompactionPreparation
+}
+
+// CompactionPreparation is PiG's CompactionPreparation beyond firstKeptEntryId and
+// tokensBefore, which BeforeCompactEvent carries itself.
+type CompactionPreparation struct {
+	// MessagesToSummarize are the messages PiG would summarize (decoded JSON).
+	MessagesToSummarize []map[string]any
+	// TurnPrefixMessages are the messages of a split turn's kept prefix.
+	TurnPrefixMessages []map[string]any
+	// IsSplitTurn is set when the cut falls inside a turn.
+	IsSplitTurn bool
+	// PreviousSummary is the previous compaction's summary, "" when none.
+	PreviousSummary string
+	// FileOps are the paths read, written and edited in the summarized range.
+	FileOps CompactionFileOps
+	// Settings are PiG's compaction settings, with model overrides applied.
+	Settings CompactionSettings
+}
+
+// CompactionFileOps are PiG's FileOperations, each set as a sorted path list.
+type CompactionFileOps struct {
+	Read, Written, Edited []string
+}
+
+// CompactionSettings are PiG's CompactionSettings.
+type CompactionSettings struct {
+	Enabled          bool
+	ReserveTokens    int
+	KeepRecentTokens int
 }
 
 // CompactionResult is the extension-provided compaction.
@@ -161,16 +193,23 @@ type CompactionResult struct {
 	FirstKeptEntryID string
 	TokensBefore     int
 	Details          ledger.MemoryDetails
+	// Usage is the provider usage of the request that built the summary, in Pi's Usage
+	// shape; nil when no request did (v1, and memory v2's level 0).
+	Usage map[string]any
 }
 
 // ToMap is the result in Pi's CompactionResult wire shape.
 func (r CompactionResult) ToMap() map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"summary":          r.Summary,
 		"firstKeptEntryId": r.FirstKeptEntryID,
 		"tokensBefore":     r.TokensBefore,
 		"details":          r.Details,
 	}
+	if r.Usage != nil {
+		result["usage"] = r.Usage
+	}
+	return result
 }
 
 // BeforeCompactOutcome is the hook's answer: cancel, own the compaction, or
@@ -202,14 +241,30 @@ func debugScope(rt *runtime.Runtime, h host.Host) debuglog.Context {
 }
 
 // HandleBeforeCompact is the session_before_compact handler. ctx carries the
-// event's cancellation.
+// event's cancellation, for v1 and v2 alike (HandleBeforeCompactRequest).
 func HandleBeforeCompact(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) BeforeCompactOutcome {
+	return HandleBeforeCompactRequest(ctx, ctx, rt, h, event)
+}
+
+// HandleBeforeCompactRequest is the session_before_compact handler with its two
+// cancellations apart: signal is the agent run's (v1 stops its catch-up on it),
+// request is the session_before_compact request's own. Memory v2 reads only
+// request (handleCompactionV2): a manual /compact aborts the run, never the
+// request.
+func HandleBeforeCompactRequest(signal, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) BeforeCompactOutcome {
+	rt.EnsureConfig(h)
+	if rt.Config().V2() {
+		return handleBeforeCompactV2(request, rt, h, event)
+	}
+	return handleBeforeCompactV1(signal, rt, h, event)
+}
+
+func handleBeforeCompactV1(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) BeforeCompactOutcome {
 	if !rt.TryEnterCompactHook() {
 		notifyUI(h, "Observational memory: another compaction is already in progress; cancelling duplicate", "warning")
 		return BeforeCompactOutcome{Cancel: true}
 	}
 	defer rt.LeaveCompactHook()
-	rt.EnsureConfig(h)
 	return handleCompaction(debuglog.With(ctx, debugScope(rt, h)), rt, h, event)
 }
 

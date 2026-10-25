@@ -236,6 +236,16 @@ func finiteNumber(v any) (float64, bool) {
 	return 0, false
 }
 
+// UsageNumber reads one provider usage count as an int: 0 and false when it is not a
+// finite number.
+func UsageNumber(v any) (int, bool) {
+	n, ok := finiteNumber(v)
+	if !ok {
+		return 0, false
+	}
+	return int(n), true
+}
+
 // ContextTokensFromUsage reads provider-reported context size: totalTokens
 // when positive, else the sum of the four components when all are numbers.
 func ContextTokensFromUsage(usage any) (int, bool) {

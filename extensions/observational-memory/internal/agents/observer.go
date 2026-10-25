@@ -49,6 +49,9 @@ type WorkerArgs struct {
 	// ReplaceSeed puts Instructions in place of the seed instructions (an instructions
 	// definition in layer.ModeReplace) instead of after them.
 	ReplaceSeed bool
+	// Engine is the memory engine in effect (config.Config.Engine), reported with each of the
+	// run's requests (RequestEvent).
+	Engine string
 }
 
 // system is the stage's system prompt: the kernel's fixed rules (textID), the stage's
@@ -76,6 +79,7 @@ func (a WorkerArgs) loopConfig(stage string) LoopConfig {
 		MaxTokens:     a.MaxOutputTokens,
 		ThinkingLevel: level,
 		MaxTurns:      a.MaxTurns,
+		Engine:        a.Engine,
 	}
 }
 

@@ -111,6 +111,9 @@ type MemoryDetails struct {
 	// Aliases are the subject aliases folded through the boundary (Projection.Aliases), so
 	// the compacted memory keeps grouping as the ledger did; none for a memory without any.
 	Aliases []SubjectAlias `json:"aliases,omitempty"`
+	// Engine is the memory engine that wrote the compaction ("v2"); "" for v1. A v2
+	// compaction keeps PiG's cut, so its fold boundary is its firstKeptEntryId.
+	Engine string `json:"engine,omitempty"`
 }
 
 // IsRelevance reports whether v is a relevance level.
