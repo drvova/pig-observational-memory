@@ -48,6 +48,9 @@ func runWrite(env Env, q *Query) (text, notify string, err error) {
 	if call.Evidence == nil {
 		call.Evidence = func(quote string) bool { return quotedInConversation(env.Entries, quote, env.memoryTools()) }
 	}
+	if call.UserEvidence == nil {
+		call.UserEvidence = func(quote string) bool { return quotedByUser(env.Entries, quote, env.memoryTools()) }
+	}
 	text, err = call.Run(op, q.Args)
 	if err != nil {
 		return "", "", err
@@ -63,10 +66,25 @@ func runWrite(env Env, q *Query) (text, notify string, err error) {
 // injected text), nor are the calls of the memory tools in skip, the current feedback among
 // them.
 func quotedInConversation(entries []session.Entry, quote string, skip []string) bool {
+	return quotedIn(entries, quote, skip, false, serialize.HistoryUser, serialize.HistoryAssistant)
+}
+
+// quotedByUser reports whether quote, whitespace collapsed and case ignored, is in a user
+// message on the branch: memory v2's confirmation of a save and its evidence for a staged
+// memory (docs/memory-v2.md, "Curated memory"). The assistant's words confirm nothing, nor
+// does harness markup in a user message (an attached file, a reminder): it reads the text
+// memory v2's history reads (historyText).
+func quotedByUser(entries []session.Entry, quote string, skip []string) bool {
+	return quotedIn(entries, quote, skip, true, serialize.HistoryUser)
+}
+
+// quotedIn reports whether quote is in a message on the branch whose role is one of roles;
+// v2 reads it as memory v2's history does.
+func quotedIn(entries []session.Entry, quote string, skip []string, v2 bool, roles ...string) bool {
 	needle := strings.ToLower(strings.Join(strings.Fields(quote), " "))
 	for _, entry := range entries {
-		role, text, ok := serialize.HistoryText(entry, skip...)
-		if !ok || (role != serialize.HistoryUser && role != serialize.HistoryAssistant) {
+		role, text, ok := historyText(entry, v2, skip)
+		if !ok || !contains(roles, role) {
 			continue
 		}
 		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), needle) {

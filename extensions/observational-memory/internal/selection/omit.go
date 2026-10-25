@@ -5,12 +5,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 )
 
 // OffPathLabel follows an entry id that is not on the current branch (docs/memory-v2.md,
 // "Branches"): the id names where the record came from, but no range query can start there.
-const OffPathLabel = " (off-path)"
+const OffPathLabel = memquery.OffPathLabel
 
 // spanRow is one row of the omitted table: a span of records left out (or several, folded),
 // with its date range, record count, first and last entry id and the query that lists it.
@@ -383,4 +384,63 @@ func queryWord(id string) string {
 		return id
 	}
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(id) + `"`
+}
+
+// SpansInput is a memory some of whose records are listed elsewhere (the level-1 input's
+// current memory), for OmittedSpans to write the rest as omitted spans.
+type SpansInput struct {
+	// Reflections and Observations are every active record of the memory, in ledger order: the
+	// records a span's query counts.
+	Reflections  []ledger.Reflection
+	Observations []ledger.Observation
+	// Listed are the ids of the records shown, or accounted for elsewhere: they break spans and
+	// are never counted as omitted.
+	Listed map[string]bool
+	// Folded is the branch's whole ledger and Branch the current branch, which place every
+	// record (ledger.ObservationAnchor).
+	Folded ledger.FoldedLedger
+	Branch []ledger.Entry
+	// Room is what the spans may cost, in estimated tokens.
+	Room int
+}
+
+// Spans are the omitted spans of a memory, one line each.
+type Spans struct {
+	// Lines are the span rows as the lines format prints them (date range, count, first and last
+	// entry id, query), then the capped files and commits lists' ends (+N more and the queries
+	// that list the whole list).
+	Lines []string
+	// Queries are every memory query Lines print, in order.
+	Queries []string
+	// Records counts the records left out.
+	Records int
+}
+
+// OmittedSpans writes the records of in that are not listed as Render writes what a summary
+// leaves out: runs of left-out records in branch order, each with the positional memory query
+// that lists it (by date for off-path records), files and commits as the ends of their lists,
+// the oldest runs folded when the lines do not fit in.Room. ok is false when even the most
+// folded layout does not fit; need is then what it costs.
+func OmittedSpans(in SpansInput) (spans Spans, need int, ok bool) {
+	s := newState(Input{Reflections: in.Reflections, Observations: in.Observations, Folded: in.Folded, Branch: in.Branch, Format: ledger.FormatLines, ReflectionDates: ledger.ReflectionDateRanges(in.Folded)})
+	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}}
+	for _, it := range s.items {
+		if in.Listed[it.id()] {
+			p.on[it] = true
+		}
+	}
+	o, need, ok := s.omissions(p, in.Room)
+	if !ok {
+		return Spans{}, need, false
+	}
+	spans = Spans{Lines: []string{}, Queries: o.queries(), Records: o.records}
+	for _, r := range o.rows {
+		spans.Lines = append(spans.Lines, omittedLine(r))
+	}
+	for _, group := range []string{groupFiles, groupCommits} {
+		if t, has := o.tails[group]; has {
+			spans.Lines = append(spans.Lines, group+": "+tailText(t))
+		}
+	}
+	return spans, 0, true
 }

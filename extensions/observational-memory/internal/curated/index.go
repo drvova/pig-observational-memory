@@ -28,10 +28,12 @@ func rankOf(t string) int {
 	return len(Types)
 }
 
-// Rank orders memories for the index: user and feedback memories first, then
-// by evidence (each helped sighting counts three, each view one, each harmed
-// sighting minus three), then the most recently updated. A memory never cools:
-// age does not lower it, only evidence does.
+// Rank orders memories for the index: a memory a correction flagged since its
+// last edit (Evidence.Corrected, memory v2) after every other, unless the user
+// pinned it (a correction never touches a pinned memory), then user and
+// feedback memories first, then by evidence (each helped sighting counts three,
+// each view one, each harmed sighting minus three), then the most recently
+// updated. A memory never cools: age does not lower it, only evidence does.
 func Rank(memories []Memory, usage map[string]Evidence) []Memory {
 	out := append([]Memory{}, memories...)
 	operator := func(m Memory) bool { return m.Type == TypeUser || m.Type == TypeFeedback }
@@ -41,6 +43,9 @@ func Rank(memories []Memory, usage map[string]Evidence) []Memory {
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
+		if fa, fb := Flagged(a, usage[a.Name]), Flagged(b, usage[b.Name]); fa != fb {
+			return fb
+		}
 		if operator(a) != operator(b) {
 			return operator(a)
 		}
@@ -57,6 +62,11 @@ func Rank(memories []Memory, usage map[string]Evidence) []Memory {
 	})
 	return out
 }
+
+// Flagged reports whether a correction flagged m since its last save or edit
+// (Evidence.Corrected) and the user has not pinned it, which a correction never
+// touches.
+func Flagged(m Memory, e Evidence) bool { return e.Corrected > 0 && !m.Pinned }
 
 func estimateTokens(text string) int { return (jsfmt.UTF16Len(text) + 3) / 4 }
 
@@ -175,12 +185,33 @@ const EmptyIndex = IndexHeader + "\n\nNo memories saved yet."
 
 // IndexFor renders the index of the memories that apply in project, ranked by
 // the store's usage evidence, within budgetTokens; EmptyIndex when there are
-// none.
+// none. A staged memory is left out until evidence promotes it (Store.Settle).
 func IndexFor(store Store, project string, budgetTokens int) (string, []string) {
-	memories, err := store.List(project)
+	listed, err := store.List(project)
+	memories := []Memory{}
+	for _, m := range listed {
+		if !m.Staged {
+			memories = append(memories, m)
+		}
+	}
 	if err != nil || len(memories) == 0 {
 		return EmptyIndex, nil
 	}
-	usage, _ := store.Usage()
-	return RenderIndex(Rank(memories, usage), budgetTokens)
+	return RenderIndex(Rank(memories, store.RankUsage()), budgetTokens)
+}
+
+// RankUsage is the usage evidence Rank orders this store's memories by. The store under
+// PiG's config root is shared by every session whatever its engine, so under v1 the
+// corrected events a memory v2 session recorded are left out: a v1 index ranks as it did
+// before memory v2.
+func (s Store) RankUsage() map[string]Evidence {
+	usage, _ := s.Usage()
+	if s.V2 {
+		return usage
+	}
+	for name, e := range usage {
+		e.Corrected = 0
+		usage[name] = e
+	}
+	return usage
 }

@@ -106,6 +106,11 @@ type Observation struct {
 	// Origin is who wrote the record under memory v2 (OriginCode, OriginModel); "" for a
 	// record a v1 worker wrote.
 	Origin string `json:"origin,omitempty"`
+	// FromUser marks a level-1 merge whose sources all stood for the user's own corrections or
+	// preferences (UserPriority): its text is the model's (Origin model), its basis the user's,
+	// so selection keeps its user class. Code sets it from the sources, never from the model's
+	// output.
+	FromUser bool `json:"fromUser,omitempty"`
 	// Outcome is an attempt record's outcome (OutcomeFailed, OutcomeWorked, OutcomeOpen).
 	Outcome string `json:"outcome,omitempty"`
 	// Tool is the tool an attempt record's call used.
@@ -113,6 +118,53 @@ type Observation struct {
 	// Target is what a code record is about: an attempt's command or path, a file record's
 	// path, a commit's hash, a note's name.
 	Target string `json:"target,omitempty"`
+	// EventDate is the one absolute date (YYYY-MM-DD) the record's own relative date phrases
+	// resolve to (EventDate), apart from Timestamp, when it was said; "" when the record names
+	// none, or more than one. Memory v2's level 0 sets it.
+	EventDate string `json:"eventDate,omitempty"`
+	// Status is how the record was stated (StatusValues): planned, conditional, or a retraction
+	// of the records it supersedes; "" means stated as fact. Memory v2's level 0 sets it from
+	// fixed wording.
+	Status string `json:"status,omitempty"`
+	// PossiblyUpdates are the ids of earlier records on the same subject and scope whose value
+	// of one specific type this record gives differently (UpdatesSpecific): code cannot tell an
+	// update from a second value of another property, so the link never drops anything.
+	PossiblyUpdates []string `json:"possiblyUpdates,omitempty"`
+	// Conflicts are the ids of earlier records on the same subject sharing a specific that
+	// exactly one side negates (NegationConflict). It never drops or supersedes anything.
+	Conflicts []string `json:"conflicts,omitempty"`
+}
+
+// The statuses of a record (Observation.Status), which memory v2's level 0 reads from fixed
+// wording (docs/memory-v2.md, "Status by explicit construction").
+const (
+	// StatusProposed is a record stated as a plan: not done.
+	StatusProposed = "proposed"
+	// StatusHypothetical is a record stated under a condition: not known to hold.
+	StatusHypothetical = "hypothetical"
+	// StatusRetracted is an explicit retraction: the records it supersedes are withdrawn, and
+	// read as retracted (RetractedIDs).
+	StatusRetracted = "retracted"
+)
+
+// StatusValues are the valid record statuses.
+var StatusValues = []string{StatusProposed, StatusHypothetical, StatusRetracted}
+
+// UserPriority reports whether a record stands for the user's own correction or preference,
+// which memory v2's selection takes before other records (docs/memory-v2.md, "Selection", class
+// 2): a correction or preference no model wrote (level 0 picks them from user messages only),
+// or a level-1 merge of only such records (FromUser). A kind a model chose never claims it.
+//
+// A retraction (StatusRetracted) never holds it: it withdraws other records rather than giving a
+// value of its own.
+func UserPriority(o Observation) bool {
+	if o.Status == StatusRetracted {
+		return false
+	}
+	if o.FromUser {
+		return true
+	}
+	return (o.Kind == "correction" || o.Kind == "preference") && o.Origin != OriginModel
 }
 
 // Reflection is a durable conclusion distilled from observations.
@@ -131,6 +183,10 @@ type Reflection struct {
 type ObservationsRecordedData struct {
 	Observations []Observation `json:"observations"`
 	CoversUpToID string        `json:"coversUpToId"`
+	// Consolidated marks the records memory v2's level 1 wrote at a compaction: what they say
+	// was judged then, not when their sources were said, so the point-in-time view holds them
+	// only from where they were recorded (ConsolidatedObservationIDs).
+	Consolidated bool `json:"consolidated,omitempty"`
 }
 
 // ReflectionsRecordedData is an om.reflections.recorded payload.
@@ -190,6 +246,14 @@ type ConsolidationReport struct {
 	Aliases     int `json:"aliases,omitempty"`
 	Dropped     int `json:"dropped,omitempty"`
 	Refused     int `json:"refused,omitempty"`
+	// Confirmed and Rejected count the possible updates level 1 settled: a confirmed one became a
+	// supersede, a rejected one was removed.
+	Confirmed int `json:"confirmed,omitempty"`
+	Rejected  int `json:"rejected,omitempty"`
+	// Cited counts the curated memories level 1 cited (evidence for a staged one), and Promoted
+	// the staged memories the citations made live.
+	Cited    int `json:"cited,omitempty"`
+	Promoted int `json:"promoted,omitempty"`
 }
 
 // Level is the compaction's level: 1 when the level-1 output was applied, else 0.
@@ -367,6 +431,7 @@ func ObservationFrom(v any) (Observation, bool) {
 	}
 	observation.Origin, _ = m["origin"].(string)
 	observation.Outcome, _ = m["outcome"].(string)
+	observation.FromUser, _ = m["fromUser"].(bool)
 	observation.Tool, _ = m["tool"].(string)
 	observation.Target, _ = m["target"].(string)
 	if subject, ok := m["subject"].(string); ok {
@@ -375,6 +440,14 @@ func ObservationFrom(v any) (Observation, bool) {
 	if scope, ok := m["scope"].(string); ok {
 		observation.Scope = NormalizeScope(scope)
 	}
+	if date, ok := m["eventDate"].(string); ok && isISODate(date) {
+		observation.EventDate = date
+	}
+	if status, ok := m["status"].(string); ok && slicesContains(StatusValues, status) {
+		observation.Status = status
+	}
+	observation.PossiblyUpdates = observation.linkIDs(m["possiblyUpdates"])
+	observation.Conflicts = observation.linkIDs(m["conflicts"])
 	// Each supersedes element is checked on its own, so one bad element drops
 	// only itself.
 	switch list := m["supersedes"].(type) {
@@ -415,6 +488,42 @@ func (observation *Observation) addSupersedes(v any) {
 		}
 	}
 	observation.Supersedes = append(observation.Supersedes, id)
+}
+
+// linkIDs reads a list of record ids leniently, as addSupersedes reads supersedes: an element
+// that is not a memory id, the record's own id, or a repeat drops only itself; nil for none.
+func (observation *Observation) linkIDs(v any) []string {
+	var out []string
+	add := func(raw any) {
+		id, ok := raw.(string)
+		if ok && IsMemoryID(id) && id != observation.ID && !slicesContains(out, id) {
+			out = append(out, id)
+		}
+	}
+	switch list := v.(type) {
+	case []string:
+		for _, id := range list {
+			add(id)
+		}
+	case []any:
+		for _, id := range list {
+			add(id)
+		}
+	}
+	return out
+}
+
+// isISODate reports a YYYY-MM-DD date.
+func isISODate(s string) bool {
+	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if i != 4 && i != 7 && (s[i] < '0' || s[i] > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // IsObservation reports a valid decoded observation.
@@ -500,7 +609,8 @@ func ObservationsRecordedDataFrom(v any) (ObservationsRecordedData, bool) {
 	if !ok || !IsNonEmptyString(m["coversUpToId"]) {
 		return ObservationsRecordedData{}, false
 	}
-	return ObservationsRecordedData{Observations: observations, CoversUpToID: m["coversUpToId"].(string)}, true
+	consolidated, _ := m["consolidated"].(bool)
+	return ObservationsRecordedData{Observations: observations, CoversUpToID: m["coversUpToId"].(string), Consolidated: consolidated}, true
 }
 
 // IsObservationsRecordedData reports a valid decoded payload.
@@ -682,6 +792,8 @@ func consolidationReportFrom(v any) *ConsolidationReport {
 	}
 	report.Records, report.Merges, report.Reflections = count("records"), count("merges"), count("reflections")
 	report.Aliases, report.Dropped, report.Refused = count("aliases"), count("dropped"), count("refused")
+	report.Confirmed, report.Rejected = count("confirmed"), count("rejected")
+	report.Cited, report.Promoted = count("cited"), count("promoted")
 	return report
 }
 

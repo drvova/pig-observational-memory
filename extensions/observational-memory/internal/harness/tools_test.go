@@ -478,3 +478,43 @@ func TestRegisterStoredReportsRefusedMigration(t *testing.T) {
 		t.Fatalf("status %s", status)
 	}
 }
+
+// Under memoryEngine v2 the memory tool's recall lists the reflections citing a note
+// (memquery.Env.CitedBy); under v1 recall reads back as before.
+func TestRunMemoryCitedByUnderV2(t *testing.T) {
+	h, _, m := session(t, tf.ReflectionsRecordedEntry("rf", []ledger.Reflection{tf.Reflection("ffffffffff01", []string{obsBake}, func(r *ledger.Reflection) {
+		r.Content = "User bakes sourdough."
+	})}, "u1"))
+	cfg := config.Defaults
+	m.Config = func(host.ToolHost) config.Config { return cfg }
+	if r := m.RunMemory(h, "recall "+obsBake); r.IsError || len(r.Details.CitedBy) != 0 {
+		t.Fatalf("v1 recall: %+v", r)
+	}
+	cfg.MemoryEngine = config.EngineV2
+	if r := m.RunMemory(h, "recall "+obsBake); r.IsError || len(r.Details.CitedBy) != 1 || !strings.Contains(r.Text, "[ffffffffff01] User bakes sourdough.") {
+		t.Fatalf("v2 recall: %s %+v", r.Text, r.Details.CitedBy)
+	}
+}
+
+// Under memoryEngine v2 a defined tool runs its query as the memory tool does (memquery.Env.V2):
+// its history leaves out the current turn, so the request that called it is never its own hit.
+func TestRunDefinedUnderV2(t *testing.T) {
+	h, _, m := session(t, tf.RawMessage("u2", "Which sourdough day did I name?"))
+	cfg := config.Defaults
+	m.Config = func(host.ToolHost) config.Config { return cfg }
+	define(t, h, m, `define find-history = history | search $input "Search the history"`)
+	ids := func() string {
+		r := m.RunDefined(h, "find-history", "sourdough")
+		if r.IsError {
+			t.Fatalf("defined tool: %s", r.Text)
+		}
+		return r.Text
+	}
+	if text := ids(); !strings.Contains(text, "u2") {
+		t.Fatalf("v1 history lists the current turn as before: %s", text)
+	}
+	cfg.MemoryEngine = config.EngineV2
+	if text := ids(); strings.Contains(text, "u2") || !strings.Contains(text, "u1") {
+		t.Fatalf("v2 history leaves the current turn out: %s", text)
+	}
+}

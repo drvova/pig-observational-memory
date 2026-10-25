@@ -319,6 +319,11 @@ func SerializeConversation(messages []map[string]any, skipTools ...string) strin
 // MaxRecordContentChars bounds a recorded observation or reflection.
 const MaxRecordContentChars = 10_000
 
+// RecallPageChars is the most one recall shows (docs/memory-v2.md, "Memory tool"): a record's
+// content bound, the largest text recall <id> returns for one record. Under memory v2,
+// recall <entry id> pages a longer entry at this size, and a curated memory must fit it whole.
+const RecallPageChars = MaxRecordContentChars
+
 // TruncateRecordContent keeps the first MaxRecordContentChars characters.
 func TruncateRecordContent(content string) string {
 	length := jsfmt.UTF16Len(content)
@@ -554,7 +559,7 @@ func SerializeSourceAddressedBranchEntries(entries []session.Entry, options Sour
 	}
 }
 
-func renderRecallMessage(entry session.Entry) (string, bool) {
+func renderRecallMessage(entry session.Entry, thinking bool) (string, bool) {
 	msg := entry.Message
 	if msg == nil {
 		return "", false
@@ -564,7 +569,7 @@ func renderRecallMessage(entry session.Entry) (string, bool) {
 	case "user":
 		return "[User @ " + timestamp + "]: " + textAndPlaceholders(msg["content"], placeholderOptions{}), true
 	case "assistant":
-		body := nonEmptyLines(textAndPlaceholders(msg["content"], placeholderOptions{includeThinking: true, omitRedactedThinking: true}))
+		body := nonEmptyLines(textAndPlaceholders(msg["content"], placeholderOptions{includeThinking: thinking, omitRedactedThinking: true}))
 		if body == "" {
 			return "", false
 		}
@@ -580,9 +585,62 @@ func renderRecallMessage(entry session.Entry) (string, bool) {
 
 // RenderRecallSourceEntry renders one source entry for recall <id>.
 func RenderRecallSourceEntry(entry session.Entry) (string, bool) {
+	return renderRecallSourceEntry(entry, true)
+}
+
+// RenderRecallSourceEntryText renders one source entry for memory v2's recall <entry id>: as
+// RenderRecallSourceEntry, with thinking left out, as extraction and history leave it out
+// (docs/memory-v2.md, "Memory tool").
+func RenderRecallSourceEntryText(entry session.Entry) (string, bool) {
+	return renderRecallSourceEntry(entry, false)
+}
+
+// WithoutThinking is entries with every thinking block taken out of their messages' content,
+// as memory v2's recall reads them (docs/memory-v2.md, "Memory tool": thinking is never matched,
+// counted or returned). Entries without thinking are returned as they are; the others are
+// copied, never changed in place.
+func WithoutThinking(entries []session.Entry) []session.Entry {
+	var out []session.Entry
+	for i, entry := range entries {
+		blocks, ok := entry.Message["content"].([]any)
+		if entry.Type != "message" || !ok || !slices.ContainsFunc(blocks, isThinkingBlock) {
+			if out != nil {
+				out = append(out, entry)
+			}
+			continue
+		}
+		if out == nil {
+			out = append(make([]session.Entry, 0, len(entries)), entries[:i]...)
+		}
+		kept := make([]any, 0, len(blocks))
+		for _, block := range blocks {
+			if !isThinkingBlock(block) {
+				kept = append(kept, block)
+			}
+		}
+		message := make(map[string]any, len(entry.Message))
+		for k, v := range entry.Message {
+			message[k] = v
+		}
+		message["content"] = kept
+		entry.Message = message
+		out = append(out, entry)
+	}
+	if out == nil {
+		return entries
+	}
+	return out
+}
+
+func isThinkingBlock(raw any) bool {
+	block, ok := raw.(map[string]any)
+	return ok && block["type"] == "thinking"
+}
+
+func renderRecallSourceEntry(entry session.Entry, thinking bool) (string, bool) {
 	switch entry.Type {
 	case "message":
-		return renderRecallMessage(entry)
+		return renderRecallMessage(entry, thinking)
 	case "custom_message":
 		return renderCustomMessage(entry, true), true
 	case "branch_summary":

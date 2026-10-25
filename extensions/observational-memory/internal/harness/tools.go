@@ -47,6 +47,12 @@ func NewManager(resolve func(h host.ToolHost) (curated.Call, bool)) *Manager {
 	return &Manager{Resolve: resolve, registered: map[string]bool{}, deactivated: map[string]bool{}}
 }
 
+// v2 reports whether the call runs under memoryEngine v2, whose memory tool additions (recall's
+// cited_by) the call then gets; false without Config.
+func (m *Manager) v2(h host.ToolHost) bool {
+	return m.Config != nil && m.Config(h).V2()
+}
+
 func (m *Manager) resolve(h host.ToolHost) (curated.Call, bool) {
 	if m.Resolve == nil {
 		return curated.Call{}, false
@@ -146,7 +152,8 @@ func (m *Manager) RunMemory(h host.ToolHost, query string) memquery.Result {
 	}
 	call, on := m.resolve(h)
 	profile, ledger, counted := profileOf(h, call, on)
-	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), DefinedTools: m.Registered()}
+	v2 := m.v2(h)
+	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), DefinedTools: m.Registered(), CitedBy: v2, V2: v2, SessionEntries: sessionEntries(h, v2)}
 	var before map[string]Standing
 	if on {
 		env.Saved = &call
@@ -430,6 +437,23 @@ func (m *Manager) DefinedToolSpec(d curated.Definition) host.ToolSpec {
 	}
 }
 
+// sessionEntries are every entry of the session file, for memory v2's off-path fallback
+// (docs/memory-v2.md, "Branches"); nil under v1, or when the host cannot read the file.
+func sessionEntries(h host.ToolHost, v2 bool) []ledger.Entry {
+	if !v2 {
+		return nil
+	}
+	reader, ok := h.(host.SessionFileReader)
+	if !ok {
+		return nil
+	}
+	all, err := reader.GetEntries()
+	if err != nil {
+		return nil
+	}
+	return all
+}
+
 // errDefinedRefused marks a defined tool call refused before it ran.
 var errDefinedRefused = errors.New("refused")
 
@@ -459,7 +483,8 @@ func (m *Manager) RunDefined(h host.ToolHost, name, input string) memquery.Resul
 		return fail(err)
 	}
 	profile, ledger, counted := profileOf(h, call, on)
-	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), Saved: &call, DefinedTools: m.Registered()}
+	v2 := m.v2(h)
+	env := memquery.Env{Entries: entries, Codec: profile.CodecValue(), Saved: &call, DefinedTools: m.Registered(), CitedBy: v2, V2: v2, SessionEntries: sessionEntries(h, v2)}
 	result := memquery.Run(env, memquery.Substitute(d.Query, input))
 	usage, outcome := curated.EventCallOK, curated.OutcomeOK
 	switch {

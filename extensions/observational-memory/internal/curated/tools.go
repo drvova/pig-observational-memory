@@ -26,6 +26,16 @@ type Call struct {
 	// Evidence reports whether a feedback quote (normalized) appears in the conversation;
 	// a feedback whose quote it rejects is refused. Nil accepts any quote.
 	Evidence func(quote string) bool
+	// UserEvidence reports whether a quote (normalized) is a user's words in the conversation:
+	// under memory v2 (Store.V2) a save quoting one is live at once, any other save is staged,
+	// and a helped feedback quoting one is evidence for a staged memory (Store.Settle). Nil
+	// finds no user quote.
+	UserEvidence func(quote string) bool
+}
+
+// userQuoted reports whether quote is a user's words (UserEvidence).
+func (c Call) userQuoted(quote string) bool {
+	return c.UserEvidence != nil && c.UserEvidence(quote)
 }
 
 // The feedback quote's bounds, in characters after whitespace is collapsed.
@@ -66,9 +76,30 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		default:
 			return "", fmt.Errorf("scope %q must be global or project", scope)
 		}
+		if quote, given := args["quote"]; given {
+			normalized, err := NormalizeQuote(quote)
+			if err != nil {
+				return "", errors.New(strings.Replace(err.Error(), "feedback needs", "save's quote needs", 1))
+			}
+			switch {
+			case c.Store.V2 && !c.userQuoted(normalized):
+				return "", errors.New("the quote is not a user's words in this conversation: copy words verbatim from a user message that confirm the memory, or save without quote to stage it")
+			case !c.Store.V2 && c.Evidence != nil && !c.Evidence(normalized):
+				return "", errors.New("the quote is not in this conversation: copy words verbatim from a user or assistant message")
+			}
+		} else if c.Store.V2 {
+			m.Staged = true
+		}
 		saved, err := c.Store.Save(m, c.Source)
 		if err != nil {
 			return "", err
+		}
+		if saved.Staged {
+			text := fmt.Sprintf("Staged memory %s [%s]%s: %s. It shows in saved in this session and stays out of the memory index until evidence confirms it: a user's words (feedback name=%s outcome=helped quote=\"...\"), a compaction citing it, or the same save in another session.", saved.Name, saved.Type, scopeNote(saved), saved.Description, saved.Name)
+			if len(saved.StagedBy) > 1 {
+				text = fmt.Sprintf("Staged memory %s [%s]%s: %s. Another session staged the same memory, which is the evidence to make it live: it enters the memory index at its next render.", saved.Name, saved.Type, scopeNote(saved), saved.Description)
+			}
+			return text, nil
 		}
 		return fmt.Sprintf("Saved memory %s [%s]%s: %s", saved.Name, saved.Type, scopeNote(saved), saved.Description), nil
 	case OpEdit:
@@ -93,7 +124,13 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		}
 		return fmt.Sprintf("Updated memory %s [%s]: %s", m.Name, m.Type, m.Description), nil
 	case OpForget:
-		err := c.Store.Forget(name, c.Project)
+		var err error
+		if m, getErr := c.Store.readIn(name, c.Project); getErr == nil && !SeenBy(m, c.Source) {
+			// A memory another session staged is not this session's to forget.
+			err = ErrNotFound
+		} else {
+			err = c.Store.Forget(name, c.Project)
+		}
 		if errors.Is(err, ErrNotFound) {
 			// A defined query is forgotten by the same write when no memory
 			// holds the name.
@@ -121,16 +158,21 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 			return "", errors.New("the quote is not in this conversation: copy words verbatim from a user or assistant message that show the memory helped or misled you")
 		}
 		key, what := name, "memory"
-		if _, err := c.Store.GetIn(name, c.Project); err != nil {
+		if _, err := c.Store.GetAs(name, c.Project, c.Source); err != nil {
 			if _, defErr := c.Store.GetDefinition(name); !errors.Is(err, ErrNotFound) || defErr != nil {
 				return "", err
 			}
 			key, what = DefinitionUsageKey(name), "defined query"
 		}
-		if err := c.Store.RecordFeedback(key, outcome, quote); err != nil {
+		user := c.Store.V2 && outcome == EventHelped && what == "memory" && c.userQuoted(quote)
+		if err := c.Store.appendUsage(usageLine{Name: key, Event: outcome, Quote: quote, User: user}); err != nil {
 			return "", err
 		}
-		return "Recorded that " + what + " " + name + " " + outcome + ".", nil
+		text := "Recorded that " + what + " " + name + " " + outcome + "."
+		if m, err := c.Store.GetAs(name, c.Project, c.Source); user && err == nil && m.Staged {
+			text += " The quote is a user's words, the evidence a staged memory needs: it goes live at the next check and enters the memory index at its next render."
+		}
+		return text, nil
 	}
 	return "", fmt.Errorf("unknown memory write %q", op)
 }
@@ -142,10 +184,21 @@ func scopeNote(m Memory) string {
 	return ""
 }
 
+// stateNote marks a staged or pinned memory in Describe.
+func stateNote(m Memory) string {
+	switch {
+	case m.Staged:
+		return " (staged)"
+	case m.Pinned:
+		return " (pinned)"
+	}
+	return ""
+}
+
 // Describe renders a memory in full for the memory tool's recall <name>.
 func Describe(m Memory) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s [%s]%s: %s\n", m.Name, m.Type, scopeNote(m), m.Description)
+	fmt.Fprintf(&b, "%s [%s]%s%s: %s\n", m.Name, m.Type, scopeNote(m), stateNote(m), m.Description)
 	if m.Body != "" {
 		b.WriteString("\n" + m.Body + "\n")
 	}

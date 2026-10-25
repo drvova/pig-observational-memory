@@ -432,6 +432,8 @@ type FakeHost struct {
 	BranchQueue    [][]session.Entry
 	branchIndex    int
 	GetBranchCalls int
+	// SessionEntries are the whole session file GetEntries returns; nil means the branch.
+	SessionEntries []session.Entry
 	// Home is PiG's config root ConfigHome reports; "" means none (no store).
 	Home string
 	// Tools is the session's tool registry, Active the active names; RegisterTool adds to
@@ -469,6 +471,16 @@ func (h *FakeHost) GetBranch() ([]session.Entry, error) {
 		idx := min(h.branchIndex, len(h.BranchQueue)-1)
 		h.branchIndex++
 		return append([]session.Entry{}, h.BranchQueue[idx]...), nil
+	}
+	return append([]session.Entry{}, h.Entries...), nil
+}
+
+// GetEntries returns SessionEntries, or the branch when it is nil (host.SessionFileReader).
+func (h *FakeHost) GetEntries() ([]session.Entry, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.SessionEntries != nil {
+		return append([]session.Entry{}, h.SessionEntries...), nil
 	}
 	return append([]session.Entry{}, h.Entries...), nil
 }

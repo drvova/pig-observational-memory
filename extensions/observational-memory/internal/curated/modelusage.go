@@ -148,6 +148,10 @@ type UsageEvent struct {
 	Name  string
 	Event string
 	Quote string
+	// User and Record are the usage line's (usageLine): a helped event quoting a user, and the
+	// record a corrected, cited or promoted event names.
+	User   bool
+	Record string
 }
 
 // UsageEventsByName reads the whole usage ledger once and groups its events by
@@ -181,5 +185,5 @@ func (s Store) UsageEvents(name string) ([]UsageEvent, error) {
 
 func (line usageLine) event() UsageEvent {
 	t, _ := time.Parse(time.RFC3339, line.Time)
-	return UsageEvent{Time: t, Name: line.Name, Event: line.Event, Quote: line.Quote}
+	return UsageEvent{Time: t, Name: line.Name, Event: line.Event, Quote: line.Quote, User: line.User, Record: line.Record}
 }

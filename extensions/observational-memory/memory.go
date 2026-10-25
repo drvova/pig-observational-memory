@@ -1,8 +1,6 @@
 package observationalmemory
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
@@ -43,29 +41,8 @@ func memorySectionText(index string, curatedOn, v2 bool) (text string, set bool)
 // reset at every session_start as well as after a compaction.
 var memoryPin curated.Pin
 
-// projectRoot is the directory a project-scoped memory is filed under: the
-// nearest ancestor of cwd holding .git, else cwd itself, with symlinks
-// resolved, so a session started in a subdirectory sees the project's
-// memories.
-func projectRoot(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
-	dir := filepath.Clean(cwd)
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = resolved
-	}
-	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return d
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return dir
-		}
-		d = parent
-	}
-}
+// projectRoot is the directory a project-scoped memory is filed under (harness.ProjectRoot).
+func projectRoot(cwd string) string { return harness.ProjectRoot(cwd) }
 
 // curatedCall is the store, project and session a memory query acts on, and
 // whether curated memory is on.
@@ -77,6 +54,17 @@ func curatedCall(h host.Host) (curated.Call, config.Config, bool) {
 		return curated.Call{}, cfg, false
 	}
 	return curated.Call{Store: store, Project: projectRoot(h.Cwd()), Source: h.SessionID()}, cfg, true
+}
+
+// settleCurated runs memory v2's curated evidence check (harness.SettleCurated) at
+// session_start and agent_settled: code only, no request. Under v1, or with curated memory off,
+// it does nothing.
+func settleCurated(h host.Host) {
+	call, cfg, on := curatedCall(h)
+	if !on || !cfg.V2() {
+		return
+	}
+	_, _ = harness.SettleCurated(h, call)
 }
 
 // memoryToolSpec is the memory tool with description, run by the harness's manager.
@@ -152,7 +140,15 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	// stored definitions as tools (once per process: the host keeps them).
 	ext.OnEvent(sdk.EventSessionStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		memoryPin.Reset()
-		manager.RegisterStored(sdkhost.New(ctx))
+		h := sdkhost.New(ctx)
+		manager.RegisterStored(h)
+		settleCurated(h)
+		return nil, nil
+	})
+	// Memory v2 checks the evidence for staged memories, and the user corrections that flag
+	// saved ones, when the agent settles; the index is not re-rendered until its next render.
+	ext.OnEvent(sdk.EventAgentSettled, func(ctx sdk.Context, _ map[string]any) (any, error) {
+		settleCurated(sdkhost.New(ctx))
 		return nil, nil
 	})
 	ext.OnEvent(sdk.EventSessionCompact, func(sdk.Context, map[string]any) (any, error) {

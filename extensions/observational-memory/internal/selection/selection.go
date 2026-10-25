@@ -10,6 +10,7 @@
 package selection
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -102,6 +103,9 @@ type item struct {
 	anchored bool
 	// from and to are the item's dates (YYYY-MM-DD, "" when undated).
 	from, to string
+	// status is the record's status as shown (statusOf); links the pointers its line ends
+	// with before its source (linksOf).
+	status, links string
 	// cost is what the item adds to its group; cells or line render it.
 	cost  int
 	cells []string
@@ -194,10 +198,13 @@ type state struct {
 	byID       map[string]*item
 	// records resolves supersede links through every record of the ledger (extract.DropClosure).
 	records map[string]ledger.Observation
+	// partners are, by record id, the active records a possibly_updates or conflicts link joins
+	// it to, either way, in ledger order: taking one tries the others next.
+	partners map[string][]*item
 }
 
 func newState(in Input) *state {
-	s := &state{in: in, positions: ledger.EntryIndexByID(in.Branch), superseded: map[string]bool{}, byID: map[string]*item{}, records: map[string]ledger.Observation{}}
+	s := &state{in: in, positions: ledger.EntryIndexByID(in.Branch), superseded: map[string]bool{}, byID: map[string]*item{}, records: map[string]ledger.Observation{}, partners: map[string][]*item{}}
 	s.l = newLayout(in)
 	for id, o := range in.Folded.ObservationsByID {
 		s.records[id] = o
@@ -251,6 +258,13 @@ func newState(in Input) *state {
 		s.items = append(s.items, it)
 		s.byID[o.ID] = it
 	}
+	retracted := ledger.RetractedIDs(all)
+	for _, it := range s.items {
+		if it.role == roleNote {
+			it.status = statusOf(it.obs, retracted)
+		}
+	}
+	s.link()
 	supersededBy := map[string][]string{}
 	for _, o := range all {
 		for _, id := range o.Supersedes {
@@ -270,6 +284,65 @@ func newState(in Input) *state {
 		s.request = it
 	}
 	return s
+}
+
+// statusOf is a record's status as the summary shows it (docs/memory-v2.md, "Selection"):
+// retracted for a record a retraction withdrew (ledger.RetractedIDs), else its own status, so a
+// plan or a condition is never shown as done.
+func statusOf(o ledger.Observation, retracted map[string]bool) string {
+	if retracted[o.ID] {
+		return ledger.StatusRetracted
+	}
+	return o.Status
+}
+
+// link fills each note's pointers (the recall pointers to what it supersedes, "was"; its
+// unsettled possible updates of active unsuperseded records, "may update"; its conflicts with
+// active records, "conflicts") and the partners each link joins. The pointers depend only on the
+// input, so an item's cost does not change with the choice.
+func (s *state) link() {
+	join := func(a, b *item) {
+		if !slices.Contains(s.partners[a.id()], b) {
+			s.partners[a.id()] = append(s.partners[a.id()], b)
+		}
+	}
+	for _, it := range s.items {
+		if it.role != roleNote {
+			continue
+		}
+		var parts []string
+		var was []string
+		for _, id := range it.obs.Supersedes {
+			if id != it.obs.ID && !slices.Contains(was, id) {
+				was = append(was, id)
+			}
+		}
+		if len(was) > 0 {
+			parts = append(parts, "(was "+strings.Join(was, " ")+")")
+		}
+		pointer := func(label string, ids []string, live func(*item) bool) {
+			var shown []string
+			for _, id := range ids {
+				other := s.byID[id]
+				if other == nil || other == it || other.role == roleReflection || !live(other) {
+					continue
+				}
+				join(it, other)
+				join(other, it)
+				shown = append(shown, id)
+			}
+			if len(shown) > 0 {
+				parts = append(parts, "("+label+" "+strings.Join(shown, " ")+")")
+			}
+		}
+		pointer("may update", it.obs.PossiblyUpdates, func(other *item) bool { return !s.superseded[other.obs.ID] })
+		pointer("conflicts", it.obs.Conflicts, func(*item) bool { return true })
+		it.links = strings.Join(parts, " ")
+	}
+	for id, items := range s.partners {
+		sort.SliceStable(items, func(a, b int) bool { return items[a].index < items[b].index })
+		s.partners[id] = items
+	}
 }
 
 // selected is one choice of items under a budget.
@@ -376,18 +449,25 @@ func (s *state) choose(budget int) *selected {
 		}
 	}
 	records := s.items
+	// Taking a record tries the records its links join it to next, in the same class, which may
+	// still not fit; a class a record may not hold refuses it as a partner too.
 	newestFirst := func(eligible func(*item) bool, roles ...role) {
 		for i := len(records) - 1; i >= 0; i-- {
 			it := records[i]
-			if containsRole(roles, it.role) && eligible(it) {
-				try(it)
+			if !containsRole(roles, it.role) || !eligible(it) || !try(it) {
+				continue
+			}
+			for _, other := range s.partners[it.id()] {
+				if !holdsNoValue(other) || eligible(other) {
+					try(other)
+				}
 			}
 		}
 	}
 	observations := []role{roleNote, roleFile, roleCommit}
 	// 2. Unsuperseded user corrections and preferences.
 	newestFirst(func(it *item) bool {
-		return (it.obs.Kind == "correction" || it.obs.Kind == "preference") && it.obs.Origin != ledger.OriginModel && !s.superseded[it.obs.ID]
+		return ledger.UserPriority(it.obs) && !s.superseded[it.obs.ID] && it.status != ledger.StatusRetracted
 	}, observations...)
 	// 3. Open and failed attempts not resolved by a later one.
 	newestFirst(func(it *item) bool {
@@ -395,7 +475,7 @@ func (s *state) choose(budget int) *selected {
 	}, observations...)
 	// 4. Records carrying specifics no selected line carries.
 	newestFirst(func(it *item) bool {
-		return len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
+		return it.status != ledger.StatusRetracted && len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
 	}, observations...)
 	// 5. Reflections, which drop the records they cite.
 	newestFirst(func(*item) bool { return true }, roleReflection)
@@ -503,6 +583,10 @@ func contains(values []string, value string) bool {
 	}
 	return false
 }
+
+// holdsNoValue reports a record classes 2 and 4 may not hold: a retraction, or a record one
+// withdrew.
+func holdsNoValue(it *item) bool { return it.status == ledger.StatusRetracted }
 
 func containsRole(roles []role, r role) bool {
 	for _, x := range roles {

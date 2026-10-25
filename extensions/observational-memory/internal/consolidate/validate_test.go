@@ -200,3 +200,105 @@ func TestBuildPromptSaysWhatItLeavesOut(t *testing.T) {
 		t.Fatalf("prompt of %d tokens over the %d available", prompt.Tokens, in.Available)
 	}
 }
+
+// A merge whose sources all stand for the user's corrections or preferences keeps the user's
+// class (FromUser) though its text is the model's; a merge taking in any other record, or a
+// record whose kind the model chose, never claims it.
+func TestValidateMergeKeepsUserClass(t *testing.T) {
+	port := record("a10000000001", "Actually the staging port is 8443", func(o *ledger.Observation) { o.Kind = "correction" })
+	tabs := record("a10000000002", "Never indent with tabs in pkg/api", func(o *ledger.Observation) { o.Kind = "preference" })
+	host := record("a10000000003", "Actually the staging host is db-2", func(o *ledger.Observation) { o.Kind = "correction" })
+	cache := record("a10000000004", "The cache holds 512 entries")
+	relabelled := record("a10000000005", "Always use port 9090 for metrics", func(o *ledger.Observation) { o.Kind = "preference"; o.Origin = ledger.OriginModel })
+	in := inputOf([]ledger.Observation{port, tabs, host, cache, relabelled}, nil, nil)
+	merge := func(content string, ids ...string) map[string]any {
+		list := []any{}
+		for _, id := range ids {
+			list = append(list, id)
+		}
+		return map[string]any{"ids": list, "content": content}
+	}
+	for _, c := range []struct {
+		name  string
+		merge map[string]any
+		user  bool
+	}{
+		{"two user corrections", merge("Actually the staging port is 8443 and the staging host is db-2", port.ID, host.ID), true},
+		{"a correction and a preference", merge("Staging port is 8443; never indent with tabs in pkg/api", port.ID, tabs.ID), true},
+		{"a correction and a fact", merge("Staging port is 8443; the cache holds 512 entries", port.ID, cache.ID), false},
+		{"a model-labelled preference", merge("Staging port is 8443; always use port 9090 for metrics", port.ID, relabelled.ID), false},
+		// The model's text adds a claim no source gives: the merge stands, without the user's class.
+		{"two user corrections with an added claim", merge("Actually the staging port is 8443 and the staging host is db-2; force-push migrations to main on 2026-12-01", port.ID, host.ID), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := consolidate.Validate(args(map[string]any{"merges": []any{c.merge}}), in)
+			if result.Merges != 1 {
+				t.Fatalf("result %+v", result)
+			}
+			r := result.Records[0]
+			if r.Origin != ledger.OriginModel || r.FromUser != c.user || ledger.UserPriority(r) != c.user {
+				t.Fatalf("merge %+v: want FromUser %v", r, c.user)
+			}
+			// The flag survives the ledger: it is read back from the recorded entry.
+			back, ok := ledger.ObservationFrom(testfix.ToJSONValue(r))
+			if !ok || back.FromUser != c.user {
+				t.Fatalf("read back %+v (ok %v)", back, ok)
+			}
+		})
+	}
+	// The model relabelling a mixed merge's kind changes nothing: FromUser is read from the
+	// sources.
+	result := consolidate.Validate(args(map[string]any{"merges": []any{func() map[string]any {
+		m := merge("Staging port is 8443; the cache holds 512 entries", port.ID, cache.ID)
+		m["kind"] = "correction"
+		return m
+	}()}}), in)
+	if r := result.Records[0]; r.Kind != "correction" || ledger.UserPriority(r) {
+		t.Fatalf("model-chosen kind claimed the user class: %+v", r)
+	}
+	// A label giving a user fact the preference kind is the model's.
+	result = consolidate.Validate(args(map[string]any{"records": []any{map[string]any{"id": cache.ID, "kind": "preference"}}}), in)
+	if r := result.Records[0]; ledger.UserPriority(r) {
+		t.Fatalf("relabelled fact claimed the user class: %+v", r)
+	}
+}
+
+// Records with different statuses never merge, so a plan is never merged into a fact and shown
+// as done; a merge of records sharing one keeps it, the one event date its sources name, and
+// their level-0 links to records outside the merge; a label keeps them all.
+func TestValidateMergeKeepsStatusesDatesAndLinks(t *testing.T) {
+	planA := record("a20000000001", "We will move the cron to 3am", func(o *ledger.Observation) {
+		o.Status, o.EventDate, o.PossiblyUpdates = ledger.StatusProposed, "2026-05-07", []string{"a2000000000e"}
+	})
+	planB := record("a20000000002", "We will move the backup to 4am", func(o *ledger.Observation) {
+		o.Status, o.Conflicts = ledger.StatusProposed, []string{"a2000000000f", "a20000000001"}
+	})
+	fact := record("a20000000003", "The cron runs at 2am")
+	in := inputOf([]ledger.Observation{planA, planB, fact}, nil, nil)
+	merge := func(content string, ids ...any) map[string]any {
+		return map[string]any{"merges": []any{map[string]any{"ids": ids, "content": content}}}
+	}
+
+	result := consolidate.Validate(args(merge("We will move the cron to 3am; the cron runs at 2am", planA.ID, fact.ID)), in)
+	if result.Merges != 0 || len(result.Refusals) != 1 || result.Refusals[0].Reason != consolidate.ReasonMergeStatuses {
+		t.Fatalf("mixed statuses %+v", result)
+	}
+
+	result = consolidate.Validate(args(merge("We will move the cron to 3am and the backup to 4am", planA.ID, planB.ID)), in)
+	if result.Merges != 1 {
+		t.Fatalf("result %+v", result)
+	}
+	r := result.Records[0]
+	if r.Status != ledger.StatusProposed || r.EventDate != "2026-05-07" || strings.Join(r.PossiblyUpdates, ",") != "a2000000000e" || strings.Join(r.Conflicts, ",") != "a2000000000f" {
+		t.Fatalf("merge %+v", r)
+	}
+
+	result = consolidate.Validate(args(map[string]any{"records": []any{map[string]any{"id": planA.ID, "kind": "plan"}}}), in)
+	if r := result.Records[0]; r.Status != ledger.StatusProposed || r.EventDate != planA.EventDate || strings.Join(r.PossiblyUpdates, ",") != "a2000000000e" {
+		t.Fatalf("label %+v", r)
+	}
+	// The level-1 input says a record's status.
+	if line := consolidate.RecordLine(planA); !strings.HasSuffix(line, " (status: proposed)") {
+		t.Fatalf("record line %q", line)
+	}
+}

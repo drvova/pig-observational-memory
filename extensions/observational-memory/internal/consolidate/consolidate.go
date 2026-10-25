@@ -25,6 +25,12 @@ func SystemPrompt() string {
 	return strings.TrimRight(kernel.Text(kernel.TextConsolidateRules), "\n") + "\n"
 }
 
+// The verdicts on a possible update (a links item's verdict).
+const (
+	VerdictConfirm = "confirm"
+	VerdictReject  = "reject"
+)
+
 // stringArray is a JSON schema array of strings.
 func stringArray(description string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": description}
@@ -62,7 +68,7 @@ func Tool() agents.Tool {
 	return agents.Tool{
 		Name:        ToolName,
 		Label:       "Consolidate memory",
-		Description: "Labels, merges, reflections and subject aliases for the memory of the compacted conversation. Every field is optional; cite only ids printed in the input.",
+		Description: "Labels, merges, reflections, subject aliases, verdicts on possible updates and citations of curated memories for the memory of the compacted conversation. Every field is optional; cite only ids and names printed in the input.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -78,6 +84,15 @@ func Tool() agents.Tool {
 					"to":     map[string]any{"type": "string"},
 					"reason": map[string]any{"type": "string"},
 				}, "required": []any{"from", "to"}}},
+				"curated": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
+					"name":          map[string]any{"type": "string", "description": "A listed CURATED MEMORY's name."},
+					"supportingIds": stringArray("Ids of shown records of the user's own words that bear the memory out."),
+				}, "required": []any{"name", "supportingIds"}}},
+				"links": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
+					"id":      map[string]any{"type": "string", "description": "The later record of a listed possible update."},
+					"updates": map[string]any{"type": "string", "description": "The earlier record it may update."},
+					"verdict": enumOf([]string{VerdictConfirm, VerdictReject}, "confirm: the later value replaces the earlier one, and the later record supersedes it; reject: both values hold."),
+				}, "required": []any{"id", "updates", "verdict"}}},
 			},
 		},
 	}

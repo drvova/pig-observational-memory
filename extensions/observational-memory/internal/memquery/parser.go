@@ -37,6 +37,17 @@ const (
 	StageGroup   = "group"
 )
 
+// The words a date or entry bound may end with (docs/memory-v2.md, "Memory tool"). They are
+// fixed grammar, read only after the bound's value, so they take no name from definitions.
+const (
+	// ModifierEvent makes since and until compare a note's event date (event_date), and its
+	// entry time when it has none.
+	ModifierEvent = "event"
+	// ModifierAsOf makes until and through read the memory as it stood at the bound: supersedes,
+	// drops and reflections recorded after it are left out (the point-in-time view).
+	ModifierAsOf = "asof"
+)
+
 // Stages lists the stages in the order the grammar names them.
 var Stages = []string{StageSearch, StageWhere, StageSince, StageUntil, StageFrom, StageThrough, StageSort, StageLimit, StageCount, StageGroup}
 
@@ -54,6 +65,11 @@ const (
 	WriteRollback = "rollback"
 )
 
+// RecallOffset is the word after recall's id that reads a long entry from a character offset:
+// recall <entry id> offset N, the page a paged recall names next (docs/memory-v2.md, "Memory
+// tool"). It is fixed grammar read only after recall's id, so it takes no name from definitions.
+const RecallOffset = "offset"
+
 // Writes lists the writes in the order the grammar names them.
 var Writes = []string{WriteSave, WriteEdit, WriteForget, WriteFeedback, WriteDefine, WritePropose, WriteHarness, WriteRollback}
 
@@ -65,7 +81,7 @@ const (
 
 // writeArgs are each key=value write's keys, required ones first.
 var writeArgs = map[string]struct{ required, optional []string }{
-	WriteSave:     {required: []string{"name", "type", "description"}, optional: []string{"body", "scope"}},
+	WriteSave:     {required: []string{"name", "type", "description"}, optional: []string{"body", "scope", "quote"}},
 	WriteEdit:     {required: []string{"name"}, optional: []string{"type", "description", "body"}},
 	WriteForget:   {required: []string{"name"}},
 	WriteFeedback: {required: []string{"name", "outcome", "quote"}},
@@ -83,7 +99,10 @@ type Query struct {
 	// Source is the read's source, "" for a write.
 	Source string
 	// ID is recall's id or name.
-	ID     string
+	ID string
+	// Offset is recall's offset N, in characters (RecallOffset); Paged marks that it was given.
+	Offset int
+	Paged  bool
 	Stages []Stage
 	// Write is the write's name, "" for a read.
 	Write string
@@ -112,6 +131,10 @@ type Stage struct {
 	Desc bool
 	// N is limit's count.
 	N int
+	// Event marks since or until DATE event: the date is compared with a note's event date.
+	Event bool
+	// AsOf marks until DATE asof or through ID asof: the point-in-time view.
+	AsOf bool
 	// pos and fieldPos are the stage's and its field's character positions.
 	pos, fieldPos int
 }
@@ -193,6 +216,15 @@ func (p *parser) parseRead(inDefine bool) (*Query, error) {
 			return nil, errAt(id, "write recall <id>: a note or reflection id, an entry id or a saved memory name", "recall needs an id, got %s", id.describe())
 		}
 		q.ID = strings.TrimSpace(id.text)
+		if next := p.peek(); next.kind == tokWord && next.text == RecallOffset {
+			p.next()
+			n := p.next()
+			value, err := strconv.Atoi(n.text)
+			if n.kind != tokWord || err != nil || value < 0 {
+				return nil, errAt(n, "write recall <entry id> offset N with the offset a paged recall named", "offset needs a whole number from 0, got %s", n.describe())
+			}
+			q.Offset, q.Paged = value, true
+		}
 		if next := p.peek(); next.kind == tokPipe {
 			return nil, errAt(next, "run recall on its own; to filter records use notes, reflections, history or saved", "recall takes no stages")
 		}
@@ -263,12 +295,18 @@ func (p *parser) parseStage() (Stage, error) {
 			return s, errAt(d, "write the date as YYYY-MM-DD, e.g. "+s.Kind+" 2023-05-20", "%s needs a date, got %s", s.Kind, d.describe())
 		}
 		s.Value = d.text
+		if err := p.modifiers(&s); err != nil {
+			return s, err
+		}
 	case StageFrom, StageThrough:
 		id := p.next()
 		if id.kind != tokWord && id.kind != tokString || strings.TrimSpace(id.text) == "" {
 			return s, errAt(id, "write "+s.Kind+" <entry id>, an id from history or a summary line", "%s needs an entry id, got %s", s.Kind, id.describe())
 		}
 		s.Value = strings.TrimSpace(id.text)
+		if err := p.modifiers(&s); err != nil {
+			return s, err
+		}
 	case StageSort:
 		f, err := p.field(s.Kind)
 		if err != nil {
@@ -307,6 +345,34 @@ func (p *parser) parseStage() (Stage, error) {
 		s.Field, s.fieldPos = f.text, f.pos
 	}
 	return s, nil
+}
+
+// modifiers reads the words a bound may end with: event after since or until, asof after until
+// or through, each once; event and asof never together, since the point-in-time view is read
+// at entry time.
+func (p *parser) modifiers(s *Stage) error {
+	for {
+		t := p.peek()
+		if t.kind != tokWord || t.text != ModifierEvent && t.text != ModifierAsOf {
+			return nil
+		}
+		p.next()
+		switch {
+		case t.text == ModifierEvent && s.Kind != StageSince && s.Kind != StageUntil:
+			return errAt(t, "event compares event dates: write since DATE event or until DATE event", "%s takes no event", s.Kind)
+		case t.text == ModifierAsOf && s.Kind != StageUntil && s.Kind != StageThrough:
+			return errAt(t, "asof reads the memory as it stood at an end bound: write until DATE asof or through ID asof", "%s takes no asof", s.Kind)
+		case t.text == ModifierEvent && s.Event, t.text == ModifierAsOf && s.AsOf:
+			return errAt(t, "write "+t.text+" once", "%s given twice", t.text)
+		case t.text == ModifierEvent && s.AsOf || t.text == ModifierAsOf && s.Event:
+			return errAt(t, "the point-in-time view (asof) is read at entry time; drop event, or asof", "event and asof cannot be combined")
+		}
+		if t.text == ModifierEvent {
+			s.Event = true
+		} else {
+			s.AsOf = true
+		}
+	}
 }
 
 // parseWrite parses save, edit, forget, feedback and propose: the write's name, then key=value
@@ -415,7 +481,7 @@ func (p *parser) parseDefine() (*Query, error) {
 func writeUsage(write string) string {
 	switch write {
 	case WriteSave:
-		return `save name=<name> type=user|feedback|project|reference|lesson description="one sentence" [body="why and how to apply it"] [scope=global|project]`
+		return `save name=<name> type=user|feedback|project|reference|lesson description="one sentence" [body="why and how to apply it"] [scope=global|project] [quote="the user's words that confirm it"]`
 	case WriteEdit:
 		return `edit name=<name> [type=...] [description="..."] [body="..."]`
 	case WriteForget:

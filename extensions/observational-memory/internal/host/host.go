@@ -154,6 +154,14 @@ type Session interface {
 	SessionFile() string
 }
 
+// SessionFileReader is a host that reads every entry of the session file, not only the current
+// branch: memory v2's memory tool falls back to them when the branch has nothing
+// (docs/memory-v2.md, "Branches").
+type SessionFileReader interface {
+	// GetEntries returns every entry of the session file, in file order.
+	GetEntries() ([]session.Entry, error)
+}
+
 // ContextMessage is one message of a provider request's context, as PiG's context event
 // carries it before each request: a Pi agent message (user, assistant, toolResult,
 // compactionSummary, …) as decoded JSON, with no entry id. A handler edits it in place; the

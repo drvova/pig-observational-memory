@@ -60,9 +60,44 @@ var relNumberWords = map[string]int{
 // phrase already followed by an annotation or a parenthesised date, or inside
 // double quotes, is left alone. A zero anchor returns content unchanged.
 func ResolveRelativeDates(content string, anchor time.Time) string {
-	if anchor.IsZero() || content == "" {
-		return content
+	out, _ := resolveRelativeDates(content, anchor)
+	return out
+}
+
+// EventDate is the one absolute date (YYYY-MM-DD) content's relative date phrases resolve to
+// against anchor (ResolveRelativeDates), the date the record is about rather than when it was
+// said (docs/memory-v2.md, "Event dates"): "" when content resolves no phrase, when its phrases
+// resolve to different dates, or when one resolves only to a week, a month or a year, which is
+// a span rather than a date. A phrase the resolver leaves alone is never guessed.
+func EventDate(content string, anchor time.Time) string {
+	_, annotations := resolveRelativeDates(content, anchor)
+	date := ""
+	for _, a := range annotations {
+		if !isISODate(a) || (date != "" && a != date) {
+			return ""
+		}
+		date = a
 	}
+	return date
+}
+
+// dateAnnotation is an annotation ResolveRelativeDates writes after a phrase.
+var dateAnnotation = regexp.MustCompile(`\s\[=(?:week of )?\d{4}(?:-\d{2}){0,2}\]`)
+
+// NamesNoOneDate reports whether o's text carries a resolved date annotation
+// (ResolveRelativeDates) but o has no event date: its phrases resolve to several dates, or to a
+// week, a month or a year (EventDate). Joined with another record, it must not let that record's
+// one date stand for the whole text.
+func NamesNoOneDate(o Observation) bool {
+	return o.EventDate == "" && dateAnnotation.MatchString(o.Content)
+}
+
+// resolveRelativeDates is ResolveRelativeDates with the annotations it wrote, in order.
+func resolveRelativeDates(content string, anchor time.Time) (string, []string) {
+	if anchor.IsZero() || content == "" {
+		return content, nil
+	}
+	var annotations []string
 	day := time.Date(anchor.Year(), anchor.Month(), anchor.Day(), 0, 0, 0, 0, time.UTC)
 	names := relativeDatePattern.SubexpNames()
 	var b strings.Builder
@@ -92,15 +127,16 @@ func ResolveRelativeDates(content string, anchor time.Time) string {
 		if annotation == "" {
 			continue
 		}
+		annotations = append(annotations, annotation)
 		b.WriteString(content[last:end])
 		b.WriteString(" [=" + annotation + "]")
 		last = end
 	}
 	if last == 0 {
-		return content
+		return content, annotations
 	}
 	b.WriteString(content[last:])
-	return b.String()
+	return b.String(), annotations
 }
 
 // hasFutureCue reports whether "in N days/weeks" reads as a future offset:

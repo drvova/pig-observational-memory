@@ -2,7 +2,7 @@
 
 Status: proposed design, for approval before any rebuild. Revised after two reviews against the
 code and PiG v0.5.1, and after source studies of pi-vcc, VCC, pi-blackhole, the upstream
-pi-observational-memory, Mastra's observational memory, nodecode and letta-code (see
+pi-observational-memory, Mastra's observational memory, nodecode, letta-code and past.dev (see
 "Sources").
 
 ## Why
@@ -54,6 +54,10 @@ never split, never retried, and skipped on an overflow compaction so recovery is
 hook returns level 1's provider usage as the compaction's `usage` (and none at level 0), so PiG's
 own `compaction_end` event and session file show the cost and can be compared with PiG's summarizer
 on the same transcript.
+
+The additions taken from past.dev (event dates, statuses, possible updates, negation conflicts,
+recall pointers, the point-in-time view, notes provenance and `cited_by`) are code, or ride inside
+level 1's one request: each costs 0 requests and adds no tuned number.
 
 ## Owning every compaction PiG prepares
 
@@ -125,6 +129,38 @@ repeated compactions, which rendering from records avoids.
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is
   reused by code for every later line.
+- **Event dates** (after past.dev's temporal anchors and `occurredAt`). A record whose text
+  `ledger.ResolveRelativeDates` resolves to one absolute date ("yesterday", "on Friday", a deadline
+  "by the 31st") carries it as `event_date`, a field separate from the entry time it was said at;
+  an ambiguous or unresolved expression leaves it empty, never a guess. Durations and deadlines get
+  it only on the same unambiguous resolution. A week, a month or a year is a span and gives none
+  (`ledger.EventDate`). The summary does not print it: the line already carries the annotation.
+- **Status by explicit construction** (after past.dev's statuses and its own planned-versus-done
+  miss). A record is `proposed` on fixed plan wording ("let's plan to", "we will", "next we"),
+  `hypothetical` on fixed conditional wording ("if we", "suppose", "what if" as a statement), and an
+  explicit retraction ("scrap that", "forget that", "never mind") marks the record it names
+  `retracted`, linked like a correction; questions are excluded, as for preferences. No status means
+  stated as fact. Records are never rewritten, so the retraction is a record of its own (kind
+  `correction`, status `retracted`) that supersedes what it withdraws, and the withdrawn record reads
+  as `retracted` wherever it is shown (`ledger.RetractedIDs`). It withdraws only a plan or a
+  condition: a bare retraction the newest `proposed` or `hypothetical` record of its exchange or the
+  one before, a named one ("forget the Postgres migration", counted only with specifics) every such
+  record giving all its specifics. A retraction that names nothing it can withdraw is no retraction:
+  it stays a fact when it carries specifics and is not recorded otherwise. A statement of fact, a
+  preference or a correction is replaced only by a correction, and only by one stated as fact: a
+  correction worded as a plan or a condition ("let's use 5433 instead of 5432") keeps its status
+  and replaces only a record of its own status, so withdrawing it later withdraws nothing else
+  (`ledger.MaySupersede`, the one rule level 0 and level 1 share).
+- **Possible updates** (after past.dev's per-property supersession, without its model judges). A
+  later record with the same canonical subject and scope as an earlier active one, carrying a
+  specific of the same type (number, date, amount, path) with a different value, gets the link
+  `possibly_updates` to it, never `supersedes`: code cannot tell an update from a second value of
+  another property. A pair whose statuses a confirmed update could not join (a plan or a
+  condition after a fact) gets no link. The link drops nothing on its own (see Level 1). Explicit correction markers
+  still supersede directly.
+- **Negation conflicts.** A record pair sharing a subject and a specific, where exactly one side
+  carries an explicit negation ("not", "never", "didn't", "no longer") attached to that specific,
+  gets the flag `conflicts`. It is a flag selection may read, never a drop and never a supersede.
 - **The model's own words** (after nodecode's snippet notes, which keep the comment the model wrote
   before each eval at no request): when an assistant message has text followed by tool calls, the
   text before the first call is kept verbatim on that call's attempt record, read from the ordered
@@ -151,7 +187,9 @@ repeated compactions, which rendering from records avoids.
 - **Dropping (code).** At compaction, a record superseded by one already rendered, and a record cited
   by a reflection that is rendered, are dropped (`om.observations.dropped`, still recallable). When
   the active records do not fit the summary budget, selection (below) decides what is shown; nothing
-  else is dropped.
+  else is dropped. A dropped superseded record leaves its id on the survivor's line as a recall
+  pointer, a suffix like the anchor (`(was <id>)`), so the old value is one `recall` away; the line
+  itself is not reworded (after past.dev's `supersededAt` history, which keeps both values).
 
 ### The summary budget
 
@@ -199,8 +237,19 @@ skipped and selection continues:
 6. everything else.
 
 The order is lexicographic over facts the ledger holds (kind, supersedes, outcome, specifics,
-citations); there are no numeric weights. Every rendered line ends with its first source entry id
-when that id is on the current branch. What does not fit becomes `omitted` spans with date range,
+citations); there are no numeric weights. Class 2 holds records `ledger.UserPriority` grants: a user
+correction or preference code picked, or a level-1 merge of only such records (`FromUser`), never a
+record whose kind the model chose. Three level-0 facts amend the classes without a weight: a
+`proposed`, `hypothetical` or `retracted` record is never presented as done (its status is shown
+with it, and a retracted record is never in class 2 or 4); an unsettled `possibly_updates` pair
+renders both records in entry order when they fit, the later one with the link's target id; and when
+one record of a `conflicts` pair is taken, the other is tried next in the same class, which may
+still not fit. The status is a field of its own (a column in the tables format, a word after the
+kind in the lines format); the links are pointers after the record's text, never inside it:
+`(was <id>)` for every record it supersedes, `(may update <id>)` while the target is active and
+unsuperseded, and `(conflicts <id>)` while the other record is active. They depend only on the
+ledger, so a line's cost does not change with the choice. Every rendered line ends with its first
+source entry id when that id is on the current branch. What does not fit becomes `omitted` spans with date range,
 count and first id.
 
 Every omitted span, and every capped list (the files line, the commits line, the minimal brief's tool
@@ -237,11 +286,30 @@ thinning lowers PiG's own request count.
   failure; level 0 stands; no retry.
 - **Input, in order.** The cut range (what does not fit stays level 0 only); its level-0 records as
   candidates; the active records and reflections that compete for the next summary, bounded by the
-  summary budget (older ones appear as omitted spans, and the model is told so); the curated index and
-  the harness evidence if room remains; PiG's `customInstructions`.
+  summary budget (older ones appear as omitted spans with the runnable memory queries selection
+  writes, and the model is told so, or that no room was left for the spans); the
+  `possibly_updates` pairs whose two records are shown, or a line counting those that did not
+  fit; the subjects shown, or a line saying they did not fit; the curated index and the harness evidence if room remains; PiG's
+  `customInstructions`. Every part left out is announced, never silently dropped.
 - **Output, one tool.** Labels, subjects (with paths), scopes, supersedes and outcomes for the
-  candidates; merges; new or superseded reflections by id; subject aliases; curated operations;
-  harness definitions only when the evidence changed.
+  candidates; merges; new or superseded reflections by id; subject aliases; verdicts on
+  `possibly_updates` links (confirm or reject, by the two ids); curated operations; harness
+  definitions only when the evidence changed.
+- **Possible updates.** Level 1 settles a `possibly_updates` link only when it runs and both records
+  are in its input (a `POSSIBLE UPDATES` section lists those pairs, each line while room remains,
+  and says how many it left out); otherwise the link stays unsettled and both records render
+  (Selection). A verdict (`links`: the later id, the earlier id, `confirm` or `reject`) applies
+  to the record that will stand for the later one: a label or merge taking it, else the later
+  record itself with the link settled, replacing it (same text, kind and origin). A confirmed link
+  becomes `supersedes`, held to the specifics check except for the values it updates
+  (`ledger.UpdatedSpecifics`: the parts of the earlier record's values of the updated type), so
+  replacing the old value is allowed and dropping any other specific is not; it is also refused
+  across scopes, in a cycle, or onto a record another proposal replaced. The old record stays
+  recallable through the survivor's recall pointer and the point-in-time view. A rejected link is
+  removed. A verdict naming a pair the input did not list, a second verdict on a pair, or one
+  inside a merge joining both records is refused and the link stays. This adds a `links` array to
+  the tool schema and two lines to `kernel.TextConsolidateRules`; no request is added, and the
+  compaction's `details.consolidation` counts `confirmed` and `rejected`.
 - **Validation** (after the upstream observer's `normalizeSourceEntryIds` and Mastra's merge
   provenance):
   - a record or merge citing an id outside its input is rejected and its candidates stand;
@@ -252,6 +320,17 @@ thinning lowers PiG's own request count.
     different scopes are never merged;
   - a reflection cites only records whose specifics it carries, checked against the record that
     stands for each id when it renders (a merge or label replacing it);
+  - records with different statuses are never merged, so a plan is never merged into a fact and shown
+    as done; a merge keeps the status its sources share, the one event date they name, and their
+    level-0 links to records outside it, and a label keeps all three;
+  - a merge's or label's origin is the model's when its text or kind is, but a merge whose sources all
+    hold the user class (`ledger.UserPriority`) keeps it (`FromUser`, set by code from the sources)
+    while its text adds no specific its sources do not give (`ledger.AddedSpecifics`); a kind the
+    model chose never claims it;
+  - a supersede (proposed, or a confirmed possible update) whose statuses could not join is
+    refused (`ledger.MaySupersede`): a planned or conditional value never replaces a stated one;
+  - a merge's event date is the one its sources name; a source naming dates but no one date
+    (several, or a span) leaves it none, as at level 0;
   - output that accounts for nothing, or has no valid record, is a failure.
 - **Union.** Any level-0 candidate carrying specifics that level 1 does not account for is kept. A
   weak model can improve the memory, never lose a fact from it (Mastra documents no code-level check
@@ -279,9 +358,11 @@ off-path. The extension does not replace PiG's branch summary by default (option
 ### Memory tool
 
 - `recall` takes record ids, then branch entry ids.
-- `history` excludes the current turn, tags every hit with its role and entry id, and when the search
-  finds nothing reports how many entries match each word instead of an empty table (after pi-vcc's
-  "mode detection must never silently lose results").
+- `history` excludes the current turn (from the last user message on the branch), tags every hit
+  with its role and entry id, and when the search
+  finds nothing reports how many entries on the current branch match each word, matched as the
+  search matches (over the whole row), instead of an empty table (after pi-vcc's "mode detection
+  must never silently lose results").
 - `recall <entry id>` pages a long entry on line boundaries and names the next offset; the page size
   is the existing single-recall result bound.
 - When rows exceed the result bound, the result leads with `matched N, showing M` and the query for the
@@ -289,9 +370,37 @@ off-path. The extension does not replace PiG's branch summary by default (option
   `(:matched N :showing M)` marker and `:before` paging). Fallback rows from off the current path come in
   session-file order with their own label.
 - Matching and display run on the same filtered text extraction uses, so thinking is never matched,
-  counted or returned. Search tokens are literal (no wildcards).
+  counted or returned, by `recall <record id>`'s source entries either. Search tokens are literal
+  (no wildcards). A tool the agent defined runs its query the same way.
 - Matching stays literal and ranked newest first; pi-vcc's BM25 floor, caps and page size are tuned on
   its benchmark and are not adopted.
+- **Point-in-time view** (after past.dev's `queryTimestamp`). With `until DATE asof` or
+  `through ID asof`, `notes` and `reflections` read the memory as it stood at the bound: drops and
+  reflections recorded after it are not applied, and a record that supersedes after it (one that
+  does not hold at the bound, below) is listed in `superseded_by` with `(later)`, so the record it replaced shows as the value current then; a
+  retraction after the bound withdraws nothing yet. A record holds at the bound when it was
+  recorded by then, or, recorded later from what was said (level 0, a v1 worker), when its newest
+  source entry (its date, for `until`) is within the bound; a record level 1 wrote at a later
+  compaction (a merge, a label, a settled possible update, tagged `consolidated` on its batch)
+  holds only from where it was recorded, under either bound, since what it says was judged then.
+  A record that does not hold is not listed. The fold already holds every record and link,
+  so this is a read, not a store. `asof` is explicit because the queries the summary prints
+  (`from`/`through`, `since`/`until`) must list exactly what they count in the current memory;
+  under a point-in-time reading, records dropped since would join their rows.
+- **Event dates.** `since` and `until` compare `event_date` instead of the entry time when asked
+  (`since DATE event`), and `sort event_date` orders by it; records without one compare by entry
+  time. `event` never combines with `asof`, which is read at entry time.
+- **Provenance and status.** `notes` rows carry `status` (or `retracted` for a withdrawn record),
+  `event_date`, and the first source entry id with its role and its time (`source`,
+  `source_role`, `source_time`); the verbatim text stays in `recall`, which already returns it, so
+  rows grow by short cells, inside the existing result bound. These columns are listed under
+  either engine; v1 records leave the level-0 ones empty. No schema may declare these names; a
+  field a schema stored before took one reads as `schema_<name>` under v2 and keeps its name
+  (filling that column) under v1.
+- **What rests on a record.** Under v2, `recall <record id>` lists `cited_by`: the reflections that
+  cite it and still stand (`ledger.ActiveReflections`; a replaced one rests on nothing held), from the reverse links the fold computes (`FoldedLedger.CitedBy`, never stored), so
+  retiring a record shows what loses support. A level-1 merge keeps its sources' entry ids, not
+  their record ids, so it cites no record; what it replaced shows through `superseded_by`.
 
 ### Curated memory
 
@@ -302,12 +411,32 @@ off-path. The extension does not replace PiG's branch summary by default (option
 - Any other `save` is staged: visible in its session through `saved`, absent from the always-loaded
   index. Code checks evidence at `agent_settled` and `session_start`, with no request: a later user
   quote, a level-1 citation, or the same normalized name and description staged in another session.
-  Staged memories are never deleted automatically.
+  Evidence counts only from the memory's last save or edit, so evidence given for one text never
+  promotes another. Level 1 lists only the staged memories of its own session (another session's
+  is visible only there); the same save staged here is the cross-session evidence.
+  Staged memories are never deleted automatically. A later user quote is a `feedback ... outcome=helped`
+  whose quote is in a user message (the assistant's words and harness markup confirm nothing); a
+  level-1 citation names a listed memory with at least one shown record code picked from a user
+  message, so the model never confirms its own save; level 1 also runs the check after recording
+  citations.
 - A `forget` through the memory tool retires a memory. A level-0 user correction whose subject matches a
   curated memory ranks it lower and flags it in `/om:status` and `saved`; it never retires it and never
   touches a pinned memory. Nothing cools by time.
 - One validator on every write and every load: allowed fields, a body bound derived from what one
-  `recall` can show, and a `pinned` flag only the user sets.
+  `recall` can show, and a `pinned` flag only the user sets. The bound is the whole memory as
+  `recall <name>` shows it within one recall page (the record content bound); `pinned: true` is
+  written by the user in the memory's file, cleared on every save and kept by every edit. A file
+  the validator refuses (a v1 memory past the bound, a hand-written field) is not loaded, but
+  never silently: `saved` lists it with state `refused` and its reason, and `/om:status` names
+  it; `edit` (which rewrites it with the allowed fields, checked as every write) and `forget`
+  still reach it, so it can be brought within the validator or retired.
+- The store under PiG's config root is shared by every session, whatever its engine. A v1
+  session ranks without v2's corrections, but a name another session staged is still refused to
+  its save, and a staged memory stays out of its index and `saved` until promoted.
+- Matching a correction to a memory: the correction's subject words, hyphen-joined, are a whole
+  hyphen-separated run of the memory's name, or the reverse. The flag counts corrections made after
+  the memory's last save or edit, so an edit clears it; a flagged memory ranks after every other,
+  unless the user pinned it.
 
 ### Self-built harness
 
@@ -394,6 +523,7 @@ branch-summary requests at the price of picked lines instead of prose.
 | Mastra observational memory | merge provenance; refusing empty output | background agents, buffering, retries, compression ladder, embeddings |
 | nodecode, cells | no silent caps; runnable recall pointers; the model's own notes as the surviving record; newest-per-name state with tombstones; thinning aged tool results; re-rendering the index only when the prefix breaks; held definitions settled by evidence the proposer did not produce (`organism/provisional.lisp`); the kernel lock (`organism/evolve.lisp` lock-floor and engage-floor, with lower-floor as its recorded unlock — distinct from the history visibility floor in `engine/context.lisp`) | eviction instead of compaction; its tuned ratios and caps; the pre-eviction warning and the context-fill line on every tool result (an extra message, and nodecode's own A/B was flat); the model-editable `context.txt`; the experience cell's reflection (`cells/tools/nodecode-experience/reflect.lisp`: one forked, tool-using reflection per operator turn that ran a tool or failed, unbudgeted by default); session naming, goal judges and board wakes |
 | letta-code | staged memory, a store validator | an out-of-band curator request |
+| past.dev (docs, API and `pastdotdev/benchmarks`; closed engine) | the point-in-time view (`queryTimestamp`); event dates apart from entry time (`occurredAt`, temporal anchors); update candidates flagged by code and settled only inside level 1; plan, hypothesis and retraction statuses; negation conflict flags; provenance on notes rows; `cited_by` lineage; dropped values kept one recall away (`supersededAt`) | per-turn model extraction, NER, NLI and adversarial judges; embeddings, HyDE, rerank and RRF; its fixed evidence budget; forced recall before every turn (a per-request injection breaks the stable request bytes and grows context); supersession by guessed property identity; benchmark scores or its harness as a target |
 | PiG v0.5.1 | what the hook can return and when it runs; the summarizer's request paths; the threshold inequality; output clamp and safety margin | — |
 
 ## Rollout
@@ -424,3 +554,6 @@ branch-summary requests at the price of picked lines instead of prose.
    proposed only in level 1.
 6. Migration of settings, records, layer definitions and project memory; docs; a real PiG session
    counting requests and compactions.
+7. The past.dev additions: event dates, statuses, possible updates and negation conflicts in level 0;
+   recall pointers and the amended classes in selection; link verdicts in level 1; the point-in-time
+   view, event-date stages, notes provenance and `cited_by` in the memory tool.

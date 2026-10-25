@@ -519,6 +519,8 @@ func TestStatusV2LastCompactionLevel(t *testing.T) {
 		want   string
 	}{
 		{"applied", ledger.ConsolidationReport{Requested: true, Applied: true, Records: 2, Merges: 1, Reflections: 1, Dropped: 3, Refused: 1}, "Last compaction: level 1, 1 request; level 1 recorded 2 labelled records, 1 merges, 1 reflections, 0 aliases, dropped 3 replaced records, refused 1 proposals"},
+		{"settled links", ledger.ConsolidationReport{Requested: true, Applied: true, Confirmed: 2, Rejected: 1}, "dropped 0 replaced records, settled 3 possible updates (2 confirmed, 1 rejected)"},
+		{"curated citations", ledger.ConsolidationReport{Requested: true, Applied: true, Cited: 2, Promoted: 1}, "dropped 0 replaced records, cited 2 curated memories (1 staged made live)"},
 		{"failed", ledger.ConsolidationReport{Requested: true, Reason: "the output accounts for nothing"}, "Last compaction: level 0, 1 request; level 1 failed (the output accounts for nothing), level 0 stands"},
 		{"skipped", ledger.ConsolidationReport{Reason: "consolidate is false"}, "Last compaction: level 0, 0 requests; level 1 not run: consolidate is false"},
 	} {

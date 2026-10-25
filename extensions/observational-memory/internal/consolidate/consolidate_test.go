@@ -233,7 +233,7 @@ func TestBuildPromptBudgets(t *testing.T) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt.Text)
 		}
 	}
-	if strings.Contains(prompt.Text, older.ID) || prompt.OmittedActive != 1 {
+	if strings.Contains(prompt.Text, "["+older.ID+"]") || prompt.OmittedActive != 1 {
 		t.Fatalf("the older record was shown:\n%s", prompt.Text)
 	}
 	if strings.Index(prompt.Text, "COMPACTED CONVERSATION") > strings.Index(prompt.Text, "CANDIDATES") || strings.Index(prompt.Text, "CURRENT MEMORY") > strings.Index(prompt.Text, "INSTRUCTIONS") {

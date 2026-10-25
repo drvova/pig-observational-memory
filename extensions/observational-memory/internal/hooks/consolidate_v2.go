@@ -10,6 +10,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
@@ -112,6 +113,9 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		return skip(level1NoCandidates)
 	}
 
+	folded := ledger.FoldLedger(entries, "")
+	store, storeOn := harness.StoreOf(h, cfg)
+	project := harness.ProjectRoot(h.Cwd())
 	tool := consolidate.Tool()
 	system := consolidate.SystemPrompt()
 	fixedTokens := requestOverheadTokens(system, tool)
@@ -124,6 +128,9 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Instructions: event.CustomInstructions,
 		Available:    window - config.PiGContextSafetyTokens - outputCap - fixedTokens,
 		MemoryBudget: max(0, budget),
+		Branch:       entries,
+		Folded:       folded,
+		Curated:      curatedInput(store, storeOn, project, h.SessionID()),
 	})
 	estimated := fixedTokens + prompt.Tokens
 	if !ok || estimated+outputCap+config.PiGContextSafetyTokens > window {
@@ -152,6 +159,12 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		"omittedActive":      prompt.OmittedActive,
 		"reflections":        len(prompt.Reflections),
 		"omittedReflections": prompt.OmittedReflections,
+		"memoryQueries":      len(prompt.MemoryQueries),
+		"subjectsShown":      prompt.SubjectsShown,
+		"links":              len(prompt.Links),
+		"omittedLinks":       prompt.OmittedLinks,
+		"curated":            len(prompt.Curated),
+		"omittedCurated":     prompt.OmittedCurated,
 		"cutShown":           prompt.CutShown,
 		"cutEntries":         prompt.CutTotal,
 		"inputTokens":        estimated,
@@ -181,8 +194,11 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Candidates:  prompt.Candidates,
 		Active:      prompt.Active,
 		Reflections: prompt.Reflections,
-		Ledger:      ledger.FoldLedger(entries, ""),
+		Ledger:      folded,
 		Subjects:    ledger.SubjectsOf(projection.Observations),
+		Links:       prompt.Links,
+		Curated:     prompt.Curated,
+		Branch:      entries,
 	}
 	result := consolidate.Validate(answer.Arguments, in)
 	if len(result.Refusals) > 0 {
@@ -196,15 +212,64 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	result.Reflections = reflections
 	out.entries = appendLevel1(ctx, h, result, drop, cut[len(cut)-1].ID)
 	out.report.Applied = true
-	out.report.Records = len(result.Records) - result.Merges
+	out.report.Records = len(result.Records) - result.Merges - result.LinkRecords
+	out.report.Confirmed, out.report.Rejected = result.Confirmed, result.Rejected
 	out.report.Merges = result.Merges
 	out.report.Reflections = len(result.Reflections)
 	out.report.Aliases = len(result.Aliases)
 	out.report.Dropped = len(drop)
 	logData["records"], logData["merges"], logData["newReflections"] = out.report.Records, out.report.Merges, out.report.Reflections
 	logData["aliases"], logData["dropped"], logData["unchanged"], logData["keptByUnion"] = out.report.Aliases, len(drop), result.Unchanged, keptBack
+	logData["confirmed"], logData["rejected"] = result.Confirmed, result.Rejected
+	if storeOn && len(result.Cited) > 0 {
+		out.report.Cited, out.report.Promoted = recordCitations(ctx, h, store, project, entries, result.Cited)
+		logData["cited"], logData["promoted"] = out.report.Cited, out.report.Promoted
+	}
 	debuglog.Log(ctx, "compaction.v2.level1", logData)
 	return out
+}
+
+// curatedInput are the curated memories the level-1 input lists: those that apply in project,
+// ranked as the index ranks them, with the memories this session staged (a citation is their
+// evidence); a memory another session staged is visible only there (curated.SeenBy), so it is
+// left out, and the same save staged here is its cross-session evidence. None without a store.
+func curatedInput(store curated.Store, on bool, project, session string) []consolidate.CuratedMemory {
+	if !on {
+		return nil
+	}
+	memories, err := store.List(project)
+	if err != nil {
+		return nil
+	}
+	out := make([]consolidate.CuratedMemory, 0, len(memories))
+	for _, m := range curated.Rank(memories, store.RankUsage()) {
+		if !curated.SeenBy(m, session) {
+			continue
+		}
+		out = append(out, consolidate.CuratedMemory{Name: m.Name, Type: m.Type, Description: m.Description, Staged: m.Staged})
+	}
+	return out
+}
+
+// recordCitations records level 1's curated citations in the store's usage ledger and runs the
+// curated evidence check (harness.SettleCurated's Settle), so a staged memory a citation bears out
+// is live when the index next renders, after this compaction. It returns the citations recorded
+// and the memories promoted. No request is made.
+func recordCitations(ctx context.Context, h host.Host, store curated.Store, project string, entries []ledger.Entry, cited []consolidate.Citation) (int, int) {
+	recorded := 0
+	for _, c := range cited {
+		if err := store.RecordCited(c.Name, strings.Join(c.Records, " ")); err != nil {
+			debuglog.Log(ctx, "compaction.v2.level1.cite_failed", map[string]any{"name": c.Name, "errorMessage": err.Error()})
+			continue
+		}
+		recorded++
+	}
+	settled, err := store.Settle(curated.SettleInput{Project: project, Corrections: harness.Corrections(entries)})
+	if err != nil {
+		debuglog.Log(ctx, "compaction.v2.level1.settle_failed", map[string]any{"errorMessage": err.Error()})
+	}
+	harness.NotifySettled(h, settled)
+	return recorded, len(settled.Promoted)
 }
 
 // requestOverheadTokens is the estimated part of the level-1 request that is not its user text:
@@ -237,6 +302,7 @@ func appendLevel1(ctx context.Context, h host.Host, result consolidate.Result, d
 	}
 	queue := []pending{}
 	if data := ledger.BuildObservationsRecordedData(result.Records, coversUpToID); data != nil {
+		data.Consolidated = true
 		queue = append(queue, pending{ledger.OMObservationsRecorded, data})
 	}
 	if data := ledger.BuildReflectionsRecordedData(result.Reflections, coversUpToID); data != nil {

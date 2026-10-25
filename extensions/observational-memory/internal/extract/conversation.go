@@ -2,7 +2,9 @@ package extract
 
 import (
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 )
@@ -30,7 +32,43 @@ var (
 		regexp.MustCompile(`(?i)\bplease\s+(?:use|avoid|keep|make|don'?t|do not|format|write)\b`),
 		regexp.MustCompile(`(?i)\b(?:style|format|language|naming)\s*[:=]\s*\S`),
 	}
+	// hypotheticalWording states a record under a condition (docs/memory-v2.md, "Status by
+	// explicit construction"); it is read before plan wording, so "if we migrate, we will need"
+	// is hypothetical.
+	hypotheticalWording = regexp.MustCompile(`(?i)\b(?:if\s+(?:we|i|you)|suppose|supposing|what\s+if|hypothetically)\b`)
+	// plannedWording states a record as a plan.
+	plannedWording = regexp.MustCompile(`(?i)\b(?:let'?s|let\s+us|we\s+will|we'll|we\s+are\s+going\s+to|we're\s+going\s+to|i\s+will|i'll|i'm\s+going\s+to|i\s+am\s+going\s+to|(?:we|i)\s+plan\s+to|planning\s+to|next,?\s+we)\b`)
+	// bareRetraction withdraws what was just said; namedRetraction withdraws what it names, and
+	// counts only when the name carries specifics. Both open the sentence, after at most
+	// interjections ("ok, scrap that", "actually, never mind").
+	bareRetraction  = regexp.MustCompile(`(?i)^(?:(?:ok(?:ay)?|no|oh|actually|wait|hmm|sorry)\W+)*(?:(?:scrap|scratch|forget|disregard|cancel)\s+(?:that|this|the\s+plan)\b|never\s*mind\b)`)
+	namedRetraction = regexp.MustCompile(`(?i)^(?:(?:ok(?:ay)?|no|oh|actually|wait|hmm|sorry)\W+)*(?:scrap|scratch|forget|disregard|cancel)\s+(?:about\s+)?the\b`)
 )
+
+// statusOf is a statement's status by fixed wording: hypothetical, proposed, or "" for a
+// statement of fact. A question has none.
+func statusOf(sentence string) string {
+	sentence = strings.ReplaceAll(sentence, "’", "'")
+	switch {
+	case isQuestion(sentence):
+		return ""
+	case hypotheticalWording.MatchString(sentence):
+		return ledger.StatusHypothetical
+	case plannedWording.MatchString(sentence):
+		return ledger.StatusProposed
+	}
+	return ""
+}
+
+// isRetraction reports an explicit retraction that is not a question: "scrap that", "forget
+// this", "never mind", or "forget the <something specific>".
+func isRetraction(sentence string) bool {
+	sentence = strings.ReplaceAll(sentence, "’", "'")
+	if isQuestion(sentence) {
+		return false
+	}
+	return bareRetraction.MatchString(sentence) || namedRetraction.MatchString(sentence) && ledger.HasSpecifics(sentence)
+}
 
 // correctionTarget is what a correction replaces: the phrase it names ("not X", "instead of
 // X"), else, with no phrase, a record on its subject whose value it restates.
@@ -92,26 +130,39 @@ func (x *extraction) user(i int) {
 			continue
 		}
 		var kind ledger.ObservationKind
+		status := ""
 		target, correction := correctionOf(sentence)
+		retraction := !correction && isRetraction(sentence)
 		switch {
 		case correction:
-			kind = "correction"
+			kind, status = "correction", statusOf(sentence)
+		case retraction:
+			// A retraction stands only once it names what it withdraws (resolveRetractions).
+			kind, status = "correction", ledger.StatusRetracted
 		case isPreference(sentence):
 			kind = "preference"
 		case ledger.HasSpecifics(sentence):
-			kind = "fact"
+			kind, status = "fact", statusOf(sentence)
 		default:
 			continue
 		}
-		content := sentence
-		if hasAnchor {
-			content = ledger.ResolveRelativeDates(content, anchor)
-		}
-		r := x.add(ledger.Observation{Content: content, Kind: kind, Subject: ledger.SubjectInText(sentence, x.subjects, x.in.Ledger.Aliases)}, i)
+		r := x.add(x.conversationRecord(sentence, kind, status, anchor, hasAnchor), i)
 		if correction {
 			r.correction = &target
 		}
+		r.retraction = retraction
 	}
+}
+
+// conversationRecord is a conversation record of sentence: its relative dates annotated, its
+// event date (ledger.EventDate) and status, and its subject named from the ledger.
+func (x *extraction) conversationRecord(sentence string, kind ledger.ObservationKind, status string, anchor time.Time, hasAnchor bool) ledger.Observation {
+	o := ledger.Observation{Content: sentence, Kind: kind, Status: status, Subject: ledger.SubjectInText(sentence, x.subjects, x.in.Ledger.Aliases)}
+	if hasAnchor {
+		o.Content = ledger.ResolveRelativeDates(sentence, anchor)
+		o.EventDate = ledger.EventDate(sentence, anchor)
+	}
+	return o
 }
 
 // reply reads assistant text that is not the words before a tool call: a sentence is a record
@@ -137,12 +188,18 @@ func (x *extraction) reply(i int, text string) {
 		if len(ledger.Added(sentence, given...)) == 0 {
 			continue
 		}
-		content := sentence
-		if hasAnchor {
-			content = ledger.ResolveRelativeDates(content, anchor)
-		}
-		x.add(ledger.Observation{Content: content, Kind: "assistant", Subject: ledger.SubjectInText(sentence, x.subjects, x.in.Ledger.Aliases)}, i)
+		x.add(x.conversationRecord(sentence, "assistant", statusOf(sentence), anchor, hasAnchor), i)
 	}
+}
+
+// conversational reports a kind a conversation record (or a v1 worker's record) has, never a
+// code record's.
+func conversational(kind ledger.ObservationKind) bool {
+	switch kind {
+	case "fact", "preference", "correction", "assistant", "event", "plan", "":
+		return true
+	}
+	return false
 }
 
 // resolveCorrections links each correction to the records it replaces (docs/memory-v2.md,
@@ -156,23 +213,19 @@ func (x *extraction) reply(i int, text string) {
 //   - a correction naming no phrase replaces the newest user statement on its subject whose
 //     value it restates (ledger.Restates).
 //
+// A correction worded as a plan or a condition (proposed, hypothetical) replaces only records of
+// its own status (ledger.MaySupersede): it keeps its status, and a stated fact stays until a
+// correction stated as fact replaces it, so withdrawing the plan later withdraws nothing else.
 // A correction that matches none supersedes nothing.
 func (x *extraction) resolveCorrections() {
 	type candidate struct {
-		id, content, subject string
-		assistant            bool
-	}
-	conversational := func(kind ledger.ObservationKind) bool {
-		switch kind {
-		case "fact", "preference", "correction", "assistant", "event", "plan", "":
-			return true
-		}
-		return false
+		id, content, subject, status string
+		assistant                    bool
 	}
 	earlier := []candidate{}
 	for _, o := range x.in.Ledger.ActiveObservations {
 		if conversational(o.Kind) && !x.superseded[o.ID] {
-			earlier = append(earlier, candidate{o.ID, o.Content, o.Subject, o.Kind == "assistant"})
+			earlier = append(earlier, candidate{o.ID, o.Content, o.Subject, o.Status, o.Kind == "assistant"})
 		}
 	}
 	supersede := func(r *record, c candidate) {
@@ -184,7 +237,7 @@ func (x *extraction) resolveCorrections() {
 			phrase := r.correction.phrase
 			for i := len(earlier) - 1; i >= 0; i-- {
 				c := earlier[i]
-				if x.superseded[c.id] {
+				if x.superseded[c.id] || !ledger.MaySupersede(r.obs, ledger.Observation{Status: c.status}) {
 					continue
 				}
 				if phrase != "" {
@@ -200,7 +253,140 @@ func (x *extraction) resolveCorrections() {
 			}
 		}
 		if conversational(r.obs.Kind) {
-			earlier = append(earlier, candidate{r.obs.ID, r.obs.Content, r.obs.Subject, r.obs.Kind == "assistant"})
+			earlier = append(earlier, candidate{r.obs.ID, r.obs.Content, r.obs.Subject, r.obs.Status, r.obs.Kind == "assistant"})
 		}
+	}
+}
+
+// resolveRetractions links each explicit retraction to what it withdraws (docs/memory-v2.md,
+// "Status by explicit construction"), superseding it, among the earlier conversation records
+// stated as a plan or under a condition (proposed, hypothetical), active and not yet
+// superseded:
+//   - a retraction carrying specifics withdraws every such record giving them all
+//     (ledger.AddedSpecifics): "forget the Postgres migration";
+//   - a bare one ("scrap that", "never mind") withdraws the newest such record of its own
+//     exchange or the exchange before it.
+//
+// A retraction that names none withdraws nothing and is no retraction: it stays a fact when it
+// carries specifics, and is not a record otherwise. A retraction never withdraws a statement of
+// fact, a preference or a correction, which only a correction replaces.
+func (x *extraction) resolveRetractions() {
+	positions := ledger.EntryIndexByID(x.in.Entries)
+	type candidate struct {
+		id, content string
+		anchor      int
+	}
+	pending := func(o ledger.Observation) bool {
+		return conversational(o.Kind) && (o.Status == ledger.StatusProposed || o.Status == ledger.StatusHypothetical)
+	}
+	earlier := []candidate{}
+	for _, o := range x.in.Ledger.ActiveObservations {
+		if !pending(o) || x.superseded[o.ID] {
+			continue
+		}
+		anchor := -1
+		for _, id := range o.SourceEntryIDs {
+			if at, ok := positions[id]; ok {
+				anchor = max(anchor, at)
+			}
+		}
+		earlier = append(earlier, candidate{o.ID, o.Content, anchor})
+	}
+	kept := x.records[:0]
+	for _, r := range x.records {
+		if r.retraction {
+			withdrawn := false
+			if ledger.HasSpecifics(r.obs.Content) {
+				for _, c := range earlier {
+					if !x.superseded[c.id] && len(ledger.AddedSpecifics(r.obs.Content, []string{c.content})) == 0 {
+						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
+						x.superseded[c.id], withdrawn = true, true
+					}
+				}
+			} else {
+				from := x.previousExchange(r.exchange)
+				for i := len(earlier) - 1; i >= 0; i-- {
+					if c := earlier[i]; !x.superseded[c.id] && c.anchor >= from {
+						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
+						x.superseded[c.id], withdrawn = true, true
+						break
+					}
+				}
+			}
+			if !withdrawn {
+				if !ledger.HasSpecifics(r.obs.Content) {
+					continue
+				}
+				r.obs.Kind, r.obs.Status, r.retraction = "fact", "", false
+			}
+		}
+		if pending(r.obs) {
+			earlier = append(earlier, candidate{r.obs.ID, r.obs.Content, r.anchor})
+		}
+		kept = append(kept, r)
+	}
+	x.records = kept
+}
+
+// previousExchange is the branch index of the user message that opened the exchange before the
+// one opened at exchange, 0 when there is none (everything before belongs to it).
+func (x *extraction) previousExchange(exchange int) int {
+	for i := exchange - 1; i >= 0; i-- {
+		entry := x.in.Entries[i]
+		if ledger.IsSourceEntry(entry) && entry.Type == "message" && entry.Message != nil && entry.Message["role"] == "user" {
+			return i
+		}
+	}
+	return 0
+}
+
+// linkRecords links each new conversation record to the earlier active ones on the same
+// canonical subject and scope (docs/memory-v2.md, "Possible updates" and "Negation
+// conflicts"): possibly_updates when it gives a different value of one specific type
+// (ledger.UpdatesSpecific), conflicts when exactly one side negates a specific both carry
+// (ledger.NegationConflict). A record it already supersedes, a superseded one and a retraction
+// are never linked, and possibly_updates links only a pair a confirmed update could join
+// (ledger.MaySupersede: never a plan or a condition onto a fact); a record with no subject has
+// nothing to compare by. The links drop nothing.
+func (x *extraction) linkRecords() {
+	subjects := ledger.SubjectsOf(x.in.Ledger.ActiveObservations)
+	for _, r := range x.records {
+		if r.obs.Subject != "" && !slices.Contains(subjects, r.obs.Subject) {
+			subjects = append(subjects, r.obs.Subject)
+		}
+	}
+	canonical := ledger.CanonicalSubjectsWithAliases(subjects, x.in.Ledger.Aliases)
+	key := func(o ledger.Observation) string {
+		subject := canonical[o.Subject].Subject
+		if subject == "" {
+			return ""
+		}
+		return subject + "\x00" + ledger.NormalizeScope(o.Scope)
+	}
+	linkable := func(o ledger.Observation) bool {
+		return conversational(o.Kind) && o.Status != ledger.StatusRetracted && o.Subject != ""
+	}
+	earlier := []ledger.Observation{}
+	for _, o := range x.in.Ledger.ActiveObservations {
+		if linkable(o) && !x.superseded[o.ID] {
+			earlier = append(earlier, o)
+		}
+	}
+	for _, r := range x.records {
+		if !linkable(r.obs) {
+			continue
+		}
+		for _, e := range earlier {
+			if x.superseded[e.ID] || key(e) != key(r.obs) || slices.Contains(r.obs.Supersedes, e.ID) {
+				continue
+			}
+			if ledger.MaySupersede(r.obs, e) && ledger.UpdatesSpecific(r.obs.Content, e.Content) {
+				r.obs.PossiblyUpdates = append(r.obs.PossiblyUpdates, e.ID)
+			}
+			if ledger.NegationConflict(r.obs.Content, e.Content) {
+				r.obs.Conflicts = append(r.obs.Conflicts, e.ID)
+			}
+		}
+		earlier = append(earlier, r.obs)
 	}
 }

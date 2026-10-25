@@ -128,6 +128,12 @@ func lastCompactionLine(cfg config.Config, entries []ledger.Entry) string {
 	switch {
 	case report.Applied:
 		line += fmt.Sprintf("; level 1 recorded %d labelled records, %d merges, %d reflections, %d aliases, dropped %d replaced records", report.Records, report.Merges, report.Reflections, report.Aliases, report.Dropped)
+		if report.Confirmed+report.Rejected > 0 {
+			line += fmt.Sprintf(", settled %d possible updates (%d confirmed, %d rejected)", report.Confirmed+report.Rejected, report.Confirmed, report.Rejected)
+		}
+		if report.Cited > 0 {
+			line += fmt.Sprintf(", cited %d curated memories (%d staged made live)", report.Cited, report.Promoted)
+		}
 		if report.Refused > 0 {
 			line += fmt.Sprintf(", refused %d proposals", report.Refused)
 		}
@@ -250,6 +256,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		if state.LastDropperError != "" {
 			lines = append(lines, "Dropper: "+state.LastDropperError)
 		}
+	}
+	if curatedLines := harness.CuratedStatusLines(h, cfg); len(curatedLines) > 0 {
+		lines = append(append(lines, ""), curatedLines...)
 	}
 	if harnessLines := harness.StatusLines(h, cfg); len(harnessLines) > 0 {
 		lines = append(append(lines, ""), harnessLines...)

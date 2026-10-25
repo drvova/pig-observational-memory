@@ -98,6 +98,11 @@ var invariantSettings = []string{
 // noteKernelFields are the fields every note carries that a schema definition only adds to.
 var noteKernelFields = []string{"id", "timestamp", "content", "sources", "sourceEntryIds", "relevance"}
 
+// levelZeroNoteNames are the notes source's fields memory v2's level 0 fills (memquery's
+// LevelZeroNoteFields): a schema field with one of these names would be shadowed by the
+// kernel's, so a schema cannot declare one.
+var levelZeroNoteNames = []string{"status", "event_date", "source", "source_role", "source_time"}
+
 // subjectNames are the names of the subject canonicalization every view that groups or queries
 // notes by subject reads (ledger.SubjectCanonicalizationNames): the matching key, the
 // canonical grouping and the notes source's raw subject and subject scope fields. Owned for
@@ -126,6 +131,7 @@ var owned = func() []entry {
 	add(invariantSettings, OwnerInvariant)
 	add(TextIDs(), OwnerPromptRules)
 	add(noteKernelFields, OwnerNoteSchema, kindSchema)
+	add(levelZeroNoteNames, OwnerNoteSchema, kindSchema)
 	add(subjectNames, OwnerSubjects)
 	return out
 }()

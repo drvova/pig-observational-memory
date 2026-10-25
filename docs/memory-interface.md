@@ -244,13 +244,33 @@ define bake-count = notes | where subject=baking | count "How many times the use
   shorter subject appears, while `group by subject` follows the canonical subject and its
   table names move with it; a field a schema added as `raw_subject` or `subject_scope` before
   the kernel took the name reads as `schema_raw_subject` or `schema_subject_scope`),
+  the level-0 fields of memory v2 follow: `status` (`proposed`, `hypothetical` or `retracted`,
+  empty for a statement of fact), `event_date` (the date the record is about), and `source`,
+  `source_role` and `source_time` (its first source entry, that entry's role as `history`
+  names it, and its time; role and time empty when the entry is off the branch); no schema may
+  declare one of these names (the kernel owns them for schemas), and a field a schema stored
+  before then added under one reads as `schema_<name>` under memory v2, while under v1, whose
+  records leave these fields empty, it keeps its name and fills that column),
   `reflections`, `history` (raw user and assistant
   text on the branch, the way nodecode's `recall-log` scans its log, without the calls and
   results of the memory tool and the defined tools), `saved` (curated
-  memories), and `recall <id>` (one record with its source, as the old recall tool did).
+  memories), and `recall <id>` (one record with its source, as the old recall tool did; under
+  memory v2 a note's recall also lists `cited_by`, the reflections still standing that cite it,
+  from the fold's reverse links, and leaves thinking out of its source entries). `recall <id> offset N` reads a paged text on from character N.
 - Stages: `search "words"` (all words, case-insensitive, literal), `where field=value`,
   `where field~"text"`, `since DATE`, `until DATE`, `from ID`, `through ID` (by branch position),
   `sort field [desc]`, `limit N` (default 20, at most 200), `count [by field]`, `group by field`.
+  A bound may end with a fixed word: `since DATE event` and `until DATE event` compare a
+  note's `event_date` (its entry time when it has none), as `sort event_date` orders; `until
+  DATE asof` and `through ID asof` read notes and reflections as the memory stood at the bound
+  (the point-in-time view): drops and reflections recorded after it are not applied, a record
+  not yet in the memory then is not listed (a record level 1 wrote at a later compaction holds
+  only from where it was recorded, under either bound), and a record superseding after it is
+  listed in `superseded_by` with `(later)`, so the record it replaced reads as the value current
+  then. Without `asof`, `until` and `through` filter the
+  current memory, which keeps every query the summary prints listing exactly what it counts.
+  `event` and `asof` are words after a bound, not stages, so they take no name from
+  definitions; one `asof` per query, never with `event`.
   Every stage name is kernel-owned under either engine (section 8), `from` and `through`
   included: a defined query or tool stored under one of those names before the stages existed
   is refused when the layer loads, with a report naming the query engine's stages, and a new
@@ -262,6 +282,18 @@ define bake-count = notes | where subject=baking | count "How many times the use
   a new tool (section 6).
 - Results are tables in the active codec with a `matched N, showing M` line when cut. Errors name the
   position and the fix. Queries cannot loop or run code; every query finishes.
+- Under memory v2 (docs/memory-v2.md, "Memory tool" and "Curated memory"): `history` leaves out
+  the current turn and harness markup and lists newest first; a search with no hit gives the
+  count of entries on the current branch holding each word, matched as the search matches; a cut result leads with `matched N, showing M` and, for
+  `history`, the query for the next older page (`through` the first entry left out); `recall`
+  pages a text longer than one record's content bound on line boundaries, naming the next
+  offset, and leaves thinking out of an entry; when the branch has nothing, `history`, `notes`
+  and `recall` read the session file, labelling rows `(off-path)`. `save` takes `quote=`, a
+  user's words that make it live at once; without one it is staged (shown in `saved` with
+  `state` `staged` only in its session, absent from the index) until code finds evidence;
+  `forget` retires; `saved` adds `state` (`live`, `staged`, `pinned`, `flagged`, and `refused`
+  for a memory file the validator refuses on load, listed with its reason; `edit` within the
+  validator or `forget` still reach it). Defined tools run their queries the same way.
 
 ## 6. The per-model harness
 

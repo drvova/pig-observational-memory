@@ -57,6 +57,7 @@ func StoreOf(h host.Host, cfg config.Config) (curated.Store, bool) {
 	}
 	store := curated.New(curated.DefaultDir(home))
 	store.Floor = floorOf(store, cfg.KernelFloor)
+	store.V2 = cfg.V2()
 	return store, true
 }
 

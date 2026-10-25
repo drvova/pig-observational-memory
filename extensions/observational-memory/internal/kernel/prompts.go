@@ -54,12 +54,16 @@ What you may do, all optional, in that one call:
 - merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit or note records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
 - reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
 - aliases: declare that one existing subject is about the same topic as another (from, to).
+- links: settle a listed POSSIBLE UPDATE by its two ids (id, updates): confirm when the later value replaces the earlier one (the later record then supersedes it), reject when both hold. Leave it when unsure; it stays a link and both records stay shown.
+- curated: cite a listed CURATED MEMORY by name with the ids of shown records of the user's own words that bear it out (name, supportingIds). A citation is the evidence a staged memory needs to enter the memory index; it never changes a memory's text.
 
 Rules code enforces (a proposal that breaks one is refused and the records it names stay as they are):
 - Cite only ids printed in this input. A record or merge citing any other id is refused.
 - Keep every specific: a merge, a supersede and a replacing reflection must carry every name, number, date, path and quantity of what they replace, written as the source writes it. Text that drops one is refused.
 - A record is labelled once and merged once. A second proposal naming the same id is refused, and so is labelling or merging a record another proposal supersedes, or superseding one another proposal replaced.
 - supersedes only on an explicit correction or replacement, never across different scopes, and never in a cycle.
+- A confirmed possible update must carry every specific of the earlier record except the values it updates.
+- A citation names a listed curated memory once, and at least one record it cites was picked from a user message.
 - A reflection's supporting records leave the summary when it is shown, so a supporting record whose specifics the reflection does not carry is not counted as support.
 - Subjects are short lowercase noun phrases; a path (a/b/c, at most three segments) nests a subject under a broader one. Reuse the subjects already listed.
 - Records not mentioned stay exactly as code extracted them. Leaving a record alone is always safe; inventing is never allowed.

@@ -15,7 +15,7 @@ import (
 var (
 	RequestFields    = []string{"content", "source"}
 	ReflectionFields = []string{"id", "dates", "content", "source"}
-	NoteFields       = []string{"id", "when", "kind", "scope", "content", "superseded_by", "source"}
+	NoteFields       = []string{"id", "when", "kind", "status", "scope", "content", "superseded_by", "source"}
 	OmittedFields    = []string{"from", "to", "count", "spans", "first_id", "last_id", "query"}
 )
 
@@ -27,7 +27,7 @@ const TablesInstructions = ledger.TablesSummaryIntro + `: name[rows]{fields}: th
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
-- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); superseded_by is the id of the record that replaced this one.
+- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; recall <entry id> reads that entry.
 - omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and the memory query that lists them.
 - The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the queries that list the whole list.
@@ -41,7 +41,7 @@ const LinesInstructions = `These are condensed memories from earlier in this ses
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - reflections: stable facts about the user, project, decisions, and constraints, as [id] (dates) content.
-- notes.<subject> and notes: records as [id] date kind content, oldest first. kind is fact, event, preference, plan, correction, assistant, attempt (a tool call and its outcome) or note (one written with the memory tool).
+- notes.<subject> and notes: records as [id] date kind status content, oldest first. kind is fact, event, preference, plan, correction, assistant, attempt (a tool call and its outcome) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted. A line may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - Every line ends with the entry id it was picked from, in parentheses; recall <entry id> reads that entry.
 - omitted lists records left out to fit, each span with its dates, count, first and last entry id and the memory query that lists them.
 - files and commits list files at their newest state and commits; +N more, all M ends a list with the queries that list the whole list.
@@ -154,9 +154,14 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		content := ledger.ResolveRelativeDates(o.Content, anchorTime(o.Timestamp))
 		scope := ledger.CanonicalScope(o.Scope, canonical[o.Subject])
 		replacedBy := strings.Join(supersededBy[o.ID], " ")
-		it.cells = []string{o.ID, it.from, string(o.Kind), scope, content, replacedBy, source}
+		// The pointers follow the content as the source does, never inside it.
+		shown := content
+		if it.links != "" {
+			shown += " " + it.links
+		}
+		it.cells = []string{o.ID, it.from, string(o.Kind), it.status, scope, shown, replacedBy, source}
 		line := "[" + o.ID + "]"
-		for _, part := range []string{it.from, string(o.Kind)} {
+		for _, part := range []string{it.from, string(o.Kind), it.status} {
 			if part != "" {
 				line += " " + part
 			}
@@ -167,6 +172,9 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		line += " " + content
 		if replacedBy != "" {
 			line += " (superseded by " + replacedBy + ")"
+		}
+		if it.links != "" {
+			line += " " + it.links
 		}
 		it.line = line + suffix(source)
 	}

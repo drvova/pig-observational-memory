@@ -19,15 +19,17 @@ const Label = "Memory"
 const grammar = `Query and update memory with one query: a source followed by stages joined with |, or one write.
 
 Sources (fields):
-  notes            active observations from this session's memory (id,when,kind,subject,scope,relevance,content,superseded_by,raw_subject,subject_scope); subject is canonical (related subjects grouped), subject_scope what the written subject adds, raw_subject as written; where subject= also matches raw_subject
+  notes            active observations from this session's memory (id,when,kind,subject,scope,relevance,content,superseded_by,raw_subject,subject_scope,status,event_date,source,source_role,source_time); subject is canonical (related subjects grouped), subject_scope what the written subject adds, raw_subject as written; where subject= also matches raw_subject; status is proposed, hypothetical or retracted (empty: stated as fact); event_date the date it is about; source the first source entry with its role and time
   reflections      durable conclusions drawn from notes (id,dates,content,supports)
   history          raw user, assistant and tool text on this branch, including what compaction condensed (id,when,role,content)
   saved            long-lived memories from earlier sessions, and defined queries (name,type,scope,updated,description,body)
-  recall <id>      one record in full with its exact source: a note or reflection id, an entry id, or a saved name
+  recall <id>      one record in full with its exact source, and the reflections citing a note: a note or reflection id, an entry id, or a saved name; recall <id> offset N reads a paged text on from character N
   harness          your memory harness: each layer definition and the seeds standing (model,kind,name,state,generation,origin,stale)
 Stages: search "words" (every word, case-insensitive) | where field=value | where field~"text" | since YYYY-MM-DD | until YYYY-MM-DD | from <entry id> | through <entry id> (by branch position, both ends kept) | sort field [desc] | limit N (default 20, at most 200) | count [by field] | group by field (last)
+  since/until DATE event compare a note's event_date (entry time when it has none); sort event_date falls back the same way
+  until DATE asof / through <entry id> asof read notes and reflections as they stood then: later drops, supersedes and reflections are ignored, and a later superseder is marked "(later)" in superseded_by
 Writes:
-  save name=<name> type=user|feedback|project|reference|lesson description="one sentence" [body="why and how to apply it"] [scope=global|project]
+  save name=<name> type=user|feedback|project|reference|lesson description="one sentence" [body="why and how to apply it"] [scope=global|project] [quote="the user's words that confirm it"]   without a user's quote a save may be staged: kept out of the index until evidence confirms it
   edit name=<name> [type=...] [description="..."] [body="..."]
   forget name=<name>
   feedback name=<name> outcome=helped|harmed quote="words copied from a user or assistant message that show it"

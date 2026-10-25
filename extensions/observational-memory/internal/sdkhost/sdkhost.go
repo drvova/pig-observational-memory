@@ -84,6 +84,15 @@ func (h *Host) GetBranch() ([]session.Entry, error) {
 	return session.FromMaps(entries), nil
 }
 
+// GetEntries reads every entry of the session file, in file order (host.SessionFileReader).
+func (h *Host) GetEntries() ([]session.Entry, error) {
+	entries, err := h.ctx.SessionManager().GetEntries()
+	if err != nil {
+		return nil, err
+	}
+	return session.FromMaps(entries), nil
+}
+
 // AppendEntry persists a custom entry.
 func (h *Host) AppendEntry(customType string, data any) error {
 	return h.ctx.AppendEntry(customType, data)

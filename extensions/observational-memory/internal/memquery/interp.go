@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
@@ -83,11 +84,35 @@ type Env struct {
 	// memory queries too, so history and the feedback quote check leave their calls and
 	// results out as they leave out the memory tool's.
 	DefinedTools []string
+	// CitedBy makes recall of an observation list the reflections citing it
+	// (FoldedLedger.CitedBy): memory v2's lineage (docs/memory-v2.md, "Memory tool"). The
+	// per-model harness sets it under memoryEngine v2.
+	CitedBy bool
 	// Records, when set, are the memory the notes and reflections sources read instead of the
 	// ledger folded from Entries: a compaction's projection for a summary query, or one
 	// pass's notes for a detector query (docs/memory-interface.md, section 8).
 	Records *Records
+	// V2 runs memory v2's memory-tool behaviour (docs/memory-v2.md, "Memory tool"): history
+	// leaves out the current turn and harness markup, lists newest first, says how many entries
+	// match each word when none matches them all, and a cut result leads with matched N,
+	// showing M and, for history, the query for the next older page; recall pages a long text
+	// (RecallPageChars) and leaves thinking out of an entry; history, notes and recall fall back
+	// to SessionEntries when the current branch has nothing; saved shows each memory's state.
+	// The per-model harness sets it under memoryEngine v2.
+	V2 bool
+	// SessionEntries are every entry of the session file, in file order: memory v2's off-path
+	// fallback (docs/memory-v2.md, "Branches"). Nil when the host cannot read them.
+	SessionEntries []session.Entry
+
+	// offPath marks the fallback read over SessionEntries: rows whose id is in onBranch are left
+	// out, and the others are labelled OffPathLabel.
+	offPath  bool
+	onBranch map[string]bool
 }
+
+// OffPathLabel follows the id of a row or entry that is not on the current branch: a summary's
+// off-path span ends, and memory v2's fallback rows (docs/memory-v2.md, "Branches").
+const OffPathLabel = " (off-path)"
 
 // Records are a memory given to a query directly.
 type Records struct {
@@ -122,6 +147,8 @@ type Details struct {
 	Error   bool `json:"error,omitempty"`
 	// Recall is recall's details when it read an observation or reflection id.
 	Recall *recall.Details `json:"recall,omitempty"`
+	// CitedBy are the reflections citing the observation recall read (FoldedLedger.CitedBy).
+	CitedBy []string `json:"citedBy,omitempty"`
 }
 
 // Result is a query's outcome.
@@ -173,11 +200,23 @@ func Run(env Env, query string) Result {
 	}
 	details.Kind = q.Source
 	if q.Source == SourceRecall {
-		text, recalled, err := runRecall(env, q.ID)
+		text, recalled, cited, err := runRecall(env, q.ID)
+		if err != nil && env.V2 && len(env.SessionEntries) > 0 {
+			// Memory v2's fallback: an id not on the current branch is read from the session
+			// file, labelled off-path.
+			if offText, offRecalled, _, offErr := runRecall(env.fallback(), q.ID); offErr == nil {
+				text, recalled, cited, err = strings.TrimSpace(OffPathLabel)+" "+offText, offRecalled, nil, nil
+			}
+		}
 		if err != nil {
 			return fail(err)
 		}
-		details.Recall = recalled
+		if env.V2 || q.Paged {
+			if text, err = page(text, q); err != nil {
+				return fail(err)
+			}
+		}
+		details.Recall, details.CitedBy = recalled, cited
 		return Result{Text: text, Details: details, Hits: []string{q.ID}}
 	}
 	out, err := runRead(env, q)
@@ -199,8 +238,10 @@ type relation struct {
 	from, to []string
 	// clip names the fields shortened for display (HistoryClipChars).
 	clip map[string]bool
-	// matched is the row count before the last limit that cut rows, 0 when none did.
+	// matched is the row count before the last limit that cut rows, 0 when none did; next is
+	// the id of the first row that cut left out.
 	matched int
+	next    string
 	// also maps a field to another whose value where also matches (the notes source's
 	// subject to raw_subject), so a filter written against the stored value keeps matching.
 	also map[string]string
@@ -242,6 +283,7 @@ func (r *relation) cut(n int) {
 		return
 	}
 	r.matched = len(r.rows)
+	r.next = r.rows[n][0]
 	r.rows = r.rows[:n]
 	if r.from != nil {
 		r.from, r.to = r.from[:n], r.to[:n]
@@ -263,21 +305,43 @@ type readOutput struct {
 	hits []string
 }
 
-// runRead runs a source and its stages.
+// runRead runs a source and its stages. Under memory v2 a history or notes query that finds
+// nothing on the branch is run again over the session file (fallback), and a history search
+// that finds nothing there either says how many entries match each word (noMatchCounts).
 func runRead(env Env, q *Query) (readOutput, error) {
 	rel, words, group, err := evalRead(env, q, true)
 	if err != nil {
 		return readOutput{}, err
 	}
+	if env.V2 && len(rel.rows) == 0 && (q.Source == SourceHistory || q.Source == SourceNotes) && env.Records == nil {
+		if len(env.SessionEntries) > 0 {
+			if off, offWords, offGroup, err := evalRead(env.fallback(), q, true); err == nil && len(off.rows) > 0 {
+				rel, words, group = off, offWords, offGroup
+			}
+		}
+		if len(rel.rows) == 0 && q.Source == SourceHistory {
+			if text, ok := noMatchCounts(env, q); ok {
+				return readOutput{text: text}, nil
+			}
+		}
+	}
 	tablesOut := encodeRelation(rel, words, group)
 	out := readOutput{text: env.Codec.Encode(tablesOut...), shown: len(rel.rows), matched: rel.matched}
 	if rel.name == SourceNotes || rel.name == SourceReflections || rel.name == SourceSaved {
 		for _, row := range rel.rows {
-			out.hits = append(out.hits, row[0])
+			out.hits = append(out.hits, strings.TrimSuffix(row[0], OffPathLabel))
 		}
 	}
 	if rel.matched > len(rel.rows) {
-		out.text += fmt.Sprintf("\nmatched %d, showing %d", rel.matched, len(rel.rows))
+		marker := fmt.Sprintf("matched %d, showing %d", rel.matched, len(rel.rows))
+		if !env.V2 {
+			out.text += "\n" + marker
+			return out, nil
+		}
+		if next := nextPageQuery(env, q, rel); next != "" {
+			marker += "; the next older page: " + next
+		}
+		out.text = marker + "\n" + out.text
 	}
 	return out, nil
 }
@@ -346,7 +410,11 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 			return nil, nil, nil, &Error{Pos: stage.pos, Msg: "group by must be the last stage", Hint: "move limit, sort and where before group by"}
 		}
 	}
-	rel, err := loadSource(env, q.Source)
+	view, err := newPointInTime(env, q)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rel, err := loadSource(env, q.Source, view)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -403,10 +471,20 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 				return nil, nil, nil, &Error{Pos: stage.pos, Msg: stage.Kind + " filters records, not counts", Hint: "put " + stage.Kind + " before count"}
 			}
 			date := stage.Value
+			from, to := func(i int) string { return rel.from[i] }, func(i int) string { return rel.to[i] }
+			if stage.Event {
+				c, ok := eventDateColumn(rel)
+				if !ok {
+					return nil, nil, nil, &Error{Pos: stage.pos, Msg: "event compares the event dates of notes", Hint: "use " + stage.Kind + " " + stage.Value + " without event on " + rel.name}
+				}
+				// A note without an event date compares by its entry time.
+				from = func(i int) string { return eventOr(rel.rows[i][c], rel.from[i]) }
+				to = func(i int) string { return eventOr(rel.rows[i][c], rel.to[i]) }
+			}
 			if stage.Kind == StageSince {
-				rel.keep(func(i int) bool { return rel.to[i] != "" && rel.to[i] >= date })
+				rel.keep(func(i int) bool { return to(i) != "" && to(i) >= date })
 			} else {
-				rel.keep(func(i int) bool { return rel.from[i] != "" && rel.from[i] <= date })
+				rel.keep(func(i int) bool { return from(i) != "" && from(i) <= date })
 			}
 		case StageFrom, StageThrough:
 			if rel.from == nil {
@@ -424,13 +502,20 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 			}
 			from := stage.Kind == StageFrom
 			rel.keep(func(i int) bool {
-				at, ok := anchors.of(rel.rows[i][0])
+				at, ok := anchors.of(strings.TrimSuffix(rel.rows[i][0], OffPathLabel))
 				return ok && (from && at >= bound || !from && at <= bound)
 			})
 		case StageSort:
 			c, err := rel.fieldIndex(stage.Field, stage.fieldPos)
 			if err != nil {
 				return nil, nil, nil, err
+			}
+			if e, ok := eventDateColumn(rel); ok && e == c {
+				// A note without an event date sorts by its entry time.
+				if when, err := rel.fieldIndex("when", stage.fieldPos); err == nil {
+					sortRelationBy(rel, func(row []string) string { return eventOr(row[c], row[when]) }, stage.Desc)
+					break
+				}
 			}
 			sortRelation(rel, c, stage.Desc)
 		case StageLimit:
@@ -453,9 +538,35 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 	return rel, words, group, nil
 }
 
+// eventDateColumn is the notes source's event_date column, when rel is the notes source's rows.
+func eventDateColumn(rel *relation) (int, bool) {
+	if rel.name != SourceNotes {
+		return 0, false
+	}
+	for i, f := range rel.fields {
+		if f == FieldEventDate {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// eventOr is a note's event date, else its entry time.
+func eventOr(event, entry string) string {
+	if event != "" {
+		return event
+	}
+	return entry
+}
+
 // sortRelation orders the rows by field c, numerically when both values are whole numbers.
 // The sort is stable, so equal values keep the source's order.
 func sortRelation(rel *relation, c int, desc bool) {
+	sortRelationBy(rel, func(row []string) string { return row[c] }, desc)
+}
+
+// sortRelationBy is sortRelation over the value key reads from each row.
+func sortRelationBy(rel *relation, key func(row []string) string, desc bool) {
 	order := make([]int, len(rel.rows))
 	for i := range order {
 		order[i] = i
@@ -469,7 +580,7 @@ func sortRelation(rel *relation, c int, desc bool) {
 		return a < b
 	}
 	sort.SliceStable(order, func(i, j int) bool {
-		a, b := rel.rows[order[i]][c], rel.rows[order[j]][c]
+		a, b := key(rel.rows[order[i]]), key(rel.rows[order[j]])
 		if desc {
 			return less(b, a)
 		}
@@ -706,4 +817,115 @@ func newRowAnchors(env Env, source string, stage Stage) (*rowAnchors, error) {
 		return nil, &Error{Pos: stage.pos, Msg: stage.Kind + " filters notes, reflections and history by branch position", Hint: "put " + stage.Kind + " before count, on one of those sources"}
 	}
 	return a, nil
+}
+
+// pointInTime is the bound of the point-in-time view (docs/memory-v2.md, "Memory tool"): until
+// DATE asof or through ID asof reads notes and reflections as the memory stood at the bound.
+type pointInTime struct {
+	// until is until's date, "" for through.
+	until string
+	// index is the bound's branch index: through's entry, or the last entry dated on or before
+	// until (-1 when none is). Drops and reflections recorded after it are not applied.
+	index int
+	// positions are the branch's entry indexes (ledger.EntryIndexByID).
+	positions map[string]int
+	// recorded are the observations recorded at or before index: in the memory at the bound.
+	recorded map[string]bool
+	// consolidated are the observations level 1 wrote at a compaction
+	// (ledger.ConsolidatedObservationIDs).
+	consolidated map[string]bool
+}
+
+// newPointInTime reads q's asof bound; nil when q has none. One asof per query, and only on
+// notes and reflections, whose memory changes after it was recorded.
+func newPointInTime(env Env, q *Query) (*pointInTime, error) {
+	var view *pointInTime
+	for _, stage := range q.Stages {
+		if !stage.AsOf {
+			continue
+		}
+		if view != nil {
+			return nil, &Error{Pos: stage.pos, Msg: "one asof per query", Hint: "keep asof on the bound the memory is read at"}
+		}
+		if q.Source != SourceNotes && q.Source != SourceReflections {
+			return nil, &Error{Pos: stage.pos, Msg: "asof reads notes and reflections as they stood at the bound", Hint: "use " + stage.Kind + " " + stage.Value + " without asof on " + q.Source}
+		}
+		positions := ledger.EntryIndexByID(env.Entries)
+		view = &pointInTime{index: -1, positions: positions}
+		if stage.Kind == StageThrough {
+			at, ok := positions[stage.Value]
+			if !ok {
+				return nil, &Error{Pos: stage.pos, Msg: fmt.Sprintf("entry %s is not on this branch", stage.Value), Hint: "take entry ids from history or from a summary line on this branch"}
+			}
+			view.index = at
+			continue
+		}
+		view.until = stage.Value
+		for i, entry := range env.Entries {
+			if day := entryDay(entry); day != "" && day <= stage.Value {
+				view.index = i
+			}
+		}
+	}
+	if view != nil {
+		view.recorded = map[string]bool{}
+		if view.index >= 0 {
+			for id := range ledger.FoldLedger(env.Entries[:view.index+1], "").ObservationsByID {
+				view.recorded[id] = true
+			}
+		}
+		view.consolidated = ledger.ConsolidatedObservationIDs(env.Entries)
+	}
+	return view, nil
+}
+
+// holds reports whether o was in the memory at the bound: recorded at or before it, or, for a
+// record recorded later that level 0 (or a v1 worker) picked from what was said, said by then:
+// its newest source entry at or before through's entry, or its date (the newest of its sources')
+// on or before until's date, the one test for both bounds. A record level 1 wrote at a later
+// compaction (a merge, a label, a settled possible update) holds only from where it was
+// recorded: what it says was judged there, and it may carry a value said after the bound.
+func (v *pointInTime) holds(o ledger.Observation) bool {
+	if v.recorded[o.ID] {
+		return true
+	}
+	if v.consolidated[o.ID] {
+		return false
+	}
+	if v.until != "" {
+		day := dayOf(o.Timestamp)
+		return day != "" && day <= v.until
+	}
+	newest := -1
+	for _, id := range o.SourceEntryIDs {
+		if at, ok := v.positions[id]; ok {
+			newest = max(newest, at)
+		}
+	}
+	return newest >= 0 && newest <= v.index
+}
+
+// dropped are the ids dropped by the bound: the drops recorded at or before its index.
+func (v *pointInTime) dropped(entries []ledger.Entry) map[string]bool {
+	if v.index < 0 {
+		return map[string]bool{}
+	}
+	return ledger.FoldLedger(entries[:v.index+1], "").DroppedObservationIDs
+}
+
+// reflections are the reflections recorded at or before the bound's index.
+func (v *pointInTime) reflections(entries []ledger.Entry) []ledger.Reflection {
+	if v.index < 0 {
+		return []ledger.Reflection{}
+	}
+	return ledger.FoldLedger(entries[:v.index+1], "").Reflections
+}
+
+// entryDay is the date of an entry, as history dates it: its message's time, else the entry's.
+func entryDay(entry ledger.Entry) string {
+	var stamp any
+	if entry.Message != nil {
+		stamp = entry.Message["timestamp"]
+	}
+	return dayOf(serialize.FormatRecallTimestamp(stamp, entryTimestamp(entry)))
 }

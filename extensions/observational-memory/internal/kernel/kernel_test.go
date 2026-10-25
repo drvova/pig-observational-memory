@@ -48,6 +48,16 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 			}
 		}
 	}
+	// The notes source's level-0 fields are owned for schemas, so no schema field shadows one,
+	// and a schema field cannot take them either.
+	for _, name := range memquery.LevelZeroNoteFields {
+		if got, ok := kernel.Owns(layer.KindSchema, name); !ok || got != kernel.OwnerNoteSchema {
+			t.Errorf("Owns(schema, %q) = %q, %v; want %q", name, got, ok, kernel.OwnerNoteSchema)
+		}
+		if ledger.SchemaAddedFieldName(name) {
+			t.Errorf("a schema can still add the field %q", name)
+		}
+	}
 	for _, id := range kernel.TextIDs() {
 		if strings.TrimSpace(kernel.Text(id)) == "" {
 			t.Errorf("kernel text %s is empty", id)

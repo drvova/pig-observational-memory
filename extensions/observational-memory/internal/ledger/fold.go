@@ -15,6 +15,11 @@ type FoldedLedger struct {
 	// Aliases are the subject aliases recorded through the fold boundary, in ledger order;
 	// whether each applies is decided when it is read (CheckSubjectAliases). nil when none.
 	Aliases []SubjectAlias
+	// CitedBy are the reverse links of the reflections' citations, computed by the fold and
+	// never stored: for each observation id a reflection cites, the ids of the reflections that
+	// cite it, in ledger order, so retiring a record shows what loses support. A level-1 merge
+	// keeps its sources' entry ids, not their record ids, so it cites no record.
+	CitedBy map[string][]string
 }
 
 func foldEndIndex(entries []Entry, upToEntryID string) int {
@@ -90,6 +95,14 @@ func FoldLedger(entries []Entry, upToEntryID string) FoldedLedger {
 			folded.ActiveObservations = append(folded.ActiveObservations, observation)
 		}
 	}
+	folded.CitedBy = map[string][]string{}
+	for _, reflection := range folded.Reflections {
+		for _, id := range reflection.SupportingObservationIDs {
+			if !slicesContains(folded.CitedBy[id], reflection.ID) {
+				folded.CitedBy[id] = append(folded.CitedBy[id], reflection.ID)
+			}
+		}
+	}
 	if folded.Observations == nil {
 		folded.Observations = []Observation{}
 	}
@@ -97,4 +110,28 @@ func FoldLedger(entries []Entry, upToEntryID string) FoldedLedger {
 		folded.Reflections = []Reflection{}
 	}
 	return folded
+}
+
+// ConsolidatedObservationIDs are the ids of the observations first recorded (first valid record
+// wins, as FoldLedger reads them) in a batch memory v2's level 1 wrote
+// (ObservationsRecordedData.Consolidated).
+func ConsolidatedObservationIDs(entries []Entry) map[string]bool {
+	seen := map[string]bool{}
+	out := map[string]bool{}
+	for _, entry := range entries {
+		data, ok := ObservationsRecordedEntry(entry)
+		if !ok {
+			continue
+		}
+		for _, o := range data.Observations {
+			if seen[o.ID] {
+				continue
+			}
+			seen[o.ID] = true
+			if data.Consolidated {
+				out[o.ID] = true
+			}
+		}
+	}
+	return out
 }

@@ -50,9 +50,11 @@ const (
 // builtinTypes are the structured fields' fixed types.
 var builtinTypes = map[string]string{NoteFieldKind: FieldEnum, NoteFieldSubject: FieldText, NoteFieldScope: FieldText, NoteFieldSupersedes: FieldIDs}
 
-// reservedNoteFields are the names a schema field cannot take: the kernel's note fields and
-// the record's own bookkeeping.
-var reservedNoteFields = []string{"id", "timestamp", "content", "relevance", "sources", "sourceentryids", "tokencount", "fields"}
+// reservedNoteFields are the names a schema field cannot take: the kernel's note fields, the
+// record's own bookkeeping, and the notes source's fields memory v2's level 0 fills (status,
+// event_date and the first source entry's id, role and time), which would shadow a schema
+// field of the same name.
+var reservedNoteFields = []string{"id", "timestamp", "content", "relevance", "sources", "sourceentryids", "tokencount", "fields", "status", "event_date", "source", "source_role", "source_time"}
 
 // Schema bounds: a note stays a short record, and a schema a short declaration.
 const (

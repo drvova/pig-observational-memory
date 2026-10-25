@@ -96,6 +96,12 @@ type record struct {
 	// correction is a correction's replaced phrase (correctionMarkers); target says whether the
 	// correction was matched against earlier records yet.
 	correction *correctionTarget
+	// retraction marks an explicit retraction (ledger.StatusRetracted), which stands only once
+	// it names what it withdraws (resolveRetractions).
+	retraction bool
+	// undated marks a merged record whose parts named different event dates, or a part naming
+	// dates but no one date (ledger.NamesNoOneDate).
+	undated bool
 }
 
 // extraction is one Extract call's state.
@@ -188,6 +194,8 @@ func Extract(in Input) Result {
 	x.merge()
 	x.assignIDs()
 	x.resolveCorrections()
+	x.resolveRetractions()
+	x.linkRecords()
 	result := Result{Batches: x.batches(cite)}
 	if last >= 0 {
 		result.CoversUpToID = in.Entries[last].ID
@@ -281,6 +289,9 @@ func (x *extraction) merge() {
 	for _, r := range x.records {
 		if n := len(merged); n > 0 && mergeable(merged[n-1], r) {
 			prev := merged[n-1]
+			// A part whose text names dates but no one date (ledger.NamesNoOneDate) leaves the
+			// joined text none, whichever side it is on.
+			prevUndated, partUndated := prev.undated || ledger.NamesNoOneDate(prev.obs), r.undated || ledger.NamesNoOneDate(r.obs)
 			prev.obs.Content = serialize.TruncateRecordContent(prev.obs.Content + " " + r.obs.Content)
 			for _, id := range r.obs.SourceEntryIDs {
 				if !slices.Contains(prev.obs.SourceEntryIDs, id) {
@@ -288,6 +299,17 @@ func (x *extraction) merge() {
 				}
 			}
 			prev.anchor = max(prev.anchor, r.anchor)
+			// The joined text has one event date when its parts name at most one between them
+			// (ledger.EventDate): a part naming none adds no date, two different dates leave none.
+			switch {
+			case prevUndated || partUndated:
+				prev.obs.EventDate, prev.undated = "", true
+			case r.obs.EventDate == "" || r.obs.EventDate == prev.obs.EventDate:
+			case prev.obs.EventDate == "":
+				prev.obs.EventDate = r.obs.EventDate
+			default:
+				prev.obs.EventDate, prev.undated = "", true
+			}
 			continue
 		}
 		merged = append(merged, r)
@@ -301,7 +323,7 @@ func mergeable(a, b *record) bool {
 	default:
 		return false
 	}
-	return a.obs.Kind == b.obs.Kind && a.obs.Subject != "" && a.obs.Subject == b.obs.Subject && a.exchange == b.exchange && a.correction == nil && b.correction == nil
+	return a.obs.Kind == b.obs.Kind && a.obs.Status == b.obs.Status && a.obs.Subject != "" && a.obs.Subject == b.obs.Subject && a.exchange == b.exchange && a.correction == nil && b.correction == nil
 }
 
 // recordID is a code record's id: the hash of its content and its sources, so the same line
