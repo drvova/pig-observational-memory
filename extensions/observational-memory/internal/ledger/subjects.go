@@ -499,3 +499,64 @@ func CountCanonicalSubjectsWithAliases(observations []Observation, aliases []Sub
 	})
 	return out
 }
+
+// SubjectInText is the canonical subject a text names among the subjects already in the
+// ledger and the subjects its aliases name (docs/memory-v2.md, "Level 0: code only"): a
+// subject is named when every one of its words (SubjectKey) is a word of text, a word matching
+// its singular or plural form as CanonicalSubjects folds them. Of the subjects named, the one
+// with the most words wins, ties going to the lexicographically smallest, and it is read
+// through CanonicalSubjectsWithAliases, so meaning a model recorded once (a subject, a path, an
+// alias) is reused by code for every later line. "" when text names none. Nothing is scored.
+func SubjectInText(text string, subjects []string, aliases []SubjectAlias) string {
+	textWords := map[string]bool{}
+	for _, w := range subjectWords(text) {
+		textWords[w] = true
+		for _, singular := range singularCandidates(w) {
+			textWords[singular] = true
+		}
+	}
+	if len(textWords) == 0 {
+		return ""
+	}
+	present := append([]string{}, subjects...)
+	for _, a := range aliases {
+		present = append(present, a.From, a.To)
+	}
+	best, bestWords := "", 0
+	for _, subject := range present {
+		words := subjectWords(subject)
+		if len(words) == 0 {
+			continue
+		}
+		named := true
+		for _, w := range words {
+			if textWords[w] {
+				continue
+			}
+			plural := false
+			for _, singular := range singularCandidates(w) {
+				if textWords[singular] {
+					plural = true
+					break
+				}
+			}
+			if !plural {
+				named = false
+				break
+			}
+		}
+		if !named {
+			continue
+		}
+		if len(words) > bestWords || (len(words) == bestWords && subject < best) {
+			best, bestWords = subject, len(words)
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	if canonical, ok := CanonicalSubjectsWithAliases(present, aliases)[best]; ok && canonical.Subject != "" {
+		return canonical.Subject
+	}
+	return NormalizeSubject(best)
+}

@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -144,5 +146,59 @@ func TestCuratedCallReadsProjectSettingsOnlyWhenTrusted(t *testing.T) {
 		if cfg.CuratedMemoryIndexTokens != c.want {
 			t.Fatalf("%s: curatedMemoryIndexTokens = %d, want %d", c.name, cfg.CuratedMemoryIndexTokens, c.want)
 		}
+	}
+}
+
+// Memory v2 leads the section with its one resume line, also when curated memory is off; v1's
+// section is the index alone, removed when curated memory is off.
+func TestMemorySectionText(t *testing.T) {
+	if text, set := memorySectionText("INDEX", true, false); !set || text != "INDEX" {
+		t.Fatalf("v1 on: %q %v", text, set)
+	}
+	if _, set := memorySectionText("", false, false); set {
+		t.Fatal("v1 off kept the section")
+	}
+	if text, set := memorySectionText("INDEX", true, true); !set || text != resumeNoteLine+"\n\nINDEX" {
+		t.Fatalf("v2 on: %q", text)
+	}
+	if text, set := memorySectionText("", false, true); !set || text != resumeNoteLine {
+		t.Fatalf("v2 off: %q", text)
+	}
+}
+
+// The context handler follows the engine: subscribed once under v2, unsubscribed under v1, so
+// v1 is sent no request context at all.
+func TestContextSubscriptionFollowsTheEngine(t *testing.T) {
+	subscribed, unsubscribed := 0, 0
+	c := &contextSubscription{subscribe: func() func() {
+		subscribed++
+		return func() { unsubscribed++ }
+	}}
+	c.sync(false)
+	c.sync(true)
+	c.sync(true)
+	if subscribed != 1 || unsubscribed != 0 {
+		t.Fatalf("v2: subscribed %d, unsubscribed %d", subscribed, unsubscribed)
+	}
+	c.sync(false)
+	c.sync(false)
+	if subscribed != 1 || unsubscribed != 1 {
+		t.Fatalf("v1: subscribed %d, unsubscribed %d", subscribed, unsubscribed)
+	}
+	rt := runtime.New()
+	cfg := config.Defaults
+	rt.SetConfig(cfg)
+	if wantsContext(rt) {
+		t.Fatal("v1 wants the context")
+	}
+	cfg.MemoryEngine = config.EngineV2
+	rt.SetConfig(cfg)
+	if !wantsContext(rt) {
+		t.Fatal("v2 does not want the context")
+	}
+	cfg.Passive = true
+	rt.SetConfig(cfg)
+	if wantsContext(rt) {
+		t.Fatal("passive v2 wants the context")
 	}
 }

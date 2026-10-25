@@ -19,6 +19,25 @@ import (
 // memorySection names the system prompt section the index occupies.
 const memorySection = "curated-memory"
 
+// resumeNoteLine is memory v2's one system-prompt line asking the session model to say,
+// before a tool call, what it would need to resume: level 0 keeps the text before an assistant
+// message's first tool call verbatim on that call's record (docs/memory-v2.md, "The model's
+// own words"). It costs no request.
+const resumeNoteLine = "Before a tool call, say in a sentence what you would need to resume this work if the conversation were compacted; memory keeps those words with the call."
+
+// memorySectionText is the extension's system-prompt section: the curated index when curated
+// memory is on, led under memory v2 by resumeNoteLine (a fixed line, so the prompt prefix stays
+// stable). set is false when there is nothing to show and the section is removed.
+func memorySectionText(index string, curatedOn, v2 bool) (text string, set bool) {
+	if !v2 {
+		return index, curatedOn
+	}
+	if !curatedOn || index == "" {
+		return resumeNoteLine, true
+	}
+	return resumeNoteLine + "\n\n" + index, true
+}
+
 // memoryPin is the index the current conversation was given. PiG keeps the
 // extension process across /new, /resume, /fork and /reload, so the pin is
 // reset at every session_start as well as after a compaction.
@@ -113,16 +132,19 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 			return nil, nil
 		}
 		call, cfg, on := curatedCall(h)
-		if !on {
-			sections.Delete(memorySection)
-			return nil, nil
+		index := ""
+		if on {
+			index, _, _ = memoryPin.Get(func() (string, []string) {
+				return curated.IndexFor(call.Store, call.Project, cfg.CuratedMemoryIndexTokens)
+			})
 		}
 		// A section, not a returned systemPrompt: a returned prompt is forced
 		// for the whole run and drops the sections other extensions set.
-		index, _, _ := memoryPin.Get(func() (string, []string) {
-			return curated.IndexFor(call.Store, call.Project, cfg.CuratedMemoryIndexTokens)
-		})
-		sections.Set(memorySection, index)
+		if text, set := memorySectionText(index, on, cfg.V2()); set {
+			sections.Set(memorySection, text)
+		} else {
+			sections.Delete(memorySection)
+		}
 		return nil, nil
 	})
 	// A new or resumed conversation, and one restarting from a compaction

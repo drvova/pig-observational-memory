@@ -490,8 +490,14 @@ func OnSessionEnd(rt *runtime.Runtime, reason string) {
 	}
 }
 
-// OnTurnEnd handles turn_end: launch a due consolidation unless in idle mode.
+// OnTurnEnd handles turn_end: launch a due consolidation unless in idle mode. Under memory v2
+// it runs level-0 extraction instead, which makes no model request (extractTurnV2).
 func OnTurnEnd(rt *runtime.Runtime, h host.Host) {
+	rt.EnsureConfig(h)
+	if rt.Config().V2() {
+		extractTurnV2(rt, h)
+		return
+	}
 	if idleMode(rt, h) {
 		return
 	}

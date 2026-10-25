@@ -633,3 +633,35 @@ func TestRollbackKeeping(t *testing.T) {
 		t.Fatalf("after rollback to 0: %+v", h.List(""))
 	}
 }
+
+// The from and through query stages are kernel-owned under every engine, as every stage is
+// (memquery.Stages): a definition stored under one of those names before the stages existed is
+// refused at load with a report naming the query engine's stages, never loaded or registered.
+func TestStoredDefinitionNamedAfterANewStageIsReported(t *testing.T) {
+	s := newStore(t, nil)
+	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+	for _, name := range []string{"from", "through"} {
+		if err := writeAtomic(s.Path(model, KindTool, name), encodeFile(Definition{Kind: KindTool, Name: name, Model: model, Text: "definition[1]{name,query}:\n  " + name + ",notes", Time: now}, "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, reports, err := s.Load(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defs := h.List(""); len(defs) != 0 {
+		t.Fatalf("loaded %+v", defs)
+	}
+	skipped := map[string]string{}
+	for _, r := range reports {
+		skipped[r.Name] = r.Reason
+	}
+	for _, name := range []string{"from", "through"} {
+		if !strings.Contains(skipped[name], kernel.OwnerQueryStage) {
+			t.Errorf("%s: reported %q, want the query stages' owner", name, skipped[name])
+		}
+	}
+	if _, err := s.Put(Definition{Kind: KindTool, Name: "through", Model: model, Text: "definition[1]{name,query}:\n  through,notes"}); err == nil {
+		t.Fatal("a new definition named through was accepted")
+	}
+}

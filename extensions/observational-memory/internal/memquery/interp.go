@@ -353,6 +353,7 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 	words := []string{}
 	limited := false
 	var group *Stage
+	var anchors *rowAnchors
 	for i := range q.Stages {
 		stage := q.Stages[i]
 		switch stage.Kind {
@@ -407,6 +408,25 @@ func evalRead(env Env, q *Query, defaultLimit bool) (*relation, []string, *Stage
 			} else {
 				rel.keep(func(i int) bool { return rel.from[i] != "" && rel.from[i] <= date })
 			}
+		case StageFrom, StageThrough:
+			if rel.from == nil {
+				return nil, nil, nil, &Error{Pos: stage.pos, Msg: stage.Kind + " filters records, not counts", Hint: "put " + stage.Kind + " before count"}
+			}
+			if anchors == nil {
+				var err error
+				if anchors, err = newRowAnchors(env, rel.name, stage); err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			bound, ok := anchors.positions[stage.Value]
+			if !ok {
+				return nil, nil, nil, &Error{Pos: stage.pos, Msg: fmt.Sprintf("entry %s is not on this branch", stage.Value), Hint: "take entry ids from history or from a summary line on this branch"}
+			}
+			from := stage.Kind == StageFrom
+			rel.keep(func(i int) bool {
+				at, ok := anchors.of(rel.rows[i][0])
+				return ok && (from && at >= bound || !from && at <= bound)
+			})
 		case StageSort:
 			c, err := rel.fieldIndex(stage.Field, stage.fieldPos)
 			if err != nil {
@@ -626,3 +646,64 @@ outer:
 
 // errCuratedOff is the failure of a query that needs the curated store when it is off.
 var errCuratedOff = errors.New("curated memory is off (curatedMemory: false), or PiG's config directory could not be found; notes, reflections, history and recall of ids still work")
+
+// rowAnchors are the branch positions the from and through stages compare: each entry id's
+// index on the branch, and each row's anchor by its id (ledger.ObservationAnchor for a note,
+// ledger.ReflectionAnchor for a reflection, the entry itself for history).
+type rowAnchors struct {
+	positions map[string]int
+	of        func(id string) (int, bool)
+}
+
+// newRowAnchors reads the anchors of source's rows; stage is the from or through stage that
+// asks, for the error when the rows have no branch position (a count, saved, harness).
+func newRowAnchors(env Env, source string, stage Stage) (*rowAnchors, error) {
+	positions := ledger.EntryIndexByID(env.Entries)
+	a := &rowAnchors{positions: positions}
+	switch source {
+	case SourceHistory:
+		a.of = func(id string) (int, bool) {
+			at, ok := positions[id]
+			return at, ok
+		}
+	case SourceNotes, SourceReflections:
+		folded := ledger.FoldLedger(env.Entries, "")
+		byID := folded.ObservationsByID
+		reflections := folded.ReflectionsByID
+		if env.Records != nil {
+			byID = make(map[string]ledger.Observation, len(folded.ObservationsByID)+len(env.Records.Observations))
+			for id, o := range folded.ObservationsByID {
+				byID[id] = o
+			}
+			for _, o := range env.Records.Observations {
+				byID[o.ID] = o
+			}
+			reflections = make(map[string]ledger.Reflection, len(env.Records.Reflections))
+			for _, r := range env.Records.Reflections {
+				reflections[r.ID] = r
+			}
+		}
+		if source == SourceNotes {
+			a.of = func(id string) (int, bool) {
+				o, known := byID[id]
+				if !known {
+					return -1, false
+				}
+				_, at, ok := ledger.ObservationAnchor(o, positions)
+				return at, ok
+			}
+		} else {
+			a.of = func(id string) (int, bool) {
+				r, known := reflections[id]
+				if !known {
+					return -1, false
+				}
+				_, at, ok := ledger.ReflectionAnchor(r, byID, positions)
+				return at, ok
+			}
+		}
+	default:
+		return nil, &Error{Pos: stage.pos, Msg: stage.Kind + " filters notes, reflections and history by branch position", Hint: "put " + stage.Kind + " before count, on one of those sources"}
+	}
+	return a, nil
+}

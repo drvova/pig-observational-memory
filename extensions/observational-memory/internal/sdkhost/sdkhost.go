@@ -60,6 +60,21 @@ func (r requestContext) Err() error { return r.ctx.Err() }
 
 func (r requestContext) Value(any) any { return nil }
 
+// ContextMessages are the messages of a context event's payload (sdk.EventContext), the same
+// objects the SDK sends back: a handler that edits them in place and returns nil changes the
+// request's context without replacing its list, so PiG keeps the system messages where they
+// are and the session file keeps the originals. A message that is not an object is left out.
+func ContextMessages(data map[string]any) []host.ContextMessage {
+	raw, _ := data["messages"].([]any)
+	out := make([]host.ContextMessage, 0, len(raw))
+	for _, message := range raw {
+		if m, ok := message.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // GetBranch reads the current branch's entries.
 func (h *Host) GetBranch() ([]session.Entry, error) {
 	entries, err := h.ctx.SessionManager().GetBranch(nil)

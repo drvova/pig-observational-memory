@@ -9,6 +9,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -90,11 +91,21 @@ func TestV2HookKeepsPiGCutAndRendersRecords(t *testing.T) {
 	if !strings.Contains(c.Summary, "aaaaaaaaaaaa") || !strings.Contains(c.Summary, "bbbbbbbbbbbb") {
 		t.Fatalf("records not rendered:\n%s", c.Summary)
 	}
-	if got := observationIDs(c.Details.Observations); len(got) != 2 {
+	if got := observationIDs(c.Details.Observations); len(got) < 2 || got[0] != "aaaaaaaaaaaa" || got[1] != "bbbbbbbbbbbb" {
 		t.Fatalf("details %v", got)
 	}
-	if counter.Total() != 0 || len(h.Appended) != 0 {
-		t.Fatalf("requests %v appends %+v", counter.ByStage(), h.Appended)
+	// Level 0 appends only its extraction of the unextracted cut range, through the last entry
+	// PiG removes, and makes no request.
+	if counter.Total() != 0 {
+		t.Fatalf("requests %v", counter.ByStage())
+	}
+	for _, a := range h.Appended {
+		if a.CustomType != ledger.OMObservationsRecorded && a.CustomType != ledger.OMExtracted {
+			t.Fatalf("appended %+v", a)
+		}
+	}
+	if progress := ledger.ExtractionProgressIndex(h.Entries); progress != 5 {
+		t.Fatalf("extraction reaches index %d, want a2 (5)", progress)
 	}
 	if ledger.LatestFullFoldBoundaryID(append(entries, testfix.CompactionEntry("c1", testfix.CompactionArgs{FirstKeptEntryID: "u2", Details: testfix.ToJSONValue(c.Details)}))) != "u2" {
 		t.Fatal("the fold boundary is not PiG's cut")
@@ -105,7 +116,7 @@ func TestV2HookKeepsPiGCutAndRendersRecords(t *testing.T) {
 func TestV2HookEmptyLedgerRendersBrief(t *testing.T) {
 	entries := []ledger.Entry{
 		userMessage("u1", "Please rename the config loader"),
-		testfix.MessageEntry("a1", testfix.AssistantToolCall("c1", "bash", map[string]any{"command": "grep -rn Load ."})),
+		testfix.MessageEntry("a1", testfix.AssistantToolCall("call-t1", "bash", map[string]any{"command": "grep -rn Load ."})),
 		toolResultMessage("t1", strings.Repeat("match ", 500)),
 		assistantMessage("a2", "Renamed."),
 		userMessage("u2", "thanks"),
@@ -197,7 +208,7 @@ func TestV2HookHeadroomShrinksBudget(t *testing.T) {
 // summarizer.
 func TestV2HookRecoversPanic(t *testing.T) {
 	old := renderV2Records
-	renderV2Records = func([]ledger.Reflection, []ledger.Observation, int, ledger.RenderOptions) ledger.RenderedSummary {
+	renderV2Records = func(selection.Input) selection.Result {
 		panic("renderer bug")
 	}
 	t.Cleanup(func() { renderV2Records = old })
@@ -306,28 +317,6 @@ func TestV2MakesNoRequestsBetweenCompactions(t *testing.T) {
 	expectV2Compaction(t, runV2Hook(rt, h, v2Event(entries, "u2", 20_000, "threshold")), "u2", h)
 	if counter.Total() != 0 || h.ModelsFake.Streams.Calls() != 0 || h.CompactCalls != 0 || rt.ConsolidationInFlight() {
 		t.Fatalf("requests %v calls %d compactions %d", counter.ByStage(), h.ModelsFake.Streams.Calls(), h.CompactCalls)
-	}
-}
-
-// With PiG's auto-compaction off, memory v2 keeps v1's compactAfterTokens trigger: PiG would
-// never compact on its own. This is a step-2 gap, not v2 behaviour: v2's trigger fires only
-// when the reported context exceeds window - reserveTokens (docs/memory-v2.md,
-// "Auto-compaction off").
-func TestV2Step2GapKeepsV1TriggerWithAutoCompactionOff(t *testing.T) {
-	entries := []ledger.Entry{userMessage("u1", strings.Repeat("long ", 400)), assistantMessage("a1", strings.Repeat("reply ", 400))}
-	rt, h := v2Setup(t, entries)
-	cfg := rt.Config()
-	cfg.CompactAfterTokens = 1
-	cfg.PiAutoCompactionEnabled = false
-	rt.SetConfig(cfg)
-	h.CompactFn = func(callbacks host.CompactCallbacks) { callbacks.OnComplete() }
-	done := MaybeTriggerCompaction(rt, h)
-	if done == nil {
-		t.Fatal("the trigger did not fire with auto-compaction off")
-	}
-	waitDone(t, done)
-	if h.CompactCalls != 1 {
-		t.Fatalf("compact calls %d", h.CompactCalls)
 	}
 }
 

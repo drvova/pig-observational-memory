@@ -249,8 +249,12 @@ define bake-count = notes | where subject=baking | count "How many times the use
   results of the memory tool and the defined tools), `saved` (curated
   memories), and `recall <id>` (one record with its source, as the old recall tool did).
 - Stages: `search "words"` (all words, case-insensitive, literal), `where field=value`,
-  `where field~"text"`, `since DATE`, `until DATE`, `sort field [desc]`, `limit N` (default 20,
-  at most 200), `count [by field]`, `group by field`.
+  `where field~"text"`, `since DATE`, `until DATE`, `from ID`, `through ID` (by branch position),
+  `sort field [desc]`, `limit N` (default 20, at most 200), `count [by field]`, `group by field`.
+  Every stage name is kernel-owned under either engine (section 8), `from` and `through`
+  included: a defined query or tool stored under one of those names before the stages existed
+  is refused when the layer loads, with a report naming the query engine's stages, and a new
+  `define` under them is refused.
 - Writes: `save`, `edit`, `forget`, `feedback` (with an evidence `quote`, as nodecode's
   experience cell requires: words copied verbatim from a user or assistant message on the
   branch, whitespace and case aside; a quote found only in tool output or in memory tool calls

@@ -70,7 +70,7 @@ const MemoryToolName = "memory"
 var (
 	// "harness" is also a source (it lists the layer); it is owned as the write it was first.
 	querySources = []string{"notes", "reflections", "history", "saved", "recall"}
-	queryStages  = []string{"search", "where", "since", "until", "sort", "limit", "count", "group"}
+	queryStages  = []string{"search", "where", "since", "until", "from", "through", "sort", "limit", "count", "group"}
 	queryWrites  = []string{"save", "edit", "forget", "feedback", "define", "propose", "harness", "rollback"}
 )
 

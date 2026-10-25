@@ -26,14 +26,19 @@ const (
 	StageWhere  = "where"
 	StageSince  = "since"
 	StageUntil  = "until"
-	StageSort   = "sort"
-	StageLimit  = "limit"
-	StageCount  = "count"
-	StageGroup  = "group"
+	// StageFrom and StageThrough bound notes, reflections and history by branch position:
+	// the rows anchored at or after (from) or at or before (through) an entry id
+	// (ledger.ObservationAnchor). Memory v2's summary prints its omitted spans with them.
+	StageFrom    = "from"
+	StageThrough = "through"
+	StageSort    = "sort"
+	StageLimit   = "limit"
+	StageCount   = "count"
+	StageGroup   = "group"
 )
 
 // Stages lists the stages in the order the grammar names them.
-var Stages = []string{StageSearch, StageWhere, StageSince, StageUntil, StageSort, StageLimit, StageCount, StageGroup}
+var Stages = []string{StageSearch, StageWhere, StageSince, StageUntil, StageFrom, StageThrough, StageSort, StageLimit, StageCount, StageGroup}
 
 // The writes.
 const (
@@ -96,7 +101,8 @@ type Query struct {
 // Stage is one parsed stage.
 type Stage struct {
 	Kind string
-	// Words is search's text; Value is where's value or since/until's date.
+	// Words is search's text; Value is where's value, since/until's date or from/through's
+	// entry id.
 	Words, Value string
 	// Field is where's, sort's, count by's or group by's field.
 	Field string
@@ -257,6 +263,12 @@ func (p *parser) parseStage() (Stage, error) {
 			return s, errAt(d, "write the date as YYYY-MM-DD, e.g. "+s.Kind+" 2023-05-20", "%s needs a date, got %s", s.Kind, d.describe())
 		}
 		s.Value = d.text
+	case StageFrom, StageThrough:
+		id := p.next()
+		if id.kind != tokWord && id.kind != tokString || strings.TrimSpace(id.text) == "" {
+			return s, errAt(id, "write "+s.Kind+" <entry id>, an id from history or a summary line", "%s needs an entry id, got %s", s.Kind, id.describe())
+		}
+		s.Value = strings.TrimSpace(id.text)
 	case StageSort:
 		f, err := p.field(s.Kind)
 		if err != nil {

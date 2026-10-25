@@ -18,6 +18,10 @@ const (
 	// OMSubjectsAliased records subject aliases the reflector declared (SubjectsAliasedData). It
 	// carries no coverage marker.
 	OMSubjectsAliased = "om.subjects.aliased"
+	// OMExtracted is memory v2's extraction marker (ExtractedData): level-0 extraction read
+	// every source entry through its coversUpToId and found nothing to record after the last
+	// om.observations.recorded entry it appended. It carries no records.
+	OMExtracted = "om.extracted"
 )
 
 // Entry is a session entry.
@@ -38,6 +42,42 @@ type ObservationKind string
 // ObservationKindValues are the valid observation kinds. "assistant" marks
 // something the assistant produced: a list, a recommendation, a number, a name.
 var ObservationKindValues = []ObservationKind{"fact", "event", "preference", "plan", "correction", "assistant"}
+
+// The kinds only memory v2's level-0 extraction writes (CodeKindValues).
+const (
+	// KindAttempt is one tool call and its outcome (Observation.Outcome).
+	KindAttempt ObservationKind = "attempt"
+	// KindFile is one path at its newest state (Observation.Target holds the path).
+	KindFile ObservationKind = "file"
+	// KindCommit is one git commit (Observation.Target holds the hash).
+	KindCommit ObservationKind = "commit"
+	// KindNote is a note the session model wrote with the memory tool.
+	KindNote ObservationKind = "note"
+)
+
+// CodeKindValues are the kinds level-0 extraction writes beside ObservationKindValues. They
+// are read back from the ledger (ObservationFrom) but are not kinds a worker or a note schema
+// may write, so v1's prompts and validation are unchanged.
+var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote}
+
+// The origins of a record (Observation.Origin).
+const (
+	// OriginCode is a record level-0 extraction picked from the session by code.
+	OriginCode = "code"
+	// OriginModel is a record the session model wrote (a memory tool note).
+	OriginModel = "model"
+)
+
+// The outcomes of an attempt record (Observation.Outcome).
+const (
+	// OutcomeFailed is a call whose result was an error or a nonzero exit.
+	OutcomeFailed = "failed"
+	// OutcomeWorked is a call that succeeded, or a failed or open call whose identical command,
+	// or the same tool on the same path, later succeeded.
+	OutcomeWorked = "worked"
+	// OutcomeOpen is a call with no result on the branch.
+	OutcomeOpen = "open"
+)
 
 // Observation is a timestamped event distilled from the conversation. Kind,
 // Subject, Scope and Supersedes are optional structure; records written before
@@ -62,6 +102,16 @@ type Observation struct {
 	// Fields are the values of the fields the writing model's own note schema adds
 	// (NoteSchema), by field name; none for a record written under the seed schema.
 	Fields map[string]string `json:"fields,omitempty"`
+	// Origin is who wrote the record under memory v2 (OriginCode, OriginModel); "" for a
+	// record a v1 worker wrote.
+	Origin string `json:"origin,omitempty"`
+	// Outcome is an attempt record's outcome (OutcomeFailed, OutcomeWorked, OutcomeOpen).
+	Outcome string `json:"outcome,omitempty"`
+	// Tool is the tool an attempt record's call used.
+	Tool string `json:"tool,omitempty"`
+	// Target is what a code record is about: an attempt's command or path, a file record's
+	// path, a commit's hash, a note's name.
+	Target string `json:"target,omitempty"`
 }
 
 // Reflection is a durable conclusion distilled from observations.
@@ -124,6 +174,20 @@ func IsRelevance(v any) bool {
 	}
 	for _, r := range RelevanceValues {
 		if string(r) == s {
+			return true
+		}
+	}
+	return false
+}
+
+// isCodeKind reports whether v is one of CodeKindValues.
+func isCodeKind(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	for _, k := range CodeKindValues {
+		if string(k) == s {
 			return true
 		}
 	}
@@ -264,9 +328,13 @@ func ObservationFrom(v any) (Observation, bool) {
 	}
 	// The structured fields are optional and read leniently: a malformed one
 	// is cleared rather than discarding the record it annotates.
-	if IsObservationKind(m["kind"]) {
+	if IsObservationKind(m["kind"]) || isCodeKind(m["kind"]) {
 		observation.Kind = ObservationKind(m["kind"].(string))
 	}
+	observation.Origin, _ = m["origin"].(string)
+	observation.Outcome, _ = m["outcome"].(string)
+	observation.Tool, _ = m["tool"].(string)
+	observation.Target, _ = m["target"].(string)
 	if subject, ok := m["subject"].(string); ok {
 		observation.Subject = NormalizeSubject(subject)
 	}
@@ -508,6 +576,24 @@ func IsReflectionsRecordedEntry(entry Entry) bool {
 func IsObservationsDroppedEntry(entry Entry) bool {
 	_, ok := ObservationsDroppedEntry(entry)
 	return ok
+}
+
+// ExtractedData is an om.extracted payload: level-0 extraction read every source entry
+// through CoversUpToID.
+type ExtractedData struct {
+	CoversUpToID string `json:"coversUpToId"`
+}
+
+// ExtractedEntry reads a valid om.extracted entry.
+func ExtractedEntry(entry Entry) (ExtractedData, bool) {
+	if entry.Type != "custom" || entry.CustomType != OMExtracted {
+		return ExtractedData{}, false
+	}
+	m, ok := entry.Data.(map[string]any)
+	if !ok || !IsNonEmptyString(m["coversUpToId"]) {
+		return ExtractedData{}, false
+	}
+	return ExtractedData{CoversUpToID: m["coversUpToId"].(string)}, true
 }
 
 // BuildObservationsRecordedData builds a payload, or nil when it would be empty.

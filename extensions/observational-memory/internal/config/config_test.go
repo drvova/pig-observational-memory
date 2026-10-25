@@ -466,3 +466,32 @@ func TestTrustFrom(t *testing.T) {
 		}
 	}
 }
+
+// PiG's compaction.reserveTokens resolves as PiG's GetCompactionSettings does: the model's
+// modelOverrides entry, else the ordinary value, else PiG's default; the project's values lie
+// over the global ones field by field, and only a trusted project's are read.
+func TestReadPiCompactionTokens(t *testing.T) {
+	f := setup(t)
+	if got := config.ReadPiCompactionTokens(f.cwd, f.paths, config.ProjectTrusted); got.ReserveTokens != nil || got.ReserveOverrides != nil || got.ReserveTokensFor("anthropic", "m") != config.PiGDefaultReserveTokens {
+		t.Fatalf("unset %+v", got)
+	}
+	f.writeJSON(t, f.global(), map[string]any{"compaction": map[string]any{"reserveTokens": 20000, "modelOverrides": map[string]any{
+		"anthropic/m": map[string]any{"reserveTokens": 8000}, "openai/x": map[string]any{"reserveTokens": 1000}, "bad/y": map[string]any{"reserveTokens": -1},
+	}}})
+	f.writeJSON(t, f.project(), map[string]any{"compaction": map[string]any{"modelOverrides": map[string]any{"openai/x": map[string]any{"reserveTokens": 0}}}})
+	trusted := config.ReadPiCompactionTokens(f.cwd, f.paths, config.ProjectTrusted)
+	for _, c := range []struct {
+		provider, id string
+		want         int
+	}{{"anthropic", "m", 8000}, {"openai", "x", 0}, {"bad", "y", 20000}, {"other", "z", 20000}, {"", "", 20000}} {
+		if got := trusted.ReserveTokensFor(c.provider, c.id); got != c.want {
+			t.Fatalf("%s/%s: %d, want %d", c.provider, c.id, got, c.want)
+		}
+	}
+	if got := config.ReadPiCompactionTokens(f.cwd, f.paths, config.ProjectUntrusted).ReserveTokensFor("openai", "x"); got != 1000 {
+		t.Fatalf("an untrusted project's override was read: %d", got)
+	}
+	if got := f.load(env{}).PiCompaction.ReserveTokensFor("openai", "x"); got != 0 {
+		t.Fatalf("Load: %d", got)
+	}
+}

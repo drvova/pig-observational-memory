@@ -78,6 +78,29 @@ func projectSettingsLine(cfg config.Config) string {
 	return "Project settings ignored: the project is not trusted, so only global settings apply (a /trust decision applies after PiG restarts)"
 }
 
+// compactionLine is the status line on the next compaction. Under memory v2 it is PiG's own
+// threshold (window - reserveTokens) and the reported context against it: PiG compacts with its
+// auto-compaction on; with it off only the extension's level-0 compaction runs, at that
+// threshold. Under v1 it is the proactive trigger's progress.
+func compactionLine(cfg config.Config, h host.Host, progress, threshold int) string {
+	if !cfg.V2() {
+		return fmt.Sprintf("Next compaction:  ~%s / %s %s source tokens (%d%%)", jsfmt.Locale(progress), jsfmt.Locale(threshold), hooks.ProgressLabel(cfg), pct(progress, threshold))
+	}
+	pig := hooks.ReadV2Threshold(cfg, h)
+	against := "PiG's threshold unknown (no context window)"
+	if pig.ContextWindow > 0 {
+		context := "context unknown until the next response reports usage"
+		if pig.Tokens != nil {
+			context = fmt.Sprintf("context ~%s (%d%%)", jsfmt.Locale(*pig.Tokens), pct(*pig.Tokens, pig.Limit()))
+		}
+		against = fmt.Sprintf("PiG's threshold %s (window %s - reserveTokens %s), %s", jsfmt.Locale(pig.Limit()), jsfmt.Locale(pig.ContextWindow), jsfmt.Locale(pig.ReserveTokens), context)
+	}
+	if cfg.PiAutoCompactionEnabled {
+		return "Compaction: PiG's auto-compaction is on; " + against
+	}
+	return "Compaction: PiG's auto-compaction is off; only the extension's level-0 compaction runs, at " + against
+}
+
 // StatusLines renders the /om:status report.
 func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	rt.EnsureConfig(h)
@@ -134,7 +157,7 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		"── Activity ──",
 		fmt.Sprintf("Next observation: ~%s / %s tokens (%d%%)", jsfmt.Locale(obsProgress), jsfmt.Locale(cfg.ObserveAfterTokens), pct(obsProgress, cfg.ObserveAfterTokens)),
 		fmt.Sprintf("Next reflection:  ~%s / %s observed tokens (%d%%)", jsfmt.Locale(reflectionProgress), jsfmt.Locale(cfg.ReflectAfterTokens), pct(reflectionProgress, cfg.ReflectAfterTokens)),
-		fmt.Sprintf("Next compaction:  ~%s / %s %s source tokens (%d%%)", jsfmt.Locale(compactionProgress), jsfmt.Locale(compactThreshold), hooks.ProgressLabel(cfg), pct(compactionProgress, compactThreshold)),
+		compactionLine(cfg, h, compactionProgress, compactThreshold),
 		fmt.Sprintf("Observer backlog: ~%s unobserved source tokens since the compaction boundary", jsfmt.Locale(unobservedSinceCompaction)),
 		fmt.Sprintf("Visible observation pool: ~%s / %s tokens (%d%%)", jsfmt.Locale(visibleObservationTokens), jsfmt.Locale(cfg.ObservationsPoolMaxTokens), pct(visibleObservationTokens, cfg.ObservationsPoolMaxTokens)),
 		fmt.Sprintf("Active observation pool: ~%s / %s target tokens (%d%%)", jsfmt.Locale(activePool.ObservationTokens), jsfmt.Locale(cfg.ObservationsPoolTargetTokens), pct(activePool.ObservationTokens, cfg.ObservationsPoolTargetTokens)),
@@ -146,7 +169,10 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s backlog tokens; resumes at ~%s (backlog now ~%s)",
 			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(hooks.ObserverBacklog(entries, memoryTools))))
 	}
-	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); backoff != nil {
+	if suspension := hooks.ActiveV2CompactionSuspension(rt, h, entries); cfg.V2() && suspension != nil {
+		lines = append(lines, fmt.Sprintf("Compaction trigger suspended: %s; asks again once the branch grows", suspension.Reason))
+	}
+	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); !cfg.V2() && backoff != nil {
 		lines = append(lines, fmt.Sprintf("Compaction backoff: last attempt failed (%s); asks again at ~%s %s source tokens", backoff.Reason, jsfmt.Locale(backoff.Progress+compactThreshold), hooks.ProgressLabel(cfg)))
 	}
 	if hooks.ReflectorBackedOff(rt, h, entries) {

@@ -154,6 +154,12 @@ type Session interface {
 	SessionFile() string
 }
 
+// ContextMessage is one message of a provider request's context, as PiG's context event
+// carries it before each request: a Pi agent message (user, assistant, toolResult,
+// compactionSummary, …) as decoded JSON, with no entry id. A handler edits it in place; the
+// session file keeps the message as it was.
+type ContextMessage = map[string]any
+
 // UI notifies the user.
 type UI interface {
 	HasUI() bool

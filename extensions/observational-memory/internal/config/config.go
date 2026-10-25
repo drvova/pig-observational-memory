@@ -106,6 +106,9 @@ type Config struct {
 	DebugLog                bool
 	// PiAutoCompactionEnabled is Pi's own compaction.enabled setting.
 	PiAutoCompactionEnabled bool
+	// PiCompaction is PiG's own compaction.reserveTokens with its
+	// compaction.modelOverrides, read under the same trust (ReadPiCompactionTokens).
+	PiCompaction PiCompactionTokens
 	// CuratedMemory gives the agent its own long-lived memory: the memory
 	// tool's saved source and writes, and an evidence-ranked index at the head
 	// of each conversation.
@@ -290,6 +293,9 @@ type V2SummaryBudgetInputs struct {
 	// PiGDefaultReserveTokens stands in for it.
 	ReserveTokens int
 	// TokensBefore is PiG's estimate of the context before the compaction.
+	// Without a usage anchor PiG v0.5.1 counts the current system message (the
+	// prompt, its sections and the tool schemas) in it
+	// (compaction.EstimateProjectedContextTokens), so no overhead is added here.
 	TokensBefore int
 	// RemovedTokens is the estimate of what the compaction removes: the cut
 	// range plus the previous summary.
@@ -710,6 +716,80 @@ func DefaultPaths() Paths {
 	return paths
 }
 
+// PiCompactionTokens is PiG's compaction.reserveTokens as its settings files set it: the
+// ordinary value and the compaction.modelOverrides entries ("provider/modelId") that take
+// precedence for one model. The zero value sets nothing, and PiG's default applies.
+type PiCompactionTokens struct {
+	// ReserveTokens is the ordinary compaction.reserveTokens, nil when no file sets it.
+	ReserveTokens *int
+	// ReserveOverrides are the modelOverrides reserveTokens values by "provider/modelId".
+	ReserveOverrides map[string]int
+}
+
+// ReserveTokensFor is PiG's reserveTokens for the model provider/id, as PiG's
+// SettingsManager.GetCompactionSettings resolves it: the model's override, else the ordinary
+// value, else PiGDefaultReserveTokens. A configured 0 is kept: it is PiG's own value.
+func (p PiCompactionTokens) ReserveTokensFor(provider, id string) int {
+	if provider != "" || id != "" {
+		if n, ok := p.ReserveOverrides[provider+"/"+id]; ok {
+			return n
+		}
+	}
+	if p.ReserveTokens != nil {
+		return *p.ReserveTokens
+	}
+	return PiGDefaultReserveTokens
+}
+
+// piCompactionToken reads one compaction token setting the way PiG accepts it: a non-negative
+// whole number. Anything else is unset here (PiG reports it as an invalid setting).
+func piCompactionToken(v any) (int, bool) {
+	n, ok := v.(float64)
+	if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n != math.Trunc(n) || n > 1<<53-1 {
+		return 0, false
+	}
+	return int(n), true
+}
+
+// readPiCompactionTokens lays the compaction token settings of one settings file over into:
+// a value the file sets replaces the one below, field by field and override by override, as
+// PiG merges its project settings over its global ones.
+func readPiCompactionTokens(path string, into *PiCompactionTokens) {
+	raw, ok := readJSONObject(path)
+	if !ok {
+		return
+	}
+	compaction, ok := raw["compaction"].(map[string]any)
+	if !ok {
+		return
+	}
+	if n, ok := piCompactionToken(compaction["reserveTokens"]); ok {
+		into.ReserveTokens = &n
+	}
+	overrides, _ := compaction["modelOverrides"].(map[string]any)
+	for key, value := range overrides {
+		entry, _ := value.(map[string]any)
+		if n, ok := piCompactionToken(entry["reserveTokens"]); ok {
+			if into.ReserveOverrides == nil {
+				into.ReserveOverrides = map[string]int{}
+			}
+			into.ReserveOverrides[key] = n
+		}
+	}
+}
+
+// ReadPiCompactionTokens reads PiG's compaction.reserveTokens and its modelOverrides the way
+// ReadPiAutoCompaction reads compaction.enabled: the global settings, then the project's over
+// them, and the project's only when it is trusted.
+func ReadPiCompactionTokens(cwd string, paths Paths, trust TrustState) PiCompactionTokens {
+	out := PiCompactionTokens{}
+	readPiCompactionTokens(filepath.Join(paths.AgentDir, "settings.json"), &out)
+	if trust == ProjectTrusted {
+		readPiCompactionTokens(filepath.Join(cwd, paths.ProjectDirName, "settings.json"), &out)
+	}
+	return out
+}
+
 // ReadPiAutoCompaction reads Pi's own compaction.enabled the way Load does:
 // the project setting wins over the global one, and is read only when the
 // project is trusted. ok is false when no file read sets it.
@@ -761,5 +841,6 @@ func Load(cwd string, paths Paths, trust TrustState, lookupEnv func(string) (str
 	} else {
 		cfg.PiAutoCompactionEnabled = Defaults.PiAutoCompactionEnabled
 	}
+	cfg.PiCompaction = ReadPiCompactionTokens(cwd, paths, trust)
 	return cfg
 }

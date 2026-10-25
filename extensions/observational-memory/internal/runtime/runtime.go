@@ -93,6 +93,10 @@ type CompactionBackoff struct {
 	Progress int
 	// Reason is the host's error message.
 	Reason string
+	// TipID is the branch tip at a memory v2 refusal ("Nothing to compact"):
+	// v2's auto-compaction-off trigger stays suspended until the tip changes.
+	// "" for a v1 backoff.
+	TipID string
 }
 
 // How long to wait for the availability re-check, and how long before the same
@@ -117,6 +121,10 @@ type Runtime struct {
 	// (enabled, whether any settings file read sets it) under the trust the
 	// configuration was loaded with; tests replace it.
 	ReadPiAutoCompaction func(cwd string, trust config.TrustState) (bool, bool)
+	// ReadPiCompactionTokens re-reads PiG's compaction.reserveTokens and its
+	// modelOverrides under the trust the configuration was loaded with; tests
+	// replace it.
+	ReadPiCompactionTokens func(cwd string, trust config.TrustState) config.PiCompactionTokens
 	// configFromDisk is true when EnsureConfig loaded the configuration,
 	// false when a caller set it (tests).
 	configFromDisk bool
@@ -155,6 +163,10 @@ type Runtime struct {
 	observerEmptyBackoff    *ObserverEmptyBackoff
 	reflectorEmptyBackoff   *ReflectorEmptyBackoff
 	compactionBackoff       *CompactionBackoff
+	// thinKey and thinPlan are memory v2's thinning plan and the session and compaction it was
+	// derived from (CachedThinPlan).
+	thinKey  string
+	thinPlan map[string]string
 	// resolveNotices holds the resolution warnings already shown; a clean
 	// resolution clears it, so a recurring condition warns once per episode.
 	resolveNotices map[string]bool
@@ -174,6 +186,9 @@ func New() *Runtime {
 		},
 		ReadPiAutoCompaction: func(cwd string, trust config.TrustState) (bool, bool) {
 			return config.ReadPiAutoCompaction(cwd, config.DefaultPaths(), trust)
+		},
+		ReadPiCompactionTokens: func(cwd string, trust config.TrustState) config.PiCompactionTokens {
+			return config.ReadPiCompactionTokens(cwd, config.DefaultPaths(), trust)
 		},
 		Now:                     time.Now,
 		availabilityRecheckedAt: map[string]time.Time{},
@@ -273,13 +288,14 @@ func (r *Runtime) DefinedTools() []string {
 	return list()
 }
 
-// LiveConfig is the configuration with Pi's own compaction.enabled re-read.
-// The user can toggle Pi's automatic compaction mid-session, and it decides
-// which token domain the proactive trigger counts, so a startup snapshot
-// would leave a session with no compaction backstop at all.
+// LiveConfig is the configuration with Pi's own compaction.enabled (and
+// PiG's compaction.reserveTokens) re-read. The user can toggle Pi's automatic
+// compaction mid-session, and it decides which token domain the proactive
+// trigger counts, so a startup snapshot would leave a session with no
+// compaction backstop at all.
 func (r *Runtime) LiveConfig(cwd string) config.Config {
 	r.mu.Lock()
-	cfg, fromDisk, read := r.config, r.configFromDisk, r.ReadPiAutoCompaction
+	cfg, fromDisk, read, readTokens := r.config, r.configFromDisk, r.ReadPiAutoCompaction, r.ReadPiCompactionTokens
 	r.mu.Unlock()
 	if fromDisk && read != nil {
 		if enabled, ok := read(cwd, cfg.ProjectTrust); ok {
@@ -287,6 +303,9 @@ func (r *Runtime) LiveConfig(cwd string) config.Config {
 		} else {
 			cfg.PiAutoCompactionEnabled = config.Defaults.PiAutoCompactionEnabled
 		}
+	}
+	if fromDisk && readTokens != nil {
+		cfg.PiCompaction = readTokens(cwd, cfg.ProjectTrust)
 	}
 	return cfg
 }
@@ -900,4 +919,24 @@ func (r *Runtime) RecordConsolidationStageError(ui host.UI, phase Phase, err err
 	r.SetLastError(phase, message)
 	safeNotify(ui, fmt.Sprintf("Observational memory: %s failed: %s", phase, message), "warning")
 	return message
+}
+
+// CachedThinPlan is memory v2's thinning plan when it was derived for key (the session and its
+// latest compaction entry, hooks.OnContext): the plan is computed once per compaction and
+// reused for every request until the next one, so the request bytes depend only on the
+// compaction, never on settings or tools that change between two compactions.
+func (r *Runtime) CachedThinPlan(key string) (map[string]string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if key == "" || key != r.thinKey {
+		return nil, false
+	}
+	return r.thinPlan, true
+}
+
+// SetThinPlan caches plan as the thinning plan for key, replacing the previous one.
+func (r *Runtime) SetThinPlan(key string, plan map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.thinKey, r.thinPlan = key, plan
 }

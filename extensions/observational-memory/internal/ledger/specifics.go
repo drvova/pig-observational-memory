@@ -194,3 +194,87 @@ func opensSentence(text string, i int) bool {
 	}
 	return false
 }
+
+// phraseSpecifics are the specifics of a phrase quoted out of a sentence (the X of "not X"),
+// with a capitalized word counted where it opens the phrase too: the phrase does not open a
+// sentence, so its first word is not a sentence start.
+func phraseSpecifics(phrase string) []specific {
+	// A lowercase word with no specifics in front keeps the phrase's first word from reading as
+	// a sentence start.
+	return specifics("of " + phrase)
+}
+
+// PhraseSpecifics returns the specifics of a phrase quoted out of a sentence (the X a
+// correction names in "not X" or "instead of X"): its numbers, time phrases and names,
+// lowercased, in order, without duplicates. Unlike Specifics, a name opening the phrase counts.
+func PhraseSpecifics(phrase string) []string {
+	items := phraseSpecifics(phrase)
+	out := make([]string, len(items))
+	for i, s := range items {
+		out[i] = s.text
+	}
+	return out
+}
+
+// CarriesPhrase reports whether text carries every specific of phrase (PhraseSpecifics) as a
+// specific of its own, matched as Given matches; false when phrase has none. A text that only
+// contains the phrase's words ("make sure" for "sure") does not carry it.
+func CarriesPhrase(text, phrase string) bool {
+	items := phraseSpecifics(phrase)
+	if len(items) == 0 {
+		return false
+	}
+	g := NewGiven([]string{text})
+	for _, s := range items {
+		if !g.has(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// CoveredByPhrase reports whether every specific of text is one of phrase's (PhraseSpecifics):
+// replacing the phrase replaces everything specific text says.
+func CoveredByPhrase(text, phrase string) bool {
+	given := Given{items: map[string]bool{}, names: map[string]bool{}}.with(phraseSpecifics(phrase))
+	return len(Added(text, given)) == 0
+}
+
+// with is g giving items too.
+func (g Given) with(items []specific) Given {
+	for _, s := range items {
+		if s.name {
+			g.names[s.text] = true
+		} else {
+			g.items[s.text] = true
+		}
+	}
+	return g
+}
+
+// Restates reports whether text gives a new value of a specific earlier carries: for one type
+// of specific (names, or numbers and time phrases), both carry one and text carries one earlier
+// does not give. A correction that names no phrase it replaces ("Correction: the budget is
+// 6000 USD") restates only such a record ("the budget is 5000 USD").
+func Restates(text, earlier string) bool {
+	mine, theirs := specifics(text), specifics(earlier)
+	given := NewGiven([]string{earlier})
+	for _, name := range []bool{true, false} {
+		has := false
+		for _, s := range theirs {
+			if s.name == name {
+				has = true
+				break
+			}
+		}
+		if !has {
+			continue
+		}
+		for _, s := range mine {
+			if s.name == name && !given.has(s) {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -56,8 +56,21 @@ func coverageEntry(entry Entry, customType string) (string, bool) {
 		if data, ok := ObservationsDroppedEntry(entry); ok {
 			return data.CoversUpToID, true
 		}
+	case OMExtracted:
+		if data, ok := ExtractedEntry(entry); ok {
+			return data.CoversUpToID, true
+		}
 	}
 	return "", false
+}
+
+// ExtractionProgressIndex is the branch index of the furthest source entry memory v2's
+// level-0 extraction has read: the furthest entry an om.observations.recorded or om.extracted
+// marker covers, or -1. Coverage is a positional claim, so every source entry at or before it
+// was read; a v1 observer's coverage counts as read too, so v2 never re-extracts what v1
+// observed.
+func ExtractionProgressIndex(entries []Entry) int {
+	return max(LatestCoverageIndex(entries, OMObservationsRecorded), LatestCoverageIndex(entries, OMExtracted))
 }
 
 // LatestCoverageIndex is the branch index of the furthest entry a marker of

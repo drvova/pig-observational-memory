@@ -89,3 +89,34 @@ func TestAddedSpecificsNumbersMatchOnlyAsWritten(t *testing.T) {
 		}
 	}
 }
+
+// A phrase's specifics count a name that opens it; a text carries a phrase only when it gives
+// every one of them as a specific, never for a common word it merely contains.
+func TestPhraseSpecifics(t *testing.T) {
+	if got := PhraseSpecifics("Lisbon"); !reflect.DeepEqual(got, []string{"lisbon"}) {
+		t.Fatalf("PhraseSpecifics = %q", got)
+	}
+	if got := PhraseSpecifics("sure"); len(got) != 0 {
+		t.Fatalf("a hedge has specifics %q", got)
+	}
+	if !CarriesPhrase("The wedding is in Lisbon on June 14.", "Lisbon") || CarriesPhrase("Make sure the key is set.", "sure") || CarriesPhrase("Port 54330 is open.", "port 5433") {
+		t.Fatal("CarriesPhrase")
+	}
+	if !CoveredByPhrase("It is in Lisbon.", "Lisbon") || CoveredByPhrase("Flights to Lisbon cost 420 EUR.", "Lisbon") {
+		t.Fatal("CoveredByPhrase")
+	}
+}
+
+// A text restates an earlier one when, for a type of specific both carry, it gives a value the
+// earlier one does not.
+func TestRestates(t *testing.T) {
+	if !Restates("Correction: the budget is 6000 USD.", "The budget is 5000 USD.") {
+		t.Fatal("a new amount does not restate the old one")
+	}
+	if Restates("Correction: the budget is 5000 USD.", "The budget is 5000 USD.") {
+		t.Fatal("the same value restates")
+	}
+	if Restates("Actually the host is in Frankfurt.", "The database runs on port 5433.") {
+		t.Fatal("a name restates a number")
+	}
+}

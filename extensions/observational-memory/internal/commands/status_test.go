@@ -483,3 +483,23 @@ func TestStatusReportsProjectSettingsIgnoredWhenUntrusted(t *testing.T) {
 		t.Fatalf("trust checked %d times over three sessions", h.TrustCalls)
 	}
 }
+
+// Under memory v2 the status shows PiG's threshold and the context against it, and says when
+// PiG's auto-compaction is off and only the extension's level-0 compaction runs.
+func TestStatusV2Compaction(t *testing.T) {
+	cfg := statusConfig()
+	cfg.MemoryEngine = config.EngineV2
+	tokens := 92_000
+	h := testfix.NewFakeHost(testfix.RawMessage("u1", "hello"))
+	h.Model = testfix.Model("anthropic", "m", map[string]any{"contextWindow": 100_000})
+	h.Usage = &host.ContextUsage{Tokens: &tokens, ContextWindow: 100_000}
+	cfg.PiCompaction = config.PiCompactionTokens{ReserveOverrides: map[string]int{"anthropic/m": 10_000}}
+	output := statusOutput(t, statusRuntime(cfg), h)
+	expectContains(t, output, "Compaction: PiG's auto-compaction is on; PiG's threshold 90,000 (window 100,000 - reserveTokens 10,000), context ~92,000 (102%)")
+	expectLacks(t, output, "Next compaction:")
+
+	cfg.PiAutoCompactionEnabled = false
+	h.Usage = &host.ContextUsage{ContextWindow: 100_000}
+	output = statusOutput(t, statusRuntime(cfg), h)
+	expectContains(t, output, "Compaction: PiG's auto-compaction is off; only the extension's level-0 compaction runs, at PiG's threshold 90,000", "context unknown until the next response reports usage")
+}

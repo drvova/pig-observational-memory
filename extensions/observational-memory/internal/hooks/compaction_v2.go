@@ -7,10 +7,12 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -29,7 +31,7 @@ const (
 const V2FallbackSummary = `omitted: the compacted conversation; the memory tool searches it (history | search "words").`
 
 // renderV2Records renders the ledger's records for a memory v2 summary; tests replace it.
-var renderV2Records = ledger.RenderSummaryWithOptions
+var renderV2Records = selection.Render
 
 // handleBeforeCompactV2 is memory v2's session_before_compact hook (docs/memory-v2.md, "Owning
 // every compaction PiG prepares"). It returns a compaction for every preparation PiG hands it,
@@ -44,8 +46,11 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 	if request.Err() != nil {
 		return BeforeCompactOutcome{}
 	}
-	// A concurrent hook is not cancelled: the hook appends nothing, so two compactions
-	// rendering at once cannot interfere.
+	// A concurrent hook is not cancelled, and it appends its extraction and drops like any
+	// other: extractCutV2 measures what is left to extract on a fresh branch under one lock, so
+	// two compactions rendering at once never append the same records twice, and whichever one
+	// PiG persists finds its range's records on the session. The slot only shows the hook as
+	// running in /om:status.
 	if rt.TryEnterCompactHook() {
 		defer rt.LeaveCompactHook()
 	}
@@ -71,12 +76,16 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 	return BeforeCompactOutcome{Compaction: &compaction}
 }
 
-// buildCompactionV2 is level 0's compaction: the ledger's records under the summary budget,
-// else the minimal brief of the cut range.
+// buildCompactionV2 is level 0's compaction: it extracts whatever of the cut range no turn end
+// read (extractCutV2), renders the ledger's records under the summary budget, else the minimal
+// brief of the cut range, and drops by rule what the rendered records supersede or the
+// rendered reflections cite.
 func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent) CompactionResult {
 	cfg := rt.Config()
-	entries := event.BranchEntries
-	cut := v2SourceEntries(v2CutRange(entries, event))
+	cut := v2SourceEntries(v2CutRange(event.BranchEntries, event))
+	// The records of the cut range, appended before rendering so the protection of unextracted
+	// entries holds by construction (docs/memory-v2.md, "PiG's cut, exactly").
+	entries := extractCutV2(ctx, rt, h, event)
 	previousSummary := v2PreviousSummary(entries, event)
 	removed := v2SourceTokens(cut) + tokens.EstimateStringTokens(previousSummary)
 	model := h.SessionModel()
@@ -104,14 +113,33 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 	// reflections included, with no normal-versus-full split.
 	projection := ledger.FullProjection(entries, event.FirstKeptEntryID)
 	summary, kind := "", ""
+	var rendered selection.Result
 	if memoryBudget > 0 && len(projection.Reflections)+len(projection.Observations) > 0 {
 		// The native layout in memoryFormat, with no codec: memory v2 bypasses the per-model
 		// layer's summary definitions (harness.LayerFor, which v1 renders through) until the
 		// harness moves to the new path (docs/memory-v2.md, "Order of work", step 5).
-		options := ledger.RenderOptions{ReflectionDates: ledger.ReflectionDateRanges(ledger.FoldLedger(entries, "")), Format: cfg.MemoryFormat, Aliases: projection.Aliases}
-		rendered := renderV2Records(projection.Reflections, projection.Observations, memoryBudget, options)
-		if len(rendered.Reflections)+len(rendered.Observations) > 0 && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
+		folded := ledger.FoldLedger(entries, "")
+		rendered = renderV2Records(selection.Input{
+			Reflections:     projection.Reflections,
+			Observations:    projection.Observations,
+			Folded:          folded,
+			Branch:          entries,
+			Request:         v2SplitTurnRequest(cut, event),
+			Budget:          memoryBudget,
+			Format:          cfg.MemoryFormat,
+			Aliases:         projection.Aliases,
+			ReflectionDates: ledger.ReflectionDateRanges(folded),
+		})
+		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords
+			// Dropping by rule: a record superseded by a rendered record, or cited by a
+			// rendered reflection, leaves the memory. Selection already let those go, so they
+			// are neither shown nor in an omitted span.
+			dropped := extract.Drops(projection.Observations, rendered.Observations, rendered.Reflections, folded.ObservationsByID)
+			projection.Observations = withoutObservations(projection.Observations, dropped)
+			if len(cut) > 0 {
+				dropByRule(ctx, h, dropped, cut[len(cut)-1].ID)
+			}
 		}
 	}
 	if summary == "" {
@@ -140,6 +168,14 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 		"isSplitTurn":      event.Preparation.IsSplitTurn,
 		"records":          len(projection.Reflections) + len(projection.Observations),
 	}
+	if kind == v2SummaryRecords {
+		data["shown"] = len(rendered.Reflections) + len(rendered.Observations)
+		data["omitted"] = rendered.Omitted
+		data["spans"] = rendered.Spans
+		data["foldedSpans"] = rendered.Folded
+		// Not "request": that key marks a model request event (debuglog.IsRequest).
+		data["splitTurnRequest"] = rendered.Request
+	}
 	if instructionsBlock != "" {
 		data["instructionsKept"] = instructionsKept
 	}
@@ -151,6 +187,21 @@ func buildCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, ev
 		TokensBefore:     event.TokensBefore,
 		Details:          v2Details(projection, event.FirstKeptEntryID),
 	}
+}
+
+// withoutObservations is observations without the records whose ids are in ids.
+func withoutObservations(observations []ledger.Observation, ids []string) []ledger.Observation {
+	remove := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		remove[id] = true
+	}
+	out := make([]ledger.Observation, 0, len(observations))
+	for _, o := range observations {
+		if !remove[o.ID] {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // v2Details are a memory v2 compaction's om.folded details: the full projection through
@@ -222,6 +273,37 @@ func v2CutRange(entries []ledger.Entry, event BeforeCompactEvent) []ledger.Entry
 		out = append(out, session.Entry{Type: "message", Message: message})
 	}
 	return out
+}
+
+// v2SplitTurnRequest is the split turn's opening request when PiG's cut falls inside a turn
+// (docs/memory-v2.md, "The whole preparation"): the first user message of the prefix range,
+// which is the cut range's last len(turnPrefixMessages) source entries; without prefix
+// messages, the cut range's last user message. nil when the cut is between turns or no user
+// text is found. cut is the range's source entries (v2SourceEntries).
+func v2SplitTurnRequest(cut []ledger.Entry, event BeforeCompactEvent) *selection.Request {
+	if !event.Preparation.IsSplitTurn || len(cut) == 0 {
+		return nil
+	}
+	userText := func(entry ledger.Entry) (string, bool) {
+		if entry.Type != "message" || entry.Message == nil || entry.Message["role"] != "user" {
+			return "", false
+		}
+		_, text, ok := serialize.HistoryText(entry)
+		return text, ok && strings.TrimSpace(text) != ""
+	}
+	if n := len(event.Preparation.TurnPrefixMessages); n > 0 && n <= len(cut) {
+		for _, entry := range cut[len(cut)-n:] {
+			if text, ok := userText(entry); ok {
+				return &selection.Request{EntryID: entry.ID, Text: text}
+			}
+		}
+	}
+	for i := len(cut) - 1; i >= 0; i-- {
+		if text, ok := userText(cut[i]); ok {
+			return &selection.Request{EntryID: cut[i].ID, Text: text}
+		}
+	}
+	return nil
 }
 
 // v2PreviousSummary is the summary the compaction replaces: the preparation's, else the

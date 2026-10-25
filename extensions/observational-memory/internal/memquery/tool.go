@@ -25,7 +25,7 @@ Sources (fields):
   saved            long-lived memories from earlier sessions, and defined queries (name,type,scope,updated,description,body)
   recall <id>      one record in full with its exact source: a note or reflection id, an entry id, or a saved name
   harness          your memory harness: each layer definition and the seeds standing (model,kind,name,state,generation,origin,stale)
-Stages: search "words" (every word, case-insensitive) | where field=value | where field~"text" | since YYYY-MM-DD | until YYYY-MM-DD | sort field [desc] | limit N (default 20, at most 200) | count [by field] | group by field (last)
+Stages: search "words" (every word, case-insensitive) | where field=value | where field~"text" | since YYYY-MM-DD | until YYYY-MM-DD | from <entry id> | through <entry id> (by branch position, both ends kept) | sort field [desc] | limit N (default 20, at most 200) | count [by field] | group by field (last)
 Writes:
   save name=<name> type=user|feedback|project|reference|lesson description="one sentence" [body="why and how to apply it"] [scope=global|project]
   edit name=<name> [type=...] [description="..."] [body="..."]

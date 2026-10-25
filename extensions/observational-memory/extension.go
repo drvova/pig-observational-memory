@@ -4,6 +4,8 @@
 package observationalmemory
 
 import (
+	"sync"
+
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 	"github.com/MichaelKinsy/PiG/extensions/sdk/json"
 
@@ -27,12 +29,24 @@ func Extension() *sdk.Extension {
 
 // Register wires the extension's hooks, commands and memory tool onto ext.
 func Register(ext *sdk.Extension, rt *runtime.Runtime) {
+	// Memory v2 thins aged tool results in each provider request's context, editing the
+	// messages in place (nil result) so PiG keeps the list and its system messages. PiG sends
+	// every request's whole message list to an extension with a context handler, so the handler
+	// is held only while v2 runs (not passive): v1 pays no round trip per request.
+	thinning := &contextSubscription{subscribe: func() func() {
+		return ext.OnEvent(sdk.EventContext, func(ctx sdk.Context, data map[string]any) (any, error) {
+			hooks.OnContext(rt, sdkhost.New(ctx), sdkhost.ContextMessages(data))
+			return nil, nil
+		})
+	}}
 	ext.OnEvent(sdk.EventAgentStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		hooks.OnAgentStart(rt, sdkhost.New(ctx))
+		thinning.sync(wantsContext(rt))
 		return nil, nil
 	})
 	ext.OnEvent(sdk.EventTurnEnd, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		hooks.OnTurnEnd(rt, sdkhost.New(ctx))
+		thinning.sync(wantsContext(rt))
 		return nil, nil
 	})
 	ext.OnEvent(sdk.EventAgentSettled, func(ctx sdk.Context, _ map[string]any) (any, error) {
@@ -72,6 +86,7 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 		return sdk.ProjectTrustResult{Trusted: sdk.ProjectTrustUndecided}, nil
 	})
 	ext.OnEvent(sdk.EventSessionBeforeCompact, func(ctx sdk.Context, data map[string]any) (any, error) {
+		defer func() { thinning.sync(wantsContext(rt)) }()
 		return handleBeforeCompact(ctx, rt, data)
 	})
 
@@ -89,6 +104,38 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 	})
 
 	registerMemory(ext, rt)
+}
+
+// contextSubscription holds the context event handler while memory v2 wants it. PiG accepts a
+// handler subscribed or unsubscribed at any time (event.subscribe), so it follows the engine
+// the configuration names, which PiG reloads per session: subscribed at the first agent_start,
+// turn_end or compaction that runs under v2, unsubscribed at the first one under v1. A request
+// before it (a session's first) is sent unthinned, which only matters after a compaction.
+type contextSubscription struct {
+	mu sync.Mutex
+	// subscribe registers the handler and returns its unsubscribe.
+	subscribe   func() func()
+	unsubscribe func()
+}
+
+// sync subscribes the handler when wanted and it is not, and unsubscribes it when not wanted.
+func (c *contextSubscription) sync(wanted bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case wanted && c.unsubscribe == nil:
+		c.unsubscribe = c.subscribe()
+	case !wanted && c.unsubscribe != nil:
+		c.unsubscribe()
+		c.unsubscribe = nil
+	}
+}
+
+// wantsContext reports whether the loaded configuration thins request contexts: memory v2, not
+// passive.
+func wantsContext(rt *runtime.Runtime) bool {
+	cfg := rt.Config()
+	return cfg.V2() && !cfg.Passive
 }
 
 // handleBeforeCompact answers session_before_compact. v1 stops its catch-up on
