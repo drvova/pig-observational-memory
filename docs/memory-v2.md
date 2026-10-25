@@ -375,6 +375,17 @@ branch-summary requests at the price of picked lines instead of prose.
 | letta-code | staged memory, a store validator | an out-of-band curator request |
 | PiG v0.5.1 | what the hook can return and when it runs; the summarizer's request paths; the threshold inequality; output clamp and safety margin | — |
 
+## Rollout
+
+- **Side by side, then switch.** v2 is built next to v1, selected by one setting, `memoryEngine`
+  (`v1` until the switch, then `v2`). Each step below runs in real PiG sessions under `memoryEngine:
+  v2` while v1 stays the default. When every step is in, v2 becomes the default and v1's workers,
+  scheduling, catch-up and worker-model settings are deleted in one cleanup.
+- **Where.** On the branch `claude/memory-v2`, with its own pull request based on the v1 branch
+  (pull request 5, which stays as the v1 baseline).
+- **The bench harness** (`cmd/longmemeval`, `internal/bench`) depends on v1's workers and is deleted in
+  the cleanup; `docs/bench-results.md` stays as history.
+
 ## Order of work
 
 1. The request rule's machinery: the per-request debug event, the single-request completion path,
