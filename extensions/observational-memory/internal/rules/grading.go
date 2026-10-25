@@ -231,6 +231,9 @@ type Evidence struct {
 	Rules          []string
 	// Events is the length of the model's usage ledger it was read at.
 	Events int
+	// Compactions marks memory v2's evidence (V2EvidenceOf): Passes are compactions, and
+	// Tokens the source the detector runs they summed read.
+	Compactions bool
 }
 
 // EvidenceOf reads model's evidence from its usage ledger and the rules that apply to it.
@@ -278,7 +281,11 @@ func (e Evidence) Digest() string {
 // Text is the evidence as the revision pass's prompt carries it.
 func (e Evidence) Text() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Counted over your last %d memory passes (%d observed source tokens):\n", e.Passes, e.Tokens)
+	if e.Compactions {
+		fmt.Fprintf(&b, "Counted over your last %d compactions (%d source tokens level 0 read):\n", e.Passes, e.Tokens)
+	} else {
+		fmt.Fprintf(&b, "Counted over your last %d memory passes (%d observed source tokens):\n", e.Passes, e.Tokens)
+	}
 	keys := make([]string, 0, len(e.Counts))
 	for k := range e.Counts {
 		keys = append(keys, k)

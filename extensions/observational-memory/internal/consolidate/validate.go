@@ -31,6 +31,9 @@ type Input struct {
 	// Branch is the current branch, which tells a record of the user's own words (a citation's
 	// support) by its first source entry.
 	Branch []ledger.Entry
+	// Offer is what the prompt offered to define (Prompt.HarnessShown with the request's
+	// DefinitionOffer); nil refuses every definition and rule.
+	Offer *DefinitionOffer
 }
 
 // Link is a possible update (ledger.Observation.PossiblyUpdates) the level-1 input lists: Later
@@ -42,12 +45,18 @@ type Link struct {
 
 // Refusal is one proposal validation refused, with why.
 type Refusal struct {
-	// What is "record", "merge", "reflection", "alias", "link" or "curated", Index its position
-	// in that list.
+	// What is "record", "merge", "reflection", "alias", "link", "curated", "definition" or
+	// "rule", Index its position in that list.
 	What   string
 	Index  int
 	Reason string
 }
+
+// The Refusal.What of the harness offer's answers: a definition or a rule level 1 proposed.
+const (
+	RefusalDefinition = "definition"
+	RefusalRule       = "rule"
+)
 
 // The refusal reasons.
 const (
@@ -102,15 +111,19 @@ type Result struct {
 	// settle links (the later record with its links settled, replacing it).
 	Confirmed, Rejected, LinkRecords int
 	// Cited are the accepted curated citations (Citation).
-	Cited    []Citation
-	Refusals []Refusal
+	Cited []Citation
+	// Definitions and Rules are the structurally valid harness proposals; the hook holds each
+	// through the layer's checks (DefinitionOffer).
+	Definitions []Definition
+	Rules       []RuleProposal
+	Refusals    []Refusal
 	// Failure is set when nothing is recorded: the output is a failure and level 0 stands.
 	Failure string
 }
 
 // Accounted is how many proposals were accepted.
 func (r Result) Accounted() int {
-	return len(r.Records) + r.Unchanged + len(r.Reflections) + len(r.Aliases) + len(r.Cited)
+	return len(r.Records) + r.Unchanged + len(r.Reflections) + len(r.Aliases) + len(r.Cited) + len(r.Definitions) + len(r.Rules)
 }
 
 // validator holds one validation's state.
@@ -191,6 +204,8 @@ func Validate(args map[string]any, in Input) Result {
 	}
 	v.aliases(aliases)
 	v.curated(list(args["curated"]))
+	v.definitions(list(args["definitions"]))
+	v.rules(list(args["rules"]))
 	v.result.Replaced = v.replaced
 	if v.result.Accounted() == 0 {
 		v.result.Failure = FailureNothing

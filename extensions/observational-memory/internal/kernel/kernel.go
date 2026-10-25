@@ -79,7 +79,7 @@ var recordKinds = []string{"om.observations.recorded", "om.reflections.recorded"
 
 // kernelEvents are the event kinds and outcomes the usage ledger counts (curated.ModelKind*,
 // curated.Outcome*): the evidence grading reads, which no definition may redefine.
-var kernelEvents = []string{"memory", "decode", "defined", "pass", "ok", "error", "empty", "shown", "omitted", "columns"}
+var kernelEvents = []string{"memory", "decode", "defined", "pass", "detect", "ok", "error", "empty", "shown", "omitted", "columns"}
 
 // roomNames are the room ceiling's names: the summary budget is derived from the room the
 // next context has and nothing raises it.

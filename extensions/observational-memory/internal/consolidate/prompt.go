@@ -38,6 +38,9 @@ type PromptInput struct {
 	// Curated are the curated memories that apply in the project, in the index's order; the
 	// input lists them while room remains, so level 1 may cite them (Citation).
 	Curated []CuratedMemory
+	// Harness is what the request may define, with the harness evidence the input shows after
+	// the curated memories while room remains; nil when nothing is offered.
+	Harness *DefinitionOffer
 }
 
 // Prompt is the level-1 user text and what it shows; validation accepts only ids it shows.
@@ -64,6 +67,9 @@ type Prompt struct {
 	OmittedCurated int
 	// CutShown of CutTotal source entries were shown.
 	CutShown, CutTotal int
+	// HarnessShown reports whether the harness evidence fit; when it did not, a line says so and
+	// nothing may be defined.
+	HarnessShown bool
 }
 
 // The section headings of the level-1 input.
@@ -100,12 +106,13 @@ func ReflectionLine(r ledger.Reflection) string {
 // BuildPrompt builds the level-1 input under in.Available (docs/memory-v2.md, level 1's "Input,
 // in order"): the cut range, its level-0 records as candidates, the current memory bounded by
 // the summary budget, the possible updates between records shown (Links), the subjects shown,
-// the curated memories (Curated), and PiG's customInstructions, in that order. Room is given by
-// priority instead: the instructions, then the candidates (one that does not fit is skipped),
-// then the current memory newest first, then the possible updates, then the subjects, then the
-// curated memories, and the cut range gets what remains (what does not fit stays level 0 only). Whatever is left out is said: the omitted
-// candidates, the older memory, the possible updates, the subjects, the curated memories and
-// the later cut entries
+// the curated memories (Curated), the harness evidence (Harness), and PiG's customInstructions,
+// in that order. Room is given by priority instead: the instructions, then the candidates (one
+// that does not fit is skipped), then the current memory newest first, then the possible
+// updates, then the subjects, then the curated memories, then the harness evidence, and the cut
+// range gets what remains (what does not fit stays level 0 only). Whatever is left out is said: the omitted
+// candidates, the older memory, the possible updates, the subjects, the curated memories, the
+// harness evidence and the later cut entries
 // each get a line
 // whose room is reserved before anything is filled, so the model is always told what it is not
 // shown; the older memory's line is followed, room permitting, by its omitted spans, each with
@@ -138,8 +145,12 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 	if len(in.Curated) > 0 {
 		curatedNotice = tokens.EstimateStringTokens("\n\n" + headingCurated + "\n" + omittedCuratedLine(len(in.Curated)))
 	}
+	harnessNotice := 0
+	if in.Harness != nil {
+		harnessNotice = tokens.EstimateStringTokens("\n\n" + headingHarness + "\n" + harnessNotShown)
+	}
 	cutNotice := max(tokens.EstimateStringTokens(cutNotShown), tokens.EstimateStringTokens(laterEntriesNote(len(in.Cut))))
-	remaining -= candidateNotice + memoryNotice + subjectsNotice + linksNotice + curatedNotice + cutNotice
+	remaining -= candidateNotice + memoryNotice + subjectsNotice + linksNotice + curatedNotice + harnessNotice + cutNotice
 	if remaining <= 0 {
 		return out, false
 	}
@@ -289,6 +300,22 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 		remaining -= tokens.EstimateStringTokens("\n\n" + curatedSection)
 	}
 
+	// The harness evidence whole, or a line saying it did not fit (nothing may then be defined),
+	// paid from the room reserved for it; the cut range gets what remains after it.
+	harnessSection := ""
+	if in.Harness != nil {
+		remaining += harnessNotice
+		section := headingHarness + "\n" + strings.TrimRight(in.Harness.Evidence, "\n")
+		if cost := tokens.EstimateStringTokens("\n\n" + section); cost <= remaining {
+			harnessSection = section
+			out.HarnessShown = true
+			remaining -= cost
+		} else {
+			harnessSection = headingHarness + "\n" + harnessNotShown
+			remaining -= harnessNotice
+		}
+	}
+
 	cutText := cutNotShown
 	if remaining > 0 && len(in.Cut) > 0 {
 		serialized := serialize.SerializeSourceAddressedBranchEntries(in.Cut, serialize.SourceAddressedOptions{MaxTokens: remaining, SkipTools: in.SkipTools})
@@ -302,7 +329,7 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 	}
 
 	sections := []string{headingCut + "\n" + cutText, headingCandidates + "\n" + strings.Join(candidateLines, "\n")}
-	for _, s := range []string{memorySection, linksSection, subjectsSection, curatedSection, instructions} {
+	for _, s := range []string{memorySection, linksSection, subjectsSection, curatedSection, harnessSection, instructions} {
 		if s != "" {
 			sections = append(sections, s)
 		}

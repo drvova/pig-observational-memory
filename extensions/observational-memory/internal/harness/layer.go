@@ -86,7 +86,8 @@ func (l Ledger) Instructions(stage string) string {
 }
 
 // layerStatusLines are a model's harness lines of /om:status (docs/memory-interface.md, section
-// 8): its generation and its last build or revision pass, its definitions by kind with their
+// 8): its generation and its last build or revision pass (under memory v2, its last level-1
+// offer), its definitions by kind with their
 // state (held, written, probation, established), its held definitions, and every file its load
 // skipped (a stale override, whose seed stands, or a refused file).
 func layerStatusLines(store curated.Store, model string) []string {
@@ -136,7 +137,13 @@ func layerStatusLines(store curated.Store, model string) []string {
 		return nil
 	}
 	line := fmt.Sprintf("Layer (%s): generation %d, %d definitions", model, len(gens), defined)
+	proposal, proposed, _ := ls.LastProposal(model)
 	switch {
+	case store.V2 && proposed:
+		// Under memory v2 no build or revision pass runs: definitions are offered inside level 1.
+		line += fmt.Sprintf(", definitions last offered in level 1 at generation %d", proposal.N)
+	case store.V2 && model != layer.AllModels:
+		line += ", definitions are offered in level 1 when the harness evidence changes"
 	case built && last.Op == layer.OpRevise:
 		line += fmt.Sprintf(", last revised at generation %d", last.N)
 	case built:

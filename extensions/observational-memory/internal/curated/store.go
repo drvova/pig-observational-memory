@@ -82,9 +82,15 @@ type Store struct {
 func New(dir string) Store { return Store{Dir: dir, Now: time.Now} }
 
 // Layer is the model-built layer kept in the store (docs/memory-interface.md, section 8):
-// <store>/harness, locked with the store's lock and checked under its floor.
+// <store>/harness, locked with the store's lock and checked under its floor. Under memory v2
+// (V2) it applies, settles and marks only memory v2's holds (layer.Store.Engine), and v1's
+// store only v1's: the written layer is shared, an unproven definition is its engine's.
 func (s Store) Layer() layer.Store {
-	return layer.Store{Dir: filepath.Join(s.Dir, "harness"), Lock: s, Floor: s.Floor, Now: s.Now}
+	l := layer.Store{Dir: filepath.Join(s.Dir, "harness"), Lock: s, Floor: s.Floor, Now: s.Now}
+	if s.V2 {
+		l.Engine = EngineV2
+	}
+	return l
 }
 
 // DefaultDir is the store under the PiG config root.

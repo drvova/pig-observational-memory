@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -250,11 +252,22 @@ func TestBuildPromptBudgets(t *testing.T) {
 	}
 }
 
-// The kernel's level-1 rules name the forced tool.
+// The kernel's level-1 rules name the forced tool and open the system prompt first and whole,
+// whatever consolidation instructions follow: the seed, or the seed and the model's addition,
+// which never takes the seed's place nor the kernel's.
 func TestSystemPromptIsKernelOwned(t *testing.T) {
+	rules := strings.TrimRight(kernel.Text(kernel.TextConsolidateRules), "\n")
+	seed := strings.TrimRight(agents.ConsolidationInstructions, "\n")
 	system := consolidate.SystemPrompt()
-	if !strings.Contains(system, consolidate.ToolName) || strings.TrimRight(system, "\n") != strings.TrimRight(kernel.Text(kernel.TextConsolidateRules), "\n") {
+	if !strings.Contains(system, consolidate.ToolName) || system != rules+"\n\n"+seed+"\n" {
 		t.Fatalf("system prompt:\n%s", system)
+	}
+	extended := consolidate.SystemPromptFor("Prefer merging duplicate deploy notes.")
+	if extended != rules+"\n\n"+seed+"\n\n"+agents.AdditionsHeading+"\nPrefer merging duplicate deploy notes.\n" {
+		t.Fatalf("extended system prompt:\n%s", extended)
+	}
+	if _, shipped := layer.Shipped()[layer.SeedKey(layer.KindInstructions, agents.InstructionsConsolidation)]; !shipped {
+		t.Fatal("the consolidation instructions seed does not ship")
 	}
 	if _, owned := kernel.Owns("instructions", kernel.TextConsolidateRules); !owned {
 		t.Fatal("the level-1 rules are not kernel-owned")

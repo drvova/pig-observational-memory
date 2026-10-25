@@ -45,7 +45,24 @@ type ModelEvent struct {
 	// counted by (rules.Revisions), so a count whose meaning changed is never compared across
 	// the change; a count absent from it was counted by its first revision.
 	Revisions map[string]int `json:"revisions,omitempty"`
+	// Engine is the memory engine the event was counted under (EngineV2); "" for v1. A count
+	// of one engine is never evidence for the other: v2's passes are compactions, its detectors
+	// read level-0 and level-1 output, and v1's are worker passes (docs/memory-v2.md,
+	// "Migration > Layer definitions").
+	Engine string `json:"engine,omitempty"`
+	// Level1 marks a memory v2 compaction pass whose level-1 request answered, so Counts carry
+	// the code checks of its output (the level-1 counts, zero ones left out): the evidence a
+	// definition shaping level 1 is settled on (docs/memory-v2.md, "Self-built harness").
+	Level1 bool `json:"level1,omitempty"`
+	// RanHeld are, for a memory v2 compaction pass, the held definitions the compaction ran with
+	// (layer.Definition.HeldID: kind/name and the digest of the text), read from its layer
+	// before its level 1, so a held definition is settled only on passes that ran under exactly
+	// its text, whichever session or process recorded others in between (rules.SettleV2).
+	RanHeld []string `json:"ranHeld,omitempty"`
 }
+
+// EngineV2 is ModelEvent.Engine for an event counted under memory v2 (config.EngineV2).
+const EngineV2 = "v2"
 
 // The model event kinds.
 const (
@@ -58,6 +75,12 @@ const (
 	// ModelKindPass is one memory-worker pass that advanced its coverage, with what the
 	// rules' detectors counted in it (docs/memory-interface.md, section 7).
 	ModelKindPass = "pass"
+	// ModelKindDetect is one run of memory v2's detectors over the source entries a level-0
+	// extraction read, at a turn end or inside a compaction, with its counts and the source
+	// tokens it read. It is no evidence on its own: the next compaction's pass sums the runs
+	// since the previous one, so one evidence unit is one compaction (docs/memory-v2.md,
+	// "Self-built harness").
+	ModelKindDetect = "detect"
 )
 
 // The model event outcomes.

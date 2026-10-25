@@ -127,9 +127,18 @@ type Definition struct {
 	Mode string
 	// Session is the session that wrote it.
 	Session string
-	Time    time.Time
-	State   string
+	// Engine is, for a held definition, the memory engine whose pass held it ("" for v1's, the
+	// store's Engine for one held through it): each engine applies and settles only its own
+	// holds. A written definition has none; the written layer is shared.
+	Engine string
+	Time   time.Time
+	State  string
 }
+
+// HeldID names d's held text: its key and the digest of its text as declared (its mode line
+// included), so a pass that records the held definitions it ran with names exactly the text it
+// ran with.
+func (d Definition) HeldID() string { return d.Key() + "@" + Digest(d.Declared()) }
 
 // Def is the definition as kernel.Check reads it.
 func (d Definition) Def() kernel.Def { return kernel.Def{Kind: d.Kind, Name: d.Name, Text: d.Text} }
@@ -244,6 +253,12 @@ type Store struct {
 	Validate func(Definition) error
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Engine is the memory engine whose holds the store applies and settles: "" for v1, or
+	// memory v2's ("v2", set by the curated store under memoryEngine v2). A hold through the
+	// store is marked with it (Definition.Engine) and the store loads, reports and settles only
+	// the held definitions marked with it, so neither engine runs with or settles the other's
+	// unproven definitions.
+	Engine string
 }
 
 // New is the store under dir, locked with lock.
@@ -340,6 +355,10 @@ const headerTable = "layer"
 
 var headerFields = []string{"kind", "name", "model", "time", "session", "overrides", "fallback", "mode"}
 
+// engineField is the header field a held file of a non-v1 engine carries (Definition.Engine);
+// a v1 hold and a written file leave it out, so their files are what they were before engines.
+const engineField = "engine"
+
 // noFallback is a held file's fallback when nothing was written for its name before the first
 // hold: a revert leaves the seed (or nothing) standing.
 const noFallback = "none"
@@ -352,11 +371,16 @@ func encodeFile(d Definition, fallback string) string {
 		overrides = d.Seed + "@" + d.SeedDigest
 	}
 	row := []string{d.Kind, d.Name, d.Model, d.Time.UTC().Format(time.RFC3339Nano), d.Session, overrides, fallback, d.Mode}
+	fields := headerFields
+	if d.Engine != "" {
+		fields = append(append([]string{}, headerFields...), engineField)
+		row = append(row, d.Engine)
+	}
 	absent := make([]bool, len(row))
 	for i, v := range row {
 		absent[i] = v == ""
 	}
-	header := tables.Rows.Encode(tables.Table{Name: headerTable, Fields: headerFields, Rows: [][]string{row}, Absent: [][]bool{absent}})
+	header := tables.Rows.Encode(tables.Table{Name: headerTable, Fields: fields, Rows: [][]string{row}, Absent: [][]bool{absent}})
 	return header + "\n\n" + strings.TrimRight(d.Text, "\n") + "\n"
 }
 
@@ -376,7 +400,7 @@ func decodeFile(content string) (Definition, string, error) {
 	t := decoded[0]
 	cell := func(field string) string { v, _ := t.Cell(0, field); return v }
 	// A file written before modes has no mode column: its Mode is "".
-	d := Definition{Kind: cell("kind"), Name: cell("name"), Model: cell("model"), Session: cell("session"), Mode: cell("mode"), Text: strings.TrimRight(strings.TrimPrefix(parts[2], "\n"), "\n")}
+	d := Definition{Kind: cell("kind"), Name: cell("name"), Model: cell("model"), Session: cell("session"), Mode: cell("mode"), Engine: cell(engineField), Text: strings.TrimRight(strings.TrimPrefix(parts[2], "\n"), "\n")}
 	d.Time, _ = time.Parse(time.RFC3339Nano, cell("time"))
 	if overrides := cell("overrides"); overrides != "" {
 		seed, digest, ok := strings.Cut(overrides, "@")
@@ -956,6 +980,8 @@ func (s Store) putStamped(d Definition) (Definition, error) {
 			return old, nil
 		}
 	}
+	// A written definition is the shared layer's, whichever engine's hold proved it.
+	d.Engine = ""
 	content := encodeFile(d, "")
 	if err := s.write(d.Model, path, content); err != nil {
 		return Definition{}, err

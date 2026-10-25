@@ -17,6 +17,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -43,6 +44,11 @@ type Input struct {
 	Budget int
 	// Format is ledger.FormatLines or ledger.FormatTables ("" and unknown values mean tables).
 	Format string
+	// Codec encodes the tables format: the session model's profile codec (a format the model
+	// declared, interpreted by its layer, or a shipped codec); nil is the native rows codec.
+	// A codec other than native rows opens the summary with instructions describing it
+	// (TablesInstructionsFor). The lines format ignores it.
+	Codec tables.Codec
 	// Aliases group the notes as the ledger does (ledger.Projection.Aliases).
 	Aliases []ledger.SubjectAlias
 	// ReflectionDates date the reflections (ledger.ReflectionDateRanges).

@@ -23,7 +23,13 @@ var (
 // ledger.TablesSummaryIntro and end with ledger.TablesRecallParagraph, so the summary's tables
 // read as any tables summary's do (ledger.TablesSummaryBody); the files and commits lines
 // follow the tables after a "---" line, outside the encoded body.
-const TablesInstructions = ledger.TablesSummaryIntro + `: name[rows]{fields}: then one record per line, values in field order; an empty value means none.
+const TablesInstructions = ledger.TablesSummaryIntro + rowsFormatLine + tablesBody
+
+// rowsFormatLine ends TablesInstructions' first sentence for the native rows codec.
+const rowsFormatLine = `: name[rows]{fields}: then one record per line, values in field order; an empty value means none.`
+
+// tablesBody is TablesInstructions after its first sentence, whatever the codec.
+const tablesBody = `
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
@@ -35,6 +41,31 @@ const TablesInstructions = ledger.TablesSummaryIntro + `: name[rows]{fields}: th
 Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 ` + ledger.TablesRecallParagraph
+
+// TablesInstructionsFor are the instructions that open a memory v2 tables summary encoded with
+// codec: TablesInstructions for the native rows codec (or nil), else the same text with its
+// first sentence naming the codec and carrying the first line of the codec's spec, as v1's
+// ledger.TablesUsageInstructionsFor does, so the instructions describe the format below them.
+// A format a model declared under the name rows is described by its own spec.
+func TablesInstructionsFor(codec tables.Codec) string {
+	if nativeRows(codec) {
+		return TablesInstructions
+	}
+	format, _, _ := strings.Cut(codec.Spec(), "\n")
+	return ledger.TablesSummaryIntro + " in the " + codec.Name() + " format. " + strings.TrimSpace(format) + tablesBody
+}
+
+// nativeRows reports whether codec is the kernel's native rows codec (nil stands for it); a
+// declared codec (tables.Declared) is never native, whatever its name.
+func nativeRows(codec tables.Codec) bool {
+	if codec == nil {
+		return true
+	}
+	if _, declared := tables.DeclaredFormat(codec); declared {
+		return false
+	}
+	return codec.Name() == tables.Rows.Name()
+}
 
 // LinesInstructions open a memory v2 summary in the lines format.
 const LinesInstructions = `These are condensed memories from earlier in this session, one record per line under a heading.
@@ -66,8 +97,12 @@ type layout struct {
 }
 
 func newLayout(in Input) *layout {
-	l := &layout{tables: in.Format != ledger.FormatLines, codec: tables.Rows, empty: map[string]int{}}
-	l.intro = TablesInstructions
+	codec := in.Codec
+	if codec == nil {
+		codec = tables.Rows
+	}
+	l := &layout{tables: in.Format != ledger.FormatLines, codec: codec, empty: map[string]int{}}
+	l.intro = TablesInstructionsFor(in.Codec)
 	if !l.tables {
 		l.intro = LinesInstructions
 	}

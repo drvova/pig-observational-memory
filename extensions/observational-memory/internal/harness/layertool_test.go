@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -257,5 +259,31 @@ func TestLayerReadMigratesInstructions(t *testing.T) {
 	harness.MigrateInstructions(h, store, "p/m")
 	if gens, _ := ls.Generations("p/m"); len(gens) != 1 || len(h.Notifications) != 0 {
 		t.Fatalf("migrated a definition with a mode: %+v %+v", gens, h.Notifications)
+	}
+}
+
+// Under memory v2 the model defines part of its harness only inside the compaction's level-1
+// request: the memory tool's harness and propose writes are refused and hold nothing, while
+// forget still reaches the layer.
+func TestMemoryToolDefinesNothingUnderV2(t *testing.T) {
+	h, store, _ := session(t)
+	store.V2 = true
+	m := harness.NewManager(func(host.ToolHost) (curated.Call, bool) {
+		return curated.Call{Store: store, Source: "session-1"}, true
+	})
+	for _, query := range []string{
+		`harness kind=instructions name=consolidation text="Prefer one merged line per deploy target."`,
+		`propose detector=uncited-assistant-specifics remedy=keep-head`,
+	} {
+		r := m.RunMemory(h, query)
+		if !r.IsError || !strings.Contains(r.Text, "consolidation request") {
+			t.Fatalf("%s: %s", query, r.Text)
+		}
+	}
+	if held, _ := store.Layer().Held("p/m"); len(held) != 0 {
+		t.Fatalf("held %+v", held)
+	}
+	if r := m.RunMemory(h, `harness forget kind=instructions name=consolidation`); !r.IsError || strings.Contains(r.Text, "consolidation request") {
+		t.Fatalf("forget: %s", r.Text)
 	}
 }

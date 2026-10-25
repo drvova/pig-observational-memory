@@ -227,6 +227,12 @@ type MemoryDetails struct {
 	Engine string `json:"engine,omitempty"`
 	// Consolidation is what memory v2's level-1 request did at this compaction, nil for v1.
 	Consolidation *ConsolidationReport `json:"consolidation,omitempty"`
+	// Shown are the ids of the records a memory v2 summary shows (selection.Result), nil for
+	// v1 and for a v2 summary that rendered no record. A v2 summary shows records its lines
+	// carry no record id for (the files and commits lines) and prints ids it does not show
+	// (pointers such as (conflicts <id>)), so the harness reads what the summary showed from
+	// here, not from the text (harness.VisibilityOf).
+	Shown []string `json:"shown,omitempty"`
 }
 
 // ConsolidationReport is what memory v2's level-1 consolidation request did at one compaction
@@ -254,6 +260,11 @@ type ConsolidationReport struct {
 	// the staged memories the citations made live.
 	Cited    int `json:"cited,omitempty"`
 	Promoted int `json:"promoted,omitempty"`
+	// HarnessOffered is set when the request was shown changed harness evidence and could define
+	// (docs/memory-v2.md, "Self-built harness"), and Defined counts the definitions and rules it
+	// held, each until a later compaction proves it.
+	HarnessOffered bool `json:"harnessOffered,omitempty"`
+	Defined        int  `json:"defined,omitempty"`
 }
 
 // Level is the compaction's level: 1 when the level-1 output was applied, else 0.
@@ -683,6 +694,14 @@ func MemoryDetailsFrom(v any) (MemoryDetails, bool) {
 	details := MemoryDetails{Type: OMFolded, Version: 1, FullFold: fullFold, Observations: observations, Reflections: reflections, FoldThroughEntryID: foldThroughID, SummaryCodec: summaryCodec, SummaryFormat: summaryFormat, Aliases: aliases}
 	details.Engine, _ = m["engine"].(string)
 	details.Consolidation = consolidationReportFrom(m["consolidation"])
+	if shown, ok := m["shown"].([]any); ok {
+		details.Shown = make([]string, 0, len(shown))
+		for _, raw := range shown {
+			if id, ok := raw.(string); ok {
+				details.Shown = append(details.Shown, id)
+			}
+		}
+	}
 	return details, true
 }
 
@@ -794,6 +813,8 @@ func consolidationReportFrom(v any) *ConsolidationReport {
 	report.Aliases, report.Dropped, report.Refused = count("aliases"), count("dropped"), count("refused")
 	report.Confirmed, report.Rejected = count("confirmed"), count("rejected")
 	report.Cited, report.Promoted = count("cited"), count("promoted")
+	report.HarnessOffered, _ = m["harnessOffered"].(bool)
+	report.Defined = count("defined")
 	return report
 }
 

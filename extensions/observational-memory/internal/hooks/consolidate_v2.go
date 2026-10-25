@@ -12,9 +12,11 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -40,6 +42,10 @@ type level1Result struct {
 	entries []ledger.Entry
 	usage   map[string]any
 	report  ledger.ConsolidationReport
+	// counts are the code checks of the response for the compaction's evidence unit
+	// (level1Counts, and rules.CountLevel1Failed for output nothing was recorded from); nil
+	// when no response came back.
+	counts map[string]int
 }
 
 // consolidateV2 is memory v2's level 1 (docs/memory-v2.md, "Level 1: one request at
@@ -51,9 +57,14 @@ type level1Result struct {
 // length or stream error, an abort, output with nothing valid) leaves the level-0 records and
 // the reflections as they are; nothing is retried. entries is the branch with level 0's
 // extraction folded in, cut the cut range's source entries, budget the summary budget the
-// memory is rendered under. spent, when not nil, receives out as it stands when consolidateV2
-// returns or panics, so a panic after the request still reports the request and its usage.
-func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, entries, cut []ledger.Entry, budget int, spent *level1Result) (out level1Result) {
+// memory is rendered under. modelLayer is the session model's layer the compaction read (only
+// memory v2's holds among its held definitions, layer.Store.Engine): its consolidation
+// instructions follow the kernel's rules and the seed in the system prompt, and, when its
+// harness evidence changed since the last offer (definitionOfferV2), the request may also define
+// part of its harness, which is held (holdDefinitionsV2) and never adds a request. spent, when
+// not nil, receives out as it stands when consolidateV2 returns or panics, so a panic after the
+// request still reports the request and its usage.
+func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, entries, cut []ledger.Entry, budget int, modelLayer declare.Active, spent *level1Result) (out level1Result) {
 	if spent != nil {
 		defer func() { *spent = out }()
 	}
@@ -116,8 +127,10 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	folded := ledger.FoldLedger(entries, "")
 	store, storeOn := harness.StoreOf(h, cfg)
 	project := harness.ProjectRoot(h.Cwd())
-	tool := consolidate.Tool()
-	system := consolidate.SystemPrompt()
+	model := harness.ModelKey(h.SessionModel())
+	offer, evidence := definitionOfferV2(ctx, store, storeOn, model, modelLayer)
+	tool := consolidate.ToolFor(offer)
+	system := consolidate.SystemPromptFor(modelLayer.Instructions(agents.InstructionsConsolidation))
 	fixedTokens := requestOverheadTokens(system, tool)
 	prompt, ok := consolidate.BuildPrompt(consolidate.PromptInput{
 		Cut:          cut,
@@ -131,6 +144,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Branch:       entries,
 		Folded:       folded,
 		Curated:      curatedInput(store, storeOn, project, h.SessionID()),
+		Harness:      offer,
 	})
 	estimated := fixedTokens + prompt.Tokens
 	if !ok || estimated+outputCap+config.PiGContextSafetyTokens > window {
@@ -167,6 +181,8 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		"omittedCurated":     prompt.OmittedCurated,
 		"cutShown":           prompt.CutShown,
 		"cutEntries":         prompt.CutTotal,
+		"harnessOffered":     offer != nil,
+		"harnessShown":       prompt.HarnessShown,
 		"inputTokens":        estimated,
 		"outputCap":          outputCap,
 		"window":             window,
@@ -187,6 +203,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	case answer.StreamError != nil:
 		return fail(answer.StreamError.Error())
 	case answer.Message != nil && answer.Message["stopReason"] == "length":
+		out.counts = map[string]int{rules.CountLevel1Failed: 1}
 		return fail("the response reached the output cap (stopReason length)")
 	}
 
@@ -200,15 +217,28 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Curated:     prompt.Curated,
 		Branch:      entries,
 	}
+	if offer != nil && prompt.HarnessShown {
+		in.Offer = offer
+	}
 	result := consolidate.Validate(answer.Arguments, in)
 	if len(result.Refusals) > 0 {
 		logData["refusals"] = consolidate.RefusalSummary(result.Refusals)
 	}
 	out.report.Refused = len(result.Refusals)
+	if in.Offer != nil {
+		// The offer was shown and answered: what it defined is held and the offer marked, so the
+		// next one waits for changed evidence, whatever else of the output stands.
+		out.report.HarnessOffered = true
+		out.report.Defined, _ = holdDefinitionsV2(ctx, request, h, store, model, entries, result, evidence)
+		logData["defined"] = out.report.Defined
+	}
 	if result.Failure != "" {
+		out.counts = level1Counts(result, 0)
+		out.counts[rules.CountLevel1Failed] = 1
 		return fail(result.Failure)
 	}
 	drop, reflections, keptBack := consolidate.Union(result, projection.Observations)
+	out.counts = level1Counts(result, keptBack)
 	result.Reflections = reflections
 	out.entries = appendLevel1(ctx, h, result, drop, cut[len(cut)-1].ID)
 	out.report.Applied = true

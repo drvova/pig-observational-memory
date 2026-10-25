@@ -109,6 +109,10 @@ type Rule struct {
 	BaselineEvents, BaselineTokens int
 	// AfterEvents, AfterTokens and AfterPasses are the same over its probation.
 	AfterEvents, AfterTokens, AfterPasses int
+	// Engine is the memory engine the rule was written for: "" for v1, whose passes are the
+	// memory worker's, or curated.EngineV2, whose evidence units are compactions. A rule is
+	// applied, judged and promoted only under its own engine (For, evaluate).
+	Engine string
 }
 
 // Default reports whether the rule is a default for all models.
@@ -139,7 +143,12 @@ func (r Rule) Active() bool { return r.State == StateProbation || r.State == Sta
 // parameters (a text compared case-insensitively). A default is promoted from single-model
 // rules with one signature.
 func (r Rule) Signature() string {
-	return strings.Join([]string{r.Detector, r.Remedy, r.Kind, formatFullness(r.Fullness), strings.ToLower(r.Text)}, "\x1f")
+	parts := []string{r.Detector, r.Remedy, r.Kind, formatFullness(r.Fullness), strings.ToLower(r.Text)}
+	if r.Engine != "" {
+		// Only a v2 rule names its engine, so every v1 rule keeps its signature and id.
+		parts = append(parts, r.Engine)
+	}
+	return strings.Join(parts, "\x1f")
 }
 
 // Describe is the rule as notifications and /om:status show it.
@@ -209,11 +218,17 @@ func layerModel(r Rule) (string, error) {
 func encode(r Rule) string {
 	row := []string{r.ID, r.Detector, strings.Join(r.Models, " "), strings.Join(r.Excluded, " "), r.Remedy, r.Kind, formatFullness(r.Fullness), r.Text, r.State, r.Reason, r.Proposer, r.Created.UTC().Format(time.RFC3339Nano),
 		strconv.Itoa(r.Start), strconv.Itoa(r.End), strconv.Itoa(r.BaselineEvents), strconv.Itoa(r.BaselineTokens), strconv.Itoa(r.AfterEvents), strconv.Itoa(r.AfterTokens), strconv.Itoa(r.AfterPasses)}
+	fields := ruleFields
+	if r.Engine != "" {
+		// Only a v2 rule carries the column, so every v1 rule file reads as it was written.
+		fields = append(append([]string{}, ruleFields...), "engine")
+		row = append(row, r.Engine)
+	}
 	absent := make([]bool, len(row))
 	for i, v := range row {
 		absent[i] = v == ""
 	}
-	return tables.Rows.Encode(tables.Table{Name: ruleTable, Fields: ruleFields, Rows: [][]string{row}, Absent: [][]bool{absent}})
+	return tables.Rows.Encode(tables.Table{Name: ruleTable, Fields: fields, Rows: [][]string{row}, Absent: [][]bool{absent}})
 }
 
 // write stores r in the layer; the caller holds the store's lock.
@@ -280,6 +295,7 @@ func parse(where, text string) (Rule, error) {
 		Remedy: cell("remedy"), Kind: cell("kind"), Text: cell("text"), State: cell("state"), Reason: cell("reason"), Proposer: cell("proposer"),
 		Start: num("start"), End: num("end"), BaselineEvents: num("baseline_events"), BaselineTokens: num("baseline_tokens"),
 		AfterEvents: num("after_events"), AfterTokens: num("after_tokens"), AfterPasses: num("after_passes"),
+		Engine: cell("engine"),
 	}
 	r.Fullness, _ = strconv.ParseFloat(cell("fullness"), 64)
 	r.Created, _ = time.Parse(time.RFC3339Nano, cell("created"))
@@ -295,6 +311,16 @@ func parse(where, text string) (Rule, error) {
 	case StateProbation, StateEstablished, StateRetired:
 	default:
 		return Rule{}, fmt.Errorf("%s has an unknown state %q", where, r.State)
+	}
+	switch r.Engine {
+	case "":
+	case curated.EngineV2:
+		// A v2 rule is held to what v2 runs: a v2 detector answered by a code-only remedy.
+		if !containsString(V2Detectors, r.Detector) || !remedyRuns(r.Engine, r.Remedy) {
+			return Rule{}, fmt.Errorf("%s: %s does not run under memoryEngine v2", where, r.Remedy)
+		}
+	default:
+		return Rule{}, fmt.Errorf("%s has an unknown engine %q", where, r.Engine)
 	}
 	return r, nil
 }

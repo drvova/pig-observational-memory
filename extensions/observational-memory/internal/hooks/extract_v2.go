@@ -21,7 +21,9 @@ var extractMu sync.Mutex
 
 // extractTurnV2 is memory v2's turn-end extraction (docs/memory-v2.md, "Level 0: code only"):
 // level 0 reads the source entries since the last extraction marker and appends their records
-// and a marker through the last entry read, with no model request. Passive mode turns it off;
+// and a marker through the last entry read, with no model request. The detectors run over what
+// it read first (detectV2), a keep-head rule's notes ride in its batches, and the run is
+// recorded once the extraction is appended. Passive mode turns it off;
 // the compaction then extracts the whole cut range. A panic is recovered: extraction never
 // fails a turn.
 func extractTurnV2(rt *runtime.Runtime, h host.Host) {
@@ -42,16 +44,21 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 		return
 	}
 	start := max(ledger.ExtractionProgressIndex(entries)+1, ledger.CompactionRangeStartIndex(entries))
+	folded := ledger.FoldLedger(entries, "")
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
 		Start:     start,
 		End:       len(entries),
 		SkipTools: harness.MemoryToolNames(rt),
-		Ledger:    ledger.FoldLedger(entries, ""),
+		Ledger:    folded,
 		Cwd:       h.Cwd(),
 	})
+	result, record := detectV2(ctx, rt, h, "turn_end", entries, start, len(entries), folded, result)
 	appended, err := appendExtraction(h, result, true)
 	logExtraction(ctx, "turn_end", result, appended, err)
+	if err == nil && len(appended) > 0 {
+		record()
+	}
 }
 
 // extractCutV2 extracts whatever of a compaction's cut range no earlier extraction read, plus
@@ -69,9 +76,10 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 	}
 	extractMu.Lock()
 	defer extractMu.Unlock()
-	if fresh, err := h.GetBranch(); err == nil {
-		if cut := ledger.EntryIndexForID(fresh, event.FirstKeptEntryID); cut >= 0 && cut >= ledger.CompactionRangeStartIndex(fresh) {
-			entries = fresh
+	fresh := false
+	if branch, err := h.GetBranch(); err == nil {
+		if cut := ledger.EntryIndexForID(branch, event.FirstKeptEntryID); cut >= 0 && cut >= ledger.CompactionRangeStartIndex(branch) {
+			entries, fresh = branch, true
 		}
 	}
 	rangeStart := ledger.CompactionRangeStartIndex(entries)
@@ -86,17 +94,25 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 	for _, p := range event.Preparation.FileOps.Edited {
 		ops = append(ops, extract.FileOp{Path: p, State: "edited"})
 	}
+	start := max(ledger.ExtractionProgressIndex(entries)+1, rangeStart)
+	folded := ledger.FoldLedger(entries, "")
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
-		Start:     max(ledger.ExtractionProgressIndex(entries)+1, rangeStart),
+		Start:     start,
 		End:       cut,
 		SkipTools: harness.MemoryToolNames(rt),
-		Ledger:    ledger.FoldLedger(entries, ""),
+		Ledger:    folded,
 		Cwd:       h.Cwd(),
 		FileOps:   extract.FileOps{Ops: ops, From: rangeStart},
 	})
+	result, record := detectV2(ctx, rt, h, "compaction", entries, start, cut, folded, result)
 	appended, err := appendExtraction(h, result, true)
 	logExtraction(ctx, "compaction", result, appended, err)
+	if err == nil && len(appended) > 0 && fresh {
+		// Counted only for an extraction that landed on a range measured on the fresh branch:
+		// one read from the event's snapshot may repeat a turn end's run already recorded.
+		record()
+	}
 	if len(appended) == 0 {
 		return entries
 	}

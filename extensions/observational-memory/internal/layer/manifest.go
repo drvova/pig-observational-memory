@@ -40,7 +40,16 @@ const (
 	// the new content), which probation judges afresh (its evidence so far ran with the text in
 	// the seed's place), a held one (Held) in its held file, which changes nothing written.
 	OpMigrate = "migrate"
+	// OpPropose marks a memory v2 level-1 request that was offered to define (docs/memory-v2.md,
+	// "Self-built harness"), with the evidence it was shown; its definitions are held in the
+	// same critical section (HoldPass). It changes no file and is no build or revision pass
+	// (LastPass): the next offer waits until that evidence changes (LastProposal).
+	OpPropose = "propose"
 )
+
+// marksPass reports whether op is a generation that marks a pass changing no file by itself:
+// a build, revision or level-1 proposal.
+func marksPass(op string) bool { return op == OpBuild || op == OpRevise || op == OpPropose }
 
 // Generation is one change to a model's layer, a line of its append-only manifest.
 type Generation struct {
@@ -79,6 +88,8 @@ func (g Generation) Describe() string {
 		return fmt.Sprintf("%d: build pass", g.N)
 	case OpRevise:
 		return fmt.Sprintf("%d: revision pass", g.N)
+	case OpPropose:
+		return fmt.Sprintf("%d: level-1 proposal", g.N)
 	case OpEstablish:
 		return fmt.Sprintf("%d: establish %s/%s (%s)", g.N, g.Kind, g.Name, g.Reason)
 	case OpMigrate:
@@ -147,10 +158,11 @@ func (s Store) appendGeneration(model string, g Generation) (Generation, error) 
 }
 
 // Mark appends a generation that changes no file: a build or revision pass (OpBuild,
-// OpRevise) with the evidence it was given. Any other op is refused.
+// OpRevise) or a level-1 proposal (OpPropose) with the evidence it was given. Any other op is
+// refused.
 func (s Store) Mark(model string, g Generation) (Generation, error) {
-	if g.Op != OpBuild && g.Op != OpRevise {
-		return Generation{}, fmt.Errorf("only a build or revision pass is marked, not %q", g.Op)
+	if !marksPass(g.Op) {
+		return Generation{}, fmt.Errorf("only a build or revision pass or a level-1 proposal is marked, not %q", g.Op)
 	}
 	var out Generation
 	err := s.locked(func() error {
@@ -169,6 +181,21 @@ func (s Store) LastPass(model string) (Generation, bool, error) {
 	}
 	for i := len(gens) - 1; i >= 0; i-- {
 		if gens[i].Op == OpBuild || gens[i].Op == OpRevise {
+			return gens[i], true, nil
+		}
+	}
+	return Generation{}, false, nil
+}
+
+// LastProposal is model's latest level-1 proposal generation (OpPropose); false when it has
+// none.
+func (s Store) LastProposal(model string) (Generation, bool, error) {
+	gens, err := s.Generations(model)
+	if err != nil {
+		return Generation{}, false, err
+	}
+	for i := len(gens) - 1; i >= 0; i-- {
+		if gens[i].Op == OpPropose {
 			return gens[i], true, nil
 		}
 	}

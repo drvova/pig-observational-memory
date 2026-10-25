@@ -144,3 +144,18 @@ func TestVisibilityDecodesTheRecordedCodec(t *testing.T) {
 		t.Fatalf("declared rows shown: %s", outcome)
 	}
 }
+
+// A memory v2 compaction records what its summary shows (ledger.MemoryDetails.Shown): a record
+// is shown exactly when it is listed there, even when its id is printed only as another line's
+// pointer, and a shown record whose line carries no record id (the files line) is still shown.
+func TestVisibilityReadsV2Shown(t *testing.T) {
+	details := tf.MemoryDetails(tf.MemoryDetailsArgs{FullFold: true, Observations: []ledger.Observation{tf.Observation("aaaaaaaaaaa1"), tf.Observation("aaaaaaaaaaa2"), tf.Observation("aaaaaaaaaaa3")}})
+	details["engine"], details["shown"] = "v2", []any{"aaaaaaaaaaa1", "aaaaaaaaaaa3"}
+	summary := ledger.TablesSummaryIntro + "\n\n- [aaaaaaaaaaa1] fact (conflicts aaaaaaaaaaa2)\n\n---\n\nfiles: main.go (e7)"
+	v := harness.VisibilityOf([]ledger.Entry{tf.RawMessage("u1", "hi"), tf.CompactionEntry("c1", tf.CompactionArgs{FirstKeptEntryID: "u1", Details: details, Summary: summary})}, nil)
+	for id, want := range map[string]string{"aaaaaaaaaaa1": curated.OutcomeShown, "aaaaaaaaaaa2": curated.OutcomeOmitted, "aaaaaaaaaaa3": curated.OutcomeShown} {
+		if outcome, _ := v.Classify([]string{id}); outcome != want {
+			t.Errorf("%s: %s, want %s", id, outcome, want)
+		}
+	}
+}

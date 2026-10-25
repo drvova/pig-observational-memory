@@ -30,12 +30,16 @@ func (s Store) Hold(d Definition) (Definition, error) {
 	return out, err
 }
 
-// HoldLocked is Hold for a caller that already holds the store's lock.
+// HoldLocked is Hold for a caller that already holds the store's lock. The hold is marked with
+// the store's engine (Store.Engine); a name another engine held is replaced like a name re-held,
+// keeping the original fallback, since one name has one held file and the newer proposal of it
+// supersedes the unproven one.
 func (s Store) HoldLocked(d Definition) (Definition, error) {
 	d, err := s.stamp(d)
 	if err != nil {
 		return Definition{}, err
 	}
+	d.Engine = s.Engine
 	fallback := ""
 	heldPath := s.heldPath(d.Model, d.Kind, d.Name)
 	if data, err := os.ReadFile(heldPath); err == nil {
@@ -67,15 +71,16 @@ func (s Store) HoldLocked(d Definition) (Definition, error) {
 	return d, nil
 }
 
-// HoldPass holds a build or revision pass's definitions (defs, all for model) and appends its
+// HoldPass holds a build or revision pass's definitions, or a level-1 proposal's (OpPropose),
+// (defs, all for model) and appends its
 // mark (Mark) in one critical section, so another process never sees some of them held with no
 // mark, and a caller that checks its context once before calling keeps the pass whole: all of it
 // lands or none. A definition the checks refuse is skipped, with its error at its index in
 // refused (nil for one held); held are the definitions held. An error writing the layer leaves
 // what was held before it, and no mark.
 func (s Store) HoldPass(model string, defs []Definition, mark Generation) (held []Definition, refused []error, gen Generation, err error) {
-	if mark.Op != OpBuild && mark.Op != OpRevise {
-		return nil, nil, Generation{}, fmt.Errorf("only a build or revision pass is marked, not %q", mark.Op)
+	if !marksPass(mark.Op) {
+		return nil, nil, Generation{}, fmt.Errorf("only a build or revision pass or a level-1 proposal is marked, not %q", mark.Op)
 	}
 	refused = make([]error, len(defs))
 	err = s.locked(func() error {
@@ -191,9 +196,10 @@ func (s Store) dropHeld(model string, kept func(key string) bool) error {
 	return nil
 }
 
-// held reads model's held definitions; a held file the kernel or the store's checks refuse is
-// reported and left for Claim to revert, and one the held index does not record is reported
-// as untracked and never loaded.
+// held reads model's held definitions of the store's engine (Store.Engine); a held file the
+// kernel or the store's checks refuse is reported and left for Claim to revert, one the held
+// index does not record is reported as untracked and never loaded, and one another engine held
+// is neither loaded nor reported: it is that engine's to apply and settle.
 func (s Store) held(model string) ([]heldDef, []Report, error) {
 	index, err := s.heldIndex(model)
 	if err != nil {
@@ -208,7 +214,13 @@ func (s Store) held(model string) ([]heldDef, []Report, error) {
 		for _, name := range names {
 			d, fallback, report := s.load(s.heldPath(model, kind, name), model, kind, name, index)
 			if report != nil {
+				if !s.ownsHeldFile(model, kind, name) {
+					continue
+				}
 				reports = append(reports, *report)
+				continue
+			}
+			if d.Engine != s.Engine {
 				continue
 			}
 			d.State = StateHeld
@@ -218,7 +230,19 @@ func (s Store) held(model string) ([]heldDef, []Report, error) {
 	return out, reports, nil
 }
 
-// Held are model's held definitions, by kind and name.
+// ownsHeldFile reports whether model's held file of kind named name is the store's engine's to
+// report and settle: one whose header decodes naming another engine is not; an undecodable one
+// is every engine's (whichever engine reads it reports it, and Claim reverts it).
+func (s Store) ownsHeldFile(model, kind, name string) bool {
+	data, err := os.ReadFile(s.heldPath(model, kind, name))
+	if err != nil {
+		return true
+	}
+	d, _, err := decodeFile(string(data))
+	return err != nil || d.Engine == s.Engine
+}
+
+// Held are model's held definitions of the store's engine, by kind and name.
 func (s Store) Held(model string) ([]Definition, error) {
 	held, _, err := s.held(model)
 	if err != nil {
@@ -253,7 +277,7 @@ func (n Notice) Message() string {
 	return fmt.Sprintf("Observational memory: held %s definition %s for %s was reverted (%s); %s stands", n.Kind, n.Name, n.Model, n.Reason, n.Restored)
 }
 
-// Claim settles model's held definitions after a pass, once each: when the pass was clean (no
+// Claim settles model's held definitions of the store's engine after a pass, once each: when the pass was clean (no
 // kernel error, no decode failure, no invariant refusal) each is written to the layer, as Put
 // writes it; otherwise each is dropped and what stood before its first hold is put back (the
 // previous definition, else the seed), with reason. A held file that no longer passes the
@@ -270,6 +294,9 @@ func (s Store) Claim(model string, clean bool, reason string) ([]Notice, error) 
 				return err
 			}
 			for _, name := range names {
+				if !s.ownsHeldFile(model, kind, name) {
+					continue
+				}
 				n, err := s.claimOne(model, kind, name, clean, reason)
 				if err != nil {
 					return err
@@ -285,7 +312,8 @@ func (s Store) Claim(model string, clean bool, reason string) ([]Notice, error) 
 // ClaimHeld is Claim for the held definitions one pass ran with (held, from the pass's layer
 // snapshot), after nodecode's claim-batch: each is settled only while its held file still
 // holds the text (and mode) the pass ran with, so a definition held again (or first) after the pass read
-// the layer waits for a pass of its own. Definitions not held are ignored.
+// the layer waits for a pass of its own. Definitions not held, or held by another engine
+// (Store.Engine), are ignored.
 func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice, error) {
 	if strings.TrimSpace(reason) == "" {
 		reason = "the pass was not clean"
@@ -293,7 +321,7 @@ func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice
 	var notices []Notice
 	err := s.locked(func() error {
 		for _, d := range held {
-			if d.State != StateHeld || !ValidKind(d.Kind) || !validName.MatchString(d.Name) {
+			if d.State != StateHeld || d.Engine != s.Engine || !ValidKind(d.Kind) || !validName.MatchString(d.Name) {
 				continue
 			}
 			data, err := os.ReadFile(s.heldPath(d.Model, d.Kind, d.Name))
@@ -303,7 +331,7 @@ func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice
 			if err != nil {
 				return err
 			}
-			if now, _, err := decodeFile(string(data)); err == nil && (now.Text != strings.TrimRight(d.Text, "\n") || now.Mode != d.Mode) {
+			if now, _, err := decodeFile(string(data)); err == nil && (now.Text != strings.TrimRight(d.Text, "\n") || now.Mode != d.Mode || now.Engine != s.Engine) {
 				continue
 			}
 			n, err := s.claimOne(d.Model, d.Kind, d.Name, clean, reason)

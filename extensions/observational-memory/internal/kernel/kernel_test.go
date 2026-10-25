@@ -25,7 +25,7 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 		kernel.OwnerQueryStage:  memquery.Stages,
 		kernel.OwnerQueryWrite:  memquery.Writes,
 		kernel.OwnerStorage:     {ledger.OMObservationsRecorded, ledger.OMReflectionsRecorded, ledger.OMObservationsDropped, ledger.OMFolded, ledger.OMSubjectsAliased},
-		kernel.OwnerEventLedger: {curated.ModelKindMemory, curated.ModelKindDecode, curated.ModelKindDefined, curated.ModelKindPass,
+		kernel.OwnerEventLedger: {curated.ModelKindMemory, curated.ModelKindDecode, curated.ModelKindDefined, curated.ModelKindPass, curated.ModelKindDetect,
 			curated.OutcomeOK, curated.OutcomeError, curated.OutcomeEmpty, curated.OutcomeShown, curated.OutcomeOmitted, curated.OutcomeColumns},
 		kernel.OwnerInvariant:   {"compactAfterTokens", "compactionMaxRetainedTokens", "compactionSummaryMaxTokens", "compactionCatchUpMaxChunks", "kernelFloor"},
 		kernel.OwnerPromptRules: kernel.TextIDs(),

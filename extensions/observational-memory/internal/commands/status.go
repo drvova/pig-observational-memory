@@ -134,6 +134,9 @@ func lastCompactionLine(cfg config.Config, entries []ledger.Entry) string {
 		if report.Cited > 0 {
 			line += fmt.Sprintf(", cited %d curated memories (%d staged made live)", report.Cited, report.Promoted)
 		}
+		if report.HarnessOffered {
+			line += fmt.Sprintf(", held %d harness definitions", report.Defined)
+		}
 		if report.Refused > 0 {
 			line += fmt.Sprintf(", refused %d proposals", report.Refused)
 		}

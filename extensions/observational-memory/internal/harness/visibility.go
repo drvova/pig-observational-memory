@@ -18,7 +18,9 @@ type Visibility struct {
 
 // VisibilityOf reads the latest compaction on the branch and the pinned index's names. A
 // record of the compaction's details is shown when its id is in the summary text and is not
-// only the first id of an omitted span; every other record of the details was omitted. Records
+// only the first id of an omitted span, or, for a memory v2 compaction, when the compaction
+// recorded showing it (ledger.MemoryDetails.Shown); every other record of the details was
+// omitted. Records
 // recorded after that compaction are neither: they are not in any summary yet.
 func VisibilityOf(entries []ledger.Entry, indexShown []string) Visibility {
 	v := Visibility{shown: map[string]bool{}, omitted: map[string]bool{}, index: map[string]bool{}}
@@ -32,6 +34,20 @@ func VisibilityOf(entries []ledger.Entry, indexShown []string) Visibility {
 	details, ok := ledger.MemoryDetailsFrom(entries[i].Details)
 	summary, _ := entries[i].Summary.(string)
 	if !ok || summary == "" {
+		return v
+	}
+	if details.Shown != nil {
+		// Memory v2 records what its summary shows (ledger.MemoryDetails.Shown).
+		shown := map[string]bool{}
+		for _, id := range details.Shown {
+			shown[id] = true
+		}
+		for _, r := range details.Reflections {
+			v.shown[r.ID], v.omitted[r.ID] = shown[r.ID], !shown[r.ID]
+		}
+		for _, o := range details.Observations {
+			v.shown[o.ID], v.omitted[o.ID] = shown[o.ID], !shown[o.ID]
+		}
 		return v
 	}
 	spanStarts := omittedSpanStarts(summary, details)

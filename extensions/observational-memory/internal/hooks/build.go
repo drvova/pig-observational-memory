@@ -127,11 +127,15 @@ func kernelNames() string {
 	return strings.Join(lines, "\n")
 }
 
-// seedDefinitions are the shipped seeds, by kind and name.
+// seedDefinitions are the shipped seeds, by kind and name, without memory v2's level-1
+// instructions (agents.InstructionsConsolidation), which no v1 pass runs with.
 func seedDefinitions() []agents.BuilderDefinition {
 	shipped := layer.Shipped()
 	keys := make([]string, 0, len(shipped))
 	for k := range shipped {
+		if k == layer.SeedKey(layer.KindInstructions, agents.InstructionsConsolidation) {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

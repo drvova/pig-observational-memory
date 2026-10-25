@@ -199,7 +199,9 @@ func settlePass(ctx context.Context, cfg config.Config, h host.Host, err error) 
 	for key, active := range cache.byModel {
 		held := []layer.Definition{}
 		for _, d := range active.Harness().List("") {
-			if d.State == layer.StateHeld && provesDefinition(cache.stage, d) {
+			// A v1 store loads only v1's holds (layer.Store.Engine); a v2 hold is never v1's to
+			// settle, whatever its kind.
+			if d.State == layer.StateHeld && d.Engine == "" && provesDefinition(cache.stage, d) {
 				held = append(held, d)
 			}
 		}

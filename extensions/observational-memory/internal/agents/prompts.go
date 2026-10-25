@@ -178,6 +178,23 @@ const (
 	InstructionsDropper   = "dropper"
 )
 
+// InstructionsConsolidation names memory v2's level-1 instructions (docs/memory-v2.md,
+// "Self-built harness"): the seed ConsolidationInstructions, which a model may extend or
+// replace like a worker stage's, always after the kernel's level-1 rules
+// (kernel.TextConsolidateRules). It is no v1 worker stage, so SeedInstructions leaves it out.
+const InstructionsConsolidation = "consolidation"
+
+// ConsolidationInstructions are the level-1 request's seed instructions: guidance a model may
+// restyle, never a rule code relies on (those are the kernel's, which open the prompt).
+const ConsolidationInstructions = `What is worth doing:
+- Label a candidate when its subject or kind is not what code guessed; reuse a listed subject before making a new one.
+- Merge records that say one thing twice; keep records apart when they differ in any specific.
+- Write a reflection only for a conclusion several records support that will still matter after this compaction.
+- Settle a possible update only when the conversation shows which value stands.
+- Cite a curated memory only when a shown record of the user's own words bears it out.
+- Doing nothing is a valid answer: a record left alone stays exactly as code extracted it.
+`
+
 // SeedInstructions are the seed instructions by stage name.
 func SeedInstructions() map[string]string {
 	return map[string]string{
@@ -193,6 +210,7 @@ func init() {
 	for name, text := range SeedInstructions() {
 		layer.Ship(layer.KindInstructions, name, text)
 	}
+	layer.Ship(layer.KindInstructions, InstructionsConsolidation, ConsolidationInstructions)
 }
 
 // Compose is a worker system prompt: the kernel text textID names, then instructions. The

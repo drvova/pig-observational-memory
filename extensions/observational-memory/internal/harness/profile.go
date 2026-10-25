@@ -191,117 +191,248 @@ func Compute(model string, events []curated.ModelEvent, definitions []curated.De
 	for _, c := range tables.Codecs() {
 		names = append(names, c.Name())
 	}
-	return ComputeWith(model, events, definitions, names)
+	return ComputeWith(model, "", events, definitions, names)
 }
 
-// ComputeWith is Compute switching codecs through codecs, in order: the codec names of the
-// model's layer (declare.Active.CodecNames: the shipped codecs, then the formats the model
-// declared under new names). The first is the default.
-func ComputeWith(model string, events []curated.ModelEvent, definitions []curated.Definition, codecs []string) Profile {
+// ComputeV2 is Compute under memory v2: from the events counted under v2 alone, one evidence
+// unit per compaction (ComputeWith with curated.EngineV2).
+func ComputeV2(model string, events []curated.ModelEvent, definitions []curated.Definition) Profile {
+	names := []string{}
+	for _, c := range tables.Codecs() {
+		names = append(names, c.Name())
+	}
+	return ComputeWith(model, curated.EngineV2, events, definitions, names)
+}
+
+// ComputeWith is Compute for the memory engine engine ("" for v1, curated.EngineV2), switching
+// codecs through codecs, in order: the codec names of the model's layer
+// (declare.Active.CodecNames: the shipped codecs, then the formats the model declared under new
+// names). The first is the default.
+//
+// Each engine's profile reads only its own events (curated.ModelEvent.Engine), as its rules
+// do: v1's worker evidence means nothing under v2 and v2's compaction units nothing under v1,
+// so switching engines starts from that engine's own tallies, never the other's partial ones.
+// Under memory v2 one evidence unit is one compaction (docs/memory-v2.md, "Self-built
+// harness"): its events are not applied one by one but gathered until the model's next v2
+// compaction pass (rules.IsV2Compaction), where each setting gets at most one unit: one against
+// it when its events against outnumbered those that keep it since the previous compaction, one
+// for keeping it when the reverse, none on a tie. The minimum-evidence rule then asks for
+// MinEvidence compactions, not MinEvidence calls of one turn. Events after the latest
+// compaction wait for the next. v1's events apply one by one, as they always did.
+func ComputeWith(model, engine string, events []curated.ModelEvent, definitions []curated.Definition, codecs []string) Profile {
+	own := make([]curated.ModelEvent, 0, len(events))
+	for _, e := range events {
+		if e.Engine == engine {
+			own = append(own, e)
+		}
+	}
+	events = own
 	p := Default(model)
 	p.Events = len(events)
 	if len(codecs) == 0 {
 		codecs = []string{p.Codec}
 	}
 	p.Codec = codecs[0]
-	codecIndex := 0
-	var codec, layout, spec, summary tally
-	created := map[string]time.Time{}
+	c := &computation{p: &p, codecs: codecs, created: map[string]time.Time{}, toolTally: map[string]*tally{}, disabled: map[string]bool{}}
 	for _, d := range definitions {
-		created[d.Name] = d.Created
+		c.created[d.Name] = d.Created
 	}
-	toolTally := map[string]*tally{}
-	disabled := map[string]bool{}
-	record := func(setting, to, reason string, at time.Time) {
-		p.Switches = append(p.Switches, Switch{Setting: setting, To: to, Reason: reason, At: at})
-	}
+	window := newVotes()
 	for _, e := range events {
 		at, _ := time.Parse(time.RFC3339, e.Time)
-		switch e.Kind {
-		case curated.ModelKindDecode:
-			if e.Outcome == curated.OutcomeError {
-				spec.against++
-			} else {
-				spec.keep++
-			}
-			if e.Codec == codecs[codecIndex] && codecIndex < len(codecs)-1 {
-				if e.Outcome == curated.OutcomeError {
-					codec.against++
-				} else {
-					codec.keep++
-				}
-				if codec.due() {
-					codecIndex++
-					record(SettingCodec, codecs[codecIndex], codec.reason("rows decode errors", "decodes")+" in "+e.Codec, at)
-					codec = tally{}
-				}
-			}
-			if p.Layout == ledger.FormatTables {
-				switch e.Outcome {
-				case curated.OutcomeColumns:
-					layout.against++
-				case curated.OutcomeOK:
-					layout.keep++
-				}
-				if layout.due() {
-					p.Layout = ledger.FormatLines
-					record(SettingLayout, ledger.FormatLines, layout.reason("rows with wrong columns", "rows with the right columns"), at)
-				}
-			}
-		case curated.ModelKindMemory:
-			if e.Syntax {
-				spec.against++
-			} else {
-				spec.keep++
-			}
-			if e.Target == curated.TargetSummary {
-				switch e.Outcome {
-				case curated.OutcomeShown:
-					summary.against++
-				case curated.OutcomeOmitted:
-					summary.keep++
-				}
-				switch {
-				case summary.due() && p.SummaryHalvings < MaxSummaryHalvings:
-					p.SummaryHalvings++
-					record(SettingSummary, scaleText(p), summary.reason("queries for records the summary showed", "for records it omitted"), at)
-					summary = tally{}
-				case p.SummaryHalvings > 0 && summary.keep >= MinEvidence && summary.keep > summary.against:
-					p.SummaryHalvings--
-					record(SettingSummary, scaleText(p), fmt.Sprintf("%d queries for records the summary omitted vs %d for records it showed since the last switch (needs at least %d and a majority)", summary.keep, summary.against, MinEvidence), at)
-					summary = tally{}
-				}
-			}
-		case curated.ModelKindDefined:
-			if e.Tool == "" || disabled[e.Tool] {
-				break
-			}
-			if c, ok := created[e.Tool]; ok && at.Before(c) {
-				break
-			}
-			t := toolTally[e.Tool]
-			if t == nil {
-				t = &tally{}
-				toolTally[e.Tool] = t
-			}
-			if e.Outcome == curated.OutcomeError {
-				t.against++
-			} else {
-				t.keep++
-			}
-			if t.due() {
-				disabled[e.Tool] = true
-				p.DisabledTools = append(p.DisabledTools, e.Tool)
-				record(SettingTool, e.Tool+" off", t.reason("errors", "calls without error"), at)
-			}
-		}
-		if !p.LongSpec && spec.due() {
-			p.LongSpec = true
-			record(SettingSpec, "long spec", spec.reason("syntax errors", "valid queries and rows"), at)
+		switch {
+		case engine == curated.EngineV2 && rules.IsV2Compaction(e):
+			c.apply(window.units(), at)
+			window = newVotes()
+		case engine == curated.EngineV2:
+			c.classify(e, at, window)
+		default:
+			one := newVotes()
+			c.classify(e, at, one)
+			c.apply(one, at)
 		}
 	}
-	p.Codec = codecs[codecIndex]
+	p.Codec = codecs[c.codecIndex]
 	return p
+}
+
+// computation is one ComputeWith's state: the profile being built, where it stands in the codec
+// rotation, and the tallies since each setting last switched.
+type computation struct {
+	p                            *Profile
+	codecs                       []string
+	codecIndex                   int
+	codec, layout, spec, summary tally
+	created                      map[string]time.Time
+	toolTally                    map[string]*tally
+	disabled                     map[string]bool
+}
+
+// votes are the events for and against each setting in one window: one event under v1, the
+// events since the previous compaction under v2. codecName is the codec the codec votes were
+// cast in, the current codec when they were classified.
+type votes struct {
+	codec, layout, spec, summary tally
+	codecName                    string
+	tools                        map[string]*tally
+	toolOrder                    []string
+}
+
+func newVotes() *votes { return &votes{tools: map[string]*tally{}} }
+
+// tool is the tally for defined tool name in the window, kept in first-seen order.
+func (v *votes) tool(name string) *tally {
+	t := v.tools[name]
+	if t == nil {
+		t = &tally{}
+		v.tools[name] = t
+		v.toolOrder = append(v.toolOrder, name)
+	}
+	return t
+}
+
+// unit is t as one evidence unit: one against when its events against outnumber those that
+// keep, one keep when the reverse, none on a tie.
+func (t tally) unit() tally {
+	switch {
+	case t.against > t.keep:
+		return tally{against: 1}
+	case t.keep > t.against:
+		return tally{keep: 1}
+	}
+	return tally{}
+}
+
+// units are the window's votes as one evidence unit per setting (tally.unit).
+func (v *votes) units() *votes {
+	out := &votes{codec: v.codec.unit(), layout: v.layout.unit(), spec: v.spec.unit(), summary: v.summary.unit(), codecName: v.codecName, tools: map[string]*tally{}}
+	for _, name := range v.toolOrder {
+		u := v.tools[name].unit()
+		out.tools[name] = &u
+		out.toolOrder = append(out.toolOrder, name)
+	}
+	return out
+}
+
+// classify adds e's votes to v, judged against the profile as it stands: a decode votes on the
+// spec, on the codec when it was in the current codec (and a later one exists), and on the
+// layout while it is tables; a memory call on the spec and, for a hit checked against the
+// summary, on its size; a defined tool's call on that tool, unless it is off or the call was of
+// an earlier definition of its name.
+func (c *computation) classify(e curated.ModelEvent, at time.Time, v *votes) {
+	switch e.Kind {
+	case curated.ModelKindDecode:
+		if e.Outcome == curated.OutcomeError {
+			v.spec.against++
+		} else {
+			v.spec.keep++
+		}
+		if e.Codec == c.codecs[c.codecIndex] && c.codecIndex < len(c.codecs)-1 {
+			v.codecName = e.Codec
+			if e.Outcome == curated.OutcomeError {
+				v.codec.against++
+			} else {
+				v.codec.keep++
+			}
+		}
+		if c.p.Layout == ledger.FormatTables {
+			switch e.Outcome {
+			case curated.OutcomeColumns:
+				v.layout.against++
+			case curated.OutcomeOK:
+				v.layout.keep++
+			}
+		}
+	case curated.ModelKindMemory:
+		if e.Syntax {
+			v.spec.against++
+		} else {
+			v.spec.keep++
+		}
+		if e.Target == curated.TargetSummary {
+			switch e.Outcome {
+			case curated.OutcomeShown:
+				v.summary.against++
+			case curated.OutcomeOmitted:
+				v.summary.keep++
+			}
+		}
+	case curated.ModelKindDefined:
+		if e.Tool == "" || c.disabled[e.Tool] {
+			break
+		}
+		if created, ok := c.created[e.Tool]; ok && at.Before(created) {
+			break
+		}
+		if e.Outcome == curated.OutcomeError {
+			v.tool(e.Tool).against++
+		} else {
+			v.tool(e.Tool).keep++
+		}
+	}
+}
+
+// apply adds a window's votes to the tallies and makes every switch they make due, in the
+// order the switches have always been checked: codec, layout, summary, tools, then the spec.
+func (c *computation) apply(v *votes, at time.Time) {
+	p := c.p
+	record := func(setting, to, reason string) {
+		p.Switches = append(p.Switches, Switch{Setting: setting, To: to, Reason: reason, At: at})
+	}
+	if v.codec != (tally{}) && v.codecName == c.codecs[c.codecIndex] && c.codecIndex < len(c.codecs)-1 {
+		c.codec.against += v.codec.against
+		c.codec.keep += v.codec.keep
+		if c.codec.due() {
+			c.codecIndex++
+			record(SettingCodec, c.codecs[c.codecIndex], c.codec.reason("rows decode errors", "decodes")+" in "+v.codecName)
+			c.codec = tally{}
+		}
+	}
+	if p.Layout == ledger.FormatTables && v.layout != (tally{}) {
+		c.layout.against += v.layout.against
+		c.layout.keep += v.layout.keep
+		if c.layout.due() {
+			p.Layout = ledger.FormatLines
+			record(SettingLayout, ledger.FormatLines, c.layout.reason("rows with wrong columns", "rows with the right columns"))
+		}
+	}
+	if v.summary != (tally{}) {
+		c.summary.against += v.summary.against
+		c.summary.keep += v.summary.keep
+		switch {
+		case c.summary.due() && p.SummaryHalvings < MaxSummaryHalvings:
+			p.SummaryHalvings++
+			record(SettingSummary, scaleText(*p), c.summary.reason("queries for records the summary showed", "for records it omitted"))
+			c.summary = tally{}
+		case p.SummaryHalvings > 0 && c.summary.keep >= MinEvidence && c.summary.keep > c.summary.against:
+			p.SummaryHalvings--
+			record(SettingSummary, scaleText(*p), fmt.Sprintf("%d queries for records the summary omitted vs %d for records it showed since the last switch (needs at least %d and a majority)", c.summary.keep, c.summary.against, MinEvidence))
+			c.summary = tally{}
+		}
+	}
+	for _, name := range v.toolOrder {
+		if c.disabled[name] {
+			continue
+		}
+		t := c.toolTally[name]
+		if t == nil {
+			t = &tally{}
+			c.toolTally[name] = t
+		}
+		t.against += v.tools[name].against
+		t.keep += v.tools[name].keep
+		if t.due() {
+			c.disabled[name] = true
+			p.DisabledTools = append(p.DisabledTools, name)
+			record(SettingTool, name+" off", t.reason("errors", "calls without error"))
+		}
+	}
+	c.spec.against += v.spec.against
+	c.spec.keep += v.spec.keep
+	if !p.LongSpec && c.spec.due() {
+		p.LongSpec = true
+		record(SettingSpec, "long spec", c.spec.reason("syntax errors", "valid queries and rows"))
+	}
 }
 
 // ApplyRules applies the switch-codec and long-spec rules that apply to the model

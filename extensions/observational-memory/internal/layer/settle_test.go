@@ -2,6 +2,8 @@ package layer
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +108,64 @@ func TestHoldPassHoldsAndMarksTogether(t *testing.T) {
 	}
 	if h, _ := s.Held(model); len(h) != 2 {
 		t.Fatalf("held on disk %+v", h)
+	}
+}
+
+// A hold is its engine's: a store loads, reports and settles only the held definitions marked
+// with its engine (Store.Engine), a v1 hold's file is what it was before engines (no engine
+// column), a written definition carries none, and a newer hold of a name the other engine held
+// replaces it with the original fallback.
+func TestHeldDefinitionsAreTheirEngines(t *testing.T) {
+	v1 := newStore(t, nil)
+	v2 := v1
+	v2.Engine = "v2"
+	if _, err := v1.Hold(instr("observer", "v1 text")); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(v1.heldPath(model, KindInstructions, "observer")); err != nil || strings.Contains(string(data), engineField) {
+		t.Fatalf("a v1 held file carries an engine column (%v):\n%s", err, data)
+	}
+	held, err := v2.Hold(instr("consolidation", "v2 text"))
+	if err != nil || held.Engine != "v2" {
+		t.Fatalf("v2 hold %+v (%v)", held, err)
+	}
+	for _, c := range []struct {
+		store Store
+		want  string
+	}{{v1, "observer"}, {v2, "consolidation"}} {
+		got, err := c.store.Held(model)
+		if err != nil || len(got) != 1 || got[0].Name != c.want {
+			t.Fatalf("engine %q holds %+v (%v), want only %s", c.store.Engine, got, err, c.want)
+		}
+		h, reports, err := c.store.Load(model)
+		if err != nil || len(reports) != 0 {
+			t.Fatalf("load: %v %+v", err, reports)
+		}
+		if n := len(h.List(KindInstructions)); n != 1 {
+			t.Fatalf("engine %q loads %d instructions, want its own hold only", c.store.Engine, n)
+		}
+	}
+	notices, err := v1.Claim(model, true, "")
+	if err != nil || len(notices) != 1 || notices[0].Name != "observer" {
+		t.Fatalf("v1's Claim settled %+v (%v), want only its own", notices, err)
+	}
+	if n, err := v1.ClaimHeld([]Definition{held}, true, ""); err != nil || len(n) != 0 {
+		t.Fatalf("v1's ClaimHeld settled a v2 hold: %+v (%v)", n, err)
+	}
+	if n, err := v2.ClaimHeld([]Definition{held}, true, ""); err != nil || len(n) != 1 || !n[0].Written {
+		t.Fatalf("v2's ClaimHeld: %+v (%v)", n, err)
+	}
+	written, err := v1.Get(model, KindInstructions, "consolidation")
+	if err != nil || written.Engine != "" || written.Text != "v2 text" {
+		t.Fatalf("written %+v (%v): a written definition is shared and carries no engine", written, err)
+	}
+	if _, err := v1.Hold(instr("reflector", "v1 hold")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v2.Hold(instr("reflector", "v2 hold")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := v1.Held(model); len(got) != 0 {
+		t.Fatalf("a v2 hold of a name v1 held did not replace it: %+v", got)
 	}
 }

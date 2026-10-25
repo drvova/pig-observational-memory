@@ -351,7 +351,10 @@ paths, so the harness can add, test and retire them per model.
   model ids it applies to (or all), a remedy, its state (`probation`, `established`,
   `retired`), the counts that decided its state, and who proposed it (harness or model).
 - **Detectors** are deterministic checks over a model's own notes and the branch, run after
-  each observer, reflector and dropper pass, and counted per model in the usage ledger:
+  each observer, reflector and dropper pass, and counted per model in the usage ledger (under
+  `memoryEngine: v2` they run over every level-0 extraction and one compaction is one evidence
+  unit; which detectors and remedies keep a meaning there is in `docs/memory-v2.md`, "Self-built
+  harness"):
 
   | Detector | Counts |
   |---|---|
@@ -479,7 +482,11 @@ is recorded with who asked and why, before it takes effect.
   counted evidence and may revise. Every definition is declarative (queries, format
   declarations, text) and never code. Text from files, web pages or tool output never becomes a
   definition. The user is notified of every change, hold, revert and rollback; `/om:status`
-  shows each model's harness, generation and held definitions.
+  shows each model's harness, generation and held definitions. Under `memoryEngine: v2` neither
+  pass runs: definitions are proposed only inside the compaction's level-1 request, when the
+  harness evidence changed, and settled on a later compaction's evidence (`docs/memory-v2.md`,
+  "Self-built harness"). A held definition belongs to the engine whose pass held it: each engine
+  applies, settles and waits on only its own holds, while the written layer is shared.
 - Built (the kernel and the layer store): `internal/kernel` holds the ownership predicate
   (`Owns`), the list it reads (the memory tool, the query engine's sources, stages and writes
   including `harness` and `rollback`, the `om.*` kinds, the event ledger's kinds and outcomes and

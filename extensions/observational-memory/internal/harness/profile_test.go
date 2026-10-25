@@ -233,3 +233,82 @@ func TestSwitchString(t *testing.T) {
 		t.Fatalf("String() = %q", got)
 	}
 }
+
+// v2 marks an event as counted under memory v2.
+func v2(e curated.ModelEvent) curated.ModelEvent {
+	e.Engine = curated.EngineV2
+	return e
+}
+
+// v2Compaction is a memory v2 compaction pass: the end of one evidence unit.
+var v2Compaction = curated.ModelEvent{Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100}
+
+// Under memory v2 one evidence unit is one compaction: the events counted under v2 between two
+// compactions give each setting at most one unit, so many errors in one turn never switch a
+// setting, the same errors over MinEvidence compactions do, and events after the latest
+// compaction wait for the next.
+func TestV2ProfileCountsCompactions(t *testing.T) {
+	syntax := v2(memory(curated.OutcomeError, "", true))
+	shown := v2(memory(curated.OutcomeShown, curated.TargetSummary, false))
+	ok := v2(memory(curated.OutcomeOK, "", false))
+
+	p := harness.ComputeV2(model, events(concat(repeat(5, syntax), repeat(1, v2Compaction))...), nil)
+	if p.LongSpec {
+		t.Fatalf("one compaction switched the spec: %+v", p.Switches)
+	}
+	p = harness.ComputeV2(model, events(repeat(9, syntax)...), nil)
+	if p.LongSpec {
+		t.Fatal("events with no compaction after them counted")
+	}
+	unit := concat(repeat(2, syntax), repeat(1, ok), repeat(1, v2Compaction))
+	p = harness.ComputeV2(model, events(concat(unit, unit, unit)...), nil)
+	if !p.LongSpec || !strings.Contains(p.Switches[len(p.Switches)-1].Reason, "3 syntax errors vs 0") {
+		t.Fatalf("three compactions did not switch the spec: %+v", p.Switches)
+	}
+	// A tie gives no unit either way.
+	tie := concat(repeat(1, syntax), repeat(1, ok), repeat(1, v2Compaction))
+	if p = harness.ComputeV2(model, events(concat(tie, tie, tie, tie)...), nil); p.LongSpec {
+		t.Fatal("ties switched the spec")
+	}
+	// The summary halves on MinEvidence compactions whose queries hit shown records.
+	shrink := concat(repeat(4, shown), repeat(1, v2Compaction))
+	if p = harness.ComputeV2(model, events(concat(shrink, shrink)...), nil); p.SummaryHalvings != 0 {
+		t.Fatal("two compactions halved the summary")
+	}
+	if p = harness.ComputeV2(model, events(concat(shrink, shrink, shrink)...), nil); p.SummaryHalvings != 1 {
+		t.Fatalf("halvings %d", p.SummaryHalvings)
+	}
+	// A defined tool is turned off on MinEvidence compactions where it erred more than it worked.
+	erring := concat(repeat(3, v2(defined("finder", curated.OutcomeError))), repeat(1, v2Compaction))
+	if p = harness.ComputeV2(model, events(concat(erring, erring, erring)...), nil); !p.ToolDisabled("finder") {
+		t.Fatalf("profile %+v", p)
+	}
+	// v1's events still count one by one under v1.
+	if p = harness.Compute(model, events(repeat(3, memory(curated.OutcomeError, "", true))...), nil); !p.LongSpec {
+		t.Fatal("v1's events stopped counting")
+	}
+}
+
+// Each engine's profile reads only its own events: v1's decode errors and syntax errors leave
+// the v2 profile at the default, v2's compaction units leave the v1 profile at the default, and
+// partial tallies never carry across a switch of engines.
+func TestProfileEnginesNeverMix(t *testing.T) {
+	rows := tables.Rows.Name()
+	v1Errors := concat(repeat(3, decode(rows, curated.OutcomeColumns)), repeat(3, memory(curated.OutcomeError, "", true)), repeat(3, memory(curated.OutcomeShown, curated.TargetSummary, false)))
+	if p := harness.ComputeV2(model, events(v1Errors...), nil); p.Codec != rows || p.LongSpec || p.SummaryHalvings != 0 || len(p.Switches) != 0 {
+		t.Fatalf("v1 evidence shaped the v2 profile: %+v", p)
+	}
+	shrink := concat(repeat(4, v2(memory(curated.OutcomeShown, curated.TargetSummary, false))), repeat(1, v2Compaction))
+	if p := harness.Compute(model, events(concat(shrink, shrink, shrink)...), nil); p.SummaryHalvings != 0 || len(p.Switches) != 0 {
+		t.Fatalf("v2 evidence shaped the v1 profile: %+v", p)
+	}
+	// Two v1 shown hits, then one v2 compaction unit: no halving under v2 (it needs MinEvidence
+	// units of its own), nor under v1 (it needs a third v1 hit).
+	mixed := concat(repeat(2, memory(curated.OutcomeShown, curated.TargetSummary, false)), shrink)
+	if p := harness.ComputeV2(model, events(mixed...), nil); p.SummaryHalvings != 0 {
+		t.Fatalf("v1 tallies carried into v2: %+v", p)
+	}
+	if p := harness.Compute(model, events(mixed...), nil); p.SummaryHalvings != 0 {
+		t.Fatalf("v2 units carried into v1: %+v", p)
+	}
+}

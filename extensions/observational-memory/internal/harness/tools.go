@@ -231,8 +231,12 @@ type proposer struct {
 	entries         []ledger.Entry
 }
 
-// Propose checks and stores the proposal and says what happens next.
+// Propose checks and stores the proposal and says what happens next; under memory v2 it is
+// refused (ErrDefinedInLevel1): a rule is proposed only inside the level-1 request.
 func (p proposer) Propose(args map[string]string) (string, error) {
+	if p.store.V2 {
+		return "", ErrDefinedInLevel1
+	}
 	fullness, err := rules.ParseFullness(args["fullness"])
 	if err != nil {
 		return "", err

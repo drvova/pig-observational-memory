@@ -154,6 +154,9 @@ type Runtime struct {
 	compactInFlight        bool
 	compactHookInFlight    bool
 	resolveFailureNotified bool
+	// compactHookRequest is the request context of the hook holding the compaction slot
+	// (SetCompactHookRequest), nil when none recorded one.
+	compactHookRequest context.Context
 
 	lastObserverError  string
 	lastReflectorError string
@@ -423,6 +426,26 @@ func (r *Runtime) LeaveCompactHook() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.compactHookInFlight = false
+	r.compactHookRequest = nil
+}
+
+// SetCompactHookRequest records the request context of the hook holding the compaction slot,
+// so a concurrent hook can tell whether that one's compaction is still live
+// (CompactHookOwnerLive). LeaveCompactHook clears it.
+func (r *Runtime) SetCompactHookRequest(request context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compactHookRequest = request
+}
+
+// CompactHookOwnerLive reports whether the hook holding the compaction slot recorded a request
+// context that is not done: false with no slot holder, or one PiG cancelled.
+func (r *Runtime) CompactHookOwnerLive() bool {
+	r.mu.Lock()
+	request := r.compactHookRequest
+	held := r.compactHookInFlight
+	r.mu.Unlock()
+	return held && request != nil && request.Err() == nil
 }
 
 // SetCompactHookInFlight sets the compaction hook flag.

@@ -508,6 +508,10 @@ func DecodeFailuresSince(events []curated.ModelEvent) (codec, syntax int) {
 		}
 	}
 	for _, e := range events[start:] {
+		if e.Engine != "" {
+			// Counted under memory v2: evidence for its compactions only (afterCompaction).
+			continue
+		}
 		switch {
 		case e.Kind == curated.ModelKindDecode && e.Outcome == curated.OutcomeError:
 			codec++

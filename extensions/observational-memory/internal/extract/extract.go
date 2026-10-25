@@ -358,24 +358,9 @@ func (x *extraction) assignIDs() {
 // entry and the tool results after it, and each batch's marker is the segment's last source
 // entry in the range, so its claim covers only entries its extraction read.
 func (x *extraction) batches(last int) []Batch {
-	segmentEnd := func(anchor int) int {
-		end := anchor
-		for i := anchor + 1; i <= last; i++ {
-			entry := x.in.Entries[i]
-			if !ledger.IsSourceEntry(entry) {
-				continue
-			}
-			if entry.Type == "message" && entry.Message != nil && entry.Message["role"] == "toolResult" {
-				end = i
-				continue
-			}
-			break
-		}
-		return end
-	}
 	out := []Batch{}
 	for _, r := range x.records {
-		cover := x.in.Entries[segmentEnd(r.anchor)].ID
+		cover := x.in.Entries[SegmentEnd(x.in.Entries, r.anchor, last)].ID
 		if n := len(out); n > 0 && out[n-1].CoversUpToID == cover {
 			out[n-1].Observations = append(out[n-1].Observations, r.obs)
 			continue
@@ -383,6 +368,26 @@ func (x *extraction) batches(last int) []Batch {
 		out = append(out, Batch{Observations: []ledger.Observation{r.obs}, CoversUpToID: cover})
 	}
 	return out
+}
+
+// SegmentEnd is the branch index of the last source entry of the cut-point segment holding
+// entries[anchor], read no further than last: the entry itself and the tool results after it.
+// A batch citing entries[anchor] claims coverage through it (Batch.CoversUpToID), so a cut
+// inside a range folds exactly the batches whose sources it removes.
+func SegmentEnd(entries []session.Entry, anchor, last int) int {
+	end := anchor
+	for i := anchor + 1; i <= last && i < len(entries); i++ {
+		entry := entries[i]
+		if !ledger.IsSourceEntry(entry) {
+			continue
+		}
+		if entry.Type == "message" && entry.Message != nil && entry.Message["role"] == "toolResult" {
+			end = i
+			continue
+		}
+		break
+	}
+	return end
 }
 
 // isSkipped reports a call or result of a memory tool or a defined tool.

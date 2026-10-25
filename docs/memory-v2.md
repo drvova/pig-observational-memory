@@ -451,7 +451,102 @@ off-path. The extension does not replace PiG's branch summary by default (option
   evidence. Written on such evidence, reverted otherwise.
 - Remedies are code-only: keep-head replaces the require-kind re-ask; `split-chunk` goes.
 - `kernel-consolidate` opens the level-1 prompt, with a `consolidation` instructions seed the model may
-  extend; both are kernel-owned.
+  extend, never replace: the kernel text is kernel-owned, and the seed always stands after it.
+- Built (detectors, evidence and remedies; `internal/rules/v2.go`, `internal/hooks/harness_v2.go`).
+  Every level-0 extraction (turn end and compaction) runs `rules.DetectV2` over the source entries it
+  read, with its own records as the notes, before any remedy, and records the run for the session
+  model (`curated.ModelKindDetect`) once the extraction is appended (a run whose extraction did not land,
+  or a compaction's read from the event's stale snapshot, is not recorded, so no entries count twice);
+  the compaction's pass (`rules.AfterPass` with `Engine: v2`, stage `compaction`, recorded by the hook
+  holding the compaction slot, or by a concurrent hook once PiG cancelled the slot owner's request,
+  `runtime.Runtime.CompactHookOwnerLive`, so the compaction PiG persists is counted and two live hooks
+  never count one twice) sums the runs since the previous
+  compaction with the decode failures counted under v2 since then and level 1's code checks
+  (`level1-refused`, `level1-specifics-refused`, `level1-union-kept`, `level1-failed`, kernel counts that
+  are not detectors), so one evidence unit is one compaction. A compaction whose cut range level 0
+  recorded nothing from is an empty pass: no evidence. Every usage-ledger event counted under v2 carries
+  `engine: v2`, and v1's and v2's windows never mix (v1 reads only events without it, v2 only events with
+  it, the profile included; a rule carries the engine it was written for and applies, is judged and is
+  promoted only under it; a held definition carries the engine whose pass held it, below).
+  - The detectors with a v2 meaning are `uncited-assistant-specifics` (over the extraction),
+    `dropped-then-queried` (queries in the read entries asking for records a compaction dropped),
+    `decode-failure` (the session model's memory syntax errors) and `cross-scope-supersede` (the
+    supersedes level 1 proposed across scopes, which validation refuses). `unresolved-relative-date`
+    has none (level 0 picks lines verbatim and the renderer resolves every relative date), nor has
+    `thin-chunk` (no chunks; what level 1 would lose is the union count).
+  - The v2 remedies are `keep-head` (its notes ride in the batch of their entry's cut-point segment,
+    only for an extraction that recorded something, citing only entries it read), `switch-codec` and
+    `long-spec` (profile switches). The harness never writes `switch-codec` under v2: its evidence is
+    the codec decode failures, and under v2 nothing decodes rows the model wrote, so none is counted. `require-kind`, `split-chunk`, `prompt-line`, `protect-kind` and
+    `block-link` never act under v2, and a model's `propose` under v2 is held to the same list.
+  - The profile (`harness.ComputeWith` with the store's engine) reads only v2's events under v2 (and
+    only v1's under v1, so switching engines never carries tallies across) and applies them per
+    compaction: each setting gets at most one unit per compaction (the majority of its events since the
+    previous one), so a switch needs `MinEvidence` compactions. The session model's profile shapes the v2 render as it shapes v1's: its
+    summary size (`ApplySummary` on the derived budget, never more), layout and codec (a written format,
+    read from its layer), with the codec's instructions and `summaryCodec`/`summaryFormat` in
+    the details for a non-native codec; the details record the shown record ids (`shown`), which the
+    memory tool's shown/omitted evidence reads. A `summary/default` query does not select under v2:
+    selection's classes are the kernel's (anchors, runnable omissions, drops over what it shows).
+- Built (definitions proposed in level 1, and settlement; `internal/rules/proposal_v2.go`,
+  `internal/hooks/definitions_v2.go`, `internal/consolidate/definitions.go`). The build and revision
+  passes stay off, and the memory tool's `harness` and `propose` writes are refused under v2
+  (`harness.ErrDefinedInLevel1`; `harness forget` and `rollback` still apply, and `define` still
+  registers a tool, which is no definition the memory runs with). Under v1 the `consolidation`
+  instructions are refused (`harness.ErrConsolidationV2Only`): only level 1 proposes them. Every hold
+  carries its engine (`layer.Definition.Engine`, set by `layer.Store.HoldLocked` from the store's
+  `Engine`, which `curated.Store.Layer` sets under v2), and each engine's store loads, reports and
+  settles only its own holds: a definition v1 held never reaches the level-1 prompt, never blocks an
+  offer and is never settled by a v2 compaction, and v1's passes never see a v2 hold. A newer hold of a
+  name the other engine held replaces it (one held file per name), keeping the original fallback.
+  - **When.** `rules.ProposalDue` (code, no request): the session model's v2 evidence
+    (`rules.V2EvidenceOf`: the counts of its last `MinEvidence` compactions that carried a rate and its
+    v2 rules' states, compared by `Evidence.Digest` as the v1 revision pass compares) differs from the
+    evidence the last offer was shown (a `layer.OpPropose` generation, `layer.Store.LastProposal`; with
+    none, from no evidence), and no held definition v2 settles waits for its proof, so a proposal is
+    never replaced before a later compaction judged it. Only then does the level-1 tool take
+    `definitions` (kind, name, text) and `rules` (a v2 detector and a code remedy), and the input show
+    `HARNESS EVIDENCE` after the curated memories while room remains (else a line saying so, and
+    nothing may be defined). An answered offer is marked in the same critical section as its holds
+    (`layer.Store.HoldPass`), even when it defined nothing.
+  - **What.** The kinds that change what v2 does and v2 evidence can judge (`rules.CheckV2Definition`):
+    the `consolidation` instructions (an addition only: `rules.CheckV2Proposal` refuses `mode:
+    replace`), a `detector`, and a `remedy` catalogue of a code remedy; a rule goes through
+    `rules.Propose` (v2 engine). A `format` is refused: under v2 nothing decodes a summary back in its
+    codec, so no count could prove or revert one, and the profile, which switches codecs on decode
+    failures alone, never reaches a format by a new name. A `summary` (selection's classes are the
+    kernel's), a `schema` (level 0 is code, level 1's fields are the kernel's), a `tool` (made with
+    `define`) and other stages' instructions are refused. A refused definition or rule is the offer's
+    answer, not consolidation: it is not counted in `level1-refused`, so it never changes the evidence
+    the next offer is compared by. Each passes
+    validation's structural check (offered kind, one per name), is refused when identical to its seed,
+    and passes `harness.CheckModelDefinition` (`layer.Store.Check` and `rules.CheckFromModel`), then is
+    held for the session model.
+  - **Settlement** (`rules.SettleV2`, run by the hook that recorded the compaction's pass, after
+    recording it, on the held definitions of the layer the compaction read before its level 1, so one
+    its own level 1 held is never among them). Evidence is attributed, not timed: each v2 compaction
+    pass records the held definitions its layer ran with (`curated.ModelEvent.RanHeld`, kind/name and
+    the digest of the text, `layer.Definition.HeldID`), and only the non-empty passes naming exactly the
+    held text count. The compaction that held it read its layer before the hold, so its pass never
+    names it, nor does another session's or process's compaction whose layer was read before the hold,
+    wherever its pass lands in the shared ledger; a text held again is judged only on passes that ran
+    with the new text. An empty compaction is counted (`outcome: empty`) and is no evidence. The `consolidation` instructions need a later compaction
+    whose level-1 request answered under them (`curated.ModelEvent.Level1`) and are reverted when its
+    code checks counted `level1-failed`, `level1-specifics-refused` or `level1-union-kept`; a detector,
+    a catalogue and a rule need detector runs over turns under them and are written, since they
+    change only what code counts or keeps (the kernel's counts judge rules from there). Written on such
+    evidence (`layer.Store.ClaimHeld`), reverted otherwise; with none yet it stays held.
+  - **The prompt.** `kernel-consolidate` opens the level-1 system prompt first and whole, then the
+    `consolidation` seed (`agents.ConsolidationInstructions`), then the model's addition under
+    "Additional instructions for this model:" (`consolidate.SystemPromptFor`). The seed is never
+    replaced: a `mode: replace` text is refused when level 1 proposes it, so the seed's guidance ("keep
+    records apart when they differ in any specific", "doing nothing is a valid answer") always stands.
+    The kernel text's id is kernel-owned; the seed name is not, so the model can extend it.
+  - **Differences from v1's settlement.** No clean-pass write at the next pass: the proof is a later
+    compaction's evidence, never the proposing request's output. A held definition that only meets
+    empty compactions stays held (v1 reverts after `MinEvidence` empty passes, since there the empty
+    pass is the definition's own stage's; an empty compaction says nothing about a definition).
+    Written v2 definitions get no probation yet (v1's `rules.JudgeDefinitions` reads v1 passes only).
 
 ## Migration
 
@@ -480,6 +575,8 @@ off-path. The extension does not replace PiG's branch summary by default (option
   additions, with a generation and a notice; replace-mode texts and dropper instructions are retired
   with a notice, their text kept in the layer's history.
 - Detector counts carry a revision, so v1 counts never act as v2 evidence.
+- Held definitions carry the engine whose pass held it, so a definition v1 held stays v1's to settle
+  and v2 never runs with it; only written definitions are shared by both engines.
 
 ### Project memory
 

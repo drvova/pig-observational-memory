@@ -37,19 +37,19 @@ func (t Transition) Message() string {
 // notes, the only kind with a rate the rules are decided by. An observer pass that recorded
 // nothing (isEmptyPass) is counted for probation only (gradedPasses).
 func isObserverPass(e curated.ModelEvent) bool {
-	return e.Kind == curated.ModelKindPass && e.Tokens > 0 && e.Outcome != curated.OutcomeEmpty
+	return e.Kind == curated.ModelKindPass && e.Tokens > 0 && e.Outcome != curated.OutcomeEmpty && e.Engine == ""
 }
 
 // isEmptyPass reports whether e is a worker pass that ran and recorded nothing (Pass.Empty).
 func isEmptyPass(e curated.ModelEvent) bool {
-	return e.Kind == curated.ModelKindPass && e.Outcome == curated.OutcomeEmpty
+	return e.Kind == curated.ModelKindPass && e.Outcome == curated.OutcomeEmpty && e.Engine == ""
 }
 
 // isGradedPass reports whether e is a pass probation and the revision pass read: an observer
 // pass, recorded or empty, so a definition that silences the observer is counted
 // (CountEmptyPass) rather than invisible.
 func isGradedPass(e curated.ModelEvent) bool {
-	return e.Kind == curated.ModelKindPass && e.Tokens > 0
+	return e.Kind == curated.ModelKindPass && e.Tokens > 0 && e.Engine == ""
 }
 
 // gradedPasses are the indexes of the graded passes (isGradedPass) in events at or after from.
@@ -90,9 +90,25 @@ func EmptyPassesSince(store curated.Store, model, stage string, since time.Time)
 
 // observerPasses are the indexes of the observer passes in events at or after from.
 func observerPasses(events []curated.ModelEvent, from int) []int {
+	return passesFor("", events, from)
+}
+
+// evidencePass reports whether e is a pass that carries a rate under engine: an observer pass
+// (isObserverPass) for v1 (""), a compaction for memory v2 (isCompactionPass). A pass of one
+// engine is never evidence under the other.
+func evidencePass(engine string, e curated.ModelEvent) bool {
+	if engine == curated.EngineV2 {
+		return isCompactionPass(e)
+	}
+	return isObserverPass(e)
+}
+
+// passesFor are the indexes of engine's evidence passes (evidencePass) in events at or after
+// from.
+func passesFor(engine string, events []curated.ModelEvent, from int) []int {
 	out := []int{}
 	for i := max(0, from); i < len(events); i++ {
-		if isObserverPass(events[i]) {
+		if evidencePass(engine, events[i]) {
 			out = append(out, i)
 		}
 	}
@@ -139,8 +155,13 @@ func countedNow(e curated.ModelEvent, key string) bool {
 // countedPasses are the observer passes at or after from that counted key by its current
 // revision (countedNow): the passes a rule for key is written, baselined and judged on.
 func countedPasses(events []curated.ModelEvent, from int, key string) []int {
+	return countedPassesFor("", events, from, key)
+}
+
+// countedPassesFor is countedPasses over engine's evidence passes (passesFor).
+func countedPassesFor(engine string, events []curated.ModelEvent, from int, key string) []int {
 	out := []int{}
-	for _, i := range observerPasses(events, from) {
+	for _, i := range passesFor(engine, events, from) {
 		if countedNow(events[i], key) {
 			out = append(out, i)
 		}
@@ -169,7 +190,12 @@ func window(events []curated.ModelEvent, indexes []int, detector string) (count,
 // baseline is the detector's events and tokens over the last MinEvidence observer passes
 // before end that counted it by its current revision (countedPasses).
 func baseline(events []curated.ModelEvent, end int, detector string) (int, int) {
-	passes := countedPasses(events[:min(end, len(events))], 0, detector)
+	return baselineFor("", events, end, detector)
+}
+
+// baselineFor is baseline over engine's evidence passes (passesFor).
+func baselineFor(engine string, events []curated.ModelEvent, end int, detector string) (int, int) {
+	passes := countedPassesFor(engine, events[:min(end, len(events))], 0, detector)
 	if len(passes) > MinEvidence {
 		passes = passes[len(passes)-MinEvidence:]
 	}
@@ -215,9 +241,18 @@ func Evaluate(model string, events []curated.ModelEvent, all []Rule, now time.Ti
 // EvaluateWith is Evaluate with the model's own remedy catalogue (CatalogOf its layer): the
 // remedies the harness tries for each detector, in its order and with its parameters.
 func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now time.Time, catalog Catalog) ([]Rule, []Transition) {
+	return evaluate("", model, events, all, now, catalog)
+}
+
+// evaluate is EvaluateWith under engine: only engine's rules (Rule.Engine) are decided, every
+// window holds only engine's evidence passes (passesFor: v1's observer passes, memory v2's
+// compactions), and the harness writes only rules for engine's detectors with engine's
+// remedies (detectorsOf, remedyRuns), so a count of one engine never decides a rule of the
+// other.
+func evaluate(engine, model string, events []curated.ModelEvent, all []Rule, now time.Time, catalog Catalog) ([]Rule, []Transition) {
 	var changed []Rule
 	var transitions []Transition
-	rules := append([]Rule(nil), all...)
+	rules := ofEngine(all, engine)
 	replace := func(r Rule) {
 		for i := range rules {
 			if rules[i].ID == r.ID {
@@ -236,7 +271,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		if !containsString(KernelKeys(), countKey(r.Detector, r.Remedy)) {
 			continue
 		}
-		passes := countedPasses(events, r.Start, countKey(r.Detector, r.Remedy))
+		passes := countedPassesFor(engine, events, r.Start, countKey(r.Detector, r.Remedy))
 		if len(passes) < MinEvidence {
 			continue
 		}
@@ -256,7 +291,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		transitions = append(transitions, Transition{Rule: r, To: r.State})
 	}
 	// Harness rules.
-	for _, detector := range Detectors {
+	for _, detector := range detectorsOf(engine) {
 		floor := 0
 		busy := false
 		tried := map[string]bool{}
@@ -276,7 +311,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		if busy {
 			continue
 		}
-		passes := countedPasses(events, floor, detector)
+		passes := countedPassesFor(engine, events, floor, detector)
 		if len(passes) < MinEvidence {
 			continue
 		}
@@ -297,7 +332,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		}
 		remedy := ""
 		for _, candidate := range catalog.Tries(detector) {
-			if tried[candidate] {
+			if tried[candidate] || !remedyRuns(engine, candidate) {
 				continue
 			}
 			// A remedy judged on a narrower count needs that count in the evidence: query
@@ -317,7 +352,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 		if err != nil {
 			continue
 		}
-		r.Models, r.State, r.Created, r.Start = []string{model}, StateProbation, now, len(events)
+		r.Models, r.State, r.Created, r.Start, r.Engine = []string{model}, StateProbation, now, len(events), engine
 		r.BaselineEvents, r.BaselineTokens = window(events, last, countKey(detector, remedy))
 		r.Reason = fmt.Sprintf("%s counted in each of the last %d passes (%d events in %d tokens)", detector, MinEvidence, r.BaselineEvents, r.BaselineTokens)
 		r.ID = newID(r)
@@ -359,7 +394,7 @@ func EvaluateWith(model string, events []curated.ModelEvent, all []Rule, now tim
 			proposer = ProposerModel
 		}
 		d := Rule{Detector: base.Detector, Remedy: base.Remedy, Kind: base.Kind, Fullness: base.Fullness, Text: base.Text,
-			Models: []string{AllModels}, Excluded: retired[sig], State: StateEstablished, Proposer: proposer, Created: now}
+			Models: []string{AllModels}, Excluded: retired[sig], State: StateEstablished, Proposer: proposer, Created: now, Engine: engine}
 		d.Reason = fmt.Sprintf("established for %d models", len(models))
 		d.ID = newID(d)
 		replace(d)
@@ -385,6 +420,20 @@ type Pass struct {
 	// the chunk it left unnoted, so probation sees a definition that silences a worker; it
 	// decides no rule (it is no observer pass the rules count).
 	Empty bool
+	// Engine is the memory engine the pass ran under: "" for v1's worker passes, or
+	// curated.EngineV2 for a memory v2 compaction (Stage StageCompaction), which AfterPass
+	// records as one evidence unit (afterCompaction).
+	Engine string
+	// Counts are kernel counts the pass adds beside its findings: under v2, what the code
+	// checks of the compaction's level-1 output counted (CountLevel1Refused and the rest, and
+	// DetectCrossScopeSupersede for the cross-scope supersedes it proposed).
+	Counts map[string]int
+	// Level1 marks a memory v2 compaction whose level-1 request answered: Counts carry the code
+	// checks of its output (curated.ModelEvent.Level1).
+	Level1 bool
+	// RanHeld are, under v2, the held definitions the compaction ran with
+	// (curated.ModelEvent.RanHeld).
+	RanHeld []string
 }
 
 // AfterPass records one pass of model in its usage ledger (with decode-failure counted from
@@ -396,6 +445,9 @@ type Pass struct {
 func AfterPass(store curated.Store, model string, pass Pass) ([]Transition, error) {
 	if model == "" {
 		return nil, errors.New("a pass needs a model id")
+	}
+	if pass.Engine == curated.EngineV2 {
+		return afterCompaction(store, model, pass)
 	}
 	e := curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: pass.Stage, Tokens: pass.Tokens, Counts: map[string]int{}}
 	if pass.Empty {
@@ -502,6 +554,14 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 	if err != nil {
 		return Rule{}, err
 	}
+	// Under memory v2 a rule answers a v2 detector with a code-only remedy (V2Remedies), and
+	// is decided on compactions.
+	if engine := engineOf(store); engine != "" {
+		if !containsString(V2Detectors, r.Detector) || !remedyRuns(engine, r.Remedy) {
+			return Rule{}, fmt.Errorf("under memoryEngine v2 a rule answers %s with %s", strings.Join(V2Detectors, ", "), strings.Join(V2Remedies, ", "))
+		}
+		r.Engine = engine
+	}
 	// The same provenance check every definition from the model passes (CheckFromModel): the
 	// whole text, or any quotation of MinCopiedWords words inside it, found in output on the
 	// branch is refused; the catalogue's own line for the remedy is not a quotation.
@@ -533,7 +593,7 @@ func Propose(store curated.Store, model string, branch []ledger.Entry, p Proposa
 			return err
 		}
 		r.Created, r.Start = store.Now().UTC(), len(events)
-		r.BaselineEvents, r.BaselineTokens = baseline(events, len(events), countKey(r.Detector, r.Remedy))
+		r.BaselineEvents, r.BaselineTokens = baselineFor(r.Engine, events, len(events), countKey(r.Detector, r.Remedy))
 		r.Reason = fmt.Sprintf("proposed by the model; %d events in %d tokens over its last passes", r.BaselineEvents, r.BaselineTokens)
 		r.ID = newID(r)
 		saved = r
@@ -610,23 +670,28 @@ func containedIn(haystacks []string, needle string) bool {
 
 // For reads the rules that apply to model in store, from its effective layer: the written and
 // held rules kept for every model and for model, so a held proposal applies to the pass that
-// proves it. None when the store cannot be read.
+// proves it. Only the rules of the store's engine apply (engineOf: memory v2's when the store
+// is v2's), so a v1 rule (require-kind, split-chunk, a dropper's protect-kind) never acts under
+// v2, and a v2 rule never under v1. None when the store cannot be read.
 func For(store curated.Store, model string) Active {
 	migrate(store)
 	h, _, err := store.Layer().Load(model)
 	if err != nil {
 		return Active{}
 	}
-	return ActiveFor(rulesOf(h.List(layer.KindRemedy)), model)
+	return ActiveFor(ofEngine(rulesOf(h.List(layer.KindRemedy)), engineOf(store)), model)
 }
 
-// StatusLines is the rules section of /om:status: every active rule with its counts, and for
-// each of models (in order) its detector counts over its last MinEvidence observer passes.
+// StatusLines is the rules section of /om:status: every active rule of the store's engine
+// (engineOf) with its counts, and for each of models (in order) its detector counts over its
+// last MinEvidence evidence passes: observer passes under v1, compactions under memory v2.
 func StatusLines(store curated.Store, models []string) []string {
+	engine := engineOf(store)
 	all, err := List(store)
 	if err != nil {
 		return nil
 	}
+	all = ofEngine(all, engine)
 	lines := []string{}
 	active := 0
 	for _, r := range all {
@@ -655,7 +720,7 @@ func StatusLines(store curated.Store, models []string) []string {
 		if err != nil {
 			continue
 		}
-		passes := observerPasses(events, 0)
+		passes := passesFor(engine, events, 0)
 		if len(passes) == 0 {
 			continue
 		}
@@ -663,7 +728,7 @@ func StatusLines(store curated.Store, models []string) []string {
 			passes = passes[len(passes)-MinEvidence:]
 		}
 		parts := []string{}
-		for _, d := range Detectors {
+		for _, d := range countsOf(engine) {
 			if count, _ := window(events, passes, d); count > 0 {
 				parts = append(parts, fmt.Sprintf("%s %d", d, count))
 			}
@@ -673,7 +738,11 @@ func StatusLines(store curated.Store, models []string) []string {
 		if len(parts) > 0 {
 			counts = strings.Join(parts, ", ")
 		}
-		out = append(out, fmt.Sprintf("  Detector counts for %s over its last %d passes (%d tokens): %s", model, len(passes), tokens, counts))
+		unit := "passes"
+		if engine == curated.EngineV2 {
+			unit = "compactions"
+		}
+		out = append(out, fmt.Sprintf("  Detector counts for %s over its last %d %s (%d tokens): %s", model, len(passes), unit, tokens, counts))
 	}
 	return out
 }

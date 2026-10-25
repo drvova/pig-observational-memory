@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
@@ -36,9 +37,14 @@ func DefinitionModel(kind, session, worker string) string {
 
 // CheckModelDefinition is what every definition from the model must pass before it is held:
 // a kind the model may define here (a tool is made with define, a rule with propose), the
-// provenance check against the branch (rules.CheckFromModel), and the layer's checks.
+// provenance check against the branch (rules.CheckFromModel), and the layer's checks. Under
+// v1 (a store not V2) the consolidation instructions are refused: they shape memory v2's level-1
+// request, which only that request proposes (docs/memory-v2.md, "Self-built harness"), and no
+// v1 pass runs with them or could settle them.
 func CheckModelDefinition(store curated.Store, branch []ledger.Entry, d layer.Definition) error {
 	switch {
+	case !store.V2 && d.Kind == layer.KindInstructions && d.Name == agents.InstructionsConsolidation:
+		return ErrConsolidationV2Only
 	case d.Kind == layer.KindTool:
 		return errors.New("a tool is defined with define <name> = <query> \"what it returns\", which registers it")
 	case rules.IsRule(d.Kind, d.Name):
@@ -50,6 +56,10 @@ func CheckModelDefinition(store curated.Store, branch []ledger.Entry, d layer.De
 	return rules.CheckFromModel(branch, d)
 }
 
+// ErrConsolidationV2Only refuses the consolidation instructions outside memory v2: they are
+// proposed only inside memory v2's level-1 request.
+var ErrConsolidationV2Only = fmt.Errorf("refused: instructions %q shape memory v2's level-1 request and are proposed only inside it (memoryEngine v2); no memory v1 pass runs with them", agents.InstructionsConsolidation)
+
 // layerWriter is the memory tool's Layerer for one call.
 type layerWriter struct {
 	h               host.ToolHost
@@ -60,8 +70,17 @@ type layerWriter struct {
 
 func (w layerWriter) notify(message string) { w.h.Notify(message, "info") }
 
-// Define holds the model's definition of kind named name.
+// ErrDefinedInLevel1 refuses the memory tool's harness and propose writes under memory v2,
+// where the model defines part of its harness only inside the compaction's level-1 request
+// (docs/memory-v2.md, "Self-built harness"); forget and rollback still apply.
+var ErrDefinedInLevel1 = errors.New("refused: under memoryEngine v2 harness definitions and rules are proposed only inside the compaction's consolidation request, when your harness evidence changed; forget and rollback still apply")
+
+// Define holds the model's definition of kind named name; under memory v2 it is refused
+// (ErrDefinedInLevel1).
 func (w layerWriter) Define(kind, name, text string) (string, error) {
+	if w.store.V2 {
+		return "", ErrDefinedInLevel1
+	}
 	kind, name = strings.TrimSpace(kind), strings.TrimSpace(name)
 	if !layer.ValidKind(kind) {
 		return "", fmt.Errorf("unknown definition kind %q; kinds are %s", kind, strings.Join(layer.Kinds, ", "))

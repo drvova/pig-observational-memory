@@ -15,6 +15,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -52,7 +53,9 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 	// two compactions rendering at once never append the same records twice, and whichever one
 	// PiG persists finds its range's records on the session. The slot only shows the hook as
 	// running in /om:status.
-	if rt.TryEnterCompactHook() {
+	owner := rt.TryEnterCompactHook()
+	if owner {
+		rt.SetCompactHookRequest(request)
 		defer rt.LeaveCompactHook()
 	}
 	ctx := request
@@ -79,7 +82,7 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 		outcome = BeforeCompactOutcome{Compaction: &compaction}
 	}()
 	ctx = debuglog.With(request, debugScope(rt, h))
-	compaction := buildCompactionV2(ctx, request, rt, h, event, &level1)
+	compaction := buildCompactionV2(ctx, request, rt, h, event, owner, &level1)
 	if request.Err() != nil {
 		return BeforeCompactOutcome{}
 	}
@@ -90,8 +93,14 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 // read (extractCutV2), runs level 1 when it may (consolidateV2, at most one request, on the
 // request context), renders the ledger's records under the summary budget, else the minimal
 // brief of the cut range, and drops by rule what the rendered records supersede or the
-// rendered reflections cite. spent receives level 1's result as it stands, even on a panic.
-func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, spent *level1Result) CompactionResult {
+// rendered reflections cite. The session model's harness shapes the render (its profile's
+// summary size, layout and codec, the codec read from its layer) and, while the request is live,
+// the compaction is recorded as its evidence unit (recordCompactionV2) by the hook holding the
+// compaction slot (owner), or by a concurrent hook once PiG cancelled the owner's request
+// (runtime.Runtime.CompactHookOwnerLive): the compaction PiG persists is counted when its slot
+// owner was the one cancelled, and two live hooks never count one compaction twice. spent
+// receives level 1's result as it stands, even on a panic.
+func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, owner bool, spent *level1Result) CompactionResult {
 	cfg := rt.Config()
 	cut := v2SourceEntries(v2CutRange(event.BranchEntries, event))
 	// The records of the cut range, appended before rendering so the protection of unextracted
@@ -109,6 +118,25 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 		MaxOutputTokens: host.ModelMaxTokens(model),
 		NextRunHeadroom: headroom,
 	})
+	// The session model reads the summary: its profile (harness.ComputeWith over memory v2's own
+	// events, one unit per compaction) may give it less than the budget, never more, and picks
+	// its layout and codec, a written format read from its layer (docs/memory-interface.md,
+	// section 6; level 1 defines no format). With no evidence and no definitions the profile is the default and the render is
+	// unchanged.
+	active := harness.LayerFor(h, cfg, model)
+	profile := harness.Default(harness.ModelKey(model))
+	if l, ok := harness.For(h, cfg, model); ok {
+		profile = l.ProfileWith(active)
+	}
+	if scaled := profile.ApplySummary(budget); scaled < budget {
+		debuglog.Log(ctx, "compaction.summary_profile", map[string]any{"model": profile.Model, "roomTokens": budget, "summaryMaxTokens": scaled, "summaryHalvings": profile.SummaryHalvings})
+		budget = scaled
+	}
+	format := profile.SummaryFormat(cfg)
+	var codec tables.Codec
+	if format != ledger.FormatLines {
+		codec = profile.CodecValue()
+	}
 
 	// PiG's customInstructions reach the level-1 input, or a level-0 summary as a block after the
 	// memory when it fits (docs/memory-v2.md, "The rule", 2).
@@ -125,7 +153,11 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// aliases and drops are appended before rendering, so the summary folds them. On any
 	// failure it appends nothing and level 0 stands. Its current memory is bounded by the room
 	// the render has, the instructions' block left out.
-	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, spent)
+	// The layer the compaction ran with, read before level 1: the held definitions it settles
+	// once its pass is recorded (settleDefinitionsV2), so one this level 1 holds is never
+	// settled by the compaction that proposed it.
+	snapshot := active.Harness()
+	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, active, spent)
 	if len(level1.entries) > 0 {
 		entries = append(append(make([]ledger.Entry, 0, len(entries)+len(level1.entries)), entries...), level1.entries...)
 	}
@@ -144,9 +176,10 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	summary, kind := "", ""
 	var rendered selection.Result
 	if memoryBudget > 0 && len(projection.Reflections)+len(projection.Observations) > 0 {
-		// The native layout in memoryFormat, with no codec: memory v2 bypasses the per-model
-		// layer's summary definitions (harness.LayerFor, which v1 renders through) until the
-		// harness moves to the new path (docs/memory-v2.md, "Order of work", step 5).
+		// Selection's ordered classes are the kernel's: a summary definition (a model's summary
+		// query, which v1 lays out through declare) does not select under v2, since only
+		// selection keeps every line anchored, every omission a runnable query and the drops
+		// exactly what it shows. The model's format and codec do apply.
 		folded := ledger.FoldLedger(entries, "")
 		rendered = renderV2Records(selection.Input{
 			Reflections:     projection.Reflections,
@@ -155,7 +188,8 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			Branch:          entries,
 			Request:         v2SplitTurnRequest(cut, event),
 			Budget:          memoryBudget,
-			Format:          cfg.MemoryFormat,
+			Format:          format,
+			Codec:           codec,
 			Aliases:         projection.Aliases,
 			ReflectionDates: ledger.ReflectionDateRanges(folded),
 		})
@@ -220,6 +254,20 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	details := v2Details(projection, event.FirstKeptEntryID)
 	report := level1.report
 	details.Consolidation = &report
+	if kind == v2SummaryRecords {
+		details.Shown = shownIDs(rendered)
+		// The summary decodes later in the codec that wrote it, with its declaration when the
+		// model declared it; the native rows codec is the default and is not recorded.
+		if codec != nil && (codec.Name() != tables.Rows.Name() || isDeclared(codec)) {
+			details.SummaryCodec = codec.Name()
+			if f, declared := tables.DeclaredFormat(codec); declared {
+				details.SummaryFormat = f.Declaration()
+			}
+		}
+	}
+	if request.Err() == nil && (owner || !rt.CompactHookOwnerLive()) {
+		recordCompactionV2(ctx, rt, h, entries, cut, level1.counts, snapshot)
+	}
 	return CompactionResult{
 		Summary:          summary,
 		FirstKeptEntryID: event.FirstKeptEntryID,
@@ -229,6 +277,24 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 		// what the compaction cost; nil at level 0, which made no request.
 		Usage: level1.usage,
 	}
+}
+
+// shownIDs are the ids of the records a rendered summary shows, reflections first.
+func shownIDs(rendered selection.Result) []string {
+	out := make([]string, 0, len(rendered.Reflections)+len(rendered.Observations))
+	for _, r := range rendered.Reflections {
+		out = append(out, r.ID)
+	}
+	for _, o := range rendered.Observations {
+		out = append(out, o.ID)
+	}
+	return out
+}
+
+// isDeclared reports whether codec is a format a model declared (tables.Declared).
+func isDeclared(codec tables.Codec) bool {
+	_, declared := tables.DeclaredFormat(codec)
+	return declared
 }
 
 // withoutObservations is observations without the records whose ids are in ids.

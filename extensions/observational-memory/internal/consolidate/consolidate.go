@@ -6,8 +6,6 @@
 package consolidate
 
 import (
-	"strings"
-
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
@@ -19,10 +17,18 @@ const ToolName = "consolidate_memory"
 // Stage is the level-1 request's stage on its request event (agents.RequestEvent).
 const Stage = "consolidate"
 
-// SystemPrompt is the level-1 request's system prompt: the kernel's fixed rules
-// (kernel.TextConsolidateRules), which no definition can change.
-func SystemPrompt() string {
-	return strings.TrimRight(kernel.Text(kernel.TextConsolidateRules), "\n") + "\n"
+// SystemPrompt is the level-1 request's system prompt with the seed instructions alone
+// (SystemPromptFor with no instructions of the model's).
+func SystemPrompt() string { return SystemPromptFor("") }
+
+// SystemPromptFor is the level-1 request's system prompt (docs/memory-v2.md, "Self-built
+// harness"): the kernel's fixed rules (kernel.TextConsolidateRules) first and whole, which no
+// definition can change, then the consolidation instructions (agents.ComposeStage): the seed
+// (agents.ConsolidationInstructions), followed by the model's addition own when it has one. The
+// seed is one the model may extend, never replace (rules.CheckV2Proposal refuses "mode:
+// replace"), so its guidance stands whatever the model adds.
+func SystemPromptFor(own string) string {
+	return agents.ComposeStage(kernel.TextConsolidateRules, agents.ConsolidationInstructions, own, false)
 }
 
 // The verdicts on a possible update (a links item's verdict).
@@ -56,16 +62,20 @@ func labelProperties() map[string]any {
 	}
 }
 
-// Tool is the level-1 request's forced tool. It is never executed: RunSingleRequest reads its
-// arguments from the one response.
-func Tool() agents.Tool {
+// Tool is the level-1 request's forced tool with nothing to define (ToolFor with no offer).
+func Tool() agents.Tool { return ToolFor(nil) }
+
+// ToolFor is the level-1 request's forced tool. It is never executed: RunSingleRequest reads its
+// arguments from the one response. With an offer (harness evidence that changed since the last
+// one) it also takes definitions and, when the offer names remedies, rules.
+func ToolFor(offer *DefinitionOffer) agents.Tool {
 	record := labelProperties()
 	record["id"] = map[string]any{"type": "string", "description": "The candidate's id."}
 	record["outcome"] = enumOf([]string{ledger.OutcomeFailed, ledger.OutcomeWorked, ledger.OutcomeOpen}, "An attempt record's outcome.")
 	merge := labelProperties()
 	merge["ids"] = stringArray("The ids of the two or more records the merged line replaces: never attempt, file, commit or note records, nor records with different scopes.")
 	merge["content"] = map[string]any{"type": "string", "description": "One line carrying every specific of the merged records."}
-	return agents.Tool{
+	tool := agents.Tool{
 		Name:        ToolName,
 		Label:       "Consolidate memory",
 		Description: "Labels, merges, reflections, subject aliases, verdicts on possible updates and citations of curated memories for the memory of the compacted conversation. Every field is optional; cite only ids and names printed in the input.",
@@ -96,4 +106,13 @@ func Tool() agents.Tool {
 			},
 		},
 	}
+	if offer != nil {
+		properties := tool.Parameters["properties"].(map[string]any)
+		properties["definitions"] = definitionsSchema(*offer)
+		if len(offer.Remedies) > 0 {
+			properties["rules"] = rulesSchema(*offer)
+		}
+		tool.Description += " With HARNESS EVIDENCE shown, also definitions of your memory harness and rules, each held until a later compaction proves it."
+	}
+	return tool
 }

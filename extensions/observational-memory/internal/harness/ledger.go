@@ -85,14 +85,19 @@ func For(h host.Host, cfg config.Config, model host.Model) (Ledger, bool) {
 func (l Ledger) Profile() Profile { return l.ProfileWith(l.Layer()) }
 
 // ProfileWith is Profile with the model's layer already loaded (active), so one pass reads its
-// codecs from the same generation as the rest of its layer.
+// codecs from the same generation as the rest of its layer. It reads the events of the store's
+// engine only (ComputeWith): a v2 store's profile is memory v2's, a v1 store's v1's.
 func (l Ledger) ProfileWith(active declare.Active) Profile {
 	events, err := l.Store.ModelEvents(l.Model)
 	if err != nil {
 		return Default(l.Model)
 	}
 	definitions, _ := l.Store.ListDefinitions()
-	p := ApplyRules(ComputeWith(l.Model, events, definitions, active.CodecNames()), rules.For(l.Store, l.Model))
+	engine := ""
+	if l.Store.V2 {
+		engine = curated.EngineV2
+	}
+	p := ApplyRules(ComputeWith(l.Model, engine, events, definitions, active.CodecNames()), rules.For(l.Store, l.Model))
 	if c, ok := active.Codec(p.Codec); ok {
 		p.codec = c
 	}
@@ -121,10 +126,14 @@ func LayerFor(h host.Host, cfg config.Config, model host.Model) declare.Active {
 // Rules are the rules that apply to the ledger's model.
 func (l Ledger) Rules() rules.Active { return rules.For(l.Store, l.Model) }
 
-// Record appends e for the ledger's model. A failed write is dropped: counting must never
-// fail the call it counts.
+// Record appends e for the ledger's model, marked as counted under memory v2 when the store
+// is v2's (curated.ModelEvent.Engine), so v1's and v2's evidence never mix. A failed write is
+// dropped: counting must never fail the call it counts.
 func (l Ledger) Record(e curated.ModelEvent) {
 	e.Model = l.Model
+	if l.Store.V2 {
+		e.Engine = curated.EngineV2
+	}
 	_ = l.Store.RecordModel(e)
 }
 
