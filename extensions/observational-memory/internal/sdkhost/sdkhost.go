@@ -178,6 +178,18 @@ func (m models) Stream(model host.Model, request map[string]any) host.ModelStrea
 	return m.registry.StreamSimple(model, request, nil)
 }
 
+// ProjectTrusted reports whether PiG trusts the current project
+// (Context.IsProjectTrusted). A host failure, or a context the session has
+// replaced, is returned as an error, never as trusted.
+func (h *Host) ProjectTrusted() (trusted bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			trusted, err = false, fmt.Errorf("project trust check: %v", r)
+		}
+	}()
+	return h.ctx.IsProjectTrusted()
+}
+
 // ConfigHome is PiG's config root (PIG_HOME, else XDG_CONFIG_HOME/pig, else
 // ~/.pig), "" when it cannot be found.
 func (h *Host) ConfigHome() string {

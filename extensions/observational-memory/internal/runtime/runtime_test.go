@@ -544,10 +544,12 @@ func TestRunAbortedTracksTheAbortedRun(t *testing.T) {
 // Pi's own compaction.enabled is re-read for a configuration loaded from disk.
 func TestLiveConfigRereadsPiAutoCompaction(t *testing.T) {
 	rt := runtime.New()
-	rt.LoadConfig = func(string) config.Config { return config.Defaults }
+	rt.LoadConfig = func(string, config.TrustState) config.Config { return config.Defaults }
 	enabled, set := true, true
-	rt.ReadPiAutoCompaction = func(string) (bool, bool) { return enabled, set }
-	rt.EnsureConfig("/project")
+	rt.ReadPiAutoCompaction = func(string, config.TrustState) (bool, bool) { return enabled, set }
+	h := testfix.NewFakeHost()
+	h.WorkDir = "/project"
+	rt.EnsureConfig(h)
 
 	if !rt.LiveConfig("/project").PiAutoCompactionEnabled {
 		t.Fatal("enabled not read")
@@ -568,5 +570,129 @@ func TestLiveConfigRereadsPiAutoCompaction(t *testing.T) {
 	enabled, set = true, true
 	if rt.LiveConfig("/project").PiAutoCompactionEnabled {
 		t.Fatal("explicit configuration overridden")
+	}
+}
+
+// EnsureConfig asks the host for the project's trust and loads under it once
+// per session; ReloadConfig (a session start) asks again, and leaves a
+// configuration a caller set alone.
+func TestEnsureConfigLoadsUnderProjectTrust(t *testing.T) {
+	rt := runtime.New()
+	var seen []config.TrustState
+	rt.LoadConfig = func(_ string, trust config.TrustState) config.Config {
+		seen = append(seen, trust)
+		cfg := config.Defaults
+		cfg.ProjectTrust = trust
+		return cfg
+	}
+	h := testfix.NewFakeHost()
+	rt.EnsureConfig(h)
+	rt.EnsureConfig(h)
+	if !reflect.DeepEqual(seen, []config.TrustState{config.ProjectUntrusted}) || h.TrustCalls != 1 {
+		t.Fatalf("loads %v, trust checks %d", seen, h.TrustCalls)
+	}
+	h.TrustErr = errors.New("host unavailable")
+	rt.ReloadConfig()
+	rt.EnsureConfig(h)
+	h.TrustErr = nil
+	h.Trusted = true
+	rt.ReloadConfig()
+	rt.EnsureConfig(h)
+	if want := []config.TrustState{config.ProjectUntrusted, config.ProjectTrustUnknown, config.ProjectTrusted}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("loads %v, want %v", seen, want)
+	}
+	if rt.Config().ProjectTrust != config.ProjectTrusted {
+		t.Fatalf("config trust %q", rt.Config().ProjectTrust)
+	}
+	// Pi's compaction.enabled is re-read under the same trust.
+	var readTrust config.TrustState
+	rt.ReadPiAutoCompaction = func(_ string, trust config.TrustState) (bool, bool) {
+		readTrust = trust
+		return false, false
+	}
+	rt.LiveConfig("")
+	if readTrust != config.ProjectTrusted {
+		t.Fatalf("compaction.enabled read under %q", readTrust)
+	}
+	set := config.Defaults
+	set.ObserveAfterTokens = 7
+	rt.SetConfig(set)
+	rt.ReloadConfig()
+	rt.EnsureConfig(h)
+	if rt.Config().ObserveAfterTokens != 7 || len(seen) != 3 {
+		t.Fatalf("reload replaced a set configuration: %+v", rt.Config())
+	}
+}
+
+// A failed trust check is not kept for the session: the next EnsureConfig asks
+// the host again, so the workers and commands do not stay global-only while
+// the memory tool, which checks trust on every call, reads project settings.
+func TestEnsureConfigRetriesFailedTrustCheck(t *testing.T) {
+	rt := runtime.New()
+	var seen []config.TrustState
+	rt.LoadConfig = func(_ string, trust config.TrustState) config.Config {
+		seen = append(seen, trust)
+		cfg := config.Defaults
+		cfg.ProjectTrust = trust
+		return cfg
+	}
+	h := testfix.NewFakeHost()
+	h.TrustErr = errors.New("transient")
+	rt.EnsureConfig(h)
+	if rt.Config().ProjectTrust != config.ProjectTrustUnknown || rt.ConfigLoaded() {
+		t.Fatalf("after a failed check: trust %q, loaded %v", rt.Config().ProjectTrust, rt.ConfigLoaded())
+	}
+	h.TrustErr = nil
+	h.Trusted = true
+	rt.EnsureConfig(h)
+	rt.EnsureConfig(h)
+	if want := []config.TrustState{config.ProjectTrustUnknown, config.ProjectTrusted}; !reflect.DeepEqual(seen, want) || h.TrustCalls != 2 {
+		t.Fatalf("loads %v, trust checks %d", seen, h.TrustCalls)
+	}
+	if !rt.ConfigLoaded() || rt.Config().ProjectTrust != config.ProjectTrusted {
+		t.Fatalf("retry not kept: trust %q", rt.Config().ProjectTrust)
+	}
+}
+
+// reloadingHost reloads the runtime's configuration during its first trust
+// check, as a session start landing while an EnsureConfig waits on the host.
+type reloadingHost struct {
+	rt       *runtime.Runtime
+	answers  []bool
+	cwds     []string
+	calls    int
+	reloaded bool
+}
+
+func (h *reloadingHost) ProjectTrusted() (bool, error) {
+	answer := h.answers[h.calls]
+	h.calls++
+	if !h.reloaded {
+		h.reloaded = true
+		h.rt.ReloadConfig()
+	}
+	return answer, nil
+}
+
+func (h *reloadingHost) Cwd() string { return h.cwds[h.calls-1] }
+
+// An EnsureConfig whose host calls straddle a ReloadConfig does not install
+// what it read for the outgoing session; it asks again.
+func TestEnsureConfigDiscardsReadsBeforeReload(t *testing.T) {
+	rt := runtime.New()
+	var loads []string
+	rt.LoadConfig = func(cwd string, trust config.TrustState) config.Config {
+		loads = append(loads, cwd+":"+string(trust))
+		cfg := config.Defaults
+		cfg.ProjectTrust = trust
+		return cfg
+	}
+	h := &reloadingHost{rt: rt, answers: []bool{false, true}, cwds: []string{"/old", "/new"}}
+	rt.EnsureConfig(h)
+	if want := []string{"/new:" + string(config.ProjectTrusted)}; !reflect.DeepEqual(loads, want) || h.calls != 2 {
+		t.Fatalf("loads %v after %d trust checks, want %v", loads, h.calls, want)
+	}
+	if !rt.ConfigLoaded() || rt.Config().ProjectTrust != config.ProjectTrusted {
+		t.Fatalf("config trust %q", rt.Config().ProjectTrust)
 	}
 }

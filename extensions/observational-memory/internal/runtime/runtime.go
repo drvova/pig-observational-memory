@@ -108,16 +108,21 @@ type Runtime struct {
 
 	config       config.Config
 	configLoaded bool
-	// LoadConfig reads the configuration for a working directory; tests replace it.
-	LoadConfig func(cwd string) config.Config
+	// LoadConfig reads the configuration for a working directory under the
+	// host's project trust answer; tests replace it.
+	LoadConfig func(cwd string, trust config.TrustState) config.Config
 	// Now is the clock; tests replace it.
 	Now func() time.Time
 	// ReadPiAutoCompaction re-reads Pi's own compaction.enabled setting
-	// (enabled, whether any settings file sets it); tests replace it.
-	ReadPiAutoCompaction func(cwd string) (bool, bool)
+	// (enabled, whether any settings file read sets it) under the trust the
+	// configuration was loaded with; tests replace it.
+	ReadPiAutoCompaction func(cwd string, trust config.TrustState) (bool, bool)
 	// configFromDisk is true when EnsureConfig loaded the configuration,
 	// false when a caller set it (tests).
 	configFromDisk bool
+	// configGeneration counts ReloadConfig calls, so an EnsureConfig that
+	// read the host before one does not install what it read.
+	configGeneration uint64
 
 	consolidationInFlight bool
 	consolidationDone     chan struct{}
@@ -156,29 +161,79 @@ type Runtime struct {
 	// definedTools lists the tools the agent defined that this process
 	// registered (SetDefinedTools); nil means none.
 	definedTools func() []string
+	// shownOnce holds the notices ShowOnce already let through.
+	shownOnce map[string]bool
 }
 
 // New creates a runtime with the default configuration.
 func New() *Runtime {
 	return &Runtime{
-		config:                  config.Defaults,
-		LoadConfig:              func(cwd string) config.Config { return config.Load(cwd, config.DefaultPaths(), nil) },
-		ReadPiAutoCompaction:    func(cwd string) (bool, bool) { return config.ReadPiAutoCompaction(cwd, config.DefaultPaths()) },
+		config: config.Defaults,
+		LoadConfig: func(cwd string, trust config.TrustState) config.Config {
+			return config.Load(cwd, config.DefaultPaths(), trust, nil)
+		},
+		ReadPiAutoCompaction: func(cwd string, trust config.TrustState) (bool, bool) {
+			return config.ReadPiAutoCompaction(cwd, config.DefaultPaths(), trust)
+		},
 		Now:                     time.Now,
 		availabilityRecheckedAt: map[string]time.Time{},
 	}
 }
 
-// EnsureConfig loads the configuration once.
-func (r *Runtime) EnsureConfig(cwd string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.configLoaded {
+// ConfigHost is what loading the configuration reads from the host: the
+// working directory and whether the project is trusted.
+type ConfigHost interface {
+	Cwd() string
+	ProjectTrusted() (bool, error)
+}
+
+// EnsureConfig loads the configuration once per session (ReloadConfig drops
+// it). Project settings are read only when the host reports the project
+// trusted; a failed trust check reads the global settings alone and is not
+// kept, so the next EnsureConfig asks the host again instead of running the
+// rest of the session global-only while the memory tool, which checks trust on
+// every call, reads the project's settings.
+func (r *Runtime) EnsureConfig(h ConfigHost) {
+	for {
+		r.mu.Lock()
+		loaded, generation := r.configLoaded, r.configGeneration
+		r.mu.Unlock()
+		if loaded {
+			return
+		}
+		// The trust check is a host call: it is made without holding the lock.
+		trust := config.TrustFrom(h.ProjectTrusted())
+		cwd := h.Cwd()
+		r.mu.Lock()
+		if r.configLoaded {
+			r.mu.Unlock()
+			return
+		}
+		if r.configGeneration != generation {
+			// A ReloadConfig (a session start) landed during the host calls:
+			// their answers may describe the previous session, so ask again.
+			r.mu.Unlock()
+			continue
+		}
+		r.config = r.LoadConfig(cwd, trust)
+		r.configLoaded = trust != config.ProjectTrustUnknown
+		r.configFromDisk = true
+		r.mu.Unlock()
 		return
 	}
-	r.config = r.LoadConfig(cwd)
-	r.configLoaded = true
-	r.configFromDisk = true
+}
+
+// ReloadConfig drops a configuration EnsureConfig loaded, so the next
+// EnsureConfig reads the settings and the project's trust again; an
+// EnsureConfig still waiting on the host discards what it read. A
+// configuration a caller set (SetConfig) stays.
+func (r *Runtime) ReloadConfig() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configGeneration++
+	if r.configFromDisk {
+		r.configLoaded = false
+	}
 }
 
 // Config is the current configuration.
@@ -227,7 +282,7 @@ func (r *Runtime) LiveConfig(cwd string) config.Config {
 	cfg, fromDisk, read := r.config, r.configFromDisk, r.ReadPiAutoCompaction
 	r.mu.Unlock()
 	if fromDisk && read != nil {
-		if enabled, ok := read(cwd); ok {
+		if enabled, ok := read(cwd, cfg.ProjectTrust); ok {
 			cfg.PiAutoCompactionEnabled = enabled
 		} else {
 			cfg.PiAutoCompactionEnabled = config.Defaults.PiAutoCompactionEnabled
@@ -236,7 +291,25 @@ func (r *Runtime) LiveConfig(cwd string) config.Config {
 	return cfg
 }
 
-// ConfigLoaded reports whether EnsureConfig ran.
+// ShowOnce reports whether the notice named key has not been shown yet in this
+// process, and marks it shown: a condition that cannot change while the
+// process runs is reported once, not on every command.
+func (r *Runtime) ShowOnce(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.shownOnce[key] {
+		return false
+	}
+	if r.shownOnce == nil {
+		r.shownOnce = map[string]bool{}
+	}
+	r.shownOnce[key] = true
+	return true
+}
+
+// ConfigLoaded reports whether a configuration is loaded for the session: a
+// caller set it, or EnsureConfig loaded it under a trust answer (one whose trust
+// check failed leaves it false, so the next EnsureConfig asks again).
 func (r *Runtime) ConfigLoaded() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

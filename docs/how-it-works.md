@@ -317,6 +317,7 @@ The renderer is deterministic. It does not call a model and does not rewrite mem
 
 Shows:
 
+- a `Settings` section, when the project has a settings file that is not read because PiG does not trust the project or the trust check failed (see [Project trust](configuration.md#project-trust));
 - passive mode, when `passive` is true;
 - recorded/dropped/active/visible observation counts, with plain `+N` / `-N` visible-vs-full drift suffixes when drift exists;
 - recorded/visible reflection counts, with a plain `+N` drift suffix when full memory has extra reflections;
@@ -333,13 +334,13 @@ Shows:
 
 ### `/om:view`
 
-Default mode shows visible memory and attempts to copy the rendered memory text to the clipboard. Visible memory is empty before the first V3 compaction, because nothing has been folded into `om.folded` details yet, and after a compaction written by Pi's native summarizer, because only the newest compaction counts; use `/om:view full` to inspect recorded branch memory in either case.
+Default mode shows visible memory and attempts to copy the rendered memory text to the clipboard. Visible memory is empty before the first V3 compaction, because nothing has been folded into `om.folded` details yet, and after a compaction written by Pi's native summarizer, because only the newest compaction counts; use `/om:view full` to inspect recorded branch memory in either case. When visible memory is empty but records exist, the command says so in one line instead of printing two empty sections, for example `Nothing compacted yet: 16 active observations and 6 reflections are recorded; /om:view full shows them.` (after a compaction that carries no V3 records it begins `The latest compaction carries no observational memory`), and copies nothing. With no records at all it prints the empty sections as before.
 
-Clipboard copy uses platform clipboard commands (`pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, or `termux-clipboard-set`). If copying succeeds, the view ends with `Copied /om:view output to clipboard.` If copying fails, the command still prints the memory view and ends it with a warning. The clipboard text is only the rendered memory content; it does not include the success/failure line.
+Clipboard copy uses platform clipboard commands (`pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, or `termux-clipboard-set`), only those that can reach a clipboard: installed, and for `wl-copy` with `WAYLAND_DISPLAY` set (or, as libwayland falls back to it, a `wayland-0` socket in `XDG_RUNTIME_DIR`) and for `xclip`/`xsel` with `DISPLAY` set. If copying succeeds, the view ends with `Copied /om:view output to clipboard.` If a usable command runs and fails, the command still prints the memory view and ends it with a warning, every time. When no command is usable (a headless session), nothing is run and the first view in the process ends with a note that the output is not copied; later views print the memory alone. Availability is checked on every view, so a clipboard tool installed later is used from then on (its views end with the copied line). The clipboard text is only the rendered memory content; it does not include the success/failure line.
 
 ### `/om:view full`
 
-Shows full V3 ledger truth at branch tip and attempts to copy the rendered memory text to the clipboard using the same success/failure behavior as default `/om:view`.
+Shows full V3 ledger truth at branch tip and attempts to copy the rendered memory text to the clipboard using the same clipboard behavior as default `/om:view`.
 
 ## Recall flow
 

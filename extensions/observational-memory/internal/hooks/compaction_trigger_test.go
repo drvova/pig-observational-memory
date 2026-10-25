@@ -367,10 +367,12 @@ func diskConfigRuntime(t *testing.T, settings map[string]any) (rt *runtime.Runti
 	cwd = filepath.Join(root, "project")
 	paths := config.Paths{AgentDir: filepath.Join(root, "agent"), ProjectDirName: ".pi"}
 	rt = runtime.New()
-	rt.LoadConfig = func(dir string) config.Config {
-		return config.Load(dir, paths, func(string) (string, bool) { return "", false })
+	rt.LoadConfig = func(dir string, trust config.TrustState) config.Config {
+		return config.Load(dir, paths, trust, func(string) (string, bool) { return "", false })
 	}
-	rt.ReadPiAutoCompaction = func(dir string) (bool, bool) { return config.ReadPiAutoCompaction(dir, paths) }
+	rt.ReadPiAutoCompaction = func(dir string, trust config.TrustState) (bool, bool) {
+		return config.ReadPiAutoCompaction(dir, paths, trust)
+	}
 	setPiCompaction = func(enabled bool) {
 		t.Helper()
 		data, err := json.Marshal(map[string]any{config.SettingsKey: settings, "compaction": map[string]any{"enabled": enabled}})
@@ -396,6 +398,7 @@ func TestTriggerRereadsPiAutoCompactionMidSession(t *testing.T) {
 	// 3 raw tokens, none of them observed.
 	h := triggerHost([]ledger.Entry{text("raw-1", "aaaaaaaaaaaa")})
 	h.WorkDir = cwd
+	h.Trusted = true
 
 	fireTrigger(t, rt, h)
 	if h.CompactCount() != 0 {

@@ -185,6 +185,10 @@ type Host interface {
 	UI
 	Agent
 	Cwd() string
+	// ProjectTrusted reports whether the host trusts the current project, so
+	// its settings may be read. An error means the answer is unknown, which
+	// callers treat as untrusted.
+	ProjectTrusted() (bool, error)
 	// SessionModel is the session's active model, nil when none is set.
 	SessionModel() Model
 	Models() Models

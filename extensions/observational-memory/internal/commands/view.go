@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/clipboard"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 )
@@ -51,6 +53,46 @@ func RenderContentOnlyProjection(projection ledger.Projection, emptyScope string
 	}, "\n")
 }
 
+// plural is count and noun, with an s for any count but one.
+func plural(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return jsfmt.Locale(count) + " " + noun + "s"
+}
+
+// NothingVisibleNote is what the default /om:view prints when the agent sees no
+// memory although records exist, "" when it sees some or nothing is recorded:
+// two empty sections would read as if the memory were empty.
+func NothingVisibleNote(entries []ledger.Entry) string {
+	visible := ledger.VisibleProjection(entries, "")
+	if len(visible.Observations) > 0 || len(visible.Reflections) > 0 {
+		return ""
+	}
+	full := ledger.FullProjection(entries, "")
+	parts := []string{}
+	if n := len(full.Observations); n > 0 {
+		parts = append(parts, plural(n, "active observation"))
+	}
+	if n := len(full.Reflections); n > 0 {
+		parts = append(parts, plural(n, "reflection"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	verb, them := "are", "them"
+	if len(full.Observations)+len(full.Reflections) == 1 {
+		verb, them = "is", "it"
+	}
+	lead := "Nothing compacted yet"
+	if ledger.FindLastCompactionIndex(entries) >= 0 {
+		// Pi shows only the newest compaction, here one the native summarizer
+		// (or an older version) wrote, or one that carried no record.
+		lead = "The latest compaction carries no observational memory"
+	}
+	return fmt.Sprintf("%s: %s %s recorded; /om:view full shows %s.", lead, strings.Join(parts, " and "), verb, them)
+}
+
 // ViewUsage is the /om:view usage line.
 const ViewUsage = "Usage: /om:view [full]"
 
@@ -66,15 +108,25 @@ func ViewOutput(entries []ledger.Entry, mode string) (output string, usage bool)
 	return ViewUsage, true
 }
 
-// CopyFunc copies text to the clipboard and reports success.
-type CopyFunc func(text string) bool
+// CopyFunc copies text to the clipboard and reports what it did.
+type CopyFunc func(text string) clipboard.Outcome
 
-// DefaultCopy uses the platform clipboard commands.
-func DefaultCopy(text string) bool { return clipboard.Copy(text, nil, nil) }
+// DefaultCopy uses the platform clipboard commands that can reach a clipboard.
+func DefaultCopy(text string) clipboard.Outcome { return clipboard.CopyIfAvailable(text) }
+
+// Clipboard notices. A usable clipboard command that fails is a real failure
+// and is reported every time; a session with no usable command (headless:
+// none installed, or no display) is told once per process, since that does
+// not change while the process runs.
+const (
+	viewCopied      = "Copied /om:view output to clipboard."
+	viewCopyFailed  = "Warning: failed to copy /om:view output to clipboard."
+	viewNoClipboard = "Note: no clipboard is available here, so /om:view output is not copied (shown once)."
+)
 
 // RunView is the /om:view handler: print the memory and copy it to the clipboard.
 func RunView(rt *runtime.Runtime, h host.Host, args string, copyText CopyFunc) error {
-	rt.EnsureConfig(h.Cwd())
+	rt.EnsureConfig(h)
 	if copyText == nil {
 		copyText = DefaultCopy
 	}
@@ -82,20 +134,33 @@ func RunView(rt *runtime.Runtime, h host.Host, args string, copyText CopyFunc) e
 	if err != nil {
 		return err
 	}
-	output, usage := ViewOutput(entries, FirstArg(args))
+	mode := FirstArg(args)
+	if mode == "" || mode == "visible" {
+		// Nothing to copy: the note points at the records instead.
+		if note := NothingVisibleNote(entries); note != "" {
+			h.Notify(note, "info")
+			return nil
+		}
+	}
+	output, usage := ViewOutput(entries, mode)
 	if usage {
 		h.Notify(output, "info")
 		return nil
 	}
-	copied := false
+	outcome := clipboard.Failed
 	func() {
 		defer func() { _ = recover() }()
-		copied = copyText(output)
+		outcome = copyText(output)
 	}()
-	if copied {
-		h.Notify(output+"\n\nCopied /om:view output to clipboard.", "info")
-	} else {
-		h.Notify(output+"\n\nWarning: failed to copy /om:view output to clipboard.", "info")
+	switch {
+	case outcome == clipboard.Copied:
+		h.Notify(output+"\n\n"+viewCopied, "info")
+	case outcome == clipboard.Unavailable && rt.ShowOnce("view-no-clipboard"):
+		h.Notify(output+"\n\n"+viewNoClipboard, "info")
+	case outcome == clipboard.Unavailable:
+		h.Notify(output, "info")
+	default:
+		h.Notify(output+"\n\n"+viewCopyFailed, "info")
 	}
 	return nil
 }

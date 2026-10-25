@@ -3,6 +3,7 @@ package observationalmemory
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 func TestProjectRootIsTheEnclosingRepository(t *testing.T) {
@@ -100,5 +102,47 @@ func TestRegistersOneMemoryTool(t *testing.T) {
 	}
 	if !commands["om:status"] || !commands["om:view"] || commands["om:memory"] || len(commands) != 2 {
 		t.Fatalf("commands %v, want om:status and om:view only", commands)
+	}
+}
+
+// The memory tool and the harness read their configuration through
+// curatedCall, which reads project settings only from a trusted project.
+func TestCuratedCallReadsProjectSettingsOnlyWhenTrusted(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	cwd := filepath.Join(root, "project")
+	info, err := json.Marshal(map[string]string{"agentDir": agentDir, "configDirName": ".pig"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PIG_EXT_HOST_INFO", string(info))
+	for path, body := range map[string]string{
+		filepath.Join(agentDir, "settings.json"):    `{"observational-memory": {"curatedMemoryIndexTokens": 700}}`,
+		filepath.Join(cwd, ".pig", "settings.json"): `{"observational-memory": {"curatedMemoryIndexTokens": 512}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name    string
+		trusted bool
+		err     error
+		want    int
+	}{
+		{"trusted", true, nil, 512},
+		{"untrusted", false, nil, 700},
+		{"trust check failed", true, errors.New("host unavailable"), 700},
+	}
+	for _, c := range cases {
+		h := testfix.NewFakeHost()
+		h.WorkDir, h.Trusted, h.TrustErr = cwd, c.trusted, c.err
+		_, cfg, _ := curatedCall(h)
+		if cfg.CuratedMemoryIndexTokens != c.want {
+			t.Fatalf("%s: curatedMemoryIndexTokens = %d, want %d", c.name, cfg.CuratedMemoryIndexTokens, c.want)
+		}
 	}
 }

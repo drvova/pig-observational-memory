@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/clipboard"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
@@ -18,19 +19,28 @@ const (
 
 type copyRecorder struct {
 	calls  []string
-	result bool
+	result clipboard.Outcome
 }
 
-func (c *copyRecorder) copy(text string) bool {
+func (c *copyRecorder) copy(text string) clipboard.Outcome {
 	c.calls = append(c.calls, text)
 	return c.result
 }
 
 func runView(t *testing.T, entries []ledger.Entry, args string, copyResult bool) (output string, clip *copyRecorder) {
+	outcome := clipboard.Failed
+	if copyResult {
+		outcome = clipboard.Copied
+	}
 	rt := runtime.New()
 	rt.SetConfig(config.Defaults)
+	clip = &copyRecorder{result: outcome}
+	return runViewWith(t, rt, entries, args, clip), clip
+}
+
+func runViewWith(t *testing.T, rt *runtime.Runtime, entries []ledger.Entry, args string, clip *copyRecorder) string {
+	t.Helper()
 	h := testfix.NewFakeHost(entries...)
-	clip = &copyRecorder{result: copyResult}
 	if err := commands.RunView(rt, h, args, clip.copy); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +48,7 @@ func runView(t *testing.T, entries []ledger.Entry, args string, copyResult bool)
 	if len(messages) == 0 {
 		t.Fatal("no output")
 	}
-	return messages[len(messages)-1], clip
+	return messages[len(messages)-1]
 }
 
 func expectNoDiagnostics(t *testing.T, output string) {
@@ -136,5 +146,76 @@ func TestViewRejectsUnsupportedArgumentsWithoutCopying(t *testing.T) {
 
 	if len(clip.calls) != 0 || output != "Usage: /om:view [full]" {
 		t.Fatalf("output %q clipboard %q", output, clip.calls)
+	}
+}
+
+// With records but nothing compacted, the default view says so instead of
+// printing two empty sections, and copies nothing; full still shows them.
+func TestViewSaysNothingCompactedYetWhenRecordsExist(t *testing.T) {
+	observations := []ledger.Observation{}
+	for _, id := range []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"} {
+		observations = append(observations, testfix.Observation(id))
+	}
+	entries := []ledger.Entry{
+		testfix.TextCustomMessage("raw-1", "aaaa"),
+		testfix.ObservationsRecordedEntry("om-obs", observations, "raw-1"),
+		testfix.ReflectionsRecordedEntry("om-ref", []ledger.Reflection{
+			testfix.Reflection("eeeeeeeeeeee", []string{"aaaaaaaaaaaa"}),
+			testfix.Reflection("ffffffffffff", []string{"bbbbbbbbbbbb"}),
+		}, "om-obs"),
+		testfix.ObservationsDroppedEntry("om-drop", []string{"cccccccccccc"}, "om-ref"),
+	}
+
+	output, clip := runView(t, entries, "", true)
+	if want := "Nothing compacted yet: 2 active observations and 2 reflections are recorded; /om:view full shows them."; output != want {
+		t.Fatalf("output %q, want %q", output, want)
+	}
+	if len(clip.calls) != 0 {
+		t.Fatalf("copied the note: %q", clip.calls)
+	}
+	output, _ = runView(t, entries, "visible", true)
+	expectContains(t, output, "Nothing compacted yet")
+
+	output, clip = runView(t, entries, "full", true)
+	expectContains(t, output, "[aaaaaaaaaaaa]", "[eeeeeeeeeeee]", copySuccess)
+	if len(clip.calls) != 1 {
+		t.Fatalf("full view not copied: %q", clip.calls)
+	}
+
+	// One record, and a compaction that carries none (Pi's native summarizer).
+	single := []ledger.Entry{
+		testfix.TextCustomMessage("raw-1", "aaaa"),
+		testfix.ObservationsRecordedEntry("om-obs", observations[:1], "raw-1"),
+		testfix.CompactionEntry("cmp", testfix.CompactionArgs{FirstKeptEntryID: "raw-1"}),
+	}
+	output, _ = runView(t, single, "", true)
+	if want := "The latest compaction carries no observational memory: 1 active observation is recorded; /om:view full shows it."; output != want {
+		t.Fatalf("output %q, want %q", output, want)
+	}
+}
+
+// With no usable clipboard (headless) the view is printed, nothing is
+// reported as a failure, and the note that it is not copied appears once per
+// process; a usable clipboard that fails still warns every time.
+func TestViewClipboardNotices(t *testing.T) {
+	rt := runtime.New()
+	rt.SetConfig(config.Defaults)
+	unavailable := &copyRecorder{result: clipboard.Unavailable}
+	expected := strings.Join([]string{"── Reflections ──", "No visible reflections.", "", "── Observations ──", "No visible observations."}, "\n")
+
+	first := runViewWith(t, rt, nil, "", unavailable)
+	if first != expected+"\n\nNote: no clipboard is available here, so /om:view output is not copied (shown once)." {
+		t.Fatalf("first output %q", first)
+	}
+	for range 2 {
+		if again := runViewWith(t, rt, nil, "", unavailable); again != expected {
+			t.Fatalf("repeated output %q", again)
+		}
+	}
+	failing := &copyRecorder{result: clipboard.Failed}
+	for range 2 {
+		if output := runViewWith(t, rt, nil, "", failing); output != expected+"\n\n"+copyFailure {
+			t.Fatalf("failure output %q", output)
+		}
 	}
 }

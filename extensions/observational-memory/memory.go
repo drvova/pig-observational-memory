@@ -51,7 +51,8 @@ func projectRoot(cwd string) string {
 // curatedCall is the store, project and session a memory query acts on, and
 // whether curated memory is on.
 func curatedCall(h host.Host) (curated.Call, config.Config, bool) {
-	cfg := config.Load(h.Cwd(), config.DefaultPaths(), nil)
+	// Project settings only from a trusted project, as PiG reads them.
+	cfg := config.Load(h.Cwd(), config.DefaultPaths(), config.TrustFrom(h.ProjectTrusted()), nil)
 	store, on := harness.StoreOf(h, cfg)
 	if !on {
 		return curated.Call{}, cfg, false

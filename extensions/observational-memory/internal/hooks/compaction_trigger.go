@@ -79,7 +79,7 @@ func ActiveCompactionBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.
 // threshold is reached and Pi is idle. The returned channel closes once the
 // deferred step ran; it is nil when nothing was scheduled.
 func MaybeTriggerCompaction(rt *runtime.Runtime, h host.Host) <-chan struct{} {
-	rt.EnsureConfig(h.Cwd())
+	rt.EnsureConfig(h)
 	cfg := rt.LiveConfig(h.Cwd())
 	if cfg.Passive || !rt.TryStartCompact() {
 		return nil

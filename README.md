@@ -105,7 +105,7 @@ The summary is sized to the room the next context has: the context window minus 
 | Command | Shows |
 | --- | --- |
 | `/om:status` | Memory counts, progress toward the next observation, reflection and compaction, memory sizes, any worker or compaction holding off after an empty or failed run, and the last worker errors |
-| `/om:view` | The memory in the latest compaction summary (empty until the first compaction), also copied to the clipboard |
+| `/om:view` | The memory in the latest compaction summary, also copied to the clipboard; before the first compaction it says how many records exist and points to `/om:view full` |
 | `/om:view full` | All memory recorded on this branch except dropped observations, also copied to the clipboard |
 
 Commands only read state or settings. The agent reaches its memory through one tool, `memory`, which takes one query string: a source (`notes`, `reflections`, `history`, `saved`, or `recall <id>`) followed by stages, or one write (`save`, `edit`, `forget`, `feedback`, `define`). Results are tables. [The memory tool](docs/concepts.md#the-memory-tool) has the grammar.
@@ -122,9 +122,9 @@ save type=user name=prefers-tabs description="The user indents with tabs."
 The defaults suit most sessions. Settings go under the `observational-memory` key in:
 
 - `~/.pig/agent/settings.json`, for every session
-- `<project>/.pig/settings.json`, for one project, overriding the global file
+- `<project>/.pig/settings.json`, for one project, overriding the global file once PiG trusts the project (until then the extension, like PiG, uses the global file alone)
 
-With `PIG_USE_PI_DIRS=1`, PiG reads Pi's `~/.pi/agent` and `.pi` instead. Settings are read when the extension starts, so restart PiG after changing them. [Where settings live](docs/configuration.md#where-settings-live) covers the overrides.
+With `PIG_USE_PI_DIRS=1`, PiG reads Pi's `~/.pi/agent` and `.pi` instead. Settings are read again at each session start (`/new`, `/resume`), so a new session picks up a change; a `/trust` decision needs a PiG restart. [Where settings live](docs/configuration.md#where-settings-live) covers the overrides.
 
 The most common change is running the workers on a cheaper model, with a second one to fall back on:
 

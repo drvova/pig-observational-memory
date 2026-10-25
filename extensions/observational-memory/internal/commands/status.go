@@ -66,9 +66,21 @@ func removedSuffix(count int) string {
 	return ""
 }
 
+// projectSettingsLine says why the project's settings file was not read, ""
+// when it was read or there is none.
+func projectSettingsLine(cfg config.Config) string {
+	if !cfg.ProjectSettingsIgnored {
+		return ""
+	}
+	if cfg.ProjectTrust == config.ProjectTrustUnknown {
+		return "Project settings ignored: the project trust check failed, so only global settings apply"
+	}
+	return "Project settings ignored: the project is not trusted, so only global settings apply (a /trust decision applies after PiG restarts)"
+}
+
 // StatusLines renders the /om:status report.
 func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
-	rt.EnsureConfig(h.Cwd())
+	rt.EnsureConfig(h)
 	cfg := rt.LiveConfig(h.Cwd())
 	entries, err := h.GetBranch()
 	if err != nil {
@@ -110,6 +122,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 			"Passive: automatic memory workers and auto-compaction disabled; manual/Pi compaction, commands, and recall remain active",
 			"",
 		)
+	}
+	if line := projectSettingsLine(cfg); line != "" {
+		lines = append(lines, "── Settings ──", line, "")
 	}
 	lines = append(lines,
 		"── Memory ──",

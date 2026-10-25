@@ -209,7 +209,7 @@ func HandleBeforeCompact(ctx context.Context, rt *runtime.Runtime, h host.Host, 
 		return BeforeCompactOutcome{Cancel: true}
 	}
 	defer rt.LeaveCompactHook()
-	rt.EnsureConfig(h.Cwd())
+	rt.EnsureConfig(h)
 	return handleCompaction(debuglog.With(ctx, debugScope(rt, h)), rt, h, event)
 }
 

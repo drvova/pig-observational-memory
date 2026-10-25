@@ -9,12 +9,20 @@ V3 keeps the existing `observational-memory` settings namespace, but the setting
 The extension reads settings from:
 
 1. Global settings: `<agent dir>/settings.json`, by default `~/.pig/agent/settings.json`
-2. Project settings: `<project>/.pig/settings.json`
+2. Project settings: `<project>/.pig/settings.json`, only when PiG trusts the project (see [Project trust](#project-trust))
 3. Environment override: `PI_OBSERVATIONAL_MEMORY_PASSIVE`
 
 The agent directory and the project directory name come from PiG. PiG's agent directory is `PIG_CODING_AGENT_DIR` when set, otherwise `<config root>/agent`, where the config root is `PIG_HOME`, else `$XDG_CONFIG_HOME/pig`, else `~/.pig`. When PiG runs with `PIG_USE_PI_DIRS=1` it shares Pi's tree instead: `~/.pi/agent` (or `PI_CODING_AGENT_DIR`) and `<project>/.pi`.
 
 Project settings override global settings. `PI_OBSERVATIONAL_MEMORY_PASSIVE` overrides only `passive` when set to a recognized value.
+
+### Project trust
+
+A project's settings travel with its repository, so the extension follows PiG's rule: until you trust a project, PiG uses your global configuration alone. The extension asks PiG whether the project is trusted and reads `<project>/.pig/settings.json` only when it is. In an untrusted project, or when the trust check fails (the extension then treats the project as untrusted, as PiG does), it uses the global settings and `PI_OBSERVATIONAL_MEMORY_PASSIVE` alone. This covers every setting it reads from that file: the `observational-memory` namespace (the runtime configuration, the `memory` tool and the harness) and Pi's own `compaction.enabled`. When a project settings file exists but is not read, `/om:status` starts with a `Settings` section saying so and why.
+
+Trust is read when the extension first loads its configuration in a session and again at every session start; a failed check is asked again on the next read instead of being kept for the session. A decision you make with `/trust` applies after PiG restarts, as PiG itself says when it saves one: PiG resolves trust once per working directory for the life of the process, so a new session (`/new`) in the same project keeps the old answer. The re-read at session start matters for a session resumed in a different project, whose trust PiG resolves separately. The extension handles PiG's `project_trust` event only to drop the configuration loaded under the previous answer; it never makes the decision (it answers undecided).
+
+Trust does not change where curated memories are filed: project-scoped memories stay keyed by the project directory either way.
 
 All extension-owned settings live under:
 
@@ -24,7 +32,7 @@ All extension-owned settings live under:
 }
 ```
 
-The extension loads config once for its runtime. After changing settings, restart PiG or reload the extension so the new values are picked up. Pi's own `compaction.enabled` is the exception: it is re-read on every check (see [`compactAfterTokens`](#compactaftertokens)).
+The extension loads config once per session and reads it again at each session start (`/new`, `/resume`, `/fork`, `/reload`). After changing settings, start a new session or restart PiG so the new values are picked up; the `memory` tool reads them on each call. Pi's own `compaction.enabled` is the exception: it is re-read on every check (see [`compactAfterTokens`](#compactaftertokens)).
 
 ## Full V3 example
 
@@ -138,7 +146,7 @@ When PiG refuses or fails the request (for example "Nothing to compact", "Alread
 
 Source entries the observer has not reached yet never count toward this threshold, so a session whose observer is slower than the conversation waits for coverage instead of compacting away unobserved context. Without any observation coverage, proactive compaction does not fire at all; Pi's own threshold compaction remains in charge.
 
-That backstop only exists while Pi's own automatic compaction is on. When Pi's `compaction.enabled` is `false` (read from the same `settings.json` files, project over global, and re-read on every check, so turning it off mid-session takes effect at once), the trigger counts raw source tokens after the boundary instead, so a stalled observer cannot leave context growing unchecked. The compaction hook still protects the unobserved entries (catch-up, retention, or delegation to Pi's native summarizer). `/om:status` labels the metric accordingly: "observed" or "estimated" source tokens.
+That backstop only exists while Pi's own automatic compaction is on. When Pi's `compaction.enabled` is `false` (read from the same `settings.json` files, project over global, the project file only when [trusted](#project-trust), and re-read on every check, so turning it off mid-session takes effect at once), the trigger counts raw source tokens after the boundary instead, so a stalled observer cannot leave context growing unchecked. The compaction hook still protects the unobserved entries (catch-up, retention, or delegation to Pi's native summarizer). `/om:status` labels the metric accordingly: "observed" or "estimated" source tokens.
 
 Outside `consolidateWhenIdle`, this trigger does not wait for observer, reflector, or dropper work. Actual compaction summary creation happens later in `session_before_compact`. A non-empty V3 projection is rendered deterministically, without a summarization model; an empty projection delegates to Pi's native summarizer so prior context is not replaced by an empty summary.
 

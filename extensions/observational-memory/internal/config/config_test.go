@@ -52,7 +52,19 @@ func (f fixture) writeJSON(t *testing.T, path string, value any) {
 func (f fixture) global() string  { return filepath.Join(f.paths.AgentDir, "settings.json") }
 func (f fixture) project() string { return filepath.Join(f.cwd, ".pi", "settings.json") }
 
-func (f fixture) load(e env) config.Config { return config.Load(f.cwd, f.paths, e.lookup) }
+// load reads the settings of a trusted project; loadAs reads them under trust.
+func (f fixture) load(e env) config.Config { return f.loadAs(config.ProjectTrusted, e) }
+
+// trustedDefaults is what a trusted project with no settings loads.
+func trustedDefaults() config.Config {
+	cfg := config.Defaults
+	cfg.ProjectTrust = config.ProjectTrusted
+	return cfg
+}
+
+func (f fixture) loadAs(trust config.TrustState, e env) config.Config {
+	return config.Load(f.cwd, f.paths, trust, e.lookup)
+}
 
 func TestDefaults(t *testing.T) {
 	f := setup(t)
@@ -64,7 +76,7 @@ func TestDefaults(t *testing.T) {
 	if !reflect.DeepEqual(config.Defaults, want) {
 		t.Fatalf("defaults %+v", config.Defaults)
 	}
-	if got := f.load(env{}); !reflect.DeepEqual(got, config.Defaults) {
+	if got := f.load(env{}); !reflect.DeepEqual(got, trustedDefaults()) {
 		t.Fatalf("empty load %+v", got)
 	}
 }
@@ -123,7 +135,7 @@ func TestInvalidValues(t *testing.T) {
 		"observeAfterTokens": -1, "reflectAfterTokens": 0, "compactAfterTokens": 1.5, "observationsPoolMaxTokens": "20000", "observationsPoolTargetTokens": "10000",
 		"agentMaxTurns": nil, "model": map[string]any{"provider": "anthropic", "id": "", "thinking": "huge"}, "showWorkerNotifications": "no", "passive": "yes", "debugLog": "true",
 	}})
-	if got := f.load(env{}); !reflect.DeepEqual(got, config.Defaults) {
+	if got := f.load(env{}); !reflect.DeepEqual(got, trustedDefaults()) {
 		t.Fatalf("invalid values applied %+v", got)
 	}
 }
@@ -146,7 +158,7 @@ func TestIgnoresV2Settings(t *testing.T) {
 		"observationThresholdTokens": 10, "compactionThresholdTokens": 20, "reflectionThresholdTokens": 30, "compactionModel": map[string]any{"provider": "anthropic", "id": "old"},
 		"thinkingLevel": "high", "observerMaxTurnsPerRun": 2, "reflectorMaxTurnsPerPass": 3, "prunerMaxTurnsPerPass": 4, "compactionMaxToolCalls": 5,
 	}})
-	if got := f.load(env{}); !reflect.DeepEqual(got, config.Defaults) {
+	if got := f.load(env{}); !reflect.DeepEqual(got, trustedDefaults()) {
 		t.Fatal("V2 settings applied")
 	}
 }
@@ -269,15 +281,15 @@ func TestBudgetKeysParse(t *testing.T) {
 // Pi's compaction.enabled is readable on its own, project over global.
 func TestReadPiAutoCompaction(t *testing.T) {
 	f := setup(t)
-	if _, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); ok {
+	if _, ok := config.ReadPiAutoCompaction(f.cwd, f.paths, config.ProjectTrusted); ok {
 		t.Fatal("unset setting reported")
 	}
 	f.writeJSON(t, f.global(), map[string]any{"compaction": map[string]any{"enabled": false}})
-	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); !ok || enabled {
+	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths, config.ProjectTrusted); !ok || enabled {
 		t.Fatalf("global %v %v", enabled, ok)
 	}
 	f.writeJSON(t, f.project(), map[string]any{"compaction": map[string]any{"enabled": true}})
-	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths); !ok || !enabled {
+	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths, config.ProjectTrusted); !ok || !enabled {
 		t.Fatalf("project %v %v", enabled, ok)
 	}
 }
@@ -370,5 +382,87 @@ func TestKernelFloor(t *testing.T) {
 	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"kernelFloor": map[string]any{"lower": true}}})
 	if got := f.load(env{}); got.KernelFloor == nil || got.KernelFloor.RequestedBy != "" {
 		t.Fatalf("bare request %+v", got.KernelFloor)
+	}
+}
+
+// PiG uses the global configuration alone until the user trusts a project, so
+// project settings, Pi's compaction.enabled among them, are read only from a
+// trusted project; an untrusted one, or one whose trust check failed, is
+// ignored and reported.
+func TestProjectSettingsNeedTrust(t *testing.T) {
+	f := setup(t)
+	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"observeAfterTokens": 111}, "compaction": map[string]any{"enabled": true}})
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"observeAfterTokens": 222, "passive": true}, "compaction": map[string]any{"enabled": false}})
+
+	trusted := f.loadAs(config.ProjectTrusted, env{})
+	if trusted.ObserveAfterTokens != 222 || !trusted.Passive || trusted.PiAutoCompactionEnabled || trusted.ProjectSettingsIgnored || trusted.ProjectTrust != config.ProjectTrusted {
+		t.Fatalf("trusted project settings not read: %+v", trusted)
+	}
+	if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths, config.ProjectTrusted); !ok || enabled {
+		t.Fatalf("trusted compaction.enabled %v %v", enabled, ok)
+	}
+	for _, trust := range []config.TrustState{config.ProjectUntrusted, config.ProjectTrustUnknown, ""} {
+		got := f.loadAs(trust, env{})
+		if got.ObserveAfterTokens != 111 || got.Passive || !got.PiAutoCompactionEnabled {
+			t.Fatalf("%q: project settings read: %+v", trust, got)
+		}
+		if !got.ProjectSettingsIgnored || got.ProjectTrust != trust {
+			t.Fatalf("%q: ignored project settings not reported: %+v", trust, got)
+		}
+		if enabled, ok := config.ReadPiAutoCompaction(f.cwd, f.paths, trust); !ok || !enabled {
+			t.Fatalf("%q: compaction.enabled read from the project: %v %v", trust, enabled, ok)
+		}
+	}
+	// The environment override applies whatever the trust.
+	if got := f.loadAs(config.ProjectUntrusted, env{config.PassiveEnv: "1"}); !got.Passive {
+		t.Fatal("PI_OBSERVATIONAL_MEMORY_PASSIVE ignored in an untrusted project")
+	}
+	// Without a project settings file there is nothing to report.
+	if err := os.Remove(f.project()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.loadAs(config.ProjectUntrusted, env{}); got.ProjectSettingsIgnored {
+		t.Fatal("missing project settings reported as ignored")
+	}
+}
+
+// The global kernelFloor request applies whatever the project's trust, and
+// an untrusted project cannot keep the floor engaged either: its settings are
+// not read at all.
+func TestKernelFloorUnderTrust(t *testing.T) {
+	f := setup(t)
+	request := map[string]any{"lower": true, "requestedBy": "drvova", "reason": "rebuilding the memory tool"}
+	f.writeJSON(t, f.global(), map[string]any{"observational-memory": map[string]any{"kernelFloor": request}})
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"kernelFloor": map[string]any{"lower": false}}})
+	if got := f.loadAs(config.ProjectTrusted, env{}); got.KernelFloor != nil {
+		t.Fatalf("a trusted project could not keep the floor engaged: %+v", got.KernelFloor)
+	}
+	if got := f.loadAs(config.ProjectUntrusted, env{}); got.KernelFloor == nil || got.KernelFloor.RequestedBy != "drvova" {
+		t.Fatalf("global request under an untrusted project %+v", got.KernelFloor)
+	}
+	f.writeJSON(t, f.global(), map[string]any{})
+	f.writeJSON(t, f.project(), map[string]any{"observational-memory": map[string]any{"kernelFloor": request}})
+	for _, trust := range []config.TrustState{config.ProjectTrusted, config.ProjectUntrusted, config.ProjectTrustUnknown} {
+		if got := f.loadAs(trust, env{}); got.KernelFloor != nil {
+			t.Fatalf("%q: a project lowered the floor: %+v", trust, got.KernelFloor)
+		}
+	}
+}
+
+func TestTrustFrom(t *testing.T) {
+	cases := []struct {
+		trusted bool
+		err     error
+		want    config.TrustState
+	}{
+		{true, nil, config.ProjectTrusted},
+		{false, nil, config.ProjectUntrusted},
+		{true, os.ErrPermission, config.ProjectTrustUnknown},
+		{false, os.ErrPermission, config.ProjectTrustUnknown},
+	}
+	for _, c := range cases {
+		if got := config.TrustFrom(c.trusted, c.err); got != c.want {
+			t.Fatalf("TrustFrom(%v, %v) = %q, want %q", c.trusted, c.err, got, c.want)
+		}
 	}
 }

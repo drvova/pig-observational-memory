@@ -3,6 +3,7 @@ package commands_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,10 +202,12 @@ func TestStatusRereadsPiAutoCompactionMidSession(t *testing.T) {
 	cwd := filepath.Join(root, "project")
 	paths := config.Paths{AgentDir: filepath.Join(root, "agent"), ProjectDirName: ".pi"}
 	rt := runtime.New()
-	rt.LoadConfig = func(dir string) config.Config {
-		return config.Load(dir, paths, func(string) (string, bool) { return "", false })
+	rt.LoadConfig = func(dir string, trust config.TrustState) config.Config {
+		return config.Load(dir, paths, trust, func(string) (string, bool) { return "", false })
 	}
-	rt.ReadPiAutoCompaction = func(dir string) (bool, bool) { return config.ReadPiAutoCompaction(dir, paths) }
+	rt.ReadPiAutoCompaction = func(dir string, trust config.TrustState) (bool, bool) {
+		return config.ReadPiAutoCompaction(dir, paths, trust)
+	}
 	setPiCompaction := func(enabled bool) {
 		t.Helper()
 		data, err := json.Marshal(map[string]any{config.SettingsKey: map[string]any{"compactAfterTokens": 30}, "compaction": map[string]any{"enabled": enabled}})
@@ -222,6 +225,7 @@ func TestStatusRereadsPiAutoCompactionMidSession(t *testing.T) {
 	// 3 raw tokens, none of them observed.
 	h := testfix.NewFakeHost(testfix.TextCustomMessage("raw-1", "aaaaaaaaaaaa"))
 	h.WorkDir = cwd
+	h.Trusted = true
 
 	setPiCompaction(true)
 	expectContains(t, statusOutput(t, rt, h), "Next compaction:  ~0 / 30 observed source tokens (0%)")
@@ -427,4 +431,55 @@ func TestStatusShowsHarnessProfile(t *testing.T) {
 	output = statusOutput(t, statusRuntime(cfg), h)
 	expectContains(t, output, "Profile (memory worker p/worker, 3 events): codec rows, short spec")
 	expectLacks(t, output, "layout → lines")
+}
+
+// Project settings apply only in a trusted project, and status says when they
+// are ignored. The trust is read once per session: a session start
+// (ReloadConfig) asks the host again.
+func TestStatusReportsProjectSettingsIgnoredWhenUntrusted(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	paths := config.Paths{AgentDir: filepath.Join(root, "agent"), ProjectDirName: ".pi"}
+	path := filepath.Join(cwd, paths.ProjectDirName, "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"observational-memory": {"compactAfterTokens": 30}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt := runtime.New()
+	rt.LoadConfig = func(dir string, trust config.TrustState) config.Config {
+		return config.Load(dir, paths, trust, func(string) (string, bool) { return "", false })
+	}
+	rt.ReadPiAutoCompaction = func(dir string, trust config.TrustState) (bool, bool) {
+		return config.ReadPiAutoCompaction(dir, paths, trust)
+	}
+	h := testfix.NewFakeHost(testfix.TextCustomMessage("raw-1", "aaaaaaaaaaaa"))
+	h.WorkDir = cwd
+	const untrusted = "Project settings ignored: the project is not trusted, so only global settings apply (a /trust decision applies after PiG restarts)"
+	const failed = "Project settings ignored: the project trust check failed, so only global settings apply"
+
+	output := statusOutput(t, rt, h)
+	expectContains(t, output, "── Settings ──", untrusted, "/ 81,000 observed source tokens")
+	expectLacks(t, output, "/ 30 observed")
+	statusOutput(t, rt, h)
+	if h.TrustCalls != 1 {
+		t.Fatalf("trust checked %d times in one session", h.TrustCalls)
+	}
+
+	rt.ReloadConfig()
+	h.TrustErr = errors.New("host unavailable")
+	output = statusOutput(t, rt, h)
+	expectContains(t, output, failed, "/ 81,000 observed source tokens")
+	expectLacks(t, output, untrusted)
+
+	rt.ReloadConfig()
+	h.TrustErr = nil
+	h.Trusted = true
+	output = statusOutput(t, rt, h)
+	expectContains(t, output, "/ 30 observed source tokens")
+	expectLacks(t, output, "── Settings ──", "Project settings ignored")
+	if h.TrustCalls != 3 {
+		t.Fatalf("trust checked %d times over three sessions", h.TrustCalls)
+	}
 }

@@ -104,8 +104,11 @@ func (h *Host) Compact(host.CompactCallbacks) {}
 // raw-entry estimates, as for a session whose provider reports none.
 func (h *Host) GetContextUsage() (*host.ContextUsage, error) { return nil, nil }
 func (h *Host) Cwd() string                                  { return "" }
-func (h *Host) SessionModel() host.Model                     { return h.model }
-func (h *Host) Models() host.Models                          { return h.models }
+
+// ProjectTrusted is false: a bench session has no project.
+func (h *Host) ProjectTrusted() (bool, error) { return false, nil }
+func (h *Host) SessionModel() host.Model      { return h.model }
+func (h *Host) Models() host.Models           { return h.models }
 
 // isoMillis renders epoch milliseconds as Pi's entry timestamp string.
 func isoMillis(ms int64) string {

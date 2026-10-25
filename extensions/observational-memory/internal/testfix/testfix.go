@@ -444,6 +444,11 @@ type FakeHost struct {
 	ToolsErr     error
 	RegisterErr  error
 	SetActiveErr error
+	// Trusted is ProjectTrusted's answer, TrustErr its failure; TrustCalls
+	// counts the checks.
+	Trusted    bool
+	TrustErr   error
+	TrustCalls int
 }
 
 // NewFakeHost creates a host with a UI, a cwd and the given entries.
@@ -539,8 +544,19 @@ func (h *FakeHost) CompactCount() int {
 
 func (h *FakeHost) GetContextUsage() (*host.ContextUsage, error) { return h.Usage, h.UsageErr }
 func (h *FakeHost) Cwd() string                                  { return h.WorkDir }
-func (h *FakeHost) SessionModel() host.Model                     { return h.Model }
-func (h *FakeHost) Models() host.Models                          { return h.ModelsFake }
+
+// ProjectTrusted answers Trusted, or fails with TrustErr.
+func (h *FakeHost) ProjectTrusted() (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.TrustCalls++
+	if h.TrustErr != nil {
+		return false, h.TrustErr
+	}
+	return h.Trusted, nil
+}
+func (h *FakeHost) SessionModel() host.Model { return h.Model }
+func (h *FakeHost) Models() host.Models      { return h.ModelsFake }
 
 // AppendedTypes lists the appended custom types in order.
 func (h *FakeHost) AppendedTypes() []string {

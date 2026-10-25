@@ -52,6 +52,24 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 			return nil, nil
 		})
 	}
+	// The configuration, and with it the project's trust, is read again for
+	// each session: PiG keeps this process across sessions, so settings edited
+	// since, or a session resumed in another project (whose trust PiG resolves
+	// separately), are picked up. A /trust decision is not: PiG caches trust
+	// per working directory for the life of the process and applies a saved
+	// decision only after a restart.
+	ext.OnEvent(sdk.EventSessionStart, func(sdk.Context, map[string]any) (any, error) {
+		rt.ReloadConfig()
+		return nil, nil
+	})
+	// project_trust asks for a trust decision before the session runs. The
+	// extension never makes one (it answers undecided); it only drops the
+	// configuration loaded under the previous answer, so the next read asks
+	// the host again.
+	ext.OnProjectTrust(func(sdk.Context, map[string]any) (sdk.ProjectTrustResult, error) {
+		rt.ReloadConfig()
+		return sdk.ProjectTrustResult{Trusted: sdk.ProjectTrustUndecided}, nil
+	})
 	ext.OnEvent(sdk.EventSessionBeforeCompact, func(ctx sdk.Context, data map[string]any) (any, error) {
 		event := decodeBeforeCompact(data)
 		outcome := hooks.HandleBeforeCompact(ctx.Signal(), rt, sdkhost.New(ctx), event)

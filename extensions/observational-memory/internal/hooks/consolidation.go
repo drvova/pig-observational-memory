@@ -438,7 +438,7 @@ func runStageWithFallback[T any](ctx context.Context, h host.Host, stage runtime
 }
 
 func idleMode(rt *runtime.Runtime, h host.Host) bool {
-	rt.EnsureConfig(h.Cwd())
+	rt.EnsureConfig(h)
 	return rt.Config().ConsolidateWhenIdle
 }
 
@@ -582,7 +582,7 @@ func newRunID(prefix string) string {
 // MaybeLaunchConsolidation launches a consolidation run when any stage is due.
 // It returns the run's completion channel, or nil when nothing launched.
 func MaybeLaunchConsolidation(rt *runtime.Runtime, h host.Host) <-chan struct{} {
-	rt.EnsureConfig(h.Cwd())
+	rt.EnsureConfig(h)
 	cfg := rt.Config()
 	if cfg.Passive || rt.ConsolidationInFlight() {
 		return nil

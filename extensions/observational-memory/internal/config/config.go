@@ -108,6 +108,40 @@ type Config struct {
 	// (docs/memory-interface.md, section 8), nil when the floor stays engaged.
 	// Configuration is the only way to lower it: the model cannot.
 	KernelFloor *FloorRequest
+	// ProjectTrust is the host's trust answer the configuration was loaded
+	// under; only a trusted project's settings are read.
+	ProjectTrust TrustState
+	// ProjectSettingsIgnored is true when the project has a settings file
+	// that was not read because the project is not trusted.
+	ProjectSettingsIgnored bool
+}
+
+// TrustState is the host's answer to whether the current project is trusted.
+// Project settings are read only when it is ProjectTrusted; every other value,
+// the zero value included, means global settings alone, as PiG does.
+type TrustState string
+
+// The trust states.
+const (
+	// ProjectTrusted: the host trusts the project.
+	ProjectTrusted TrustState = "trusted"
+	// ProjectUntrusted: the host does not trust the project.
+	ProjectUntrusted TrustState = "untrusted"
+	// ProjectTrustUnknown: the trust check failed, so the project is treated
+	// as untrusted (fail closed).
+	ProjectTrustUnknown TrustState = "unknown"
+)
+
+// TrustFrom reads a host trust check (Context.IsProjectTrusted): an error
+// means the trust is unknown, never trusted.
+func TrustFrom(trusted bool, err error) TrustState {
+	switch {
+	case err != nil:
+		return ProjectTrustUnknown
+	case trusted:
+		return ProjectTrusted
+	}
+	return ProjectUntrusted
 }
 
 // FloorRequest is the configured request to lower the kernel floor: who asked
@@ -561,17 +595,22 @@ func DefaultPaths() Paths {
 }
 
 // ReadPiAutoCompaction reads Pi's own compaction.enabled the way Load does:
-// the project setting wins over the global one. ok is false when neither file
-// sets it.
-func ReadPiAutoCompaction(cwd string, paths Paths) (enabled bool, ok bool) {
-	if enabled, ok := readPiCompactionEnabled(filepath.Join(cwd, paths.ProjectDirName, "settings.json")); ok {
-		return enabled, true
+// the project setting wins over the global one, and is read only when the
+// project is trusted. ok is false when no file read sets it.
+func ReadPiAutoCompaction(cwd string, paths Paths, trust TrustState) (enabled bool, ok bool) {
+	if trust == ProjectTrusted {
+		if enabled, ok := readPiCompactionEnabled(filepath.Join(cwd, paths.ProjectDirName, "settings.json")); ok {
+			return enabled, true
+		}
 	}
 	return readPiCompactionEnabled(filepath.Join(paths.AgentDir, "settings.json"))
 }
 
-// Load reads the global and project settings and the environment.
-func Load(cwd string, paths Paths, lookupEnv func(string) (string, bool)) Config {
+// Load reads the global settings, the project settings when trust is
+// ProjectTrusted, and the environment. PiG uses the global configuration alone
+// until the user trusts a project, so an untrusted project's settings, or
+// ones whose trust could not be checked, are never read.
+func Load(cwd string, paths Paths, trust TrustState, lookupEnv func(string) (string, bool)) Config {
 	if lookupEnv == nil {
 		lookupEnv = os.LookupEnv
 	}
@@ -579,15 +618,20 @@ func Load(cwd string, paths Paths, lookupEnv func(string) (string, bool)) Config
 	projectPath := filepath.Join(cwd, paths.ProjectDirName, "settings.json")
 	cfg := Defaults
 	cfg.ObservationsPoolTargetTokens = 0
+	cfg.ProjectTrust = trust
 	target, targetSet := 0, false
 	readNamespaced(globalPath).apply(&cfg, &target, &targetSet)
-	project := readNamespaced(projectPath)
-	if project.floor != nil {
-		// A project's settings travel with its repository, so they can keep the
-		// kernel floor engaged but never lower it: only the user's own settings do.
-		project.floor, project.floorSet = nil, false
+	if trust == ProjectTrusted {
+		project := readNamespaced(projectPath)
+		if project.floor != nil {
+			// A project's settings travel with its repository, so they can keep the
+			// kernel floor engaged but never lower it: only the user's own settings do.
+			project.floor, project.floorSet = nil, false
+		}
+		project.apply(&cfg, &target, &targetSet)
+	} else if info, err := os.Stat(projectPath); err == nil && !info.IsDir() {
+		cfg.ProjectSettingsIgnored = true
 	}
-	project.apply(&cfg, &target, &targetSet)
 	if passive, set := ReadEnvPassive(lookupEnv); set {
 		cfg.Passive = passive
 	}
@@ -596,9 +640,7 @@ func Load(cwd string, paths Paths, lookupEnv func(string) (string, bool)) Config
 	} else {
 		cfg.ObservationsPoolTargetTokens = cfg.ObservationsPoolMaxTokens / 2
 	}
-	if enabled, ok := readPiCompactionEnabled(projectPath); ok {
-		cfg.PiAutoCompactionEnabled = enabled
-	} else if enabled, ok := readPiCompactionEnabled(globalPath); ok {
+	if enabled, ok := ReadPiAutoCompaction(cwd, paths, trust); ok {
 		cfg.PiAutoCompactionEnabled = enabled
 	} else {
 		cfg.PiAutoCompactionEnabled = Defaults.PiAutoCompactionEnabled
