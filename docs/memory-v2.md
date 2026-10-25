@@ -1,7 +1,7 @@
 # Memory v2: no requests beyond what PiG makes on its own
 
 Status: proposed design, for approval before any rebuild. Revised after two reviews against the
-code and PiG v0.5.1, and after a source study of pi-vcc, VCC, pi-blackhole, the upstream
+code and PiG v0.5.1, and after source studies of pi-vcc, VCC, pi-blackhole, the upstream
 pi-observational-memory, Mastra's observational memory, nodecode and letta-code (see
 "Sources").
 
@@ -26,8 +26,10 @@ retries. pi-vcc shows the other end: a compaction built by code, with no model c
    some paths; v2 does none). PiG's `customInstructions` reach only the level-1 input, or at level 0
    a line appended to the summary.
 3. **Compactions.** The extension never makes PiG compact more often than PiG would: the summary
-   fits the room PiG's own threshold leaves, and the extension triggers a compaction only where PiG
-   never would (auto-compaction off), at PiG's own threshold.
+   is never larger than what it removed and leaves room for at least one more run before PiG's
+   threshold (see "The summary budget"), aged tool results are thinned so context grows more slowly
+   than without the extension, and the extension triggers a compaction only where PiG never would
+   (auto-compaction off), at PiG's own threshold.
 4. **Derived, not tuned.** Every limit comes from what PiG or the ledger knows: the window,
    `reserveTokens`, `keepRecentTokens`, `tokensBefore`, the model's output limit, and the records
    themselves. No weights, shares, caps or calibrations picked to score well.
@@ -115,9 +117,19 @@ repeated compactions, which rendering from records avoids.
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is
   reused by code for every later line.
+- **The model's own words** (after nodecode's snippet notes, which keep the comment the model wrote
+  before each eval at no request): when an assistant message has text followed by tool calls, the
+  text before the first call is kept verbatim on that call's attempt record, read from the ordered
+  content blocks of the `turn_end` message (text blocks only, never thinking). Notes the session model
+  wrote with the memory tool inside the cut range are records with `origin: model, kind: note`. One
+  line in the extension's system-prompt section asks the model to say, before a tool call, what it
+  would need to resume; it costs no request.
 - **Work facts** (after pi-vcc's and pi-blackhole's extractors, without their item caps):
-  - files read and modified, from tool-call arguments at turn end, with `fileOps` filling in at
-    compaction;
+  - files at their newest state, one entry per path (after nodecode's newest-per-name clauses with
+    tombstones): order, renames and deletions come from the ordered tool calls on the branch; a path is
+    tombstoned only on unambiguous evidence (a delete tool, or an exact literal path in a successful
+    `rm`, `git rm` or `git mv`), and shown as `reverted` after a successful `git checkout -- path` or
+    `git restore path`; `fileOps` adds only an unordered set of touched paths at compaction;
   - commits, as the `git commit` subject plus the hash from its result;
   - `attempt` records whose outcome code sets: `failed` on `isError` or a nonzero exit; `worked` when
     the identical command, or the same tool on the same path, later succeeds; `open` otherwise.
@@ -146,7 +158,21 @@ Two bounds, both from the host:
 - **PiG's output limit.** No larger than one summary output of PiG's: the model's `MaxOutputTokens`,
   when known.
 
-When the budget is zero or less, the minimal brief applies.
+Two more bounds keep compactions from coming sooner than PiG's (nodecode evicts to well below its
+trigger so one prefix holds for many exchanges):
+
+- **Headroom for the next run.** Subtract the largest per-run growth of the context measured on this
+  branch since the previous compaction: the difference in input usage (input plus cache read and cache
+  write) between the last assistant messages of consecutive runs, ignoring negative differences. With no
+  usage on the branch, nothing is subtracted.
+- **Never larger than it removed.** The summary is at most `est(cut range + previous summary)`.
+
+When the budget is zero or less, the minimal brief applies; it is smaller than the range it replaces,
+so the compaction still frees room.
+
+The removed range is estimated at chars/4 without a measured ratio: `tokensBefore` already carries
+PiG's usage-anchored count of everything else, and the unscaled estimate of the removed part errs on
+the side of a smaller summary.
 
 ### Selection
 
@@ -164,6 +190,26 @@ The order is lexicographic over facts the ledger holds (kind, supersedes, outcom
 citations); there are no numeric weights. Every rendered line ends with its first source entry id
 when that id is on the current branch. What does not fit becomes `omitted` spans with date range,
 count and first id.
+
+Every omitted span, and every capped list (the files line, the commits line, the minimal brief's tool
+lines), is written as a runnable memory query (after nodecode's stubs, which spell the exact
+`recall-log :after A :before B` call): the span's date range, count, first and last entry id, and the
+query that lists it, bounded by branch position resolved from those ids (an off-path id is labelled, as
+in "Branches"); a capped list ends with `+N more` and the query for the rest. When the span lines do not
+fit, the oldest fold into one line with a span count and its own query. A test parses and runs every
+query the renderer prints, including after a fork.
+
+### Thinning aged tool results (no request)
+
+After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every
+round after that. The extension shortens each tool result in the retained tail that the model has
+already answered after to its level-0 record line (tool, key argument, outcome) and the memory query
+that returns the original, never the newest round, never a fresh result, never the split turn's opening
+request. It does so as a deterministic per-request transform (PiG's `context` event), a pure function of
+the ledger, switched on from the latest compaction entry, so the bytes are stable between requests and
+the prompt cache prefix breaks only where a compaction already broke it. Thinning stops once the next
+context leaves the headroom above. The session file keeps every original for `recall`. Smaller context
+means PiG compacts less often, so thinning lowers PiG's own request count.
 
 ### Level 1: one request at compaction (on by default, `consolidate: false` turns it off)
 
@@ -217,16 +263,28 @@ off-path. The extension does not replace PiG's branch summary by default (option
   "mode detection must never silently lose results").
 - `recall <entry id>` pages a long entry on line boundaries and names the next offset; the page size
   is the existing single-recall result bound.
+- When rows exceed the result bound, the result leads with `matched N, showing M` and the query for the
+  next older page, bounded before the oldest entry shown by branch position (after nodecode's
+  `(:matched N :showing M)` marker and `:before` paging). Fallback rows from off the current path come in
+  session-file order with their own label.
+- Matching and display run on the same filtered text extraction uses, so thinking is never matched,
+  counted or returned. Search tokens are literal (no wildcards).
 - Matching stays literal and ranked newest first; pi-vcc's BM25 floor, caps and page size are tuned on
   its benchmark and are not adopted.
 
 ### Curated memory
 
-- A `save` confirmed by a verbatim user quote (the check `feedback` uses) is live at once.
+- A `save` confirmed by a verbatim user quote (the check `feedback` uses) is live at once in the store
+  and in `saved`, and enters the always-loaded index at its next render (session start or after a
+  compaction), which is when the prompt cache prefix breaks anyway (after nodecode's index, re-pinned
+  "never at a keep").
 - Any other `save` is staged: visible in its session through `saved`, absent from the always-loaded
   index. Code checks evidence at `agent_settled` and `session_start`, with no request: a later user
   quote, a level-1 citation, or the same normalized name and description staged in another session.
   Staged memories are never deleted automatically.
+- A `forget` through the memory tool retires a memory. A level-0 user correction whose subject matches a
+  curated memory ranks it lower and flags it in `/om:status` and `saved`; it never retires it and never
+  touches a pinned memory. Nothing cools by time.
 - One validator on every write and every load: allowed fields, a body bound derived from what one
   `recall` can show, and a `pinned` flag only the user sets.
 
@@ -235,8 +293,12 @@ off-path. The extension does not replace PiG's branch summary by default (option
 - Detectors are code, run at turn end and at compaction, counted per model; one evidence unit is one
   compaction.
 - Definitions are proposed only inside the level-1 request, when the evidence changed. A held
-  definition is settled by the next compaction: written if that compaction recorded results, else
-  reverted.
+  definition is settled only on evidence its proposing request did not produce (after nodecode's
+  provisional definitions: "a call from inside a form the model is evaluating is the model calling its
+  own work", which proves nothing): code detectors over session entries from turns that ran under it,
+  and code checks of a later compaction's level-1 output under it (validation results, union-rule
+  losses, specifics refusals). The proposing request's own output never counts, and an empty pass is no
+  evidence. Written on such evidence, reverted otherwise.
 - Remedies are code-only: keep-head replaces the require-kind re-ask; `split-chunk` goes.
 - `kernel-consolidate` opens the level-1 prompt, with a `consolidation` instructions seed the model may
   extend; both are kernel-owned.
@@ -309,7 +371,7 @@ branch-summary requests at the price of picked lines instead of prose.
 | pi-blackhole (`k0valik/pi-blackhole`) | outstanding-error extraction | its preset compaction curve and retained tool-output rewriting |
 | upstream `elpapi42/pi-observational-memory` | the record model, content-hash ids, recall with sources, source-id validation | background observer, reflector and dropper loops, worker models, moved cuts |
 | Mastra observational memory | merge provenance; refusing empty output | background agents, buffering, retries, compression ladder, embeddings |
-| nodecode, cells | no silent caps, kernel floor, held definitions | eviction instead of compaction |
+| nodecode, cells | no silent caps; runnable recall pointers; the model's own notes as the surviving record; newest-per-name state with tombstones; thinning aged tool results; re-rendering the index only when the prefix breaks; held definitions settled by evidence the proposer did not produce (`organism/provisional.lisp`); the kernel lock (`organism/evolve.lisp` lock-floor and engage-floor, with lower-floor as its recorded unlock — distinct from the history visibility floor in `engine/context.lisp`) | eviction instead of compaction; its tuned ratios and caps; the pre-eviction warning and the context-fill line on every tool result (an extra message, and nodecode's own A/B was flat); the model-editable `context.txt`; the experience cell's reflection (`cells/tools/nodecode-experience/reflect.lisp`: one forked, tool-using reflection per operator turn that ran a tool or failed, unbudgeted by default); session naming, goal judges and board wakes |
 | letta-code | staged memory, a store validator | an out-of-band curator request |
 | PiG v0.5.1 | what the hook can return and when it runs; the summarizer's request paths; the threshold inequality; output clamp and safety margin | — |
 
@@ -318,8 +380,9 @@ branch-summary requests at the price of picked lines instead of prose.
 1. The request rule's machinery: the per-request debug event, the single-request completion path,
    owning every compaction (never delegate, minimal brief, request-context cancellation, recovered
    panics), decoding the whole preparation, and the summary budget from `tokensBefore`.
-2. Level 0: turn-end and compaction extraction (conversation and work facts), compression, code
-   dropping, ordered selection with entry ids, split turns; remove the background loop, the catch-up,
+2. Level 0: turn-end and compaction extraction (conversation and work facts, the model's own words),
+   compression, code dropping, ordered selection with entry ids, runnable omitted-span queries, split
+   turns, and thinning aged tool results through PiG's `context` event; remove the background loop, the catch-up,
    the moved cut and the proactive trigger (keeping only the auto-compaction-off trigger).
 3. Level 1: the consolidation request, its tool schema, validation, the union rule and the failure
    path.
