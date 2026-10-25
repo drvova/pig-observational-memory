@@ -1694,7 +1694,7 @@ func TestExcludedBashRunDoesNotLiftObserverBackoff(t *testing.T) {
 		t.Fatalf("observer ran again on the same chunk: %d calls", fx.obs.count())
 	}
 	entries, _ := fx.h.GetBranch()
-	if got := ObserverBacklog(entries); got != fx.rt.ObserverEmptyBackoff().TokensAtEmpty {
+	if got := ObserverBacklog(entries, nil); got != fx.rt.ObserverEmptyBackoff().TokensAtEmpty {
 		t.Fatalf("observer backlog %d counts the excluded run", got)
 	}
 }

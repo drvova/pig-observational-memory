@@ -51,6 +51,9 @@ type CutResolution struct {
 type CutOptions struct {
 	MaxRetainedTokens int
 	Reason            string
+	// MemoryTools are the memory tools (harness.MemoryToolNames): an entry holding only their
+	// calls or results renders nothing for the observer, so it needs no coverage.
+	MemoryTools []string
 }
 
 func cutAt(firstKept, foldThrough string) CutResolution {
@@ -74,9 +77,11 @@ func ResolveCompactionCut(entries []ledger.Entry, firstKeptEntryID string, optio
 		return cutAt(firstKeptEntryID, firstKeptEntryID)
 	}
 	// Entries the observer could never read (no renderable content, such as
-	// an aborted assistant turn) need no coverage; counting them would force a
-	// moved cut onto them with a "~0 tokens" notice.
-	gap := ledger.UnobservedSourceSpanBeforeWhere(entries, cutIndex, serialize.ObserverRenders)
+	// an aborted assistant turn, or only memory-tool calls and results) need no
+	// coverage; counting them would force a moved cut onto them with a "~0
+	// tokens" notice.
+	needsCoverage := serialize.ObserverRendersFunc(options.MemoryTools)
+	gap := ledger.UnobservedSourceSpanBeforeWhere(entries, cutIndex, needsCoverage)
 	if gap == nil {
 		// Coverage reaches Pi's cut, so fold through the cut. A marker that
 		// straddles it also read source this compaction removes; folding
@@ -85,7 +90,7 @@ func ResolveCompactionCut(entries []ledger.Entry, firstKeptEntryID string, optio
 		// cover only retained source and wait for the next compaction rather
 		// than take summary budget from the source being removed.
 		foldThrough := firstKeptEntryID
-		if straddling := ledger.StraddlingCoverageMarkerID(entries, cutIndex, ledger.OMObservationsRecorded, serialize.ObserverRenders); straddling != "" {
+		if straddling := ledger.StraddlingCoverageMarkerID(entries, cutIndex, ledger.OMObservationsRecorded, needsCoverage); straddling != "" {
 			foldThrough = straddling
 		}
 		// Never fold through less than the latest full fold did: later
@@ -247,7 +252,8 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 	entries := event.BranchEntries
 	contextWindow := host.ModelContextWindow(h.SessionModel())
 	maxRetainedTokens := config.ResolveCompactionMaxRetainedTokens(cfg, contextWindow)
-	resolution := ResolveCompactionCut(entries, event.FirstKeptEntryID, CutOptions{MaxRetainedTokens: maxRetainedTokens, Reason: event.Reason})
+	cutOptions := CutOptions{MaxRetainedTokens: maxRetainedTokens, Reason: event.Reason, MemoryTools: harness.MemoryToolNames(rt)}
+	resolution := ResolveCompactionCut(entries, event.FirstKeptEntryID, cutOptions)
 
 	// The background observer is behind Pi's cut. Rather than retaining the
 	// tail or handing the whole range to Pi's native summarizer, observe the
@@ -264,7 +270,7 @@ func handleCompaction(ctx context.Context, rt *runtime.Runtime, h host.Host, eve
 			if fresh, err := h.GetBranch(); err == nil && fresh != nil {
 				entries = fresh
 			}
-			resolution = ResolveCompactionCut(entries, event.FirstKeptEntryID, CutOptions{MaxRetainedTokens: maxRetainedTokens, Reason: event.Reason})
+			resolution = ResolveCompactionCut(entries, event.FirstKeptEntryID, cutOptions)
 		}
 	}
 

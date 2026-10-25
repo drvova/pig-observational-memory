@@ -92,12 +92,15 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	)
 	// The same measures that gate the workers: the larger of the raw backlog
 	// and the provider-reported growth.
-	obsProgress := hooks.ObserverProgressTokens(entries, h)
+	// One memory-tool list for every observer figure below.
+	memoryTools := harness.MemoryToolNames(rt)
+	obsProgress := hooks.ObserverProgressTokens(entries, h, memoryTools)
 	reflectionProgress := hooks.ReflectorProgressTokens(entries, h)
 	compactionProgress := hooks.CompactionProgress(cfg, entries)
 	// What the observer still has to read before the compaction cut can pass
-	// it: entries that render nothing for it never need coverage.
-	unobservedSinceCompaction := ledger.RawTokensAfterIndexWhere(entries, max(ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded), ledger.CompactionRangeStartIndex(entries)-1), serialize.ObserverRenders)
+	// it: entries that render nothing for it (memory-tool calls and results
+	// among them) never need coverage.
+	unobservedSinceCompaction := ledger.RawTokensAfterIndexWhere(entries, max(ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded), ledger.CompactionRangeStartIndex(entries)-1), serialize.ObserverRendersFunc(memoryTools))
 	compactThreshold := config.ResolveCompactAfterTokens(cfg, host.ModelContextWindow(h.SessionModel()))
 
 	lines := []string{}
@@ -124,9 +127,9 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 	)
 	// The observer backoff is measured on the observer's backlog alone, not on
 	// the larger figure "Next observation" shows.
-	if backoff := hooks.ActiveObserverBackoff(rt, h, entries, cfg); backoff != nil {
+	if backoff := hooks.ActiveObserverBackoff(rt, h, entries, cfg, memoryTools); backoff != nil {
 		lines = append(lines, fmt.Sprintf("Observer backoff: nothing new at ~%s backlog tokens; resumes at ~%s (backlog now ~%s)",
-			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(hooks.ObserverBacklog(entries))))
+			jsfmt.Locale(backoff.TokensAtEmpty), jsfmt.Locale(backoff.TokensAtEmpty+cfg.ObserveAfterTokens), jsfmt.Locale(hooks.ObserverBacklog(entries, memoryTools))))
 	}
 	if backoff := hooks.ActiveCompactionBackoff(rt, h, entries); backoff != nil {
 		lines = append(lines, fmt.Sprintf("Compaction backoff: last attempt failed (%s); asks again at ~%s %s source tokens", backoff.Reason, jsfmt.Locale(backoff.Progress+compactThreshold), hooks.ProgressLabel(cfg)))

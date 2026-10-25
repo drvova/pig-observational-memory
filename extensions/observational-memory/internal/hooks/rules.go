@@ -320,9 +320,9 @@ func recordEmptyPass(ctx context.Context, cfg config.Config, h host.Host, model 
 // left unnoted). Detection only: no remedy acts on an empty verdict.
 func emptyObserverPass(ctx context.Context, cfg config.Config, h host.Host, model host.Model, chunk observerChunk, coversUpToID string) rules.Pass {
 	covered := chunk.covered(coversUpToID)
-	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Known: chunk.known, Aliases: chunk.aliases, Defined: harness.DefinedQueries(h, cfg),
+	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Known: chunk.known, Aliases: chunk.aliases, Defined: chunk.defined,
 		Detectors: rules.ModelDetectors(layerFor(ctx, h, cfg, model).Harness())})
-	return rules.Pass{Stage: rules.StageObserver, Tokens: rules.SourceTokens(covered), Findings: &findings}
+	return rules.Pass{Stage: rules.StageObserver, Tokens: chunk.coveredTokens(covered), Findings: &findings}
 }
 
 // observerChunk is one observer chunk as the background stage and the compaction catch-up
@@ -337,13 +337,19 @@ type observerChunk struct {
 	known []ledger.Observation
 	// aliases are the memory's subject aliases, which the chunk's prompt read subjects with.
 	aliases []ledger.SubjectAlias
+	// defined are the stored queries of the memory tools the chunk skipped
+	// (harness.DefinedQueries), read once for the pass the detectors count.
+	defined map[string]string
 }
 
 // covered are the chunk's source entries at or before coversUpToID: what a marker there covers.
+// They include the entries the chunk read but skipped for holding only memory-tool calls and
+// results (serialize.SourceAddressedSerialization.EntryIDs), so dropped-then-queried still sees
+// the memory queries the marker covers.
 func (c observerChunk) covered(coversUpToID string) []ledger.Entry {
 	index := ledger.EntryIndexByID(c.branch)
 	out := []ledger.Entry{}
-	for _, id := range c.serialized.SourceEntryIDs {
+	for _, id := range c.serialized.EntryIDs {
 		if i, ok := index[id]; ok {
 			out = append(out, c.branch[i])
 		}
@@ -352,6 +358,22 @@ func (c observerChunk) covered(coversUpToID string) []ledger.Entry {
 		}
 	}
 	return out
+}
+
+// coveredTokens is the pass's source tokens: the covered entries the observer read text of
+// (the labelled ones), the input its detector rates are per.
+func (c observerChunk) coveredTokens(covered []ledger.Entry) int {
+	labelled := map[string]bool{}
+	for _, id := range c.serialized.SourceEntryIDs {
+		labelled[id] = true
+	}
+	read := make([]ledger.Entry, 0, len(covered))
+	for _, e := range covered {
+		if labelled[e.ID] {
+			read = append(read, e)
+		}
+	}
+	return rules.SourceTokens(read)
 }
 
 // applyObserverRules applies the worker model's note remedies to the observations a chunk
@@ -399,10 +421,10 @@ func applyObserverRules(ctx context.Context, cfg config.Config, h host.Host, wor
 			}
 		}
 	}
-	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Notes: observations, Known: chunk.known, Aliases: chunk.aliases, Defined: harness.DefinedQueries(h, cfg),
+	findings := rules.DetectObserverPass(rules.ObserverPass{Branch: chunk.branch, Covered: covered, Notes: observations, Known: chunk.known, Aliases: chunk.aliases, Defined: chunk.defined,
 		Detectors: rules.ModelDetectors(layerFor(ctx, h, cfg, worker.Model).Harness())})
 	if active.Has(rules.RemedyKeepHead) {
-		kept, refused := rules.KeepHead(chunk.branch, findings.Uncited, chunk.serialized.SourceEntryIDs, coversUpToID, observations)
+		kept, refused := rules.KeepHead(chunk.branch, findings.Uncited, chunk.serialized.EntryIDs, coversUpToID, observations)
 		if len(kept) > 0 || len(refused) > 0 {
 			debuglog.Log(ctx, "rules.keep_head", map[string]any{"kept": len(kept), "refused": refused})
 		}
@@ -419,7 +441,7 @@ func applyObserverRules(ctx context.Context, cfg config.Config, h host.Host, wor
 			debuglog.Log(ctx, "rules.block_link", map[string]any{"blocked": blocked})
 		}
 	}
-	return observations, rules.Pass{Stage: rules.StageObserver, Tokens: rules.SourceTokens(covered), Findings: &findings}
+	return observations, rules.Pass{Stage: rules.StageObserver, Tokens: chunk.coveredTokens(covered), Findings: &findings}
 }
 
 // protectDrops applies the worker model's protect-kind rules to the dropper's selection.

@@ -75,7 +75,7 @@ func Register(ext *sdk.Extension, rt *runtime.Runtime) {
 		},
 	})
 
-	registerMemory(ext)
+	registerMemory(ext, rt)
 }
 
 func decodeBeforeCompact(data map[string]any) hooks.BeforeCompactEvent {

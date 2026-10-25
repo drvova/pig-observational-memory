@@ -1,10 +1,14 @@
 package harness
 
 import (
+	"slices"
+	"sort"
+
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 )
@@ -131,9 +135,11 @@ func ProfileFor(h host.Host, cfg config.Config, model host.Model) Profile {
 	return Default(ModelKey(model))
 }
 
-// DefinedQueries are the store's definitions by name, each with its stored query: a call of a
-// defined tool is a memory query (rules.MemoryQueries). None without a store.
-func DefinedQueries(h host.Host, cfg config.Config) map[string]string {
+// DefinedQueries are the stored queries of memoryTools (MemoryToolNames) by name: a call of a
+// defined tool is a memory query (rules.MemoryQueries). A stored definition this process did not
+// register (another tool holds its name) is not among them, and neither is a registered tool
+// whose definition was forgotten (it has no stored query). None without a store.
+func DefinedQueries(h host.Host, cfg config.Config, memoryTools []string) map[string]string {
 	store, ok := StoreOf(h, cfg)
 	if !ok {
 		return nil
@@ -144,7 +150,33 @@ func DefinedQueries(h host.Host, cfg config.Config) map[string]string {
 	}
 	out := make(map[string]string, len(definitions))
 	for _, d := range definitions {
-		out[d.Name] = d.Query
+		if d.Name != memquery.ToolName && slices.Contains(memoryTools, d.Name) {
+			out[d.Name] = d.Query
+		}
 	}
 	return out
+}
+
+// MemoryToolNames are the tools whose calls are memory plumbing, not conversation: the memory
+// tool and the tools the agent defined with it that this process registered
+// (runtime.Runtime.DefinedTools, harness.Manager.Registered), the memory tool first and the
+// rest in name order. The observer and every worker that reads source leave their calls and
+// results out (serialize.SourceAddressedOptions.SkipTools): the memory tool's writes persist in
+// the curated store, and observing them would feed memory back into itself.
+//
+// The list is the registered tools, not the store's definitions: a stored definition whose
+// name another tool holds is never registered (Manager.RegisterStored), so that tool's calls
+// stay conversation. It only grows within a process: a forgotten definition's tool stays
+// registered, so calls of it already on the branch stay skipped and needing no coverage, as
+// they did when they were made. A pass resolves it once and uses that list throughout.
+func MemoryToolNames(rt *runtime.Runtime) []string {
+	defined := rt.DefinedTools()
+	names := make([]string, 0, len(defined)+1)
+	for _, name := range defined {
+		if name != memquery.ToolName && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return append([]string{memquery.ToolName}, names...)
 }

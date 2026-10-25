@@ -153,6 +153,9 @@ type Runtime struct {
 	// resolveNotices holds the resolution warnings already shown; a clean
 	// resolution clears it, so a recurring condition warns once per episode.
 	resolveNotices map[string]bool
+	// definedTools lists the tools the agent defined that this process
+	// registered (SetDefinedTools); nil means none.
+	definedTools func() []string
 }
 
 // New creates a runtime with the default configuration.
@@ -192,6 +195,27 @@ func (r *Runtime) SetConfig(cfg config.Config) {
 	r.config = cfg
 	r.configLoaded = true
 	r.configFromDisk = false
+}
+
+// SetDefinedTools sets where DefinedTools reads the tools the agent defined
+// with the memory tool that this process registered (harness.Manager.Registered).
+func (r *Runtime) SetDefinedTools(list func() []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.definedTools = list
+}
+
+// DefinedTools lists the tools the agent defined with the memory tool that
+// this process registered, as SetDefinedTools reads them; none when it was
+// never set.
+func (r *Runtime) DefinedTools() []string {
+	r.mu.Lock()
+	list := r.definedTools
+	r.mu.Unlock()
+	if list == nil {
+		return nil
+	}
+	return list()
 }
 
 // LiveConfig is the configuration with Pi's own compaction.enabled re-read.

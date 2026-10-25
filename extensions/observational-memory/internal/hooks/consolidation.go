@@ -171,8 +171,9 @@ func reflectorBackoffFor(rt *runtime.Runtime, h host.Host, entries []ledger.Entr
 // ActiveObserverBackoff is the deliberate-empty observer backoff that applies
 // to this branch, or nil. It holds while the session, the observation coverage
 // and the judged chunk are unchanged and the raw uncovered backlog stays below
-// TokensAtEmpty+ObserveAfterTokens.
-func ActiveObserverBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config) *runtime.ObserverEmptyBackoff {
+// TokensAtEmpty+ObserveAfterTokens. memoryTools are the memory tools the backlog
+// leaves out (ObserverBacklog), resolved once by the caller's pass.
+func ActiveObserverBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config, memoryTools []string) *runtime.ObserverEmptyBackoff {
 	backoff := rt.ObserverEmptyBackoff()
 	if backoff == nil || backoff.SessionIdentity != sessionIdentityOf(h) || backoff.CoverageID != ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded) {
 		return nil
@@ -180,7 +181,7 @@ func ActiveObserverBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.En
 	if backoff.ChunkEndID != "" && ledger.EntryIndexForID(entries, backoff.ChunkEndID) == -1 {
 		return nil
 	}
-	if ObserverBacklog(entries) >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
+	if ObserverBacklog(entries, memoryTools) >= backoff.TokensAtEmpty+cfg.ObserveAfterTokens {
 		return nil
 	}
 	return backoff
@@ -188,22 +189,31 @@ func ActiveObserverBackoff(rt *runtime.Runtime, h host.Host, entries []ledger.En
 
 // ObserverBacklog is the uncovered source the observer can read: the raw
 // backlog without entries that render nothing for it (a !!command run PiG keeps
-// out of context, an aborted turn with no content). Counting those would make
-// the observer due, or lift its empty backoff, on input it never sees.
-func ObserverBacklog(entries []ledger.Entry) int {
-	return ledger.RawTokensAfterIndexWhere(entries, ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded), serialize.ObserverRenders)
+// out of context, an aborted turn with no content, an entry holding only calls
+// or results of memoryTools, harness.MemoryToolNames). Counting those would
+// make the observer due, or lift its empty backoff, on input it never sees. An
+// entry it does read counts whole (its raw estimate), as entries whose thinking
+// the chunk leaves out always have.
+func ObserverBacklog(entries []ledger.Entry, memoryTools []string) int {
+	return ledger.RawTokensAfterIndexWhere(entries, ledger.LatestCoverageIndex(entries, ledger.OMObservationsRecorded), serialize.ObserverRendersFunc(memoryTools))
+}
+
+// observerBacklogOf is ObserverBacklog with memoryTools bound, as stageDue and stageTokens take it.
+func observerBacklogOf(memoryTools []string) func([]ledger.Entry) int {
+	return func(entries []ledger.Entry) int { return ObserverBacklog(entries, memoryTools) }
 }
 
 func anyStageDue(rt *runtime.Runtime, h host.Host, entries []ledger.Entry, cfg config.Config, current int, hasCurrent bool) bool {
-	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, ObserverBacklog, cfg.ObserveAfterTokens) ||
+	return stageDue(entries, current, hasCurrent, ledger.OMObservationsRecorded, observerBacklogOf(harness.MemoryToolNames(rt)), cfg.ObserveAfterTokens) ||
 		(reflectorDue(entries, cfg, current, hasCurrent) && !ReflectorBackedOff(rt, h, entries))
 }
 
 // ObserverProgressTokens is what gates the observer: the larger of the raw
-// uncovered backlog and the provider-reported growth since its anchor.
-func ObserverProgressTokens(entries []ledger.Entry, h host.Host) int {
+// uncovered backlog (ObserverBacklog, without memoryTools) and the provider-reported growth
+// since its anchor.
+func ObserverProgressTokens(entries []ledger.Entry, h host.Host, memoryTools []string) int {
 	current, hasCurrent := realContextTokens(h)
-	return stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ObserverBacklog)
+	return stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, observerBacklogOf(memoryTools))
 }
 
 // ReflectorProgressTokens is what gates the reflector, on the same basis. Like
@@ -727,18 +737,22 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		return outcomeAbort, err
 	}
 	current, hasCurrent := realContextTokens(h)
-	tokens := stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, ObserverBacklog)
+	// The memory tools' calls and results are memory plumbing, not conversation: the chunk
+	// leaves them out, and the backlog does not count what holds nothing else. Resolved once,
+	// so the backlog, the backoff, the chunk and the detectors read the same list.
+	memoryTools := harness.MemoryToolNames(rt)
+	tokens := stageTokens(entries, ledger.OMObservationsRecorded, current, hasCurrent, observerBacklogOf(memoryTools))
 	if tokens < cfg.ObserveAfterTokens {
 		return outcomeContinue, nil
 	}
 	leafID := branchLeafID(entries)
-	rawTokens := ObserverBacklog(entries)
+	rawTokens := ObserverBacklog(entries, memoryTools)
 	sessionIdentity := sessionIdentityOf(h)
 	coverageID := ledger.LatestCoverageMarkerID(entries, ledger.OMObservationsRecorded)
 
 	// Deliberate-empty backoff: an intentional "nothing to record" verdict
 	// must not re-fire the observer every turn over the same span.
-	if backoff := ActiveObserverBackoff(rt, h, entries, cfg); backoff != nil {
+	if backoff := ActiveObserverBackoff(rt, h, entries, cfg, memoryTools); backoff != nil {
 		debuglog.Log(ctx, "observer.empty_backoff", map[string]any{"tokens": rawTokens, "resumeAtTokens": backoff.TokensAtEmpty + cfg.ObserveAfterTokens})
 		return outcomeContinue, nil
 	}
@@ -763,17 +777,20 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	// as the fallback's pass, which ran it; later chunks in the pass resolve to the fallback and
 	// are sized by its rules.
 	maxChunkTokens := rulesFor(h, cfg, resolved.Model).SplitChunk(config.ResolveObserverChunkMaxTokens(cfg, contextWindow))
-	serialized := serialize.SerializeSourceAddressedBranchEntries(backlog, serialize.SourceAddressedOptions{MaxTokens: maxChunkTokens})
+	serialized := serialize.SerializeSourceAddressedBranchEntries(backlog, serialize.SourceAddressedOptions{MaxTokens: maxChunkTokens, SkipTools: memoryTools})
 	if trimmed(serialized.Text) == "" || len(serialized.SourceEntryIDs) == 0 {
 		return outcomeContinue, nil
 	}
-	coversUpToID := serialized.SourceEntryIDs[len(serialized.SourceEntryIDs)-1]
-	if len(serialized.SourceEntryIDs) < len(backlog) || len(serialized.TruncatedSourceEntryIDs) > 0 {
+	coversUpToID := serialized.CoversUpToID
+	defined := harness.DefinedQueries(h, cfg, memoryTools)
+	// The chunk read the whole backlog when it read through the backlog's last entry with
+	// content: entries it skipped for holding only memory plumbing are read, not capped.
+	if serialized.CoversUpToID != lastReadableID(backlog) || len(serialized.TruncatedSourceEntryIDs) > 0 {
 		debuglog.Log(ctx, "observer.chunk_capped", map[string]any{
 			"maxChunkTokens":          maxChunkTokens,
 			"backlogEntries":          len(backlog),
 			"backlogTokens":           tokens,
-			"chunkEntries":            len(serialized.SourceEntryIDs),
+			"chunkEntries":            len(serialized.EntryIDs),
 			"chunkTokens":             serialized.EstimatedTokens,
 			"truncatedSourceEntryIds": serialized.TruncatedSourceEntryIDs,
 		})
@@ -831,7 +848,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		notifyWorker(cfg, h, "Observational memory: observer found nothing new in this chunk (coverage unchanged; will retry later)")
 		// Counted, never proof: a held definition that makes the observer record nothing is
 		// not written by it (settlePass), and a written one is judged by it.
-		chunk := observerChunk{branch: entries, serialized: serialized, known: fullMemory.Observations, aliases: fullMemory.Aliases}
+		chunk := observerChunk{branch: entries, serialized: serialized, known: fullMemory.Observations, aliases: fullMemory.Aliases, defined: defined}
 		recordEmptyPass(ctx, cfg, h, used.Model, emptyObserverPass(ctx, cfg, h, used.Model, chunk, coversUpToID))
 		return outcomeContinue, nil
 	}
@@ -858,7 +875,7 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 		coversUpToID = cited
 		notifyWorker(cfg, h, fmt.Sprintf("Observational memory: observer stopped early (%s); coverage advances to the last cited entry", reason))
 	}
-	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations, aliases: fullMemory.Aliases}
+	chunk := observerChunk{branch: entries, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations, aliases: fullMemory.Aliases, defined: defined}
 	observations, pass := applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 
 	data := ledger.BuildObservationsRecordedData(observations, coversUpToID)
@@ -888,6 +905,17 @@ func runObserverPass(ctx context.Context, rt *runtime.Runtime, h host.Host, reso
 	notifyWorker(cfg, h, fmt.Sprintf("Observational memory: %d %s recorded", len(observations), jsfmt.Plural(len(observations), "observation")))
 	recordPass(ctx, cfg, h, used.Model, pass)
 	return outcomeContinue, nil
+}
+
+// lastReadableID is the id of the last entry the observer chunk serializer reads (labels, or
+// reads and skips for holding only memory-tool content): the last one with any content.
+func lastReadableID(entries []ledger.Entry) string {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if serialize.ObserverRenders(entries[i]) {
+			return entries[i].ID
+		}
+	}
+	return ""
 }
 
 // runReflectorStage runs one reflector pass with one layer snapshot (layerFor), then settles

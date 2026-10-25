@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
 )
 
@@ -84,8 +85,10 @@ func memoryToolSpec(manager *harness.Manager, description string) host.ToolSpec 
 
 // registerMemory wires the memory tool (docs/memory-interface.md, section 5), the
 // per-model harness and the tools the agent defines (section 6), and the
-// curated memory index section of the system prompt.
-func registerMemory(ext *sdk.Extension) {
+// curated memory index section of the system prompt. rt reads the defined
+// tools the manager registered, the memory tools every worker leaves out of
+// what it reads (harness.MemoryToolNames).
+func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	manager := harness.NewManager(func(h host.ToolHost) (curated.Call, bool) {
 		call, _, on := curatedCall(h)
 		return call, on
@@ -96,6 +99,7 @@ func registerMemory(ext *sdk.Extension) {
 		_, cfg, _ := curatedCall(h)
 		return cfg
 	}
+	rt.SetDefinedTools(manager.Registered)
 
 	ext.OnEvent(sdk.EventBeforeAgentStart, func(ctx sdk.Context, data map[string]any) (any, error) {
 		h := sdkhost.New(ctx)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
@@ -151,15 +152,16 @@ func Ingest(ctx context.Context, q Question, models host.Models, opts IngestOpti
 		drainCfg.ObserveAfterTokens = 1
 		rt.SetConfig(drainCfg)
 	}
+	memoryTools := harness.MemoryToolNames(rt)
 	for range 50 {
-		backlog := hooks.ObserverBacklog(h.Entries())
+		backlog := hooks.ObserverBacklog(h.Entries(), memoryTools)
 		if backlog == 0 || backlog < drainCfg.ObserveAfterTokens {
 			break
 		}
 		if err := run(); err != nil {
 			return IngestResult{}, err
 		}
-		if hooks.ObserverBacklog(h.Entries()) >= backlog {
+		if hooks.ObserverBacklog(h.Entries(), memoryTools) >= backlog {
 			break
 		}
 	}

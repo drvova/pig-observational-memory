@@ -167,6 +167,33 @@ func TestStatusBacklogLeavesOutExcludedBashRuns(t *testing.T) {
 	expectContains(t, output, "Next observation: ~4 / ", "Observer backlog: ~4 unobserved source tokens since the compaction boundary")
 }
 
+// The observer figures leave out memory plumbing: calls and results of the memory tool and of
+// the defined tools this process registered (runtime.Runtime.DefinedTools).
+func TestStatusBacklogLeavesOutMemoryPlumbing(t *testing.T) {
+	call := func(id, tool string) ledger.Entry {
+		return testfix.MessageEntry(id, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "toolCall", "id": "c-" + id, "name": tool, "arguments": map[string]any{"query": "save x"}}}})
+	}
+	result := func(id, tool string) ledger.Entry {
+		return testfix.MessageEntry(id, map[string]any{"role": "toolResult", "toolName": tool, "content": []any{map[string]any{"type": "text", "text": strings.Repeat("x", 400)}}})
+	}
+	entries := []ledger.Entry{
+		testfix.CompactionEntry("cmp-1", testfix.CompactionArgs{FirstKeptEntryID: "raw-1"}),
+		testfix.TextCustomMessage("raw-1", "aaaaaaaaaaaa"),
+		testfix.ObservationsRecordedEntry("om-cov", []ledger.Observation{testfix.Observation("aaaaaaaaaaaa")}, "raw-1"),
+		testfix.TextCustomMessage("raw-2", "bbbbbbbbbbbbbbbb"),
+		call("a1", "memory"), result("t1", "memory"),
+		call("a2", "half-plan"), result("t2", "half-plan"),
+	}
+	rt := statusRuntime(statusConfig())
+	rt.SetDefinedTools(func() []string { return []string{"half-plan"} })
+	output := statusOutput(t, rt, testfix.NewFakeHost(entries...))
+	expectContains(t, output, "Next observation: ~4 / ", "Observer backlog: ~4 unobserved source tokens since the compaction boundary")
+
+	// A defined tool this process did not register is conversation and counts.
+	unregistered := statusOutput(t, statusRuntime(statusConfig()), testfix.NewFakeHost(entries...))
+	expectLacks(t, unregistered, "Observer backlog: ~4 unobserved")
+}
+
 // The compaction line follows a mid-session toggle of Pi's auto-compaction:
 // status re-reads compaction.enabled for a configuration loaded from disk.
 func TestStatusRereadsPiAutoCompactionMidSession(t *testing.T) {

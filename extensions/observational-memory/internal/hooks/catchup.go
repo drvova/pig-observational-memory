@@ -7,6 +7,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
@@ -62,6 +63,9 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 	// would change what its marker covers); its pass is still the fallback's, which ran it.
 	maxChunkTokens := rulesFor(h, cfg, current.Model).SplitChunk(config.ResolveObserverChunkMaxTokens(cfg, contextWindow))
 	entries := args.Entries
+	// Resolved once, so every chunk and the detectors read the same memory tools.
+	memoryTools := harness.MemoryToolNames(rt)
+	defined := harness.DefinedQueries(h, cfg, memoryTools)
 	// Start at the global observation frontier, not at the gap: a coverage
 	// marker claims everything before it, so starting later would mark unread
 	// source between the frontier and the range start as observed.
@@ -80,11 +84,11 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			result.StoppedBecause = "aborted"
 			return result
 		}
-		serialized := serialize.SerializeSourceAddressedBranchEntries(remaining, serialize.SourceAddressedOptions{MaxTokens: maxChunkTokens})
+		serialized := serialize.SerializeSourceAddressedBranchEntries(remaining, serialize.SourceAddressedOptions{MaxTokens: maxChunkTokens, SkipTools: memoryTools})
 		if trimmed(serialized.Text) == "" || len(serialized.SourceEntryIDs) == 0 {
 			break
 		}
-		coversUpToID := serialized.SourceEntryIDs[len(serialized.SourceEntryIDs)-1]
+		coversUpToID := serialized.CoversUpToID
 		fullMemory := ledger.FullProjection(branch, "")
 		memory := ledger.BoundObserverMemoryWithAliases(fullMemory.Reflections, fullMemory.Observations, fullMemory.Aliases, config.ResolveWorkerMemoryMaxTokens(cfg, contextWindow))
 		if cfg.ShowWorkerNotifications && h.HasUI() {
@@ -141,7 +145,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			// The same remedies as the background stage, with the same constraint: they act
 			// only on a chunk that recorded something, and keep-head only inside the coverage
 			// boundary, so the marker appended below stays a positional claim.
-			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations, aliases: fullMemory.Aliases}
+			chunk := observerChunk{branch: branch, serialized: serialized, priorReflections: priorReflections, priorObservations: priorObservations, subjects: memory.Subjects, known: fullMemory.Observations, aliases: fullMemory.Aliases, defined: defined}
 			observations, pass = applyObserverRules(ctx, cfg, h, used, chunk, observations, coversUpToID, outcome.Partial)
 			data = ledger.BuildObservationsRecordedData(observations, coversUpToID)
 		}
@@ -149,7 +153,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 			debuglog.Log(ctx, "compaction.catch_up.empty", map[string]any{"chunkIndex": chunkIndex, "coversUpToId": coversUpToID})
 			if len(observations) == 0 && ctx.Err() == nil {
 				// An empty chunk is counted like the background stage's, and proves nothing.
-				chunk := observerChunk{branch: branch, serialized: serialized, known: fullMemory.Observations, aliases: fullMemory.Aliases}
+				chunk := observerChunk{branch: branch, serialized: serialized, known: fullMemory.Observations, aliases: fullMemory.Aliases, defined: defined}
 				recordEmptyPass(ctx, cfg, h, used.Model, emptyObserverPass(ctx, cfg, h, used.Model, chunk, coversUpToID))
 				settlePass(ctx, cfg, h, nil)
 			}
@@ -170,7 +174,7 @@ func CatchUpObserver(ctx context.Context, args CatchUpArgs) CatchUpResult {
 
 		// Coverage is positional: everything at or before the marker counts as
 		// covered, including entries the serializer skipped for lack of
-		// renderable content.
+		// renderable content or for holding only memory-tool calls and results.
 		coveredIndex := ledger.EntryIndexForID(entries, coversUpToID)
 		index := ledger.EntryIndexByID(entries)
 		next := []ledger.Entry{}

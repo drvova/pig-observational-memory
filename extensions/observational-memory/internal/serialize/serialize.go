@@ -280,8 +280,12 @@ func jsString(v any) string {
 // out: they are the model's private reasoning, and feeding them to a prompt
 // that condenses the conversation has drawn provider refusals under
 // anti-distillation terms (upstream issue #97). Recall keeps them, since it
-// shows evidence to the same session rather than to a worker.
-func SerializeConversation(messages []map[string]any) string {
+// shows evidence to the same session rather than to a worker. Calls to the
+// tools named in skipTools (the memory tools) and the results answering them
+// are left out too, as HistoryText leaves them out: memory plumbing is not
+// conversation to remember, and observing it would feed memory back into
+// itself. An assistant message holding nothing else renders nothing.
+func SerializeConversation(messages []map[string]any, skipTools ...string) string {
 	blocks := []string{}
 	for _, msg := range messages {
 		if msg == nil {
@@ -292,7 +296,7 @@ func SerializeConversation(messages []map[string]any) string {
 		case "user":
 			blocks = append(blocks, "[User @ "+timestamp+"]: "+textOnly(msg["content"]))
 		case "assistant":
-			body := nonEmptyLines(textAndPlaceholders(msg["content"], placeholderOptions{}))
+			body := nonEmptyLines(textAndPlaceholders(withoutToolCalls(msg["content"], skipTools), placeholderOptions{}))
 			if body == "" {
 				continue
 			}
@@ -303,6 +307,9 @@ func SerializeConversation(messages []map[string]any) string {
 			}
 			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+BashExecutionText(msg))
 		default:
+			if skippedToolResult(msg, skipTools) {
+				continue
+			}
 			blocks = append(blocks, "[Tool result for "+jsString(msg["toolName"])+" @ "+timestamp+"]: "+textOnly(msg["content"]))
 		}
 	}
@@ -376,14 +383,15 @@ func entryTimestamp(entry session.Entry) any {
 }
 
 // SerializeBranchEntries renders message, custom message and branch summary
-// entries, separated by blank lines.
-func SerializeBranchEntries(entries []session.Entry) string {
+// entries, separated by blank lines; calls to the tools in skipTools and their
+// results are left out (SerializeConversation).
+func SerializeBranchEntries(entries []session.Entry, skipTools ...string) string {
 	blocks := []string{}
 	for _, entry := range entries {
 		switch entry.Type {
 		case "message":
 			if entry.Message != nil {
-				if part := SerializeConversation([]map[string]any{entry.Message}); part != "" {
+				if part := SerializeConversation([]map[string]any{entry.Message}, skipTools...); part != "" {
 					blocks = append(blocks, part)
 				}
 			}
@@ -401,15 +409,30 @@ func SerializeBranchEntries(entries []session.Entry) string {
 // SourceAddressedSerialization is an observer chunk: labelled source blocks and
 // the ids they cover.
 type SourceAddressedSerialization struct {
-	Text                    string
-	SourceEntryIDs          []string
-	EstimatedTokens         int
+	Text string
+	// SourceEntryIDs are the labelled entries, the ones the observer may cite.
+	SourceEntryIDs  []string
+	EstimatedTokens int
+	// TruncatedSourceEntryIDs are the labelled entries shown as a head/tail excerpt.
 	TruncatedSourceEntryIDs []string
+	// EntryIDs are every entry the chunk read, in branch order: the labelled ones
+	// and, among them or after the last, those that held only skipped memory-tool
+	// content (SourceAddressedOptions.SkipTools). Empty when nothing was labelled.
+	EntryIDs []string
+	// CoversUpToID is the last entry the chunk read (the last of EntryIDs), what
+	// its coverage marker covers when the observer reads it all: coverage stays
+	// positional, so a trailing entry whose content was skipped is covered too.
+	// "" when nothing was labelled.
+	CoversUpToID string
 }
 
 // SourceAddressedOptions bounds a serialization; MaxTokens 0 means unbounded.
 type SourceAddressedOptions struct {
 	MaxTokens int
+	// SkipTools names the memory tools (the memory tool and the tools the agent
+	// defined with it): their calls and the results answering them are left out
+	// of the chunk (SerializeConversation).
+	SkipTools []string
 }
 
 const sourceOmissionMarker = "\n\n[… middle omitted: source exceeds observer input budget; original source remains in the session ledger …]\n\n"
@@ -443,31 +466,45 @@ func isSourceRenderableEntry(entry session.Entry) bool {
 
 // ObserverRenders reports whether the observer chunk would carry anything for
 // entry: a source entry with renderable content. Entries that render nothing
-// (an aborted assistant turn with no content, a `!!command` run) are skipped
-// by the chunk serializer and therefore never need observation coverage.
-func ObserverRenders(entry session.Entry) bool {
+// (an aborted assistant turn with no content, a `!!command` run, or, with
+// skipTools, a message holding only memory-tool calls or a memory-tool result)
+// are skipped by the chunk serializer and therefore never need observation
+// coverage.
+func ObserverRenders(entry session.Entry, skipTools ...string) bool {
 	if entry.ID == "" || !isSourceRenderableEntry(entry) {
 		return false
 	}
-	return strings.TrimSpace(SerializeBranchEntries([]session.Entry{entry})) != ""
+	return strings.TrimSpace(SerializeBranchEntries([]session.Entry{entry}, skipTools...)) != ""
+}
+
+// ObserverRendersFunc is ObserverRenders with skipTools bound, as the ledger's
+// needs-coverage predicates take it.
+func ObserverRendersFunc(skipTools []string) func(session.Entry) bool {
+	return func(entry session.Entry) bool { return ObserverRenders(entry, skipTools...) }
 }
 
 // SerializeSourceAddressedBranchEntries serializes complete source entries up
 // to the token budget. If the first entry alone exceeds the budget, a clearly
 // marked head/tail excerpt is included so one pathological tool result cannot
 // permanently block observation coverage. The ledger entry itself is never
-// modified and remains recallable by id.
+// modified and remains recallable by id. An entry holding only content skipped
+// for options.SkipTools gets no block, but is read (EntryIDs, CoversUpToID).
 func SerializeSourceAddressedBranchEntries(entries []session.Entry, options SourceAddressedOptions) SourceAddressedSerialization {
 	blocks := []string{}
 	sourceEntryIDs := []string{}
+	entryIDs := []string{}
+	skipped := []string{}
 	truncated := []string{}
 	estimated := 0
 	for _, entry := range entries {
 		if entry.ID == "" || !isSourceRenderableEntry(entry) {
 			continue
 		}
-		rendered := SerializeBranchEntries([]session.Entry{entry})
+		rendered := SerializeBranchEntries([]session.Entry{entry}, options.SkipTools...)
 		if strings.TrimSpace(rendered) == "" {
+			if len(options.SkipTools) > 0 && ObserverRenders(entry) {
+				skipped = append(skipped, entry.ID)
+			}
 			continue
 		}
 		label := "[Source entry id: " + entry.ID + "]"
@@ -487,13 +524,24 @@ func SerializeSourceAddressedBranchEntries(entries []session.Entry, options Sour
 			}
 			blocks = append(blocks, excerpt)
 			sourceEntryIDs = append(sourceEntryIDs, entry.ID)
+			entryIDs = append(append(entryIDs, skipped...), entry.ID)
+			skipped = nil
 			truncated = append(truncated, entry.ID)
 			estimated = tokens.EstimateStringTokens(excerpt)
 			break
 		}
 		blocks = append(blocks, block)
 		sourceEntryIDs = append(sourceEntryIDs, entry.ID)
+		entryIDs = append(append(entryIDs, skipped...), entry.ID)
+		skipped = nil
 		estimated += blockTokens
+	}
+	coversUpToID := ""
+	if len(blocks) > 0 {
+		// Skipped entries after the last block (before the entry the budget
+		// stopped at, or at the end) were read too.
+		entryIDs = append(entryIDs, skipped...)
+		coversUpToID = entryIDs[len(entryIDs)-1]
 	}
 	text := strings.Join(blocks, "\n\n")
 	return SourceAddressedSerialization{
@@ -501,6 +549,8 @@ func SerializeSourceAddressedBranchEntries(entries []session.Entry, options Sour
 		SourceEntryIDs:          sourceEntryIDs,
 		EstimatedTokens:         tokens.EstimateStringTokens(text),
 		TruncatedSourceEntryIDs: truncated,
+		EntryIDs:                entryIDs,
+		CoversUpToID:            coversUpToID,
 	}
 }
 
@@ -583,7 +633,7 @@ func HistoryText(entry session.Entry, skipTools ...string) (role, text string, o
 	case "assistant":
 		role, text = HistoryAssistant, nonEmptyLines(textAndPlaceholders(withoutToolCalls(msg["content"], skipTools), placeholderOptions{}))
 	case "toolResult":
-		if name, _ := msg["toolName"].(string); name != "" && slices.Contains(skipTools, name) {
+		if skippedToolResult(msg, skipTools) {
 			return "", "", false
 		}
 		role, text = HistoryTool, textOnly(msg["content"])
@@ -599,6 +649,15 @@ func HistoryText(entry session.Entry, skipTools ...string) (role, text string, o
 		return "", "", false
 	}
 	return role, text, true
+}
+
+// skippedToolResult reports whether msg is a tool result answering one of tools.
+func skippedToolResult(msg map[string]any, tools []string) bool {
+	if msg["role"] != "toolResult" {
+		return false
+	}
+	name, _ := msg["toolName"].(string)
+	return name != "" && slices.Contains(tools, name)
 }
 
 // withoutToolCalls is content minus its toolCall blocks naming one of tools (none keeps them all).
