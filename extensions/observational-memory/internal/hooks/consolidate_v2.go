@@ -348,6 +348,7 @@ func appendLevel1(ctx context.Context, h host.Host, result consolidate.Result, d
 		queue = append(queue, pending{ledger.OMSubjectsAliased, data})
 	}
 	if data := ledger.BuildObservationsDroppedData(drop, coversUpToID); data != nil {
+		data.Consolidated = true
 		queue = append(queue, pending{ledger.OMObservationsDropped, data})
 	}
 	out := make([]ledger.Entry, 0, len(queue))

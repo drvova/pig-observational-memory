@@ -149,7 +149,7 @@ func TestCuratedCallReadsProjectSettingsOnlyWhenTrusted(t *testing.T) {
 	}
 }
 
-// Memory v2 leads the section with its one resume line, also when curated memory is off; v1's
+// Memory v2 leads the section with its one tool-note line, also when curated memory is off; v1's
 // section is the index alone, removed when curated memory is off.
 func TestMemorySectionText(t *testing.T) {
 	if text, set := memorySectionText("INDEX", true, false); !set || text != "INDEX" {
@@ -158,11 +158,26 @@ func TestMemorySectionText(t *testing.T) {
 	if _, set := memorySectionText("", false, false); set {
 		t.Fatal("v1 off kept the section")
 	}
-	if text, set := memorySectionText("INDEX", true, true); !set || text != resumeNoteLine+"\n\nINDEX" {
+	if text, set := memorySectionText("INDEX", true, true); !set || text != toolNoteLine+"\n\nINDEX" {
 		t.Fatalf("v2 on: %q", text)
 	}
-	if text, set := memorySectionText("", false, true); !set || text != resumeNoteLine {
+	if text, set := memorySectionText("", false, true); !set || text != toolNoteLine {
 		t.Fatalf("v2 off: %q", text)
+	}
+}
+
+// The tool-note line is said to the user before every tool call and kept verbatim on the call's
+// attempt record, so it must not make the model talk about memory, compaction or resuming (a real
+// v2 session wrote "... to resume this work if the conversation is compacted" before every call).
+func TestToolNoteLineNamesNoMemoryMachinery(t *testing.T) {
+	lower := strings.ToLower(toolNoteLine)
+	for _, word := range []string{"memory", "compact", "resum", "summar", "context"} {
+		if strings.Contains(lower, word) {
+			t.Fatalf("tool-note line mentions %q: %q", word, toolNoteLine)
+		}
+	}
+	if !strings.Contains(lower, "tool call") || !strings.Contains(lower, "why") {
+		t.Fatalf("tool-note line no longer asks what and why before a tool call: %q", toolNoteLine)
 	}
 }
 

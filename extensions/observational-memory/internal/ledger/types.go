@@ -137,6 +137,10 @@ type Observation struct {
 	// Conflicts are the ids of earlier records on the same subject sharing a specific that
 	// exactly one side negates (NegationConflict). It never drops or supersedes anything.
 	Conflicts []string `json:"conflicts,omitempty"`
+	// Replaces are the ids of the records a level-1 record stands for (memory v2): a label's or a
+	// settled possible update's one record, a merge's sources. Links to those records are read
+	// as links to this one (Standing). Code sets it; none for every other record.
+	Replaces []string `json:"replaces,omitempty"`
 }
 
 // The statuses of a record (Observation.Status), which memory v2's level 0 reads from fixed
@@ -203,6 +207,9 @@ type ReflectionsRecordedData struct {
 type ObservationsDroppedData struct {
 	ObservationIDs []string `json:"observationIds"`
 	CoversUpToID   string   `json:"coversUpToId"`
+	// Consolidated marks memory v2's level-1 drops of the records its batch at the same entry
+	// replaced: only these confirm that batch's replacements (replace.go).
+	Consolidated bool `json:"consolidated,omitempty"`
 }
 
 // MemoryDetails is the details of a compaction entry this extension wrote.
@@ -463,6 +470,7 @@ func ObservationFrom(v any) (Observation, bool) {
 	}
 	observation.PossiblyUpdates = observation.linkIDs(m["possiblyUpdates"])
 	observation.Conflicts = observation.linkIDs(m["conflicts"])
+	observation.Replaces = observation.linkIDs(m["replaces"])
 	// Each supersedes element is checked on its own, so one bad element drops
 	// only itself.
 	switch list := m["supersedes"].(type) {
@@ -663,7 +671,8 @@ func ObservationsDroppedDataFrom(v any) (ObservationsDroppedData, bool) {
 	if !ok || !IsNonEmptyString(m["coversUpToId"]) {
 		return ObservationsDroppedData{}, false
 	}
-	return ObservationsDroppedData{ObservationIDs: ids, CoversUpToID: m["coversUpToId"].(string)}, true
+	consolidated, _ := m["consolidated"].(bool)
+	return ObservationsDroppedData{ObservationIDs: ids, CoversUpToID: m["coversUpToId"].(string), Consolidated: consolidated}, true
 }
 
 // IsObservationsDroppedData reports a valid decoded payload.

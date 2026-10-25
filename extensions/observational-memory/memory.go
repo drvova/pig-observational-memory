@@ -17,23 +17,24 @@ import (
 // memorySection names the system prompt section the index occupies.
 const memorySection = "curated-memory"
 
-// resumeNoteLine is memory v2's one system-prompt line asking the session model to say,
-// before a tool call, what it would need to resume: level 0 keeps the text before an assistant
-// message's first tool call verbatim on that call's record (docs/memory-v2.md, "The model's
-// own words"). It costs no request.
-const resumeNoteLine = "Before a tool call, say in a sentence what you would need to resume this work if the conversation were compacted; memory keeps those words with the call."
+// toolNoteLine is memory v2's one system-prompt line asking the session model to say, before a
+// tool call, what it is doing and why: level 0 keeps the text before an assistant message's first
+// tool call verbatim on that call's record (docs/memory-v2.md, "The model's own words"). The
+// model writes those words to the user, so the line names no memory, compaction or resuming,
+// which the model would otherwise repeat to the user before every call. It costs no request.
+const toolNoteLine = "Before each tool call, say in one short sentence what you are doing and why."
 
 // memorySectionText is the extension's system-prompt section: the curated index when curated
-// memory is on, led under memory v2 by resumeNoteLine (a fixed line, so the prompt prefix stays
+// memory is on, led under memory v2 by toolNoteLine (a fixed line, so the prompt prefix stays
 // stable). set is false when there is nothing to show and the section is removed.
 func memorySectionText(index string, curatedOn, v2 bool) (text string, set bool) {
 	if !v2 {
 		return index, curatedOn
 	}
 	if !curatedOn || index == "" {
-		return resumeNoteLine, true
+		return toolNoteLine, true
 	}
-	return resumeNoteLine + "\n\n" + index, true
+	return toolNoteLine + "\n\n" + index, true
 }
 
 // memoryPin is the index the current conversation was given. PiG keeps the

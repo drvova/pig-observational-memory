@@ -166,8 +166,10 @@ repeated compactions, which rendering from records avoids.
   text before the first call is kept verbatim on that call's attempt record, read from the ordered
   content blocks of the `turn_end` message (text blocks only, never thinking). Notes the session model
   wrote with the memory tool inside the cut range are records with `origin: model, kind: note`. One
-  line in the extension's system-prompt section asks the model to say, before a tool call, what it
-  would need to resume; it costs no request.
+  line in the extension's system-prompt section asks the model to say, before each tool call, in one
+  short sentence what it is doing and why; the model says it to the user, so the line names no
+  memory, compaction or resuming (a line that did made the model announce them before every call). It
+  costs no request.
 - **Work facts** (after pi-vcc's and pi-blackhole's extractors, without their item caps):
   - files at their newest state, one entry per path (after nodecode's newest-per-name clauses with
     tombstones): order, renames and deletions come from the ordered tool calls on the branch; a path is
@@ -182,7 +184,16 @@ repeated compactions, which rendering from records avoids.
   `details` file lists).
 - **Compression.** Echoes and bare acknowledgements are not records; a record keeps the sentence
   carrying its specifics, not the whole message; consecutive records on one subject from one exchange
-  merge. Lines are picked, never reworded; the only additions are date annotations (VCC: lowering
+  merge. A list in one message (numbered or bulleted items, markers removed; a code fence inside an
+  item leaves it one list, and after a blank line a change of marker type or a numbering that starts
+  again opens another) is one statement: in an assistant reply its items, joined in order with a
+  space as consecutive records merge, are kept whole when any of them gives a specific the user did
+  not give, so a sibling item is never left out because an earlier one already gave the same
+  specific; the list is cut where an item's status changes or where it names another event date, so
+  one conditional or planned item never gives its status to firm items beside it. A user's items
+  are read one by one. A list marker is never a record on its own (an inline list's first marker
+  goes with its item), horizontal rules say nothing, and markdown such as a bold label (`**Race:**`)
+  stays as written. Lines are picked, never reworded; the only additions are date annotations (VCC: lowering
   "can only select, truncate, or annotate").
 - **Dropping (code).** At compaction, a record superseded by one already rendered, and a record cited
   by a reflection that is rendered, are dropped (`om.observations.dropped`, still recallable). When
@@ -331,7 +342,26 @@ thinning lowers PiG's own request count.
     refused (`ledger.MaySupersede`): a planned or conditional value never replaces a stated one;
   - a merge's event date is the one its sources name; a source naming dates but no one date
     (several, or a span) leaves it none, as at level 0;
+  - a record a standing record supersedes, or a standing reflection cites, is never merged, since
+    the merge would stand for it and leave with it;
   - output that accounts for nothing, or has no valid record, is a failure.
+- **Replacements and links.** Every level-1 record says which records it replaces (`replaces`: a
+  label's or a settled possible update's one record, a merge's sources). The fold reads every link
+  (`supersedes`, `possibly_updates`, `conflicts`, reflection citations and so `cited_by`) through the
+  replacement chains, transitively, to the record that stands for its target now
+  (`ledger.Standing`), in selection, its drops, recall, the point-in-time view (following only the
+  replacements that held at the bound) and the level-1 input, so a correction of a record level 1
+  relabelled supersedes the relabelled record and its `(was <id>)` names a record recall reads.
+  A replacement holds only once level 1's own drop entry at the batch's entry drops the replaced
+  record, so a record a failed append or the union rule left active keeps its links. Records
+  written before `replaces` existed are read through their compaction: level 1 appends its batch
+  and then the drops of exactly the records it replaced, so a dropped record is replaced by the
+  batch's record keeping its text and sources, else by the one record whose sources include its own
+  and which carries its specifics; with none, more than one, or a batch record superseding it,
+  nothing is read and its links stay as written. A merge is never read as standing for a record a
+  standing correction supersedes or a reflection cites (that link would hide the merge and its
+  other sources' specifics): validation refuses such a merge, and one written before it did is not
+  followed.
 - **Union.** Any level-0 candidate carrying specifics that level 1 does not account for is kept. A
   weak model can improve the memory, never lose a fact from it (Mastra documents no code-level check
   that facts survive its reflection; this is that check).

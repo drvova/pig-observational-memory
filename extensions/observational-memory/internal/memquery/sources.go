@@ -126,6 +126,12 @@ func notesRelation(env Env, view *pointInTime) *relation {
 		all, active, aliases, contextSubjects = env.Records.Observations, env.Records.Observations, env.Records.Aliases, env.Records.SubjectContext
 	} else {
 		folded := ledger.FoldLedger(env.Entries, "")
+		if view != nil {
+			// A link is read through level 1's replacements only as far as they held at the
+			// bound: a correction made before a later relabel supersedes the record it named.
+			folded = ledger.FoldLedgerUnresolved(env.Entries, "")
+			ledger.ResolveFolded(&folded, func(id string) bool { return view.holds(folded.ObservationsByID[id]) })
+		}
 		all, active, aliases = folded.Observations, folded.ActiveObservations, folded.Aliases
 		if view != nil {
 			dropped := view.dropped(env.Entries)

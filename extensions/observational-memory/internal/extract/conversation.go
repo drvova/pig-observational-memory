@@ -165,9 +165,9 @@ func (x *extraction) conversationRecord(sentence string, kind ledger.Observation
 	return o
 }
 
-// reply reads assistant text that is not the words before a tool call: a sentence is a record
-// only for the specifics no user text of the exchange and no record already held gives
-// (ledger.Added), so an echo of what the user said is not one.
+// reply reads assistant text that is not the words before a tool call: a sentence, or a list as
+// one statement (units), is a record only for the specifics no user text of the exchange and no
+// record already held gives (ledger.Added), so an echo of what the user said is not one.
 func (x *extraction) reply(i int, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
@@ -175,9 +175,9 @@ func (x *extraction) reply(i int, text string) {
 	entry := x.in.Entries[i]
 	anchor, hasAnchor := anchorTime(entry)
 	exchange := ledger.NewGiven(x.exchangeTexts)
-	for _, sentence := range sentences(text) {
-		if isBareAck(sentence) {
-			continue
+	keep := func(statement string) {
+		if isBareAck(statement) {
+			return
 		}
 		given := []ledger.Given{exchange, x.knownGiven}
 		for _, r := range x.records {
@@ -185,11 +185,52 @@ func (x *extraction) reply(i int, text string) {
 				given = append(given, ledger.NewGiven([]string{r.obs.Content}))
 			}
 		}
-		if len(ledger.Added(sentence, given...)) == 0 {
+		if len(ledger.Added(statement, given...)) == 0 {
+			return
+		}
+		x.add(x.conversationRecord(statement, "assistant", statusOf(statement), anchor, hasAnchor), i)
+	}
+	for _, u := range units(text) {
+		// A list is one statement: its items joined in order are kept whole when any of them
+		// gives a specific, so a sibling item is never left out because an earlier one already
+		// gave the same specific ("30 seconds per side" on every stretch). It is cut where an
+		// item's status changes, or where it names an event date other than the one its run
+		// names, so one conditional or planned item never gives its status (or date) to firm
+		// items beside it.
+		if u.isList() {
+			for _, run := range listRuns(u.items, anchor, hasAnchor) {
+				keep(joinItems(run))
+			}
 			continue
 		}
-		x.add(x.conversationRecord(sentence, "assistant", statusOf(sentence), anchor, hasAnchor), i)
+		for _, sentence := range u.sentences {
+			keep(sentence)
+		}
 	}
+}
+
+// listRuns are a list's items cut into runs of consecutive items with one status (statusOf)
+// and at most one event date (ledger.EventDate), as consecutive records merge (merge): an item
+// naming no date joins the run before it, one naming another date starts a new run.
+func listRuns(items []string, anchor time.Time, hasAnchor bool) [][]string {
+	runs := [][]string{}
+	status, date := "", ""
+	for n, item := range items {
+		itemStatus, itemDate := statusOf(item), ""
+		if hasAnchor {
+			itemDate = ledger.EventDate(item, anchor)
+		}
+		if n == 0 || itemStatus != status || itemDate != "" && date != "" && itemDate != date {
+			runs = append(runs, []string{item})
+			status, date = itemStatus, itemDate
+			continue
+		}
+		runs[len(runs)-1] = append(runs[len(runs)-1], item)
+		if date == "" {
+			date = itemDate
+		}
+	}
+	return runs
 }
 
 // conversational reports a kind a conversation record (or a v1 worker's record) has, never a

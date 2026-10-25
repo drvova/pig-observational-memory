@@ -95,6 +95,13 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 	seenObservations := map[string]bool{}
 	seenReflections := map[string]bool{}
 	dropped := map[string]bool{}
+	byID := map[string]Observation{}
+	replacements := newReplacementTracker(func(id string) (Observation, bool) {
+		o, ok := byID[id]
+		return o, ok
+	}, func(id string) bool {
+		return hiddenBy(id, observations, dropped, reflections)
+	})
 	var aliases []SubjectAlias
 	for i, entry := range entries {
 		if data, ok := ObservationsRecordedEntry(entry); ok && isCoveredAtOrBefore(data.CoversUpToID, index, observationsBoundary) {
@@ -103,8 +110,10 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 					continue
 				}
 				seenObservations[observation.ID] = true
+				byID[observation.ID] = observation
 				observations = append(observations, observation)
 			}
+			replacements.recorded(data)
 			continue
 		}
 		if data, ok := ReflectionsRecordedEntry(entry); ok && isCoveredAtOrBefore(data.CoversUpToID, index, reflectionsBoundary) {
@@ -117,9 +126,13 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 			}
 			continue
 		}
-		if data, ok := ObservationsDroppedEntry(entry); ok && isCoveredAtOrBefore(data.CoversUpToID, index, dropsBoundary) {
-			for _, id := range data.ObservationIDs {
-				dropped[id] = true
+		if data, ok := ObservationsDroppedEntry(entry); ok {
+			// A replacement holds only where its record's drop folds (replace.go).
+			if isCoveredAtOrBefore(data.CoversUpToID, index, dropsBoundary) {
+				for _, id := range data.ObservationIDs {
+					dropped[id] = true
+				}
+				replacements.dropped(data)
 			}
 			continue
 		}
@@ -131,11 +144,15 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 			aliases = append(aliases, data.Aliases...)
 		}
 	}
+	// Every link is read through level 1's replacements, as FoldLedger reads it.
 	active := []Observation{}
 	for _, observation := range observations {
 		if !dropped[observation.ID] {
-			active = append(active, observation)
+			active = append(active, ResolveObservationLinks(observation, replacements.by, nil))
 		}
+	}
+	for i, r := range reflections {
+		reflections[i] = ResolveReflectionCitations(r, replacements.by, nil)
 	}
 	return Projection{Observations: active, Reflections: reflections, Aliases: aliases}
 }

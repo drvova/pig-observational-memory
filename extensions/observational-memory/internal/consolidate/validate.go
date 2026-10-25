@@ -70,6 +70,7 @@ const (
 	ReasonCrossScope     = "supersedes a record with a different scope"
 	ReasonMergeScopes    = "merges records with different scopes"
 	ReasonSuperseded     = "names a record another proposal supersedes"
+	ReasonCited          = "merges a record a standing reflection cites"
 	ReasonSelf           = "supersedes itself"
 	ReasonNoSupport      = "cites no record whose specifics it carries"
 	ReasonMalformed      = "is not an object"
@@ -134,10 +135,14 @@ type validator struct {
 	reflections map[string]ledger.Reflection
 	used        map[string]bool
 	replaced    map[string]string
-	superseded  map[string]bool     // ids an accepted proposal supersedes
-	edges       map[string][]string // supersede links, by record id, new records included
-	verdicts    []verdict           // the links verdicts, in input order
-	result      Result
+	superseded  map[string]bool // ids an accepted proposal supersedes
+	// standingSuperseded are the ids an active record of the ledger or the input supersedes.
+	standingSuperseded map[string]bool
+	// standingCited are the ids a reflection of the ledger or the input cites.
+	standingCited map[string]bool
+	edges         map[string][]string // supersede links, by record id, new records included
+	verdicts      []verdict           // the links verdicts, in input order
+	result        Result
 }
 
 // verdict is one valid links item, waiting for the record that stands for its later record.
@@ -186,6 +191,22 @@ func Validate(args map[string]any, in Input) Result {
 	}
 	for _, r := range in.Reflections {
 		v.reflections[r.ID] = r
+	}
+	v.standingSuperseded = map[string]bool{}
+	for _, list := range [][]ledger.Observation{in.Ledger.ActiveObservations, in.Active, in.Candidates} {
+		for _, o := range list {
+			for _, id := range o.Supersedes {
+				v.standingSuperseded[id] = true
+			}
+		}
+	}
+	v.standingCited = map[string]bool{}
+	for _, list := range [][]ledger.Reflection{in.Ledger.Reflections, in.Reflections} {
+		for _, r := range list {
+			for _, id := range r.SupportingObservationIDs {
+				v.standingCited[id] = true
+			}
+		}
 	}
 	merges, records, reflections, aliases := list(args["merges"]), list(args["records"]), list(args["reflections"]), list(args["aliases"])
 	v.links(list(args["links"]))
@@ -245,8 +266,16 @@ func (v *validator) merge(index int, item any) {
 			v.refuse("merge", index, ReasonUsed)
 			return
 		}
-		if v.superseded[id] {
+		// A record a standing record already supersedes leaves when that record renders, and a
+		// merge would stand for it (ledger.Standing), taking its other sources with it.
+		if v.superseded[id] || v.standingSuperseded[id] {
 			v.refuse("merge", index, ReasonSuperseded)
+			return
+		}
+		// A reflection's citation hides the record it cites when the reflection renders, so the
+		// same holds for a record a standing reflection cites.
+		if v.standingCited[id] {
+			v.refuse("merge", index, ReasonCited)
 			return
 		}
 		// A note is indexed by its name (Target), which a merged record does not keep, so a
@@ -488,8 +517,10 @@ func (v *validator) resolve(id string) string {
 	return id
 }
 
-// accept records a new record replacing sources.
+// accept records a new record replacing sources. The record says which records it replaces
+// (Observation.Replaces), so every link to them is read as a link to it (ledger.Standing).
 func (v *validator) accept(record ledger.Observation, sources []string) {
+	record.Replaces = slices.Clone(sources)
 	record.ID = recordID(record)
 	record.TokenCount = tokens.ObservationLineTokenCount(tokens.ObservationLine{ID: record.ID, Timestamp: record.Timestamp, Relevance: string(record.Relevance), Content: record.Content})
 	for _, id := range sources {

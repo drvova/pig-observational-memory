@@ -155,6 +155,16 @@ func notFound(memoryID string) RecallResult {
 // observations for a reflection).
 func RecallMemorySources(entries []Entry, memoryID string) RecallResult {
 	indexedObservations, indexedReflections, dropped := indexLedger(entries)
+	// Links and citations are read through level 1's replacements, as the fold reads them, so
+	// a recalled record names the records standing for its targets (replace.go).
+	if replacedBy := FoldLedgerUnresolved(entries, "").ReplacedBy; len(replacedBy) > 0 {
+		for i := range indexedObservations {
+			indexedObservations[i].observation = ResolveObservationLinks(indexedObservations[i].observation, replacedBy, nil)
+		}
+		for i := range indexedReflections {
+			indexedReflections[i].reflection = ResolveReflectionCitations(indexedReflections[i].reflection, replacedBy, nil)
+		}
+	}
 	directMatches := []indexedObservation{}
 	for _, indexed := range indexedObservations {
 		if indexed.observation.ID == memoryID {
