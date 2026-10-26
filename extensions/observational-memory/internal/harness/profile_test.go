@@ -72,8 +72,8 @@ func defined(tool, outcome string) curated.ModelEvent {
 }
 
 func TestDefaultProfile(t *testing.T) {
-	p := harness.Compute(model, nil, nil)
-	if p.Codec != tables.Codecs()[0].Name() || p.Layout != ledger.FormatTables || p.SummaryHalvings != 0 || len(p.DisabledTools) != 0 || len(p.Switches) != 0 {
+	p := harness.Compute(model, nil)
+	if p.Codec != tables.Codecs()[0].Name() || p.Layout != ledger.FormatTables || p.SummaryHalvings != 0 || len(p.Switches) != 0 {
 		t.Fatalf("default profile %+v", p)
 	}
 	if p.SummaryScale() != 1 || p.ApplySummary(50_000) != 50_000 || p.CodecValue().Spec() != tables.Rows.Spec() {
@@ -97,7 +97,7 @@ func TestCodecSwitch(t *testing.T) {
 		{"the last codec is kept", concat(repeat(3, decode(rows, curated.OutcomeError)), repeat(5, decode(jsonl, curated.OutcomeError))), jsonl},
 	}
 	for _, c := range cases {
-		p := harness.Compute(model, units(c.evs...), nil)
+		p := harness.Compute(model, units(c.evs...))
 		if p.Codec != c.want {
 			t.Errorf("%s: codec %s, want %s", c.name, p.Codec, c.want)
 		}
@@ -116,18 +116,18 @@ func TestCodecSwitch(t *testing.T) {
 // Layout: rows that parse with the wrong columns switch tables to lines, once.
 func TestLayoutSwitch(t *testing.T) {
 	rows := tables.Rows.Name()
-	p := harness.Compute(model, units(concat(repeat(1, decode(rows, curated.OutcomeOK)), repeat(3, decode(rows, curated.OutcomeColumns)))...), nil)
+	p := harness.Compute(model, units(concat(repeat(1, decode(rows, curated.OutcomeOK)), repeat(3, decode(rows, curated.OutcomeColumns)))...))
 	if p.Layout != ledger.FormatLines || p.SummaryFormat(config.Defaults) != ledger.FormatLines {
 		t.Fatalf("layout %s", p.Layout)
 	}
 	if p.Codec != rows {
 		t.Fatalf("wrong columns switched the codec: %+v", p)
 	}
-	p = harness.Compute(model, units(concat(repeat(3, decode(rows, curated.OutcomeColumns)), repeat(3, decode(rows, curated.OutcomeOK)))...), nil)
+	p = harness.Compute(model, units(concat(repeat(3, decode(rows, curated.OutcomeColumns)), repeat(3, decode(rows, curated.OutcomeOK)))...))
 	if p.Layout != ledger.FormatLines {
 		t.Fatal("the layout switched back")
 	}
-	p = harness.Compute(model, units(concat(repeat(3, decode(rows, curated.OutcomeOK)), repeat(3, decode(rows, curated.OutcomeColumns)))...), nil)
+	p = harness.Compute(model, units(concat(repeat(3, decode(rows, curated.OutcomeOK)), repeat(3, decode(rows, curated.OutcomeColumns)))...))
 	if p.Layout != ledger.FormatTables {
 		t.Fatal("a tie switched the layout")
 	}
@@ -147,13 +147,13 @@ func TestNoSwitchChangesTheTool(t *testing.T) {
 		repeat(4, memory(curated.OutcomeError, "", true)),
 		repeat(4, queryCall(curated.OutcomeError, "", true)),
 		repeat(1, decode(tables.Rows.Name(), curated.OutcomeOK)),
-	)...), nil)
+	)...))
 	if len(p.Switches) != 0 {
 		t.Fatalf("profile %+v", p)
 	}
 	// Query-language calls stay history: their shown hits never halve the summary.
 	shown := queryCall(curated.OutcomeShown, curated.TargetSummary, false)
-	if p := harness.Compute(model, units(repeat(6, shown)...), nil); p.SummaryHalvings != 0 {
+	if p := harness.Compute(model, units(repeat(6, shown)...)); p.SummaryHalvings != 0 {
 		t.Fatalf("query-language hits halved the summary: %+v", p.Switches)
 	}
 }
@@ -165,11 +165,11 @@ func TestSummarySwitch(t *testing.T) {
 	omitted := memory(curated.OutcomeOmitted, curated.TargetSummary, false)
 	index := memory(curated.OutcomeShown, curated.TargetIndex, false)
 
-	p := harness.Compute(model, units(repeat(5, index)...), nil)
+	p := harness.Compute(model, units(repeat(5, index)...))
 	if p.SummaryHalvings != 0 {
 		t.Fatal("index hits shrank the summary")
 	}
-	p = harness.Compute(model, units(concat(repeat(1, omitted), repeat(3, shown))...), nil)
+	p = harness.Compute(model, units(concat(repeat(1, omitted), repeat(3, shown))...))
 	if p.SummaryHalvings != 1 || p.SummaryScale() != 0.5 {
 		t.Fatalf("halvings %d", p.SummaryHalvings)
 	}
@@ -177,42 +177,29 @@ func TestSummarySwitch(t *testing.T) {
 		t.Fatalf("switch %+v", sw)
 	}
 	// Each switch resets the counts: three more shown halve again, then omitted grow back.
-	p = harness.Compute(model, units(concat(repeat(3, shown), repeat(3, shown), repeat(3, omitted))...), nil)
+	p = harness.Compute(model, units(concat(repeat(3, shown), repeat(3, shown), repeat(3, omitted))...))
 	if p.SummaryHalvings != 1 || len(p.Switches) != 3 || p.Switches[2].To != "1/2 of the room" {
 		t.Fatalf("halvings %d switches %v", p.SummaryHalvings, p.Switches)
 	}
 	// Omitted hits never grow past the whole room.
-	p = harness.Compute(model, units(repeat(9, omitted)...), nil)
+	p = harness.Compute(model, units(repeat(9, omitted)...))
 	if p.SummaryHalvings != 0 || len(p.Switches) != 0 {
 		t.Fatalf("grew past the room: %+v", p)
 	}
 	// Halving stops where the floor governs every window.
-	p = harness.Compute(model, units(repeat(3*(harness.MaxSummaryHalvings+4), shown)...), nil)
+	p = harness.Compute(model, units(repeat(3*(harness.MaxSummaryHalvings+4), shown)...))
 	if p.SummaryHalvings != harness.MaxSummaryHalvings {
 		t.Fatalf("halvings %d, want the cap %d", p.SummaryHalvings, harness.MaxSummaryHalvings)
 	}
 }
 
-// Tools: a defined tool that errors more than it succeeds for this model is deactivated for
-// it; calls of an earlier definition of the name do not count.
-func TestToolSwitch(t *testing.T) {
-	p := harness.Compute(model, units(concat(repeat(2, defined("bake-count", curated.OutcomeError)), repeat(1, defined("bake-count", curated.OutcomeOK)), repeat(1, defined("bake-count", curated.OutcomeError)))...), nil)
-	if !p.ToolDisabled("bake-count") || p.Switches[0].To != "bake-count off" {
+// Tools: no profile turns a tool off. The retired defined tools' calls (ModelKindDefined) are
+// history: errors outnumbering results over many compactions switch nothing.
+func TestNoToolSwitch(t *testing.T) {
+	erring := concat(repeat(3, v2(defined("bake-count", curated.OutcomeError))), repeat(1, v2Compaction))
+	p := harness.Compute(model, events(concat(erring, erring, erring, erring)...))
+	if len(p.Switches) != 0 || p.Events == 0 {
 		t.Fatalf("profile %+v", p)
-	}
-	p = harness.Compute(model, units(concat(repeat(3, defined("bake-count", curated.OutcomeError)), repeat(3, defined("other", curated.OutcomeOK)))...), nil)
-	if p.ToolDisabled("other") {
-		t.Fatal("a tool that returns results was deactivated")
-	}
-	p = harness.Compute(model, units(concat(repeat(3, defined("bake-count", curated.OutcomeEmpty)), repeat(3, defined("bake-count", curated.OutcomeError)))...), nil)
-	if p.ToolDisabled("bake-count") {
-		t.Fatal("empty results count as errors")
-	}
-	// Redefined after the errors: they belong to the earlier definition.
-	redefined := []curated.Definition{{Name: "bake-count", Created: t0.Add(10 * time.Minute)}}
-	p = harness.Compute(model, units(repeat(3, defined("bake-count", curated.OutcomeError))...), redefined)
-	if p.ToolDisabled("bake-count") {
-		t.Fatal("calls before the definition counted")
 	}
 }
 
@@ -264,30 +251,25 @@ var v2Compaction = curated.ModelEvent{Kind: curated.ModelKindPass, Stage: "compa
 func TestV2ProfileCountsCompactions(t *testing.T) {
 	shown := v2(memory(curated.OutcomeShown, curated.TargetSummary, false))
 
-	p := harness.Compute(model, events(concat(repeat(9, shown), repeat(1, v2Compaction))...), nil)
+	p := harness.Compute(model, events(concat(repeat(9, shown), repeat(1, v2Compaction))...))
 	if p.SummaryHalvings != 0 {
 		t.Fatalf("one compaction halved the summary: %+v", p.Switches)
 	}
-	p = harness.Compute(model, events(repeat(9, shown)...), nil)
+	p = harness.Compute(model, events(repeat(9, shown)...))
 	if p.SummaryHalvings != 0 {
 		t.Fatal("events with no compaction after them counted")
 	}
 	// The summary halves on MinEvidence compactions whose queries hit shown records.
 	shrink := concat(repeat(4, shown), repeat(1, v2Compaction))
-	if p = harness.Compute(model, events(concat(shrink, shrink)...), nil); p.SummaryHalvings != 0 {
+	if p = harness.Compute(model, events(concat(shrink, shrink)...)); p.SummaryHalvings != 0 {
 		t.Fatal("two compactions halved the summary")
 	}
-	if p = harness.Compute(model, events(concat(shrink, shrink, shrink)...), nil); p.SummaryHalvings != 1 {
+	if p = harness.Compute(model, events(concat(shrink, shrink, shrink)...)); p.SummaryHalvings != 1 {
 		t.Fatalf("halvings %d", p.SummaryHalvings)
-	}
-	// A defined tool is turned off on MinEvidence compactions where it erred more than it worked.
-	erring := concat(repeat(3, v2(defined("finder", curated.OutcomeError))), repeat(1, v2Compaction))
-	if p = harness.Compute(model, events(concat(erring, erring, erring)...), nil); !p.ToolDisabled("finder") {
-		t.Fatalf("profile %+v", p)
 	}
 	// Memory v1's events (no engine) never count.
 	v1Shown := memory(curated.OutcomeShown, curated.TargetSummary, false)
-	if p = harness.Compute(model, events(concat(repeat(3, v1Shown), repeat(1, v2Compaction), repeat(3, v1Shown), repeat(1, v2Compaction), repeat(3, v1Shown), repeat(1, v2Compaction))...), nil); p.SummaryHalvings != 0 {
+	if p = harness.Compute(model, events(concat(repeat(3, v1Shown), repeat(1, v2Compaction), repeat(3, v1Shown), repeat(1, v2Compaction), repeat(3, v1Shown), repeat(1, v2Compaction))...)); p.SummaryHalvings != 0 {
 		t.Fatal("v1's events counted")
 	}
 }
@@ -297,14 +279,14 @@ func TestV2ProfileCountsCompactions(t *testing.T) {
 func TestProfileEnginesNeverMix(t *testing.T) {
 	rows := tables.Rows.Name()
 	v1Errors := concat(repeat(3, decode(rows, curated.OutcomeColumns)), repeat(3, memory(curated.OutcomeError, "", true)), repeat(3, memory(curated.OutcomeShown, curated.TargetSummary, false)))
-	if p := harness.Compute(model, events(v1Errors...), nil); p.Codec != rows || p.SummaryHalvings != 0 || len(p.Switches) != 0 {
+	if p := harness.Compute(model, events(v1Errors...)); p.Codec != rows || p.SummaryHalvings != 0 || len(p.Switches) != 0 {
 		t.Fatalf("v1 evidence shaped the v2 profile: %+v", p)
 	}
 	shrink := concat(repeat(4, v2(memory(curated.OutcomeShown, curated.TargetSummary, false))), repeat(1, v2Compaction))
 	// Two v1 shown hits, then one v2 compaction unit: no halving (it needs MinEvidence units of
 	// its own).
 	mixed := concat(repeat(2, memory(curated.OutcomeShown, curated.TargetSummary, false)), shrink)
-	if p := harness.Compute(model, events(mixed...), nil); p.SummaryHalvings != 0 {
+	if p := harness.Compute(model, events(mixed...)); p.SummaryHalvings != 0 {
 		t.Fatalf("v1 tallies carried into v2: %+v", p)
 	}
 }

@@ -96,6 +96,11 @@ var Methods = []string{
 	MStr, MMan, MKept, MForget,
 }
 
+// DetectorMethods are the methods a detector child may call (docs/code-tool.md, "The
+// detector om"): the four reads answered from the pass bound to the run. Any other method from a
+// detector child kills it, and the run is recorded as an error.
+var DetectorMethods = []string{MNotes, MHistory, MSubjects, MNoteByID}
+
 // Pair is one field and value of a Where or Contains option.
 type Pair struct {
 	Field string `json:"field"`

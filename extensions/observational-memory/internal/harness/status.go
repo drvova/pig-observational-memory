@@ -28,8 +28,8 @@ func profileFigures(p Profile, cfg config.Config) string {
 	return fmt.Sprintf("codec %s, layout %s, summary %s", p.Codec, p.SummaryFormat(cfg), summary)
 }
 
-// profileDetails are a profile's evidence since its last level-1 offer, its disabled defined
-// tools and the switches that made it, each with its reason.
+// profileDetails are a profile's evidence since its last level-1 offer and the switches that
+// made it, each with its reason.
 func profileDetails(store curated.Store, key string, p Profile) []string {
 	var lines []string
 	if units, offered, err := rules.V2UnitsSinceProposal(store, key); err == nil {
@@ -39,9 +39,6 @@ func profileDetails(store curated.Store, key string, p Profile) []string {
 		}
 		lines = append(lines, fmt.Sprintf("Evidence: %d compactions counted %s", units, since))
 	}
-	if len(p.DisabledTools) > 0 {
-		lines = append(lines, "Defined tools off for this model: "+strings.Join(p.DisabledTools, ", "))
-	}
 	for _, s := range p.Switches {
 		lines = append(lines, s.String())
 	}
@@ -49,8 +46,8 @@ func profileDetails(store curated.Store, key string, p Profile) []string {
 }
 
 // SharedStatusLines are the harness lines that belong to no model: the rules with their
-// counts, the kernel floor, the layer kept for every model, the defined tools and their
-// standing, and the legacy definitions the layer refused. None without a store.
+// counts, the kernel floor, the layer kept for every model, and the retired defined queries
+// (retiredStatusLine). None without a store.
 func SharedStatusLines(h host.Host, cfg config.Config) []string {
 	store, ok := StoreOf(h, cfg)
 	if !ok {
@@ -60,20 +57,30 @@ func SharedStatusLines(h host.Host, cfg config.Config) []string {
 	lines = append(lines, rules.StatusLines(store, nil)...)
 	lines = append(lines, FloorStatus(store))
 	lines = append(lines, layerStatusLines(store, layer.AllModels)...)
-	if definitions, err := store.ListDefinitions(); err == nil && len(definitions) > 0 {
-		parts := make([]string, 0, len(definitions))
-		for _, d := range definitions {
-			s := StandingOf(store, d.Name)
-			parts = append(parts, fmt.Sprintf("%s %s (%d calls: %d with results, %d empty, %d errors)", d.Name, s.State, s.Calls, s.Results, s.Empty, s.Errors))
-		}
-		lines = append(lines, "Defined tools: "+strings.Join(parts, "; "))
-	}
-	if refused, err := store.RefusedDefinitions(); err == nil {
-		for _, r := range refused {
-			lines = append(lines, strings.TrimPrefix(r.Message(), "Observational memory: "))
-		}
+	if line, ok := retiredStatusLine(store); ok {
+		lines = append(lines, line)
 	}
 	return lines
+}
+
+// retiredStatusLine lists the retired defined queries (RetiredQueries, docs/code-tool.md,
+// "Migration"): each name with its equivalent snippet, or why it has none (a write, a form with
+// no equivalent, a legacy file the layer refused). They are never registered or run; the line
+// says where to read them from code. false when there are none or the store is unreadable.
+func retiredStatusLine(store curated.Store) (string, bool) {
+	retired, err := RetiredQueries(store)
+	if err != nil || len(retired) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(retired))
+	for _, q := range retired {
+		if q.Snippet != "" {
+			parts = append(parts, q.Name+": "+q.Snippet)
+			continue
+		}
+		parts = append(parts, q.Name+" ("+q.Reason+")")
+	}
+	return fmt.Sprintf("Retired defined queries (%d; the query language was removed, so none is registered or run; om.Retired() lists them): %s", len(retired), strings.Join(parts, "; ")), true
 }
 
 // ModelStatusLines are one model's figures, computed from its own usage ledger and layer: its
@@ -84,6 +91,9 @@ func ModelStatusLines(store curated.Store, cfg config.Config, key string) []stri
 	lines := []string{fmt.Sprintf("Profile (%d events): %s", p.Events, profileFigures(p, cfg))}
 	lines = append(lines, profileDetails(store, key, p)...)
 	if line, ok := rules.DetectorCountsLine(store, key); ok {
+		lines = append(lines, line)
+	}
+	if line, ok := rules.DetectorPassLine(store, key); ok {
 		lines = append(lines, line)
 	}
 	if line, ok := codeCallsLine(store, key); ok {

@@ -93,12 +93,13 @@ func describe(x any) string {
 	return b.String()
 }
 
-// seedCall is a seeded function's call back to the extension: an error panics, recovered in the
-// child as a runtime error.
+// seedCall is a seeded function's call back to the extension. The seeded functions return one
+// string, so a failure is that string, "error: <function>: <message>", rendered as a failed
+// (T, error) result is: the code goes on, and the text says what failed.
 func seedCall(method string, args ...any) string {
 	var s string
 	if err := omwire.Call(method, &s, args...); err != nil {
-		panic(fmt.Errorf("%s: %w", method, err))
+		return fmt.Sprintf("error: %s: %v", method, err)
 	}
 	return s
 }

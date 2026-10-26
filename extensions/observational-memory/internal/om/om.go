@@ -8,8 +8,8 @@
 // cycle, and none of those three may ever import om or a package that does.
 //
 // Step 1 of the design's order of work moves the read bounds, the notes and reflections fields
-// and the layer listing's row type here out of the query language (internal/memquery), which
-// keeps aliases to them until it is deleted.
+// and the layer listing's row type here out of the query language (internal/memquery, deleted in
+// step 10).
 package om
 
 // The bounds of a list read: a read without a limit shows DefaultLimit rows, and no read shows
@@ -74,7 +74,8 @@ type LayerRow struct {
 	// Kind and Name are the definition's kind and name.
 	Kind, Name string
 	// State is seed, held, written (with its probation: written, probation or established),
-	// or skipped for a file the layer refused.
+	// retired for a defined tool or a query detector of the removed query language, or skipped
+	// for a file the layer refused.
 	State string
 	// Generation is the generation that wrote it, "" for a seed or a held definition.
 	Generation string
@@ -84,6 +85,9 @@ type LayerRow struct {
 	Origin string
 	// Stale is why an override was skipped as stale, "" when it is not.
 	Stale string
+	// Flagged is, for a Go detector, the error of its run in its model's latest detector pass
+	// (it counted nothing there), "" when it counted or did not run.
+	Flagged string
 	// Engine is the engine that wrote the definition (config.EngineV2), "" for a seed or one
 	// written before engines were recorded.
 	Engine string

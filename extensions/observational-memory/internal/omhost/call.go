@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"sync"
@@ -65,6 +66,9 @@ type Call struct {
 	Units Units
 	// Record is what the call did, for its Details; nil records nothing.
 	Record *Record
+
+	// detector is the pass a detector run reads (DetectorCall), nil for a memory tool call.
+	detector *DetectorPass
 }
 
 // Write is one curated or layer write that landed.
@@ -219,6 +223,15 @@ func (c *Call) Call(ctx context.Context, method string, raw json.RawMessage) (js
 func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if c.detector != nil && !slices.Contains(omwire.DetectorMethods, method) {
+		// The supervisor refuses these before asking; the call context holds no write anyway.
+		return nil, fmt.Errorf("%s: %w (a detector reads only %v)", method, omwire.ErrBadArgs, omwire.DetectorMethods)
+	}
+	// A fixed snippet form run as it stands (om.Recall(`<id>`)) passes its placeholder as a
+	// value: it is refused, so it never reads as "nothing called <id>" or as a search.
+	if p := placeholderArg(raw); p != "" {
+		return nil, om.PlaceholderError(p)
 	}
 	switch method {
 	case omwire.MNotes, omwire.MReflections, omwire.MHistory, omwire.MFiles, omwire.MCommits, omwire.MAttempts, omwire.MDropped, omwire.MSaved, omwire.MLayer, omwire.MRetired:
@@ -404,13 +417,22 @@ func (c *Call) curatedWrite(ctx context.Context, op string, args map[string]stri
 	if call.UserEvidence == nil {
 		call.UserEvidence = func(quote string) bool { return QuotedByUser(c.Entries, quote, c.Skip) }
 	}
-	if op == curated.OpForget {
-		// The retired defined queries stay stored (an earlier release may share the store):
-		// ForgetMemory forgets memories only.
+	if op == curated.OpForget || op == curated.OpFeedback {
+		// The retired defined queries stay stored (an earlier release may share the store), and
+		// nothing reads a feedback line on one: ForgetMemory and Feedback act on memories only.
+		// A definition is refused by its presence, not its readability, so a stored one that no
+		// longer parses (never listed by om.Retired()) is kept too.
 		name := args["name"]
 		if _, err := call.Store.GetAs(name, call.Project, call.Source); errors.Is(err, curated.ErrNotFound) {
-			if _, derr := call.Store.GetDefinition(name); derr == nil {
-				return nil, fmt.Errorf("no memory is called %s; the defined query %s is retired, stays stored, and is listed by om.Retired()", name, name)
+			if _, derr := call.Store.GetDefinition(name); !errors.Is(derr, curated.ErrNotFound) && curated.ValidateName(name) == nil {
+				listed := ""
+				if derr == nil {
+					listed = ", listed by om.Retired()"
+				}
+				if op == curated.OpFeedback {
+					return nil, fmt.Errorf("no memory is called %s; the defined query %s is retired%s, and feedback applies to memories", name, name, listed)
+				}
+				return nil, fmt.Errorf("no memory is called %s; the defined query %s is retired and stays stored%s", name, name, listed)
 			}
 		}
 	}
@@ -419,4 +441,38 @@ func (c *Call) curatedWrite(ctx context.Context, op string, args map[string]stri
 		c.Notify(text.(string))
 	}
 	return text, err
+}
+
+// placeholderArg is the first string among a call's JSON arguments, at any depth (an option's
+// search words and field values included), that is a placeholder of the fixed texts; "" when
+// none is. Arguments that do not decode are left to the method's own decoding.
+func placeholderArg(raw json.RawMessage) string {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	var walk func(any) string
+	walk = func(v any) string {
+		switch x := v.(type) {
+		case string:
+			if om.IsPlaceholder(x) {
+				return x
+			}
+		case []any:
+			for _, e := range x {
+				if p := walk(e); p != "" {
+					return p
+				}
+			}
+		case map[string]any:
+			// In key order, so the same call is refused with the same text.
+			for _, k := range slices.Sorted(maps.Keys(x)) {
+				if p := walk(x[k]); p != "" {
+					return p
+				}
+			}
+		}
+		return ""
+	}
+	return walk(v)
 }

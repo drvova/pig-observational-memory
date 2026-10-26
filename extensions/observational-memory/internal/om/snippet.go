@@ -23,13 +23,78 @@ import (
 // between options; an id is a Go raw string.
 
 // The fixed snippet forms the summaries, the index and the tool's prompt lines name. Once
-// printed into a summary on a branch these names are frozen.
+// printed into a summary on a branch these names are frozen. Every value in them is a
+// placeholder of one form, a raw string holding <what goes there>, which no generated id, word
+// list or name takes: a fixed form run as it stands is refused with PlaceholderError, while the
+// snippets the formatter prints from real ids run.
 const (
-	SnippetRecall        = "om.Recall(`id`)"
-	SnippetHistorySearch = "om.History(om.Search(`w`))"
-	SnippetSavedSearch   = "om.Saved(om.Search(`w`))"
-	SnippetNotesSpan     = "om.Notes(om.From(`A`).Through(`B`))"
+	SnippetRecall        = "om.Recall(`" + PlaceholderID + "`)"
+	SnippetRecallEntry   = "om.Recall(`" + PlaceholderEntryID + "`)"
+	SnippetRecallName    = "om.Recall(`" + PlaceholderName + "`)"
+	SnippetHistorySearch = "om.History(om.Search(`" + PlaceholderWords + "`))"
+	SnippetSavedSearch   = "om.Saved(om.Search(`" + PlaceholderWords + "`))"
+	SnippetNotesSpan     = "om.Notes(om.From(`" + PlaceholderFirstID + "`).Through(`" + PlaceholderLastID + "`))"
+	SnippetOptionChain   = "om.From(`" + PlaceholderFirstID + "`).Through(`" + PlaceholderLastID + "`).Limit(50)"
+	SnippetSave          = "om.Save(`" + PlaceholderName + "`, `" + PlaceholderType + "`, `" + PlaceholderDescription + "`, om.Body(`" + PlaceholderBody + "`))"
+	SnippetFeedback      = "om.Feedback(`" + PlaceholderName + "`, `" + PlaceholderOutcome + "`, `" + PlaceholderQuote + "`)"
 )
+
+// The placeholders of the fixed texts, each naming what goes in its place.
+const (
+	PlaceholderID      = "<id>"
+	PlaceholderEntryID = "<entry id>"
+	PlaceholderName    = "<name>"
+	PlaceholderWords   = "<words>"
+	PlaceholderFirstID = "<first id>"
+	PlaceholderLastID  = "<last id>"
+
+	PlaceholderType        = "<type>"
+	PlaceholderDescription = "<description>"
+	PlaceholderBody        = "<body>"
+	PlaceholderOutcome     = "<outcome>"
+	PlaceholderQuote       = "<quote>"
+
+	PlaceholderString     = "<string name>"
+	PlaceholderDefinition = "<definition>"
+)
+
+// placeholderWhat is, for each placeholder, what the code should hold instead.
+var placeholderWhat = map[string]string{
+	PlaceholderID:      "a record, reflection or entry id from the summary's lines",
+	PlaceholderEntryID: "an entry id from a summary line's source",
+	PlaceholderName:    "a saved memory's name from the index",
+	PlaceholderWords:   "the words to search for",
+	PlaceholderFirstID: "the span's first entry or record id",
+	PlaceholderLastID:  "the span's last entry or record id",
+
+	PlaceholderType:        "a memory type: user, feedback, project, reference or lesson",
+	PlaceholderDescription: "a one-line description",
+	PlaceholderBody:        "the memory's text: why it holds and how to apply it",
+	PlaceholderOutcome:     "helped or harmed",
+	PlaceholderQuote:       "the user's or assistant's words that show it",
+
+	PlaceholderString:     "a name from the strings argument",
+	PlaceholderDefinition: "a kept definition's name, as kept() lists it",
+}
+
+// IsPlaceholder reports whether s is one of the fixed texts' placeholders.
+func IsPlaceholder(s string) bool {
+	_, ok := placeholderWhat[s]
+	return ok
+}
+
+// PlaceholderError is the refusal of a call that passes a placeholder of the fixed texts as a
+// value, as running a fixed snippet form unchanged does.
+func PlaceholderError(p string) error {
+	return fmt.Errorf("`%s` %s, not a value: replace it with %s", p, placeholderPhrase, placeholderWhat[p])
+}
+
+// placeholderPhrase is what every PlaceholderError says.
+const placeholderPhrase = "is a placeholder from the memory tool's instructions"
+
+// NamesPlaceholder reports whether an error message holds a PlaceholderError, which is answered
+// without a manual section: the code is right but for the placeholder.
+func NamesPlaceholder(msg string) bool { return strings.Contains(msg, placeholderPhrase) }
 
 // ReadFuncs are the read functions a snippet may call: the ones taking only options, and Recall,
 // which takes an id first.

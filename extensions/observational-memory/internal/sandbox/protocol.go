@@ -90,6 +90,9 @@ type wireChunk struct {
 	// Names are the names a declaration chunk binds (Recv.Name for a method), so the child
 	// can restore their earlier definitions when the chunk's group fails to compile.
 	Names []string `json:"names,omitempty"`
+	// Expr marks an expression statement whose values, when it has any, the code drops
+	// unless it is the call's last chunk (codepolicy.Chunk.DropsValue).
+	Expr bool `json:"expr,omitempty"`
 }
 
 // msg is one line of the protocol. T is its type; which other fields it carries depends on T.
@@ -125,6 +128,12 @@ type msg struct {
 	Compiled string `json:"compiled,omitempty"`
 	Cut      int    `json:"cut,omitempty"`
 	Exit     bool   `json:"exit,omitempty"`
+	// Discarded counts the expression statements before the last whose values were dropped;
+	// DiscardedFailed counts the failures among them and DiscardedErrs holds their texts, within
+	// ResultChars together.
+	Discarded       int      `json:"discarded,omitempty"`
+	DiscardedFailed int      `json:"discarded_failed,omitempty"`
+	DiscardedErrs   []string `json:"discarded_errs,omitempty"`
 }
 
 // errLineOverBound is a line that reached its bound without a newline.

@@ -154,7 +154,6 @@ func TestAdvertisedSpecIsFixed(t *testing.T) {
 			t.Fatalf("%s: the memory tool was deactivated: %v", when, active)
 		}
 	}
-	manager.BeforeAgentStart(h)
 	stillActive("the first profile")
 	// Another model whose profile switched the codec (a switch-codec rule).
 	if _, err := rules.Add(store, rules.Rule{Detector: rules.DetectDecodeFailure, Remedy: rules.RemedySwitchCodec, Models: []string{"q/other"}, Engine: curated.EngineV2}); err != nil {
@@ -164,12 +163,10 @@ func TestAdvertisedSpecIsFixed(t *testing.T) {
 	if l, _ := harness.For(h, config.Defaults, h.Model); l.Profile().Codec == tables.Rows.Name() {
 		t.Fatal("the test needs a profile with another codec")
 	}
-	manager.BeforeAgentStart(h)
 	stillActive("a profile with another codec")
 	if r := manager.RunMemory(h, map[string]any{"code": "func up(s string) string { return strings.ToUpper(s) }"}); len(r.Details.Kept) != 1 {
 		t.Fatalf("keep: %s", r.Text)
 	}
-	manager.BeforeAgentStart(h)
 	stillActive("after a keep")
 	if _, ok := h.RegisteredSpec(omtool.ToolName); ok {
 		t.Fatal("a profile registered the memory tool again")

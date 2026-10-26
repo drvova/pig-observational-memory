@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -14,7 +15,8 @@ import (
 
 // An om call whose arguments are within the character bound but encode to a line over the
 // protocol bound (many empty values) fails in the child before anything is sent, and the child
-// stays in step: the next call runs on the same child.
+// stays in step: the next call runs on the same child. A read panics with the failure; a seeded
+// function returns it as its "error: <function>: <message>" text.
 func TestOverBoundArgumentsKeepTheChildInStep(t *testing.T) {
 	s := newSup(t, Config{})
 	h := notesFake()
@@ -24,7 +26,11 @@ func TestOverBoundArgumentsKeepTheChildInStep(t *testing.T) {
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		r := runCode(t, ctx, s, code, h)
-		if r.Outcome != OutcomeRuntime || !strings.Contains(r.Err, "encode to") || r.Restarted {
+		failed := r.Outcome == OutcomeRuntime && strings.Contains(r.Err, "encode to")
+		if strings.HasPrefix(code, "names") {
+			failed = r.Outcome == OutcomeOK && strings.HasPrefix(r.Val, "error: kept: ") && strings.Contains(r.Val, "encode to")
+		}
+		if !failed || r.Restarted {
 			cancel()
 			t.Fatalf("%q: %+v", code, r)
 		}
@@ -165,5 +171,14 @@ func TestKillDuringACallIsCancelled(t *testing.T) {
 	}
 	if st := s.Status(); st.LastCrash != "" {
 		t.Fatalf("a reset was recorded as a crash: %q", st.LastCrash)
+	}
+}
+
+// An error that uses the whole budget renders alone: no stray newline stands for the values
+// it left no room for.
+func TestRenderValuesErrorOverBudgetHasNoLeadingNewline(t *testing.T) {
+	text, cut := renderValues([]any{5, errors.New(strings.Repeat("x", 50))}, 30)
+	if strings.HasPrefix(text, "\n") || !strings.HasPrefix(text, "error: x") || !cut {
+		t.Fatalf("%q (cut %v)", text, cut)
 	}
 }

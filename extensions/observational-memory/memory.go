@@ -113,12 +113,13 @@ func statusInfo(rt *runtime.Runtime, h host.Host) func() om.StatusInfo {
 	}
 }
 
-// registerMemory wires the memory tool (docs/code-tool.md), the per-model
-// harness and the tools the agent defined before it (docs/memory-interface.md,
-// section 6), and the curated memory index section of the system prompt. rt
-// reads the memory plumbing the manager knows (the defined tools it registered
-// and the retired defined queries' names), the tools level-0 extraction leaves
-// out of what it reads (harness.MemoryToolNames).
+// registerMemory wires the memory tool (docs/code-tool.md), the one tool the
+// extension registers, and the curated memory index section of the system
+// prompt. The tools the agent defined with the removed query language are
+// retired: none is registered, run or (de)activated. rt reads the memory
+// plumbing the manager knows (the memory tool and the retired defined queries'
+// names), the tools level-0 extraction leaves out of what it reads
+// (harness.MemoryToolNames).
 func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	manager := harness.NewManager(func(h host.ToolHost) (curated.Call, bool) {
 		call, _, on := curatedCall(h)
@@ -126,14 +127,11 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	})
 	manager.Info = func(h host.ToolHost) func() om.StatusInfo { return statusInfo(rt, h) }
 	manager.IndexShown = memoryPin.Shown
-	rt.SetDefinedTools(manager.SkipNames)
+	rt.SetSkipTools(manager.SkipNames)
 	rt.SetCodeStatus(manager.CodeStatusLines)
 
 	ext.OnEvent(sdk.EventBeforeAgentStart, func(ctx sdk.Context, data map[string]any) (any, error) {
 		h := sdkhost.New(ctx)
-		// The session model's profile: the defined tools it keeps active. The memory
-		// tool itself is the same for every model.
-		manager.BeforeAgentStart(h)
 		options, _ := data["systemPromptOptions"].(map[string]any)
 		sections, _ := options["sections"].(*sdk.SystemPromptSections)
 		if sections == nil {
@@ -152,14 +150,17 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 		return nil, nil
 	})
 	// A new or resumed conversation, and one restarting from a compaction
-	// summary, take a freshly ranked index. A session start also registers the
-	// stored definitions as tools (once per process: the host keeps them).
+	// summary, take a freshly ranked index. A session start also reads the
+	// retired defined queries' names into the skip list.
 	ext.OnEvent(sdk.EventSessionStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		memoryPin.Reset()
-		// The namespace resets: only kept definitions reach the next conversation.
+		// The namespace resets: only kept definitions reach the next conversation. A detector
+		// pass still running from the last compaction is killed: its run in flight is an
+		// error for that detector (unfinished at session end).
 		manager.Namespace().Reset()
+		rt.StopDetectorPass(runtime.DetectorStopSessionEnd)
 		h := sdkhost.New(ctx)
-		manager.RegisterStored(h)
+		manager.NoteRetired(h)
 		migrateLayerV2(h)
 		settleCurated(h)
 		return nil, nil
@@ -177,6 +178,7 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 
 	ext.OnEvent(sdk.EventSessionShutdown, func(sdk.Context, map[string]any) (any, error) {
 		manager.Namespace().Reset()
+		rt.StopDetectorPass(runtime.DetectorStopSessionEnd)
 		return nil, nil
 	})
 

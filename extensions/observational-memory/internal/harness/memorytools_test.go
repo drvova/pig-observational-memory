@@ -13,10 +13,10 @@ import (
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
-// The memory tools are the memory tool and the defined tools this process registered, never a
-// stored definition another tool's name kept from registering, and a forgotten definition's tool
-// stays among them; the detectors' stored queries are those of the memory tools still stored.
-func TestMemoryToolNamesAreTheRegisteredTools(t *testing.T) {
+// The memory tools are the memory tool and the retired defined queries' names, never a stored
+// definition whose name another tool holds, and a forgotten definition's name stays among them;
+// the detectors' stored queries are those of the memory tools still stored.
+func TestMemoryToolNamesAreTheRetiredNames(t *testing.T) {
 	rt := runtime.New()
 	if got := harness.MemoryToolNames(rt); !reflect.DeepEqual(got, []string{omtool.ToolName}) {
 		t.Fatalf("unwired %v", got)
@@ -31,8 +31,8 @@ func TestMemoryToolNamesAreTheRegisteredTools(t *testing.T) {
 		}
 	}
 	m := harness.NewManager(func(host.ToolHost) (curated.Call, bool) { return curated.Call{Store: store, Source: "s0"}, true })
-	m.RegisterStored(h)
-	rt.SetDefinedTools(m.SkipNames)
+	m.NoteRetired(h)
+	rt.SetSkipTools(m.SkipNames)
 	want := []string{omtool.ToolName, "half-plan", "plan"}
 	if got := harness.MemoryToolNames(rt); !reflect.DeepEqual(got, want) {
 		t.Fatalf("memory tools %v, want %v", got, want)
@@ -40,8 +40,12 @@ func TestMemoryToolNamesAreTheRegisteredTools(t *testing.T) {
 	if err := store.ForgetDefinition("plan"); err != nil {
 		t.Fatal(err)
 	}
+	m.NoteRetired(h)
 	if got := harness.MemoryToolNames(rt); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after forget %v, want %v", got, want)
+	}
+	if len(h.Registered) != 0 {
+		t.Fatalf("a retired definition was registered: %v", h.Registered)
 	}
 	cfg := config.Defaults
 	cfg.CuratedMemory = true

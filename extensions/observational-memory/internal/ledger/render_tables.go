@@ -18,13 +18,18 @@ func TablesSummaryBody(summary string) (string, bool) {
 	if !strings.HasPrefix(summary, TablesSummaryIntro) {
 		return "", false
 	}
-	_, body, ok := strings.Cut(summary, TablesRecallParagraph)
-	if !ok {
-		// A summary written before the code tool ends its instructions with the frozen
-		// paragraph of the query language.
-		if _, body, ok = strings.Cut(summary, LegacyTablesRecallParagraph); !ok {
-			return "", false
+	var body string
+	ok := false
+	// A summary written before the code tool ends its instructions with the frozen paragraph
+	// of the query language, and one written by the code tool's first build with the frozen
+	// paragraph of its first placeholders.
+	for _, p := range []string{TablesRecallParagraph, FirstCodeTablesRecallParagraph, LegacyTablesRecallParagraph} {
+		if _, body, ok = strings.Cut(summary, p); ok {
+			break
 		}
+	}
+	if !ok {
+		return "", false
 	}
 	body, _, _ = strings.Cut(body, "\n\n---\n\n")
 	return strings.TrimSpace(body), true
@@ -36,6 +41,11 @@ func TablesSummaryBody(summary string) (string, bool) {
 // omtool.ToolName, which this package does not import; omtool's tests check the
 // name).
 const TablesRecallParagraph = "The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (" + om.SnippetRecall + "), and searches what these tables condensed (" + om.SnippetHistorySearch + "); use it when precision needs the source."
+
+// FirstCodeTablesRecallParagraph is TablesRecallParagraph as the code tool's first build
+// wrote it, before its placeholders took the <what goes there> form. It is frozen, never
+// edited, for the same reason as LegacyTablesRecallParagraph.
+const FirstCodeTablesRecallParagraph = "The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (om.Recall(`id`)), and searches what these tables condensed (om.History(om.Search(`w`))); use it when precision needs the source."
 
 // LegacyTablesRecallParagraph is TablesRecallParagraph as summaries wrote it
 // before the code tool (docs/code-tool.md, "Migration"). It is frozen, never

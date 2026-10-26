@@ -7,7 +7,7 @@ import (
 )
 
 // Opt is one or more options of a read. Every option is a function and also a method, so
-// options chain without commas: om.From(`e1`).Through(`e9`).Limit(50). Options given to one
+// options chain without commas: om.From(`<first id>`).Through(`<last id>`).Limit(50). Options given to one
 // read are merged in order: a later scalar wins, and searches and field filters accumulate.
 type Opt struct{ w omwire.Options }
 

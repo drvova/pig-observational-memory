@@ -318,3 +318,39 @@ func errorOffset(err error) int {
 	}
 	return -1
 }
+
+// DropsValue reports whether the chunk is an expression statement whose values, when it has
+// any, are not the code's: before the call's last chunk they are dropped (and the result says
+// how many such statements there were). A call of a fmt printer is not one: its byte count and
+// error are not the code's value.
+func (c Chunk) DropsValue() bool {
+	s, ok := c.stmt.(*ast.ExprStmt)
+	return ok && !isPrintCall(s.X)
+}
+
+// PrintsOnly reports whether src is one call of a fmt printer (fmt.Print, Printf, Println,
+// Fprint, Fprintf, Fprintln), whose results are not the code's value.
+func PrintsOnly(src string) bool {
+	e, err := parser.ParseExpr(src)
+	return err == nil && isPrintCall(e)
+}
+
+func isPrintCall(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "fmt" {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Print", "Printf", "Println", "Fprint", "Fprintf", "Fprintln":
+		return true
+	}
+	return false
+}

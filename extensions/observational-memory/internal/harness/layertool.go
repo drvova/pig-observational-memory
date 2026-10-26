@@ -23,12 +23,12 @@ import (
 // CheckModelDefinition and is held until a later compaction's evidence settles it.
 
 // CheckModelDefinition is what every definition from the model must pass before it is held:
-// a kind the model may define (a tool is made with define, a rule is proposed), the provenance
+// a kind the model may define (defined tools are retired, a rule is proposed), the provenance
 // check against the branch (rules.CheckFromModel), and the layer's checks.
 func CheckModelDefinition(store curated.Store, branch []ledger.Entry, d layer.Definition) error {
 	switch {
 	case d.Kind == layer.KindTool:
-		return errors.New("a tool is defined with define <name> = <query> \"what it returns\", which registers it")
+		return errors.New("defined tools are retired: the agent keeps code definitions with the memory tool")
 	case rules.IsRule(d.Kind, d.Name):
 		return fmt.Errorf("a remedy definition is a catalogue named after a catalogue remedy (%s); a rule is proposed with propose", strings.Join(rules.Remedies, ", "))
 	}
@@ -65,13 +65,13 @@ func (w layerWriter) Define(kind, name, text string) (string, error) {
 }
 
 // Forget removes the session model's definition of kind named name: only a kind the model may
-// define (CheckModelDefinition). A tool is forgotten with forget name=..., which
-// unregisters it; a rule is the harness's to establish or retire, so the model cannot remove one.
+// define (CheckModelDefinition). A retired defined tool stays stored (om.Retired lists it);
+// a rule is the harness's to establish or retire, so the model cannot remove one.
 func (w layerWriter) Forget(kind, name string) (string, error) {
 	kind, name = strings.TrimSpace(kind), strings.TrimSpace(name)
 	switch {
 	case kind == layer.KindTool:
-		return "", fmt.Errorf("a defined tool is forgotten with forget name=%s, which unregisters it", name)
+		return "", fmt.Errorf("defined tools are retired and stay stored (om.Retired lists %s); nothing is forgotten from the layer", name)
 	case rules.IsRule(kind, name):
 		return "", fmt.Errorf("refused: %s is a rule, which the harness establishes or retires by its detector's counts; a remedy definition you can forget is a catalogue (%s)", name, strings.Join(rules.Remedies, ", "))
 	}
@@ -171,17 +171,20 @@ func OriginOf(d layer.Definition) string {
 	return "override"
 }
 
-// The probation states a written definition is listed with.
+// The probation states a written definition is listed with, and the state of a retired
+// defined tool (a tool definition of the removed query language: stored, never registered or
+// run, docs/code-tool.md).
 const (
 	stateProbation   = "probation"
 	stateEstablished = "established"
+	stateRetired     = "retired"
 )
 
 // LayerRows lists model's layer: every seed and every effective definition (held or written,
 // kept for model or for every model) by kind and name, then every file its load skipped, a stale
 // override with the seed standing in its place. A written definition probation judges, and a
 // written instructions replacement of the seed until probation decides it, is listed in its
-// probation state.
+// probation state; a defined tool is listed as retired.
 func LayerRows(store curated.Store, model string) ([]om.LayerRow, error) {
 	ls := store.Layer()
 	h, reports, err := ls.Load(model)
@@ -193,6 +196,7 @@ func LayerRows(store curated.Store, model string) ([]om.LayerRow, error) {
 		return nil, err
 	}
 	seeds := layer.Shipped()
+	lastPass := rules.LatestDetectorPass(store, model)
 	rows := map[string]om.LayerRow{}
 	for key := range seeds {
 		kind, name, _ := strings.Cut(key, "/")
@@ -203,7 +207,19 @@ func LayerRows(store curated.Store, model string) ([]om.LayerRow, error) {
 		if _, ok := seeds[d.Key()]; ok {
 			row.Origin = OriginOf(d)
 		}
-		if d.State == layer.StateWritten {
+		if d.Kind == layer.KindDetector {
+			if def, err := rules.ParseDetector(d.Name, d.Text); err == nil {
+				switch {
+				case def.Retired():
+					row.State = stateRetired
+				case def.IsCode():
+					row.Flagged = lastPass.Errors[d.Name]
+				}
+			}
+		}
+		if d.Kind == layer.KindTool {
+			row.State = stateRetired
+		} else if d.State == layer.StateWritten && row.State != stateRetired {
 			if w, ok := history[d.Key()]; ok {
 				row.Generation = strconv.Itoa(w.Generation)
 				switch {

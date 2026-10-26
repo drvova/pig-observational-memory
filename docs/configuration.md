@@ -85,7 +85,7 @@ budget    = min(budget, compactionSummaryMaxTokens if set)
 
 `reserveTokens` and `tokensBefore` come from PiG's compaction preparation (an unknown `reserveTokens` counts as PiG's default, 16384), `contextWindow` and `maxOutputTokens` from the session model (each bound applies only when known), and `headroom` is the largest growth of input usage between the last assistant messages of consecutive runs since the previous compaction, `0` without usage. The headroom comes off PiG's threshold bound only. The summary is therefore never larger than what it removed and leaves room for one more run like the largest so far before PiG's threshold.
 
-Everything the summary leaves out is printed as an om snippet (`memory` tool code, such as ``om.Notes(om.From(`A`).Through(`B`))``) that lists it, so nothing is lost from reach: left-out records stay in the session ledger and are shown by `/om:view full`. Custom instructions passed with a compaction go to level 1's input when level 1 runs; at level 0 they ride along after the memory when they fit the budget.
+Everything the summary leaves out is printed as an om snippet (`memory` tool code, such as ``om.Notes(om.From(`<first id>`).Through(`<last id>`))``) that lists it, so nothing is lost from reach: left-out records stay in the session ledger and are shown by `/om:view full`. Custom instructions passed with a compaction go to level 1's input when level 1 runs; at level 0 they ride along after the memory when they fit the budget.
 
 ## `consolidate`
 

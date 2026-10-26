@@ -31,7 +31,7 @@ var (
 // interpreter's om table (the sandbox's symgen.OMNames, which its test compares).
 var ManualGroups = []ManualGroup{
 	{"Reads", []string{"Notes", "Reflections", "History", "Recall", "NoteByID", "ReflectionByID", "Files", "Commits", "Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Str", "ErrNoCall"}},
-	{"Options (each is also an Opt method, so they chain: om.From(`e1`).Through(`e9`).Limit(50))", []string{"Opt", "Search", "From", "Through", "Since", "Until", "ByEvent", "AsOf", "Where", "Contains", "Kind", "Subject", "WithStatus", "SortBy", "Limit", "Offset", "Failed", "Worked", "Open"}},
+	{"Options (each is also an Opt method, so they chain: " + SnippetOptionChain + ")", []string{"Opt", "Search", "From", "Through", "Since", "Until", "ByEvent", "AsOf", "Where", "Contains", "Kind", "Subject", "WithStatus", "SortBy", "Limit", "Offset", "Failed", "Worked", "Open"}},
 	{"Writes", []string{"Save", "SaveOpt", "Body", "Scope", "Quoting", "Edit", "EditOpt", "SetType", "SetDescription", "SetBody", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define"}},
 	{"Values (describe(x) lists a value's fields and methods with their docs)", append(append([]string{}, valueTypes...), listTypes...)},
 }
@@ -61,12 +61,16 @@ func manualSections() []manualSection {
 		{"The memory tool", `Runs Go code (yaegi, in a child process) over this session's memory: definitions and
 statements in any order, no package clause or imports. The result is what the code printed, the
 value of its last expression, and a line per definition kept or refused. Long text goes in the
-strings argument, read with om.Str("name"). Empty code prints this manual.`},
+strings argument, read with om.Str(` + "`" + PlaceholderString + "`" + `). Empty code prints this manual.`},
 		{"Seeded functions", `  describe(x any) string: the type of x and its fields and methods, with docs
   man() string: this manual
-  kept(name ...string) string: the kept definitions, 20 a page (kept("2") is page 2), with load
-      errors and quarantined ones; kept("name") is one definition's source
-  forget(name string) string: forgets a kept definition (om.ForgetMemory forgets a memory)`},
+  kept(name ...string) string: the kept definitions, 20 a page (its last line is the call for
+      the next page), with load errors and quarantined ones; kept(` + "`" + PlaceholderDefinition + "`" + `) is one
+      definition's source
+  forget(name string) string: forgets a kept definition (om.ForgetMemory forgets a memory)
+  Each returns "error: <function>: <message>" when it fails. A call returning (T, error) shows T
+  alone when the error is nil, else "error: <message>". Only the last expression's value is
+  shown: print the others with fmt.Println; a discarded value that is an error is still shown.`},
 	}
 	for _, g := range ManualGroups {
 		values := strings.HasPrefix(g.Title, "Values")

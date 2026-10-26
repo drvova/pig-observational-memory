@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om/omwire"
@@ -169,7 +170,7 @@ func runSnippet(t *testing.T, c *omhost.Call, snippet string) json.RawMessage {
 	return raw
 }
 
-// The reads answer from the call's snapshot with memquery's semantics: active notes, a file's
+// The reads answer from the call's snapshot with the deleted query language's semantics: active notes, a file's
 // newest state, reflections and what they cite, subjects, recall with cited_by, history without
 // the current turn, and never thinking.
 func TestReadsAnswerFromTheSnapshot(t *testing.T) {
@@ -517,6 +518,36 @@ func TestForgetMemoryKeepsDefinedQueries(t *testing.T) {
 	}
 }
 
+// Feedback acts on memories only: nothing reads a feedback line on a retired defined query, so
+// one is refused rather than reported as recorded. A stored definition that no longer parses
+// (never listed as retired) is kept by ForgetMemory too.
+func TestRetiredDefinedQueriesTakeNoFeedbackAndUnreadableOnesStay(t *testing.T) {
+	c, store, _ := curatedCall(t, fixture())
+	if _, err := store.Define(curated.Definition{Name: "bakes", Query: "notes", Description: "Notes."}, "s0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, c, omwire.MFeedback, "bakes", "harmed", "anything at all"); err == nil || !strings.Contains(err.Error(), "feedback applies to memories") {
+		t.Fatalf("%v", err)
+	}
+	// A row the kernel reads but parseDefinition refuses: it names itself otherwise.
+	bakes, err := store.Layer().Get(layer.AllModels, layer.KindTool, "bakes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Layer().Put(layer.Definition{Kind: layer.KindTool, Model: layer.AllModels, Name: "broken", Text: bakes.Text}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetDefinition("broken"); err == nil || errors.Is(err, curated.ErrNotFound) {
+		t.Fatalf("the fixture parses: %v", err)
+	}
+	if _, err := call(t, c, omwire.MForgetMemory, "broken"); err == nil || !strings.Contains(err.Error(), "stays stored") {
+		t.Fatalf("%v", err)
+	}
+	if _, err := store.Layer().Get(layer.AllModels, layer.KindTool, "broken"); err != nil {
+		t.Fatalf("the unreadable definition was removed: %v", err)
+	}
+}
+
 type fakeLayer struct{ forgot, rolled []string }
 
 func (f *fakeLayer) Forget(kind, name string) (string, error) {
@@ -619,5 +650,26 @@ func TestOptionsARreadRefuses(t *testing.T) {
 	}
 	if l := must[om.NoteList](t, c, omwire.MAttempts, omwire.Options{Failed: true}); l.Len() != 0 {
 		t.Fatal(l)
+	}
+}
+
+// A placeholder of the fixed texts passed as a value, at any depth of the arguments (an id, a
+// search word, a field value), is refused with what goes in its place; real values are read.
+func TestPlaceholderArgumentsAreRefused(t *testing.T) {
+	c := &omhost.Call{Entries: []session.Entry{tf.RawMessage("u1", "w is a letter")}}
+	for _, args := range [][]any{
+		{omwire.MRecall, om.PlaceholderID, omwire.Options{}},
+		{omwire.MRecall, "u1", omwire.Options{Through: om.PlaceholderLastID}},
+		{omwire.MHistory, omwire.Options{Search: []string{om.PlaceholderWords}}},
+		{omwire.MNotes, omwire.Options{Where: []omwire.Pair{{Field: "kind", Value: om.PlaceholderType}}}},
+		{omwire.MSave, "<name>", "user", "d", omwire.SaveOptions{}},
+	} {
+		_, err := call(t, c, args[0].(string), args[1:]...)
+		if err == nil || !om.NamesPlaceholder(err.Error()) || !strings.Contains(err.Error(), "replace it with") {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+	if _, err := call(t, c, omwire.MHistory, omwire.Options{Search: []string{"w"}}); err != nil {
+		t.Fatalf("a real word: %v", err)
 	}
 }

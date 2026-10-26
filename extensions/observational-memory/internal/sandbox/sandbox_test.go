@@ -33,13 +33,77 @@ func TestCaptureLastValue(t *testing.T) {
 		{code: "[]string{\"a\", \"b\"}", val: `["a" "b"]`, hasVal: true},
 		{code: "map[string]int{\"b\": 2, \"a\": 1}", val: `map["a":1 "b":2]`, hasVal: true},
 		{code: "om.Text{Body: \"page\"}", val: "page", hasVal: true},
+		// A last error result: the values alone when it is nil, "error: <message>" when it
+		// is not, after the values only when one of them is not zero.
+		{code: "func ok2() (string, error) { return \"text\", nil }\nok2()", val: "text", hasVal: true},
+		{code: "func bad() (string, error) { return \"\", errors.New(\"broke\") }\nbad()", val: "error: broke", hasVal: true},
+		{code: "func part() (int, error) { return 3, errors.New(\"short\") }\npart()", val: "3\nerror: short", hasVal: true},
+		{code: "func three() (int, string, error) { return 1, \"a\", nil }\nthree()", val: "1, a", hasVal: true},
+		{code: "func zero3() (int, string, error) { return 0, \"\", errors.New(\"no\") }\nzero3()", val: "error: no", hasVal: true},
+		{code: "func box() (om.Text, error) { return om.Text{}, errors.New(\"nothing\") }\nbox()", val: "error: nothing", hasVal: true},
+		{code: "errors.New(\"alone\")", val: "alone", hasVal: true},
 	}
 	for _, c := range cases {
 		r := runCode(t, ctx, s, c.code, nil)
 		ok(t, r)
-		if r.Out != c.out || r.HasVal != c.hasVal || r.Val != c.val {
-			t.Errorf("%q: out %q val %q (%v); want out %q val %q (%v)", c.code, r.Out, r.Val, r.HasVal, c.out, c.val, c.hasVal)
+		if r.Out != c.out || r.HasVal != c.hasVal || r.Val != c.val || r.Discarded != 0 {
+			t.Errorf("%q: out %q val %q (%v), %d discarded; want out %q val %q (%v)", c.code, r.Out, r.Val, r.HasVal, r.Discarded, c.out, c.val, c.hasVal)
 		}
+	}
+}
+
+// Expression statements before the last whose values the code drops are counted (the last
+// value alone is shown); fmt printers, void calls and other statements are not.
+func TestDiscardedValuesAreCounted(t *testing.T) {
+	s := newSup(t, Config{})
+	ctx := context.Background()
+	h := fake{omwire.MNotes: func(context.Context, []json.RawMessage) (any, error) { return om.NoteList{}, nil }}
+	cases := []struct {
+		code      string
+		out, val  string
+		discarded int
+	}{
+		{code: "1; 2; 3", val: "3", discarded: 2},
+		{code: "om.Notes()\nom.Notes(om.Limit(2))\nx := 1\n_ = x", discarded: 2},
+		{code: "fmt.Println(1)\nfmt.Print(2)\n3", out: "1\n2", val: "3"},
+		{code: "func void() {}\nvoid()\nvoid()\n4", val: "4"},
+		{code: "x := 2\nx++\nx", val: "3"},
+		{code: "strings.ToUpper(`a`)\nfor i := 0; i < 2; i++ {}\n`b`", val: "b", discarded: 1},
+	}
+	for _, c := range cases {
+		r := runCode(t, ctx, s, c.code, h)
+		ok(t, r)
+		if r.Out != c.out || r.Val != c.val || r.Discarded != c.discarded {
+			t.Errorf("%q: out %q val %q, %d discarded; want out %q val %q, %d", c.code, r.Out, r.Val, r.Discarded, c.out, c.val, c.discarded)
+		}
+	}
+}
+
+// A failure among the dropped values (a refused seeded call, a write's non-nil error) is kept
+// apart from the count, so it is never silent; a success and a plain value add none.
+func TestDiscardedFailuresAreKept(t *testing.T) {
+	s := newSup(t, Config{})
+	ctx := context.Background()
+	saved := 0
+	h := fake{
+		omwire.MForget: func(context.Context, []json.RawMessage) (any, error) { return nil, errors.New("refused: not kept") },
+		omwire.MKept:   func(context.Context, []json.RawMessage) (any, error) { return "kept list", nil },
+		omwire.MSave: func(context.Context, []json.RawMessage) (any, error) {
+			if saved++; saved == 1 {
+				return nil, errors.New("a memory is already called a")
+			}
+			return "saved", nil
+		},
+	}
+	r := runCode(t, ctx, s, "forget(`up`)\nkept()\n10", h)
+	ok(t, r)
+	if r.Val != "10" || r.Discarded != 2 || r.DiscardedFailed != 1 || len(r.DiscardedErrs) != 1 || r.DiscardedErrs[0] != "error: forget: refused: not kept" {
+		t.Fatalf("%+v", r)
+	}
+	r = runCode(t, ctx, s, "om.Save(`a`, `lesson`, `d`)\nom.Save(`b`, `lesson`, `d`)\n1", h)
+	ok(t, r)
+	if r.Discarded != 2 || r.DiscardedFailed != 1 || len(r.DiscardedErrs) != 1 || !strings.Contains(r.DiscardedErrs[0], "a memory is already called a") {
+		t.Fatalf("%+v", r)
 	}
 }
 

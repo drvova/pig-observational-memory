@@ -326,6 +326,9 @@ func checkOptions(fn string, o omwire.Options) error {
 
 // reader is the read engine over the call's snapshot, as the memory tool reads.
 func (c *Call) reader() Reader {
+	if c.detector != nil {
+		return c.detector.reader()
+	}
 	return Reader{Entries: c.Entries, SessionEntries: c.SessionEntries, ToolCall: true, Skip: c.Skip}
 }
 
@@ -778,7 +781,12 @@ func (c *Call) retired(ctx context.Context, o omwire.Options, n int) (any, error
 
 // noteByID answers NoteByID: one record of the folded ledger, dropped or replaced ones included.
 func (c *Call) noteByID(id string) (any, error) {
-	folded := ledger.FoldLedger(c.Entries, "")
+	var folded ledger.FoldedLedger
+	if c.detector != nil {
+		folded = c.detector.Folded
+	} else {
+		folded = ledger.FoldLedger(c.Entries, "")
+	}
 	obs, ok := folded.ObservationsByID[id]
 	if !ok {
 		return nil, fmt.Errorf("no record %s on this branch", id)

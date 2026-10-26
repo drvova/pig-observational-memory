@@ -74,7 +74,7 @@ type entry struct {
 	kinds []string
 }
 
-// MemoryToolName is the base memory tool's name (memquery.ToolName).
+// MemoryToolName is the base memory tool's name (omtool.ToolName).
 const MemoryToolName = "memory"
 
 // The query engine's vocabulary (legacyquery.Sources, legacyquery.Stages, legacyquery.Writes:

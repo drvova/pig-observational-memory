@@ -276,6 +276,10 @@ type ConsolidationReport struct {
 	// held, each until a later compaction proves it.
 	HarnessOffered bool `json:"harnessOffered,omitempty"`
 	Defined        int  `json:"defined,omitempty"`
+	// Pending names the Go detectors it defined (kind/name) that wait for their smoke run in the
+	// compaction's background detector pass: held when that run returns a count, refused
+	// otherwise (docs/code-tool.md, "Checks").
+	Pending []string `json:"pending,omitempty"`
 }
 
 // Level is the compaction's level: 1 when the level-1 output was applied, else 0.
@@ -828,6 +832,13 @@ func consolidationReportFrom(v any) *ConsolidationReport {
 	report.Cited, report.Promoted = count("cited"), count("promoted")
 	report.HarnessOffered, _ = m["harnessOffered"].(bool)
 	report.Defined = count("defined")
+	if pending, ok := m["pending"].([]any); ok {
+		for _, p := range pending {
+			if name, ok := p.(string); ok {
+				report.Pending = append(report.Pending, name)
+			}
+		}
+	}
 	return report
 }
 

@@ -9,7 +9,6 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/codepolicy"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sandbox"
@@ -79,6 +78,12 @@ describe(again)`
 // An old pure-read defined query's snippet, read from om.Retired() and run as code, returns the
 // rows the old query returned over the same fixture; a write and a $input query get a reason.
 func TestRetiredSnippetRunsAsCode(t *testing.T) {
+	// The rows each old query returned over fixture(), recorded from memquery.Run before the
+	// query language was deleted (docs/code-tool.md, "Order of work", step 10).
+	oldRows := map[string]string{
+		"file-states": obsFileB + " " + obsFileA,
+		"bakes":       obsBake,
+	}
 	store := curated.New(t.TempDir())
 	for _, d := range []curated.Definition{
 		{Name: "file-states", Query: "notes | where kind=file | sort id desc", Description: "File records."},
@@ -108,9 +113,8 @@ func TestRetiredSnippetRunsAsCode(t *testing.T) {
 			t.Fatalf("%s: listed %q, snippet %q (%s)", q.Name, listed, q.Snippet, q.Reason)
 		}
 		got := runChild(t, s, c, "fmt.Print(strings.Join("+q.Snippet+".IDs(), \" \"))", nil).Out
-		old := memquery.Run(memquery.Env{Entries: entries, ToolCall: true}, q.Query)
-		if old.IsError || got != strings.Join(old.Hits, " ") || got == "" {
-			t.Fatalf("%s: code %q, old query %v (%s)", q.Name, got, old.Hits, old.Text)
+		if want := oldRows[q.Name]; got != want {
+			t.Fatalf("%s: code %q, the old query returned %q", q.Name, got, want)
 		}
 	}
 }

@@ -124,7 +124,7 @@ func TestSettleV2(t *testing.T) {
 		}
 	}
 	instructions := held(layer.KindInstructions, agents.InstructionsConsolidation, "Merge less.")
-	detector := held(layer.KindDetector, "missed-paths", "detector[1]{check,query,description}:\n  ,notes | count,notes counted")
+	detector := held(layer.KindDetector, "missed-paths", "detector[1]{check,description}:\n  thin-chunk,notes counted")
 	if instructions.Engine != curated.EngineV2 || detector.Engine != curated.EngineV2 {
 		t.Fatalf("a hold through a v2 store is not marked v2: %q %q", instructions.Engine, detector.Engine)
 	}
@@ -166,7 +166,7 @@ func TestSettleV2(t *testing.T) {
 		t.Fatalf("detector: decided %v clean %v (%s)", decided, clean, reason)
 	}
 	// A pass that ran with another text of the name is no evidence for this one.
-	changed := held(layer.KindDetector, "missed-paths", "detector[1]{check,query,description}:\n  ,notes | count,notes counted again")
+	changed := held(layer.KindDetector, "missed-paths", "detector[1]{check,description}:\n  thin-chunk,notes counted again")
 	if decided, _, _ := SettleV2(events(), changed); decided {
 		t.Fatal("a re-held text was settled on passes that ran with the old one")
 	}
@@ -201,5 +201,121 @@ func TestV2UnitsSinceProposal(t *testing.T) {
 	v2Compaction(t, store, 100, nil, map[string]int{CountLevel1UnionKept: 2})
 	if units, offered, _ := V2UnitsSinceProposal(store, "p/m"); units != 2 || !offered {
 		t.Fatalf("after the offer: %d %v", units, offered)
+	}
+}
+
+// A held Go detector is settled on the detector pass events that started its held text, never
+// on compaction passes: reverted when any of those runs gave no count (unfinished and crashed
+// runs included), written when one counted and none failed, held while none ran it. A held
+// query detector is retired: never settled, never blocking an offer.
+func TestSettleV2GoDetectors(t *testing.T) {
+	store := newStore(t)
+	hold := func(name, text string) layer.Definition {
+		t.Helper()
+		d, err := store.Layer().Hold(layer.Definition{Kind: layer.KindDetector, Name: name, Model: "p/m", Text: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	events := func() []curated.ModelEvent {
+		e, err := store.ModelEvents("p/m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	pass := func(ranHeld []string, counts map[string]int, errs map[string]string) {
+		t.Helper()
+		if err := store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDetectorPass, Engine: curated.EngineV2, Cut: "e9", Tokens: 100, RanHeld: ranHeld, Counts: counts, Errors: errs}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	good := hold("plans", CodeDetectorText("func Count() int { return om.Notes().Matched }", "notes"))
+	loops := hold("loops", CodeDetectorText("func Count() int { for {} }", "loops"))
+	query := hold("old", "detector[1]{query}:\n  \"notes | where kind=plan\"")
+	if !SettlesUnderV2(good) || SettlesUnderV2(query) {
+		t.Fatal("SettlesUnderV2: a Go detector is settled, a query detector never")
+	}
+	// A compaction pass naming them is no evidence for a Go detector.
+	compaction := Pass{Level1: true, Counts: map[string]int{CountLevel1UnionKept: 1}, RanHeld: []string{good.HeldID(), loops.HeldID(), query.HeldID()}}
+	if err := RecordDetection(store, "p/m", Findings{Counts: map[string]int{}}, 200); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AfterPass(store, "p/m", compaction); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []layer.Definition{good, loops, query} {
+		if decided, _, reason := SettleV2(events(), d); decided {
+			t.Fatalf("%s settled without a detector pass (%s)", d.Name, reason)
+		}
+	}
+	// A pass that never started them (still queued at the kill) names neither.
+	pass(nil, map[string]int{}, nil)
+	if decided, _, _ := SettleV2(events(), good); decided {
+		t.Fatal("settled by a pass that never started it")
+	}
+	pass([]string{good.HeldID(), loops.HeldID(), query.HeldID()}, map[string]int{DefinedCountKey("plans"): 0}, map[string]string{"loops": "unfinished at the next compaction"})
+	if decided, clean, reason := SettleV2(events(), good); !decided || !clean || !strings.Contains(reason, "1 later detector pass") {
+		t.Fatalf("good: %v %v (%s)", decided, clean, reason)
+	}
+	if decided, clean, reason := SettleV2(events(), loops); !decided || clean || !strings.Contains(reason, "unfinished at the next compaction") {
+		t.Fatalf("loops: %v %v (%s)", decided, clean, reason)
+	}
+	if decided, _, _ := SettleV2(events(), query); decided {
+		t.Fatal("a held query detector was settled")
+	}
+	// The held query detector never blocks an offer; a held Go detector does.
+	if _, err := store.Layer().ClaimHeld([]layer.Definition{good, loops}, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, due, err := ProposalDue(store, "p/m"); err != nil || !due {
+		t.Fatalf("a retired held query detector blocked the offer: due %v (%v)", due, err)
+	}
+}
+
+// A model's Go detector counts reach the level-1 offer through the detector pass events of the
+// compactions in the evidence window (each belonging to the compaction recorded before it): a
+// first non-zero count changes the digest, a refused smoke run's count is not offer evidence,
+// and a detector pass of a compaction outside the window counts nothing.
+func TestV2EvidenceCarriesDefinedDetectorCounts(t *testing.T) {
+	store := newStore(t)
+	detectorPass := func(counts map[string]int) {
+		t.Helper()
+		if err := store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDetectorPass, Engine: curated.EngineV2, Cut: "c", Tokens: 100, Counts: counts}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v2Compaction(t, store, 100, nil, nil)
+	detectorPass(map[string]int{DefinedCountKey("old-loops"): 4})
+	for range MinEvidence {
+		v2Compaction(t, store, 100, nil, nil)
+	}
+	before, err := V2EvidenceOf(store, "p/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := before.Counts[DefinedCountKey("old-loops")]; ok {
+		t.Fatalf("a detector pass outside the window counted: %v", before.Counts)
+	}
+	detectorPass(map[string]int{DefinedCountKey("retry-loops"): 7, DefinedCountKey("quiet"): 0, CountLevel1Refused: 1})
+	after, err := V2EvidenceOf(store, "p/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Counts[DefinedCountKey("retry-loops")] != 7 || !strings.Contains(after.Text(), "defined:retry-loops: 7") {
+		t.Fatalf("the detector's count is not offer evidence: %v\n%s", after.Counts, after.Text())
+	}
+	if _, ok := after.Counts[CountLevel1Refused]; ok {
+		t.Fatalf("a refused smoke run is offer evidence: %v", after.Counts)
+	}
+	if _, ok := after.Counts[DefinedCountKey("quiet")]; ok {
+		t.Fatalf("a zero count is offer evidence: %v", after.Counts)
+	}
+	if before.Digest() == after.Digest() {
+		t.Fatal("a first non-zero detector count left the digest unchanged")
+	}
+	if after.Tokens != before.Tokens {
+		t.Fatalf("a detector pass added source tokens: %d, want %d", after.Tokens, before.Tokens)
 	}
 }

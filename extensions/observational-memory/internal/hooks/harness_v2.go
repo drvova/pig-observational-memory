@@ -53,15 +53,13 @@ func detectV2(ctx context.Context, rt *runtime.Runtime, h host.Host, at string, 
 		}
 	}
 	notes := result.Observations()
-	active := l.Layer()
 	findings := rules.DetectV2(rules.ObserverPass{
-		Branch:    entries,
-		Covered:   covered,
-		Notes:     notes,
-		Known:     folded.ActiveObservations,
-		Aliases:   folded.Aliases,
-		Defined:   harness.DefinedQueries(h, cfg, harness.MemoryToolNames(rt)),
-		Detectors: rules.ModelDetectors(active.Harness()),
+		Branch:  entries,
+		Covered: covered,
+		Notes:   notes,
+		Known:   folded.ActiveObservations,
+		Aliases: folded.Aliases,
+		Defined: harness.DefinedQueries(h, cfg, harness.MemoryToolNames(rt)),
 	})
 	logData := map[string]any{"at": at, "uncited": len(findings.Uncited), "counts": findings.Counts, "tokens": rules.SourceTokens(covered)}
 	if len(notes) > 0 && l.Rules().Has(rules.RemedyKeepHead) {

@@ -7,23 +7,28 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/codepolicy"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/provenance"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
-// The detector and remedy kinds of the layer as data (docs/memory-interface.md, section 8).
+// The detector and remedy kinds of the layer as data (docs/memory-interface.md, section 8;
+// docs/code-tool.md, "Detectors").
 //
 // A detector definition declares what it counts: one of the kernel's checks (the six detectors
-// of section 7, whose counting is kernel code), or a memory query over the pass's own notes and
-// the history it covered, whose selected rows (or count) are the events. The six seeds name
-// their own checks. The kernel's checks are counted under their names on every observer pass
+// of section 7, whose counting is kernel code), or Go code (the code column): a func Count() int
+// over the detector's read-only om, run in a detector child of its own in the background after
+// each compaction, over what that compaction covered (DetectorDef.Code). The six seeds name
+// their own checks. The kernel's checks are counted under their names on every extraction
 // whatever the layer holds, since rules are judged by them alone (grading stays with the
-// kernel); every detector a model defines is counted beside them under DefinedCountKey, so it
-// flags problems without ever judging a remedy.
+// kernel); every Go detector a model defines is counted beside them under DefinedCountKey, in
+// the compaction's detector pass event (curated.ModelKindDetectorPass), so it flags problems
+// without ever judging a remedy. A detector declared with a query of the removed language (the
+// query column) still loads, validated by the frozen recognizer, and is retired: it counts
+// nothing and a held one is never settled.
 //
 // A remedy definition named after a catalogue remedy declares that remedy's catalogue entries:
 // the detectors it answers (within the kernel's bounds, Answers), the order the harness tries it
@@ -36,16 +41,21 @@ import (
 const DetectorTable = "detector"
 
 // DetectorColumns are a detector declaration's columns.
-var DetectorColumns = []string{"check", "query", "description"}
+var DetectorColumns = []string{"check", "query", "code", "description"}
 
-// Detector bounds: a declaration is one short query and one sentence.
+// Detector bounds: a query is one short line and a description one sentence; a detector's code
+// is bounded by codepolicy.CheckDetector (one recall page).
 const (
 	MaxDetectorQuery       = 200
 	MaxDetectorDescription = 200
 )
 
-// detectorSources are what a detector query reads: the pass's notes, and the history (user,
-// assistant and tool text) of the entries the pass covered.
+// RetiredQueryDetector is how a detector declared with a query of the removed language is
+// listed: it loads and counts nothing, and a held one is never settled.
+const RetiredQueryDetector = "retired: query language removed"
+
+// detectorSources are what a detector query of the removed language read: the pass's notes, and
+// the history of the entries the pass covered.
 var detectorSources = []string{legacyquery.SourceNotes, legacyquery.SourceHistory}
 
 // DefinedCountKey is the usage-ledger count key of a detector a model defined: beside the
@@ -55,21 +65,41 @@ func DefinedCountKey(name string) string { return "defined:" + name }
 // DetectorDef is one parsed detector declaration.
 type DetectorDef struct {
 	Name string
-	// Check is a kernel check (one of Detectors); "" for a query.
+	// Check is a kernel check (one of Detectors); "" otherwise.
 	Check string
-	// Query is a memory query whose selection is the count; "" for a check.
-	Query       string
+	// Query is a memory query of the removed language: the declaration is retired
+	// (RetiredQueryDetector) and counts nothing; "" otherwise.
+	Query string
+	// Code is a Go detector's source: a func Count() int with its helper functions, types and
+	// constants (codepolicy.CheckDetector); "" otherwise.
+	Code        string
 	Description string
 }
 
+// Retired reports whether d is a query detector of the removed language, listed as
+// RetiredQueryDetector, which no pass runs.
+func (d DetectorDef) Retired() bool { return d.Query != "" }
+
+// IsCode reports whether d is a Go detector, which detector passes run.
+func (d DetectorDef) IsCode() bool { return d.Code != "" }
+
+// detectorSeed is a seed's declaration. It keeps the columns the seeds were first shipped with
+// (no code column), so the seeds' digests, which a model's override records, do not change.
 func detectorSeed(name, description string) string {
-	return tables.Rows.Encode(tables.Table{Name: DetectorTable, Fields: DetectorColumns, Rows: [][]string{{name, "", description}}, Absent: [][]bool{{false, true, false}}})
+	return tables.Rows.Encode(tables.Table{Name: DetectorTable, Fields: []string{"check", "query", "description"}, Rows: [][]string{{name, "", description}}, Absent: [][]bool{{false, true, false}}})
 }
 
-// ParseDetector reads the detector declaration text named name: exactly one of a kernel check
-// and a query reading notes or history, of at most MaxDetectorQuery characters. The query is
-// validated by the frozen recognizer (legacyquery), so a declaration it accepted once keeps
-// loading after the query language is removed.
+// CodeDetectorText is the declaration of a Go detector: its source in the code column and its
+// description, in the rows codec.
+func CodeDetectorText(code, description string) string {
+	return tables.Rows.Encode(tables.Table{Name: DetectorTable, Fields: []string{"code", "description"}, Rows: [][]string{{code, description}}})
+}
+
+// ParseDetector reads the detector declaration text named name: exactly one of a kernel check,
+// a query reading notes or history (of at most MaxDetectorQuery characters, validated by the
+// frozen recognizer, legacyquery, so a declaration it accepted once keeps loading), and Go code
+// that passes codepolicy.CheckDetector. It runs on every load of the layer (the validator this
+// package registers), so a hand-edited file with a bad detector is refused there.
 func ParseDetector(name, text string) (DetectorDef, error) {
 	decoded, err := tables.Rows.Decode(strings.TrimSpace(text))
 	if err != nil {
@@ -85,16 +115,26 @@ func ParseDetector(name, text string) (DetectorDef, error) {
 		}
 	}
 	cell := func(c string) string { v, _ := t.Cell(0, c); return strings.TrimSpace(v) }
-	d := DetectorDef{Name: name, Check: cell("check"), Query: cell("query"), Description: strings.Join(strings.Fields(cell("description")), " ")}
+	d := DetectorDef{Name: name, Check: cell("check"), Query: cell("query"), Code: cell("code"), Description: strings.Join(strings.Fields(cell("description")), " ")}
 	if n := utf8.RuneCountInString(d.Description); n > MaxDetectorDescription {
 		return DetectorDef{}, fmt.Errorf("a detector's description is at most %d characters (this one %d)", MaxDetectorDescription, n)
 	}
+	given := 0
+	for _, v := range []string{d.Check, d.Query, d.Code} {
+		if v != "" {
+			given++
+		}
+	}
 	switch {
-	case (d.Check == "") == (d.Query == ""):
-		return DetectorDef{}, fmt.Errorf("a detector declares exactly one of check (a kernel check: %s) and query", strings.Join(Detectors, ", "))
+	case given != 1:
+		return DetectorDef{}, fmt.Errorf("a detector declares exactly one of check (a kernel check: %s), code (Go: func %s() int over the detector's om) and query (the removed language, retired)", strings.Join(Detectors, ", "), codepolicy.DetectorEntry)
 	case d.Check != "":
 		if !containsString(Detectors, d.Check) {
 			return DetectorDef{}, fmt.Errorf("check %q is not a kernel check; the checks are %s", d.Check, strings.Join(Detectors, ", "))
+		}
+	case d.Code != "":
+		if err := codepolicy.CheckDetector(d.Code); err != nil {
+			return DetectorDef{}, fmt.Errorf("detector code: %w", err)
 		}
 	default:
 		if n := utf8.RuneCountInString(d.Query); n > MaxDetectorQuery {
@@ -111,26 +151,10 @@ func ParseDetector(name, text string) (DetectorDef, error) {
 	return d, nil
 }
 
-// Count is what d counts in one observer pass: its kernel check's count (kernel, from
-// DetectObserverPass), or its query's selection over the pass's notes and covered history.
-// The notes' subjects are canonical over the memory before the pass and the pass's notes,
-// under the pass's aliases (ObserverPass.Known, Aliases), as the memory tool reads them. A
-// query that fails counts nothing.
-func (d DetectorDef) Count(p ObserverPass, kernel map[string]int) int {
-	if d.Check != "" {
-		return kernel[d.Check]
-	}
-	env := memquery.Env{Entries: p.Covered, Records: &memquery.Records{Observations: p.Notes, Reflections: []ledger.Reflection{}, Aliases: p.Aliases, SubjectContext: ledger.SubjectsOf(p.Known)}}
-	sel, err := memquery.Select(env, d.Query, detectorSources...)
-	if err != nil {
-		return 0
-	}
-	return sel.Count
-}
-
 // ModelDetectors are the detectors a model defined in its effective layer (held or written),
-// by name: those its passes count beside the kernel's checks. A declaration that no longer
-// parses is skipped.
+// by name, in the layer's order: Go detectors, which detector passes run, kernel-check
+// overrides and retired query detectors, which none does. A declaration that no longer parses
+// is skipped.
 func ModelDetectors(h layer.Harness) []DetectorDef {
 	out := []DetectorDef{}
 	for _, def := range h.List(layer.KindDetector) {

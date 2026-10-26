@@ -18,7 +18,7 @@ Memory is a ledger of records appended to the session as custom entries and fold
 | `session_before_compact` | Extract the unextracted cut range, run level 1 when it applies, and return the compaction on PiG's exact cut. |
 | `/om:status` | Show PiG's threshold and the context against it, the last compaction, records by origin, curated memory and the harness. |
 | `/om:view` | Show visible or full memory content and attempt to copy the rendered memory text. |
-| `memory` tool | Run Go code over the `om` API ([code-tool.md](code-tool.md)): read notes, reflections, raw history and saved memories, recover source evidence (``om.Recall(`id`)``), write to the curated store, and keep definitions per project. |
+| `memory` tool | Run Go code over the `om` API ([code-tool.md](code-tool.md)): read notes, reflections, raw history and saved memories, recover source evidence (``om.Recall(`<id>`)``), write to the curated store, and keep definitions per project. |
 
 ## Lifecycle
 
@@ -43,7 +43,7 @@ flowchart TD
 2. **The trigger.** With PiG's automatic compaction on, PiG compacts on its own. With it off, the extension asks for a compaction at an idle `agent_settled` when the reported context exceeds `contextWindow - reserveTokens`; see [When compactions happen](configuration.md#when-compactions-happen).
 3. **The hook.** `session_before_compact` keeps PiG's cut (`firstKeptEntryId`) exactly, extracts whatever of the removed range no turn end read, and folds the ledger.
 4. **Level 1.** When it applies ([`consolidate`](configuration.md#consolidate)), one forced-tool request on the session model labels, merges and reflects; code validates every proposal, so a record is dropped only when the record replacing it carries every specific it carries. Any failure appends nothing and level 0 stands.
-5. **The summary.** Code renders the folded ledger under the [summary budget](configuration.md#the-summary-budget) (`selection.Render`): ordered classes, every line ending with its anchor, and everything left out printed as a `memory` tool om snippet that lists it (``om.Notes(om.From(`A`).Through(`B`))``). When no record fits, a minimal brief of the removed range is written instead.
+5. **The summary.** Code renders the folded ledger under the [summary budget](configuration.md#the-summary-budget) (`selection.Render`): ordered classes, every line ending with its anchor, and everything left out printed as a `memory` tool om snippet that lists it (``om.Notes(om.From(`<first id>`).Through(`<last id>`))``). When no record fits, a minimal brief of the removed range is written instead.
 6. **Thinning.** Before each provider request, aged tool results the latest compaction retained are sent as their level-0 line and ``memory: om.Recall(`<entry id>`)``. The plan is decided once per compaction, so request bytes change only at a compaction. The session file keeps every original.
 
 ## Source entries and progress
@@ -124,7 +124,7 @@ Shows the full ledger at the branch tip, with the same clipboard behavior.
 
 ## Recall flow
 
-The `memory` tool's ``om.Recall(`id`)`` looks a 12-character lowercase hex id up among records and reflections first; an id it does not find falls through to an entry id on the branch, then a saved memory name (see [The memory tool](concepts.md#the-memory-tool)). For a record it reports whether it is active or dropped and returns the source entries its `sourceEntryIds` name; for a reflection, its supporting records and their sources. A text longer than one page is paged on line boundaries (`om.Recall(id, om.Offset(N))`, printed as the result's next-page snippet).
+The `memory` tool's ``om.Recall(`<id>`)`` looks a 12-character lowercase hex id up among records and reflections first; an id it does not find falls through to an entry id on the branch, then a saved memory name (see [The memory tool](concepts.md#the-memory-tool)). For a record it reports whether it is active or dropped and returns the source entries its `sourceEntryIds` name; for a reflection, its supporting records and their sources. A text longer than one page is paged on line boundaries (`om.Recall(id, om.Offset(N))`, printed as the result's next-page snippet).
 
 ## Error and race handling
 

@@ -120,8 +120,8 @@ repeated compactions, which rendering from records avoids.
   compaction on whatever of the cut range is not yet extracted. Records are appended as
   `om.observations.recorded` with `origin: code` and source entry ids, so the `notes` source works
   from the first turn and every compaction selects over the whole folded ledger.
-- **Input filter.** Extraction skips thinking blocks, the memory tool's and defined tools' calls and
-  results, and harness markup. The detectors read the unfiltered entries.
+- **Input filter.** Extraction skips thinking blocks, the memory tool's calls and results and those the
+  retired defined tools left on the branch, and harness markup. The detectors read the unfiltered entries.
 - **Conversation facts.** User statements and assistant replies carrying specifics
   (`ledger.Specifics`); corrections by explicit markers ("actually", "correction", "not X but Y",
   "instead of"), linked with `supersedes`; preferences by explicit construction ("always", "never",
@@ -293,10 +293,10 @@ split turn's opening request, never the result of a memory tool or a tool the ag
 result whose call is off the branch or whose tool call id names another result in the tail, never one
 whose thinned text would not be shorter. There is no stop and no limit to tune: every answered result is
 thinned, and every original stays recallable. It does so as a deterministic per-request transform (PiG's
-`context` event), a function of the branch up to the latest compaction entry and of the memory and
-defined tool names, decided at the first request after that compaction and cached in the process, so the
-bytes are stable between requests (after a restart they are decided again, and change once only if the
-defined tools changed) and the prompt cache prefix breaks only where a compaction already broke it.
+`context` event), a function of the branch up to the latest compaction entry and of the memory tool's
+name and the retired defined tools' names, decided at the first request after that compaction and cached in
+the process, so the bytes are stable between requests (after a restart they are decided again, and change
+once only if the stored definitions changed) and the prompt cache prefix breaks only where a compaction already broke it.
 The session file keeps every original for `om.Recall`. Smaller context means PiG compacts less often, so
 thinning lowers PiG's own request count.
 
@@ -405,8 +405,8 @@ equivalent snippet, never run. The reads keep the semantics this section records
 names: `recall` is `om.Recall`, `history` `om.History`, `notes` `om.Notes`, `saved` `om.Saved`, the
 `search`, `where`, `since`/`until`, `from`/`through` and `asof` stages the options `om.Search`,
 `om.Where`, `om.Since`/`om.Until`, `om.From`/`om.Through` and `om.AsOf()`, `event` `om.ByEvent()`, and
-the next-page query a list's `Next` snippet. The defined tools still run the grammar until they are
-removed (code-tool.md, order of work step 8).
+the next-page query a list's `Next` snippet. The defined tools are retired (code-tool.md, order of
+work step 8): none is registered or run, and `om.Retired()` lists each with its equivalent snippet.
 
 - `recall` takes record ids, then branch entry ids.
 - `history` excludes the current turn (from the last user message on the branch), tags every hit
@@ -447,7 +447,7 @@ removed (code-tool.md, order of work step 8).
   rows grow by short cells, inside the existing result bound. These columns are always listed;
   v1 records leave the level-0 ones empty. No schema may declare these names; a field a schema
   stored before took one reads as `schema_<name>` in a memory tool call and keeps its name (filling
-  that column) in a detector's query (`memquery.Env.ToolCall` unset).
+  that column) in a detector's read (`omhost.Reader.ToolCall` unset).
 - **What rests on a record.** Under v2, ``om.Recall(`<record id>`)`` lists `cited_by`: the reflections that
   cite it and still stand (`ledger.ActiveReflections`; a replaced one rests on nothing held), from the reverse links the fold computes (`FoldedLedger.CitedBy`, never stored), so
   retiring a record shows what loses support. A level-1 merge keeps its sources' entry ids, not
@@ -494,7 +494,9 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
 ### Self-built harness
 
 - Detectors are code, run at turn end and at compaction, counted per model; one evidence unit is one
-  compaction.
+  compaction. A detector the model defines is Go, run in the background after a compaction over what
+  it removed, never at turn end or inside the hook (`docs/code-tool.md`, "Detectors"); its counts are
+  in a `detector-pass` event, and a held one is settled on those events alone.
 - Definitions are proposed only inside the level-1 request, when the evidence changed. A held
   definition is settled only on evidence its proposing request did not produce (after nodecode's
   provisional definitions: "a call from inside a form the model is evaluating is the model calling its
@@ -743,7 +745,7 @@ branch-summary requests at the price of picked lines instead of prose.
   the proactive trigger, `fallbackModel` and the worker-model resolution (`resolveCandidate`'s auth
   rule stays for the session model), the v1-only remedies' application (their names still parse),
   v1's summary renderers, the engine switches (`config.V2`, `curated.Store.V2`, `memquery.Env.V2`,
-  now `Env.ToolCall`, which tells a tool call from a detector's query) and every v1-only test.
+  now `omhost.Reader.ToolCall`, which tells a tool call from a detector's query) and every v1-only test.
   What v2 writes keeps its `engine: v2` tag, so what v1 wrote stays apart, and everything v1 wrote
   still loads: records and reflections, `om.folded` compactions with `foldThroughEntryId`, coverage
   markers, layer files, held definitions and rules (listed, never run) and the curated store. A

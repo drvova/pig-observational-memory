@@ -397,13 +397,25 @@ func TestV2CodeNamesStayFreeForSubjectsAndLayer(t *testing.T) {
 // A tables summary written before the code tool ends its instructions with the query language's
 // paragraph (ledger.LegacyTablesRecallParagraph, frozen): its tables are still found, so its
 // omitted span starts keep classifying a code call's hits as omitted (its printed old queries
-// get the removal notice and a snippet hint: harness TestLegacyQueriesNeverRun).
+// get the removal notice and a snippet hint: harness TestLegacyQueriesNeverRun). So does one the
+// code tool's first build wrote, whose paragraph held its first placeholders
+// (ledger.FirstCodeTablesRecallParagraph, frozen).
 func TestPreUpgradeTablesSummaryStillClassifiesHits(t *testing.T) {
+	for _, frozen := range []string{ledger.LegacyTablesRecallParagraph, ledger.FirstCodeTablesRecallParagraph} {
+		preUpgradeTablesSummaryClassifies(t, frozen)
+	}
+	if ledger.FirstCodeTablesRecallParagraph == ledger.TablesRecallParagraph || !strings.Contains(ledger.FirstCodeTablesRecallParagraph, "om.Search(`w`)") {
+		t.Fatal("the first build's paragraph is frozen as it was written")
+	}
+}
+
+func preUpgradeTablesSummaryClassifies(t *testing.T, frozen string) {
+	t.Helper()
 	body := tables.Rows.Encode(
 		tables.Table{Name: "notes", Fields: []string{"id", "when", "relevance", "content"}, Rows: [][]string{{"aaaaaaaaaaa1", "2026-05-02", "high", "Shown."}}},
 		tables.Table{Name: "omitted", Fields: []string{"from", "to", "count", "first_id", "query"}, Rows: [][]string{{"2026-05-01", "2026-05-01", "2", "aaaaaaaaaaa2", "notes | from u0 | through u1"}}},
 	)
-	legacyInstructions := strings.Replace(selection.TablesInstructions, ledger.TablesRecallParagraph, ledger.LegacyTablesRecallParagraph, 1)
+	legacyInstructions := strings.Replace(selection.TablesInstructions, ledger.TablesRecallParagraph, frozen, 1)
 	if legacyInstructions == selection.TablesInstructions || !strings.Contains(ledger.LegacyTablesRecallParagraph, "recall <id>") {
 		t.Fatal("the fixture needs the frozen paragraph")
 	}

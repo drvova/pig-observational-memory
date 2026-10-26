@@ -12,51 +12,6 @@ import (
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
-func usage(names ...string) []curated.UsageEvent {
-	out := []curated.UsageEvent{}
-	for _, n := range names {
-		out = append(out, curated.UsageEvent{Name: "query:x", Event: n})
-	}
-	return out
-}
-
-const (
-	ok    = curated.EventCallOK
-	empty = curated.EventCallEmpty
-	fail  = curated.EventCallError
-	save  = curated.EventSave
-)
-
-func TestProbationTransitions(t *testing.T) {
-	cases := []struct {
-		name   string
-		events []string
-		want   string
-	}{
-		{"new", []string{save}, harness.StateProbation},
-		{"one result", []string{save, ok}, harness.StateProbation},
-		{"empty results do not establish", []string{save, empty, empty, empty}, harness.StateProbation},
-		{"two results establish", []string{save, ok, empty, ok}, harness.StateEstablished},
-		{"errors before the minimum", []string{save, fail, fail}, harness.StateProbation},
-		{"repeated errors retire", []string{save, fail, ok, fail, fail}, harness.StateRetired},
-		{"retired before established", []string{save, fail, fail, fail, ok, ok}, harness.StateRetired},
-		{"harmed retires", []string{save, ok, ok, curated.EventHarmed}, harness.StateRetired},
-		{"established counts start over", []string{save, fail, ok, ok, fail, ok}, harness.StateEstablished},
-		{"established then failing", []string{save, ok, ok, fail, fail, fail}, harness.StateRetired},
-		{"a redefinition starts over", []string{save, fail, fail, fail, save, ok}, harness.StateProbation},
-	}
-	for _, c := range cases {
-		s := harness.Probation(usage(c.events...))
-		if s.State != c.want || s.Reason == "" {
-			t.Errorf("%s: %+v, want %s", c.name, s, c.want)
-		}
-	}
-	s := harness.Probation(usage(save, ok, empty, fail))
-	if s.Calls != 3 || s.Results != 1 || s.Empty != 1 || s.Errors != 1 {
-		t.Fatalf("counts %+v", s)
-	}
-}
-
 // summaryEntries is a branch whose latest compaction rendered note a1 and omitted a2 and a3
 // (a2 is the omitted span's first id).
 func summaryEntries(t *testing.T) []ledger.Entry {

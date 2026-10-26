@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -62,10 +64,18 @@ func TestStatusShowsTheHarness(t *testing.T) {
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: "p/m", Text: "mode: replace\nMerge only exact repeats."}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "missed-paths", Model: "p/m", Text: "detector[1]{check,query,description}:\n  ,notes | count,notes counted"}); err != nil {
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "missed-paths", Model: "p/m", Text: rules.CodeDetectorText("func Count() int { return om.Notes().Matched }", "notes counted")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ls.Hold(layer.Definition{Kind: layer.KindDetector, Name: "held-one", Model: "p/m", Text: "detector[1]{check,query,description}:\n  ,notes | count,notes counted again"}); err != nil {
+	if _, err := ls.Hold(layer.Definition{Kind: layer.KindDetector, Name: "held-one", Model: "p/m", Text: rules.CodeDetectorText("func Count() int { return om.History().Matched }", "entries counted")}); err != nil {
+		t.Fatal(err)
+	}
+	// A query detector of the removed language loads and is listed as retired.
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "old-query", Model: "p/m", Text: "detector[1]{check,query,description}:\n  ,notes | count,notes counted"}); err != nil {
+		t.Fatal(err)
+	}
+	// The latest detector pass flagged the written Go detector.
+	if err := store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindDetectorPass, Engine: curated.EngineV2, Cut: "e9", Counts: map[string]int{rules.DefinedCountKey("held-one"): 4}, Errors: map[string]string{"missed-paths": "runtime: panic: boom"}}); err != nil {
 		t.Fatal(err)
 	}
 	// The consolidation seed changes after the replacement was written (an upgrade): the
@@ -76,8 +86,9 @@ func TestStatusShowsTheHarness(t *testing.T) {
 	status := statusText(h, config.Defaults)
 	for _, want := range []string{
 		"Kernel floor: engaged",
-		"Layer (p/m): generation 2, 2 definitions, definitions are offered in level 1 when the harness evidence changes, held: detector/held-one",
-		"detector: held-one held; missed-paths written gen 2",
+		"Layer (p/m): generation 3, 3 definitions, definitions are offered in level 1 when the harness evidence changes, held: detector/held-one",
+		"detector: held-one held; missed-paths written gen 2, flagged: runtime: panic: boom; old-query retired (query language removed)",
+		"Detector pass after the compaction at e9: held-one 4; errors (a held one is reverted at the next compaction, a written one flagged): missed-paths: runtime: panic: boom",
 		"stale override skipped, the seed stands: instructions/consolidation",
 	} {
 		if !strings.Contains(status, want) {

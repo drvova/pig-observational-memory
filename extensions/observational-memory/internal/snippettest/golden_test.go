@@ -1,14 +1,19 @@
 package snippettest_test
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/snippettest"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -78,8 +83,12 @@ func TestGoldenSnippets(t *testing.T) {
 	if got := snippettest.RunWith(t, call, "om.Files()"); len(got.IDs) != 1 {
 		t.Errorf("om.Files() lists each path's newest state: %v", got.IDs)
 	}
-	if got := snippettest.Run(t, entries, om.SnippetHistorySearch); got.Matched != 0 {
-		t.Errorf("history search for w: %+v", got)
+	// The fixed forms hold placeholders: run as they stand they are refused, never read as
+	// "nothing called <id>" or as a search; with real values they run.
+	for _, fixed := range []string{om.SnippetRecall, om.SnippetRecallEntry, om.SnippetRecallName, om.SnippetHistorySearch, om.SnippetSavedSearch, om.SnippetNotesSpan} {
+		if res := snippettest.Try(t, &omhost.Call{Entries: entries}, fixed); !om.NamesPlaceholder(res) {
+			t.Errorf("%s ran as it stands: %s", fixed, res)
+		}
 	}
 	if got := snippettest.Run(t, entries, "om.History(om.Search(`sourdough`))"); len(got.IDs) != 5 || got.IDs[0] != "m04" {
 		t.Errorf("history %v", got.IDs)
@@ -93,6 +102,41 @@ func TestGoldenSnippets(t *testing.T) {
 	for _, fixed := range []string{om.SnippetRecall, om.SnippetHistorySearch, om.SnippetSavedSearch, om.SnippetNotesSpan} {
 		if err := om.CheckSnippet(fixed); err != nil {
 			t.Errorf("%s: %v", fixed, err)
+		}
+	}
+}
+
+// Every value in the fixed texts' snippet forms (the summary instructions, the brief, the
+// fallback summary, the index, the tool's prompt lines and the manual) is a placeholder of the
+// one form, a raw string holding <what goes there>: none reads as a runnable value.
+func TestFixedTextsUseOnePlaceholderForm(t *testing.T) {
+	texts := map[string]string{
+		"tables":    selection.TablesInstructions,
+		"lines":     selection.LinesInstructions,
+		"brief":     serialize.BriefHeading,
+		"fallback":  hooks.V2FallbackSummary,
+		"index":     curated.IndexHeader,
+		"snippet":   omtool.PromptSnippet,
+		"guideline": strings.Join(omtool.PromptGuidelines, "\n"),
+		"manual":    om.Manual(""),
+	}
+	raw := regexp.MustCompile("`([^`]*)`")
+	// A call's one double-quoted argument is an example value too (om.Str("name") and
+	// kept("name") once read literally); a field name passed with its value, as
+	// Where("kind", k) documents Kind, is the real name.
+	quoted := regexp.MustCompile(`\(\s*"([^"]*)"\s*\)`)
+	for name, text := range texts {
+		found := raw.FindAllStringSubmatch(text, -1)
+		for _, m := range quoted.FindAllStringSubmatch(text, -1) {
+			t.Errorf("%s holds the double-quoted value %s; a value is a raw-string placeholder", name, m[0])
+		}
+		if name != "lines" && name != "manual" && len(found) == 0 {
+			t.Errorf("%s names no snippet form", name)
+		}
+		for _, m := range found {
+			if !om.IsPlaceholder(m[1]) {
+				t.Errorf("%s holds %s, not a placeholder", name, m[0])
+			}
 		}
 	}
 }

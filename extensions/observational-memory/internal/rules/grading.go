@@ -49,8 +49,9 @@ func eventTime(e curated.ModelEvent) (time.Time, bool) {
 }
 
 // Evidence is a model's counted evidence as a level-1 offer shows it (V2EvidenceOf): the events
-// each kernel check and each detector it defined counted over its last MinEvidence compactions,
-// with the source tokens their detector runs read, and its rules with their states.
+// each kernel check counted over its last MinEvidence compactions, and each Go detector it
+// defined counted in those compactions' detector passes, with the source tokens level 0 read,
+// and its rules with their states.
 type Evidence struct {
 	Model          string
 	Passes, Tokens int

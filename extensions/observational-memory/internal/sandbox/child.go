@@ -53,10 +53,13 @@ type childHooks struct {
 	beforeEval func(src string)
 }
 
-// child is the namespace child's state.
+// child is a child's state: the namespace child's, or one detector run's (detector).
 type child struct {
 	hooks *childHooks
-	out   io.Writer // the protocol pipe to the host
+	// detector marks a detector child: its om table is the detector's (codepolicy.DetectorOMNames)
+	// and it has no seeded store functions.
+	detector bool
+	out      io.Writer // the protocol pipe to the host
 
 	sendMu  sync.Mutex
 	control chan msg // init, run and define, in order
@@ -85,6 +88,15 @@ type child struct {
 	holding bool
 	heldNow []reflect.Value
 	held    []reflect.Value
+
+	// While discarding, the capture function counts a statement whose values the code
+	// dropped (an expression statement before the last) rather than rendering them, and keeps
+	// the failure among them (discardedFailure): discardedErrs holds their texts within
+	// ResultChars together, discardedFailed counts them all.
+	discarding      bool
+	discarded       int
+	discardedErrs   []string
+	discardedFailed int
 }
 
 // capture is the last value the capture function rendered.
@@ -96,6 +108,18 @@ type capture struct {
 // namespaceMain is the namespace child's main: it never returns until the host goes away or
 // the child must exit.
 func namespaceMain(args []string, hooks *childHooks) int {
+	return childMain(args, hooks, false)
+}
+
+// detectorMain is a detector child's main (docs/code-tool.md, "The detector om"): the same
+// protocol, an interpreter built from one detector's source and none of the agent's units, a
+// read-only om table and no seeded store functions. It answers one run and is killed.
+func detectorMain(args []string, hooks *childHooks) int {
+	return childMain(args, hooks, true)
+}
+
+// childMain is every child's main.
+func childMain(args []string, hooks *childHooks, detector bool) int {
 	debug.SetTraceback("none")
 	oom := setOOMScore()
 	if oom != oomSet {
@@ -110,13 +134,14 @@ func namespaceMain(args []string, hooks *childHooks) int {
 		return exitSetup
 	}
 	c := &child{
-		hooks:   hooks,
-		out:     out,
-		control: make(chan msg, 1),
-		replies: make(chan msg, 1),
-		stdout:  newBoundedWriter(ResultChars),
-		diag:    newBoundedWriter(ResultChars),
-		defs:    map[string]string{},
+		hooks:    hooks,
+		detector: detector,
+		out:      out,
+		control:  make(chan msg, 1),
+		replies:  make(chan msg, 1),
+		stdout:   newBoundedWriter(ResultChars),
+		diag:     newBoundedWriter(ResultChars),
+		defs:     map[string]string{},
 	}
 	// The reader is its own goroutine, so the host's death ends the child even inside a
 	// runaway loop.
@@ -255,6 +280,19 @@ func exports(c *child) interp.Exports {
 		codepolicy.CaptureName: captureFn,
 		codepolicy.HeldName:    reflect.ValueOf(c.heldValue),
 	}
+	if c.detector {
+		// A detector reads, counts and returns: its om holds the detector's reads, options and
+		// types only, and it has none of the namespace's seeded functions.
+		omKey := codepolicy.OMImport + "/" + codepolicy.OMImport
+		for name := range ex[omKey] {
+			if !slices.Contains(codepolicy.DetectorOMNames, name) {
+				delete(ex[omKey], name)
+			}
+		}
+		for _, name := range codepolicy.SeededFuncs {
+			delete(ex[seedPath+"/"+seedPath], name)
+		}
+	}
 	ex["."] = map[string]reflect.Value{"MapTypes": reflect.ValueOf(mapTypes(captureFn))}
 	return ex
 }
@@ -385,6 +423,7 @@ func (c *child) run(m msg) msg {
 	c.callMu.Lock()
 	c.inCall, c.call, c.seq, c.strs, c.captured = true, m.Call, 0, m.Strings, nil
 	c.callMu.Unlock()
+	c.discarded, c.discardedErrs, c.discardedFailed = 0, nil, 0
 	defer func() {
 		c.callMu.Lock()
 		c.inCall, c.strs = false, nil
@@ -462,6 +501,12 @@ func (c *child) run(m msg) msg {
 		var err error
 		if g.capture {
 			err = c.evalCapture(m.Chunks[g.chunks[0]].Src)
+		} else if ch := m.Chunks[g.chunks[0]]; ch.Expr && c.compiles(wrapCapture(ch.Src)) {
+			// An expression statement before the last whose values the code drops: it runs
+			// wrapped, so the capture function counts it, and the result says so.
+			c.discarding = true
+			_, err = c.eval(wrapCapture(ch.Src))
+			c.discarding = false
 		} else {
 			_, err = c.eval(src)
 			var ee *evalError
@@ -489,6 +534,7 @@ func (c *child) run(m msg) msg {
 		}
 	}
 	res.Compiled = string(mask)
+	res.Discarded, res.DiscardedErrs, res.DiscardedFailed = c.discarded, c.discardedErrs, c.discardedFailed
 	// Printed output, the last value and the error together fit one result; the error is kept
 	// first, then the output, then the value.
 	var cutErr, cutOut int
@@ -768,14 +814,96 @@ func (c *child) captureValues(vs ...any) {
 		}
 		return
 	}
+	if c.discarding {
+		c.discarded++
+		if failure := discardedFailure(vs); failure != "" {
+			c.discardedFailed++
+			used := 0
+			for _, e := range c.discardedErrs {
+				used += utf8.RuneCountInString(e)
+			}
+			if text, _ := cutChars(failure, ResultChars-used); text != "" {
+				c.discardedErrs = append(c.discardedErrs, text)
+			}
+		}
+		return
+	}
+	text, cut := renderValues(vs, ResultChars)
+	c.captured = &capture{text: text, cut: cut}
+}
+
+// discardedFailure is the failure among a dropped expression's values, so a refused write or a
+// failed seeded call before the last expression is never silent: a non-nil last error ("error:
+// <message>"), or a seeded function's failure string ("error: <function>: <message>", seedCall).
+// "" when the values hold none.
+func discardedFailure(vs []any) string {
+	if len(vs) == 0 {
+		return ""
+	}
+	if err, ok := vs[len(vs)-1].(error); ok && err != nil {
+		return "error: " + err.Error()
+	}
+	if s, ok := vs[0].(string); ok && len(vs) == 1 && strings.HasPrefix(s, "error: ") {
+		return s
+	}
+	return ""
+}
+
+// renderValues renders an expression's values within budget characters. A call whose last
+// result is an error, as (T, error) is, renders its values alone when the error is nil, and
+// "error: <message>" when it is not, after its values only when one of them is not the zero
+// value. The capture function takes ...any, so a nil error arrives as a nil interface: a nil
+// last value of several is read as a nil error. The interpreter also boxes a typed nil error (a
+// nil *T returned as error) as a bare nil, so it renders as success where compiled Go would
+// see a non-nil error (docs/code-tool.md, "Result").
+func renderValues(vs []any, budget int) (string, bool) {
+	var failure any
+	if n := len(vs); n >= 2 {
+		if last := vs[n-1]; last == nil {
+			vs = vs[:n-1]
+		} else if _, ok := last.(error); ok {
+			failure, vs = last, vs[:n-1]
+		}
+	}
 	var parts []string
 	cut := false
-	budget := ResultChars
+	if failure != nil {
+		s, over := render(failure, budget-len("error: "))
+		parts = append(parts, "error: "+s)
+		budget -= utf8.RuneCountInString(s) + len("error: ") + 1
+		cut = over
+		if allZero(vs) {
+			return parts[0], cut
+		}
+	}
+	var values []string
 	for _, v := range vs {
+		if cut || budget <= 0 {
+			cut = true
+			break
+		}
 		s, over := render(v, budget)
-		parts = append(parts, s)
+		values = append(values, s)
 		budget -= utf8.RuneCountInString(s) + 2
 		cut = cut || over
 	}
-	c.captured = &capture{text: strings.Join(parts, ", "), cut: cut}
+	text := strings.Join(values, ", ")
+	if failure != nil {
+		if text == "" {
+			// The error used the whole budget: no value is shown before it.
+			return parts[0], cut
+		}
+		text += "\n" + parts[0]
+	}
+	return text, cut
+}
+
+// allZero reports whether every value is its type's zero value (nil included).
+func allZero(vs []any) bool {
+	for _, v := range vs {
+		if v != nil && !reflect.ValueOf(v).IsZero() {
+			return false
+		}
+	}
+	return true
 }

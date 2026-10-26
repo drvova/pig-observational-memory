@@ -29,7 +29,7 @@ This extension does the memory work while the session runs, so it is ready befor
 
 - **No summary chains.** Records are saved as entries in the session, and every compaction renders them as written. They are never re-summarized.
 - **No extra requests.** Records are picked out of the conversation by code at every turn end. A compaction makes at most one model request, on the session model, to merge and reflect, in place of PiG's own summarizer; nothing runs between compactions.
-- **Traceable memory.** Every line ends with the entry it came from, and the agent can read it back with the `memory` tool (``om.Recall(`id`)``), or search the raw history behind the summary. Whatever the summary leaves out is printed as the snippet that lists it.
+- **Traceable memory.** Every line ends with the entry it came from, and the agent can read it back with the `memory` tool (``om.Recall(`<id>`)``), or search the raw history behind the summary. Whatever the summary leaves out is printed as the snippet that lists it.
 - **Unread history is never lost.** Before rendering, the compaction reads whatever of the removed range no turn end read, and a record is dropped only when the record replacing it carries every specific it carries.
 
 ## Quick start
@@ -90,7 +90,7 @@ omitted[1]{from,to,count,spans,first_id,last_id,query}:
   2026-01-08,2026-01-14,38,3,m02,m39,om.Notes(om.From(`m02`).Through(`m39`))
 ```
 
-When a record is too compressed to act on, the agent runs ``om.Recall(`id`)`` with the `memory` tool and gets the original conversation back. The `memoryFormat` setting switches to a bracketed line layout; [Summary format](docs/concepts.md#summary-format) describes both.
+When a record is too compressed to act on, the agent runs ``om.Recall(`<id>`)`` with the `memory` tool and gets the original conversation back. The `memoryFormat` setting switches to a bracketed line layout; [Summary format](docs/concepts.md#summary-format) describes both.
 
 The summary budget is derived from what PiG reports: never more than PiG's threshold leaves room for, the model's output limit, or what the compaction removed; `compactionSummaryMaxTokens` caps it. Before each request, aged tool results the latest compaction retained are sent as their one-line record and the snippet that recalls the original. [How it works](docs/how-it-works.md) covers the lifecycle and the ledger; [memory v2](docs/memory-v2.md) is the design.
 
@@ -157,7 +157,7 @@ extensions/observational-memory/   the extension, a standalone Go module
     ├── runtime/                   per-process state, session model resolution
     ├── omtool/, om/, omhost/      the memory tool: its surface, the om API, the extension's answers
     ├── sandbox/, codepolicy/, codestore/  the child process, the code policy, kept definitions
-    ├── memquery/, legacyquery/    the removed query language (still run by defined tools) and its frozen recognizer
+    ├── legacyquery/               the frozen recognizer of the removed query language (reads old text, runs nothing)
     ├── commands/, recall/         /om:status, /om:view, om.Recall evidence
     ├── curated/, harness/, rules/ long-lived memories, the per-model harness, rules
     ├── kernel/, layer/, declare/  what no definition may touch; the model-built layer

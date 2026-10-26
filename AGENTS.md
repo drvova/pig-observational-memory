@@ -42,19 +42,18 @@ from `omtool.Details`, which level 0 (`writes`) and `dropped-then-queried` (`rec
 query text is never run: `internal/legacyquery` (frozen) answers it with a snippet hint and still reads old calls,
 stored definitions and `ledger.LegacyTablesRecallParagraph` summaries. Every printed pointer is an om snippet from
 `om.FormatRead` (no comma, quote or `|`, so it survives every codec); tests run them through a real child with
-`internal/snippettest`. A child kill goes through `harness.Namespace.kill`, which re-reads the store's types and digests for the next call's policy check, and `forget` refuses a name its own call declares. The root `lifecycle_test.go` drives events and tool calls through the registered extension over a pipe with `PIG_HOME` set to a temp dir (a root test that reaches the real host must never write `~/.pig`). Defined tools (`memquery.Run`) stay until step 8. Slash commands stay read-only views
+`internal/snippettest`. Fixed texts name snippet forms through `om.Snippet*`, whose values are the placeholders
+`om.IsPlaceholder` lists (``om.Recall(`<id>`)``), refused if run as they stand; never print a bare-letter example. A child kill goes through `harness.Namespace.kill`, which re-reads the store's types and digests for the next call's policy check, and `forget` refuses a name its own call declares. The root `lifecycle_test.go` drives events and tool calls through the registered extension over a pipe with `PIG_HOME` set to a temp dir (a root test that reaches the real host must never write `~/.pig`). The query language's interpreter is deleted; `internal/legacyquery` only reads old text. Defined tools are retired: `harness.Manager.SkipNames` keeps their names, `om.Retired()` and `/om:status` list them; never register, run or grade one. Slash commands stay read-only views
 (`/om:status`, `/om:view`); `/om:status` reads the code store and the supervisor's record, never starting a child.
-`internal/curated` is the agent-written memory (store under PiG's config root, defined queries, ranked index, staging
+`internal/curated` is the agent-written memory (store under PiG's config root, retired defined queries loaded and listed only, ranked index, staging
 and `curated.Check` on every write and load, forget retires); writes go through `curated.Call.Run`.
 `internal/harness` is the per-model harness: profiles are a pure function of
 `<store>/models/<model>.jsonl` (`harness.Compute`, `MinEvidence`) over the events tagged `engine: v2` only, one unit
-per compaction; it owns the memory tool's execution and the agent-defined tools, which it registers and
-(de)activates only through `host.Tools`; it never touches the `memory` tool's activation or a tool it did not
-register. `om.Propose` is refused (`omhost.ErrDefinedInLevel1`); `om.LayerForget` and `om.LayerRollback` act on the session
+per compaction; it owns the memory tool's execution and registers no other tool. `om.Propose` is refused (`omhost.ErrDefinedInLevel1`); `om.LayerForget` and `om.LayerRollback` act on the session
 model's layer and never touch rules (`rules.IsRule`). Definitions and
 rules are proposed only inside the level-1 request (`hooks/definitions_v2.go`, `rules.CheckV2Definition`), pass
 `harness.CheckModelDefinition`, are held and settled only by `rules.SettleV2` on later compactions' evidence.
-`internal/rules` decides only rules tagged `engine: v2` (v2 detectors, code remedies `keep-head`, `switch-codec`;
+`internal/rules` decides only rules tagged `engine: v2` (v2 detectors: a kernel check, or a model's Go `func Count() int` that passes `codepolicy.CheckDetector`, run in its own child after each compaction by `hooks/detectors_v2.go`, never inside the hook, killed at the next compaction, `session_start` or `session_shutdown`; code remedies `keep-head`, `switch-codec`;
 `long-spec` is retired and listed, never applied); v1's rules and remedy names still parse (`rules.Check`, `ProtectKindMaxFullness`) and are listed,
 never applied. `internal/kernel` is what no definition may touch (`kernel.Owns`, `Check`, the floor,
 `kernel-consolidate`; v1's retired prompt ids stay owned); `internal/layer` stores the model-built definitions and

@@ -63,6 +63,18 @@ type ModelEvent struct {
 	// before its level 1, so a held definition is settled only on passes that ran under exactly
 	// its text, whichever session or process recorded others in between (rules.SettleV2).
 	RanHeld []string `json:"ranHeld,omitempty"`
+	// Cut is, for a detector pass (ModelKindDetectorPass), the id of the compaction's
+	// firstKeptEntryId: the cut whose removed range the pass's detectors read.
+	Cut string `json:"cut,omitempty"`
+	// Errors are, for a detector pass, the detectors whose run gave no count, by name, with the
+	// reason (a compile failure, a panic, a crash, a disallowed method, or killed unfinished).
+	Errors map[string]string `json:"errors,omitempty"`
+	// Unfinished is, for a detector pass, the detector whose run was killed unfinished, so the
+	// next pass starts its order after it (docs/code-tool.md, "Running, and the time bound").
+	Unfinished string `json:"unfinished,omitempty"`
+	// Pending are, for a detector pass, the detectors level 1 proposed at the compaction whose
+	// smoke run the pass made first: held when it returned a count, refused otherwise.
+	Pending []string `json:"pending,omitempty"`
 }
 
 // EngineV2 is ModelEvent.Engine for an event counted under memory v2 (config.EngineV2).
@@ -74,7 +86,8 @@ const (
 	ModelKindMemory = "memory"
 	// ModelKindDecode is one decode of a rows table the observer was sent.
 	ModelKindDecode = "decode"
-	// ModelKindDefined is a call of a tool the agent defined.
+	// ModelKindDefined is a call of a tool the agent defined with the removed query language:
+	// history, never graded (the defined tools are retired, docs/code-tool.md).
 	ModelKindDefined = "defined"
 	// ModelKindCode is a call of the memory tool since it runs Go code (docs/code-tool.md):
 	// Outcome error for code that did not compile, panicked or crashed the child, ok for a
@@ -91,6 +104,14 @@ const (
 	// since the previous one, so one evidence unit is one compaction (docs/memory-v2.md,
 	// "Self-built harness").
 	ModelKindDetect = "detect"
+	// ModelKindDetectorPass is one detector pass (docs/code-tool.md, "Running, and the time
+	// bound"): the Go detectors a model defined, run in the background after a compaction over
+	// what it covered, each in a detector child of its own. Counts carry each detector's count
+	// under rules.DefinedCountKey (zero included, so a run that counted is told from one that
+	// did not run) and the smoke runs refused (rules.CountLevel1Refused); Errors the runs that
+	// gave no count; RanHeld the held texts whose run started. Never a judge of a rule: the
+	// kernel's findings stay on the compaction pass.
+	ModelKindDetectorPass = "detector-pass"
 )
 
 // The model event outcomes.

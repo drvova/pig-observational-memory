@@ -1,13 +1,21 @@
 # The code tool: one `memory` tool that runs Go
 
-Status: steps 1 to 7 of the order of work are built and pass CI's checks: the `memory` tool runs
-code. Outstanding: step 7's manual gate, the real PiG session (code calls, a definition kept
-across a PiG restart, a cancelled loop, a compaction whose printed snippets run when pasted, request
-events staying at 0 between compactions), has not been run, and neither has step 4's packed-size
-report; both are run, and their output pasted into the pull request, before the steps merge.
-Defined tools stay registered until step 8 (in the interim their results still print the old
-grammar's paging and recall pointers, which the memory tool answers with the removal notice and
-the snippet to run instead), Go detectors are step 9 and the grammar's deletion step 10. This design replaces the memory tool's query language
+Status: all ten steps of the order of work are built and pass CI's checks: the `memory` tool runs
+code, the defined tools are removed (nothing registers, runs, grades or (de)activates them;
+`om.Retired()` and `/om:status` list them, and their names stay in the skip list), the
+detectors a model defines are Go (`internal/hooks/detectors_v2.go`, `sandbox.RunDetector`,
+`omhost.DetectorCall`, `codepolicy.CheckDetector`): run in the background after each compaction,
+one detector child per run, killed at the next compaction, `session_start` or `session_shutdown`,
+and recorded as one `curated.ModelKindDetectorPass` event per pass; `query` detectors are retired),
+and the grammar is deleted: `internal/memquery` is gone, and only the frozen recognizer
+(`internal/legacyquery`) reads text written in the old language, running none of it.
+Outstanding: the manual gates' real PiG sessions (step 7's: code calls, a definition kept across a
+PiG restart, a cancelled loop, a compaction whose printed snippets run when pasted, request events
+staying at 0 between compactions; step 8's: a branch with old defined-tool calls that are skipped
+and not thinned; step 9's: a level-1 detector proposal held by its smoke run, a later pass running
+it, a looping held detector that neither delays a compaction nor survives the next one; step 10's
+final session) have not been run, and neither has step 4's packed-size report; they are run, and
+their output pasted into the pull request, before the steps merge. This design replaces the memory tool's query language
 (`internal/memquery`'s pipeline grammar), the agent-defined tools, `define` and the defined queries
 with one tool that runs Go code through the yaegi interpreter (`github.com/traefik/yaegi` v0.16.1).
 The interpreter and its namespace live in one long-lived child process, and `om` calls come back to
@@ -102,8 +110,8 @@ function and carries no part of the manual, the `kept()` list or a codec spec. T
 descriptions in the advertised JSON schema are fixed too and name no `om` symbol: `code` is "Go
 source; empty prints the manual", `strings` is "Optional named text values the code can read; see
 the manual". The tool also carries `Label`, `PromptSnippet` and `PromptGuidelines`, which enter the
-system prompt: they are fixed text too, naming only frozen snippet forms (``om.Recall(`id`)``,
-``om.History(om.Search(`w`))``) and that empty code prints the manual, never an old-grammar form.
+system prompt: they are fixed text too, naming only frozen snippet forms (``om.Recall(`<id>`)``,
+``om.History(om.Search(`<words>`))``) and that empty code prints the manual, never an old-grammar form.
 Capabilities are found only through the manual. A test serializes the whole advertised spec (name,
 label, description, parameter schema, `PromptSnippet` and `PromptGuidelines`) and asserts that it is
 byte-identical under two profiles with different codecs and before and after a definition is kept,
@@ -125,6 +133,19 @@ The result text is, in order:
 1. What the code printed (`fmt.Print*`, `print`, `println`; stdout and stderr are one stream).
 2. The last value, when the code's final top-level unit is an expression with a value. The child
    renders it, inside the call and under the call's deadline (see "Splitting and the last value").
+   A call whose last result is an error, as `(T, error)` is, renders `T` alone when the error is
+   nil and `error: <message>` when it is not, after the other values only when one of them is not
+   its zero value (the capture function takes `...any`, so a nil last value of several reads as a
+   nil error; the interpreter also passes a typed nil error, a nil `*T` returned as `error`, as a
+   bare nil, so it renders as success where compiled Go would see a non-nil error, the same edge
+   as a `(T, any)` result). A last call of a `fmt` printer (`Print`, `Printf`, `Println` and the `Fprint`
+   forms) reports no value: its byte count and error are not the code's. When expression
+   statements before the last had values the code dropped, one line says how many and suggests
+   `fmt.Println` or putting the wanted value last (a real session showed models expecting every
+   value); the semantics stay: only the last value is shown. A dropped value that is a failure (a
+   non-nil last error, or a seeded function's `error: <function>: <message>` string) is never
+   silent: each adds a line, `A discarded value was an error: <message>`, their texts within one
+   result together, and a count of any left out.
 3. One line per definition kept (`kept: up, Box, Box.Twice`) and per definition refused, with the
    reason.
 
@@ -513,7 +534,10 @@ need A. Recommendation: B for functions, A for the rest, and the result says whi
   allow-list, and refused otherwise.
 - `describe(x any) string`, `man() string`, `kept(name ...string) string` and
   `forget(name string) string`, bound as dot-imported functions from a host package. `kept`,
-  `forget` and the store part of `man` are calls back to the extension.
+  `forget` and the store part of `man` are calls back to the extension. They return one string,
+  so a failure is that string, `error: <function>: <message>`, as a failed `(T, error)` result
+  renders, and the code goes on; one that is not the last expression is still reported (see
+  "Result").
 - The capture function the runner wraps around the last expression, under a name in the owned group.
 
 None of these can be redeclared or shadowed (see "Code policy").
@@ -594,8 +618,8 @@ view, because the summary's printed snippets must list exactly what they count i
 memory (unchanged from `until`/`through` and `asof`, `docs/memory-v2.md` "Memory tool").
 
 `Where`, `Contains`, `SortBy` and `Note.Fields` use the tool-call naming: a v1 schema field that
-collides with a level-0 column is read as `schema_<name>` (today's `memquery/sources.go` with
-`Env.ToolCall` set), so `om.Where("status", ...)` never reads a schema value. Detectors use the
+collides with a level-0 column is read as `schema_<name>` (`omhost.Reader.ToolCall` set, as
+`memquery.Env.ToolCall` was), so `om.Where("status", ...)` never reads a schema value. Detectors use the
 detector naming (see "Detectors"). Both are tested with a v1 schema fixture.
 
 ### Records
@@ -1141,7 +1165,7 @@ pass as plain data, beside the summary it already renders, and hands it to the b
 nothing in it refers to live state. `Notes` reads the pass's records, `History` the pass's
 entries (filtered as `ObserverPass.Covered` is today), `NoteByID` a record of the folded ledger as
 of that compaction, `Subjects` the pass's aliases and known subjects. Field naming is the detector
-naming (`Env.ToolCall` unset: no `schema_` shadowing), as today. A detector run has no side effect:
+naming (`omhost.Reader.ToolCall` unset: no `schema_` shadowing), as today. A detector run has no side effect:
 it reads, counts and returns.
 
 The kernel's detectors are unaffected: `rules.V2Detectors` and `keep-head` still run synchronously
@@ -1188,7 +1212,9 @@ Only a smoke run that returns a count holds it, written to the layer by the back
 Detectors never block anything (decision 5). They do not run at turn end, and they do not run
 inside `session_before_compact`: the hook only builds the detector pass (above) and, once it has
 produced its compaction, starts one background goroutine for the pass that it does not wait on. If
-the hook's request context was cancelled, so PiG discards the compaction, no pass starts.
+the hook's request context was cancelled, so PiG discards the compaction, no pass starts. The hook
+builds the pass's data only once the order below has at least one run, so a model with no Go
+detector pays nothing for them on the compaction path.
 
 The pass's runs are serialized: the pending smoke runs first, then the held detectors (so held
 evidence is not starved), then the written ones, each group in an order that starts after the
@@ -1202,10 +1228,13 @@ count, exit. Each run's outcome is one of:
 | a count | `defined:<name>` = the count |
 | compile failure, panic, crash (out of memory, stack overflow, fatal error), a disallowed `om` method, a protocol line over its bound | an error for that detector, with the reason |
 | killed unfinished (the run had started when the next compaction, `session_start` or `session_shutdown` came) | an error for that detector: "unfinished at the next compaction" (or "at session end") |
-| never started (still queued at the kill) | nothing: no count and no error, and it is not named in `RanHeld` |
+| never started (still queued at the kill, or reached by the kill before its child was spawned: `sandbox.DetectorResult.Queued`) | nothing: no count and no error, it is not named in `RanHeld` or as the unfinished one, and the runs after it are queued too |
+| a host-side panic while it ran (the read engine answering its `om` calls, or holding its smoke run) | an error for that detector, `crashed: host panic: ...`, recovered in the pass's goroutine, which is outside the hook's recover; the next run goes on and the event is still written |
 
 The bound is therefore an event PiG already raises, never a tuned number: at the start of the next
-`session_before_compact` (before `rules.SettleV2` reads evidence), at `session_start` and at
+`session_before_compact` whose request is not already cancelled (before `rules.SettleV2` reads
+evidence; an attempt cancelled before the hook ran compacts nothing and leaves the pass running),
+at `session_start` and at
 `session_shutdown`, the runtime kills the run in flight, waits for its child, and writes the pass's
 detector event synchronously. Because each run is its own process, a crash or a kill is charged
 only to the detector that was running, and the next run starts a fresh child: one bad detector
@@ -1218,8 +1247,11 @@ config.EngineV2`, carrying the compaction's cut id, the pass's token figure
 the held texts whose run started (finished or failed). The background goroutine writes it when the
 pass's last run ends; when a kill comes first, the kill writes it, exactly once either way (a
 per-pass flag under the runtime's lock). The kernel's findings stay on the existing pass event, and
-rules still judge only from those; the model counts in this event feed `SettleV2`, `/om:status`
-and the layer listing, as the `defined:<name>` counts did.
+rules still judge only from those; the model counts in this event feed `SettleV2`, `/om:status`,
+the layer listing and the level-1 offer's evidence, as the `defined:<name>` counts did: a detector
+pass belongs to the compaction recorded last before it, and `rules.V2EvidenceOf` adds the non-zero
+`defined:<name>` counts of the passes of the compactions in its window, so they reach the offer's
+text and its digest (`rules.ProposalDue`). The pass's `CountLevel1Refused` is not offer evidence.
 
 An idle session after a compaction keeps at most one detector child busy until the runs end or the
 session ends; there is no turn-end run to linger.
@@ -1250,6 +1282,27 @@ its text, and `SettleV2` neither writes nor reverts it, so it stays as held data
 judged. A written `query` detector counts nothing and is listed the same way. A migration fixture
 with one held and one written `query` detector pins this.
 
+**As built (step 9).** A few choices the text above leaves open, settled in the build:
+
+- A held detector whose declaration is a kernel `check` (an override of a seed's text) runs in no
+  detector pass, so it keeps today's settlement on the compaction passes that ran with it; only Go
+  detectors are settled on the detector pass events.
+- A smoke run's refusal is counted as `level1-refused` in the detector pass event only; it is not
+  summed into the next compaction's pass, since a refused definition is the offer's answer and never
+  changes the evidence the next offer is compared by (`hooks.level1Counts`).
+- The background pass reads the model's layer once the compaction is recorded (so a held detector
+  that compaction's settling reverted or wrote runs in its new state), tells the user nothing (the
+  host's event context is gone by then; the debug log records holds and refusals), and holds a
+  pending detector through `layer.Store.Hold`. The level-1 input states the detector format (one
+  `detector` row with a `code` column) with an example that is itself a valid detector.
+- The layer listing marks a Go detector whose run errored in its model's latest detector pass in a
+  new `LayerRow.Flagged` field; `/om:status` prints each model's latest detector pass (counts,
+  errors and smoke runs). A query detector is listed with the state `retired`.
+- A query detector stays readable but is refused as a new proposal (`rules.CheckV2Proposal`);
+  `memquery` no longer has a caller in the extension outside tests.
+- Open decision 4 follows its recommendation: a kill at session end is an error for the run in
+  flight.
+
 `rules.V2DefinitionKinds` stays `{instructions (consolidation, extend only), detector, remedy}`.
 Rules stay data (`rules.Propose`): a v2 detector and a code remedy. Level 1 never defines namespace
 code and never runs the agent's code. `CheckV2Definition`'s refusal text for `tool` changes from
@@ -1265,13 +1318,13 @@ Every dependent of the grammar and its replacement:
 | Tool description | grammar plus codec spec, re-registered per model with the long spec (`harness.applyDescription`) | fixed text, registered once; `applyDescription` is deleted |
 | `RunMemory` usage events | `ModelKindMemory`, `ParseError` as `Syntax`, rows, `result.Hits` | a new `curated.ModelKindCode` with `Engine: config.EngineV2` (so `harness.Compute` reads it; tested), from `Details`: `compile`, `runtime` and `crashed` as error, `cancelled` as no event, `writes` as ok, `empty`, otherwise `VisibilityOf(entries, indexShown).Classify(hits)`; a recall of a shown record counts as ok, as now |
 | The profile (`harness.ComputeWith`) | `ModelKindMemory` `Syntax` drives `long-spec`; `ModelKindDefined` drives tool on/off; shown/omitted drives the summary size | `ModelKindCode` events count only toward the summary-size switch (target summary, shown/omitted); nothing counts toward `long-spec` or tool on/off; `ModelKindMemory` and `ModelKindDefined` events stay as history and are never graded |
-| Summary omitted spans (`selection/omit.go`) | `notes \| from A \| through B [\| limit N]` | ``om.Notes(om.From(`A`).Through(`B`))``, with `.Limit(N)` only above 20 (never above 200); reflections alike |
+| Summary omitted spans (`selection/omit.go`) | `notes \| from A \| through B [\| limit N]` | ``om.Notes(om.From(`<first id>`).Through(`<last id>`))``, with `.Limit(N)` only above 20 (never above 200); reflections alike |
 | Off-path spans | `notes \| since D \| until D` | ``om.Notes(om.Since(`D`).Until(`D`))`` |
-| Capped lists | `notes \| where kind=file` / `kind=commit`, positional chunks past 200 | `om.Files()` / `om.Commits()`, chunks as ``om.Files(om.From(`A`).Through(`B`))`` |
+| Capped lists | `notes \| where kind=file` / `kind=commit`, positional chunks past 200 | `om.Files()` / `om.Commits()`, chunks as ``om.Files(om.From(`<first id>`).Through(`<last id>`))`` |
 | `selection.Result.Queries` | query strings | `Result.Snippets`, built by one formatter |
 | Level-1 prompt (`prompt.MemoryQueries`) | the same span queries | the same snippets |
-| Fixed texts: `TablesRecallParagraph`, `layout.go` instructions, `V2FallbackSummary`, `BriefHeading` and the brief's pointer line, `curated/index.go`, `declare` error text, `recall` doc | `recall <id>`, `history \| search "w"`, `saved \| search "w"`, `recall <name>` | ``om.Recall(`id`)``, ``om.History(om.Search(`w`))``, ``om.Saved(om.Search(`w`))``; the old `TablesRecallParagraph` stays as a frozen legacy marker that `TablesSummaryBody` still recognises (see "Migration") |
-| The tool's `PromptSnippet` and `PromptGuidelines` (`memory.go`, from `memquery/tool.go`), which enter the system prompt | teach the grammar: `recall <id>`, `history \| search "words"`, "notes or reflections to filter" | fixed, model-independent snippet text, for example ``om.Recall(`id`)`` and ``om.History(om.Search(`w`))``, and "empty code prints the manual"; no old-grammar form |
+| Fixed texts: `TablesRecallParagraph`, `layout.go` instructions, `V2FallbackSummary`, `BriefHeading` and the brief's pointer line, `curated/index.go`, `declare` error text, `recall` doc | `recall <id>`, `history \| search "w"`, `saved \| search "w"`, `recall <name>` | ``om.Recall(`<id>`)``, ``om.History(om.Search(`<words>`))``, ``om.Saved(om.Search(`<words>`))``; the old `TablesRecallParagraph` stays as a frozen legacy marker that `TablesSummaryBody` still recognises (see "Migration") |
+| The tool's `PromptSnippet` and `PromptGuidelines` (`memory.go`, from `memquery/tool.go`), which enter the system prompt | teach the grammar: `recall <id>`, `history \| search "words"`, "notes or reflections to filter" | fixed, model-independent snippet text, for example ``om.Recall(`<id>`)`` and ``om.History(om.Search(`<words>`))``, and "empty code prints the manual"; no old-grammar form |
 | Thinning stub (`thin.Text`) | `memory "recall <entryID>"` | ``memory: om.Recall(`<entryID>`)`` (see "Thinning") |
 | History paging (`nextPageQuery`) | the query with `through` inserted | `Next` snippet with `.Through(...)` chained |
 | Level 0 notes (`extract.note`) | parses `args["query"]` for `save`/`edit` | reads `details.writes` from the memory tool's persisted result, whatever its error flag (a `runtime`, `cancelled` or `crashed` result still carries the writes that landed; see "Cancellation is a kill"); entries written before the change still parse `args["query"]` with the frozen recognizer, and keep today's early return on a failed result |
@@ -1279,7 +1332,7 @@ Every dependent of the grammar and its replacement:
 | `dropped-then-queried` | parses `recall <id>` and `search` stages from args, defined tools via `Substitute` | reads `details.recalled` and `details.searches`; old entries parse `args["query"]` with the frozen recognizer; old defined-tool calls expand their stored query, read-only; `CountRevision` bumped |
 | `decode-failure` | rows that did not decode, plus memory queries that did not parse | rows that did not decode only (`CountCodecDecodeFailure`), for the summary codec; compile errors of code calls are recorded on `ModelKindCode` events and shown in `/om:status` (each model's `Code calls: N (E errors, L queries of the removed language)` line, read from its usage ledger), and feed no remedy, since no remedy may change the tool by model; `CountRevision` bumped |
 | Remedies `switch-codec`, `long-spec` | change the tool's codec and description per model | `long-spec` retired: listed, never applied, like v1's remedies. `switch-codec` acts only on the compaction summary's codec (`profile.CodecValue` in `hooks/compaction_v2.go`), never on the tool. The summary layout and size switches stay. |
-| Agent-defined tools (`define`, `DefinedToolSpec`, `RegisterStored`, `RunDefined`, probation, `BeforeAgentStart` activation, `SettingTool`, `ToolDisabled`, `ModelKindDefined`, `runtime.SetDefinedTools`, `harness.DefinedQueries`) | a host tool per definition, switched per model | removed (the named deviation above); kept Go definitions replace them |
+| Agent-defined tools (`define`, `DefinedToolSpec`, `RegisterStored`, `RunDefined`, probation, `BeforeAgentStart` activation, `SettingTool`, `ToolDisabled`, `ModelKindDefined`, `runtime.SetDefinedTools`) | a host tool per definition, switched per model | removed (the named deviation above); kept Go definitions replace them |
 | Curated defined queries (`KindTool` layer rows, `curated.Define`) | stored, registered, run | still loaded, never run by the extension; listed by `om.Retired()` with their stored text and, for a pure read, the equivalent snippet the model can run as its own code (see "Migration") |
 | Model detectors with `query` (`rules.ParseDetector`, `DetectorDef.Count`) | `memquery.Select` over the pass | `query` detectors load, are listed as "retired: query language removed" and count nothing (never refused); held ones are never settled (see "Holding and settling"); new detectors carry `code` (see "Detectors") |
 | Summary declarations (`declare.ParseSummary`, the `summary/default` seed) | validated with `memquery.Parse`, never run under v2 | validated with the frozen recognizer, still never run |
@@ -1296,6 +1349,23 @@ Each printed snippet must list exactly its span within the 200-row bound, as the
 uses the same anchors and branch-position semantics as `from`/`through`, the same current-memory
 filtering and the same off-path labelling, because it calls the same helpers that `from`/`through`
 called.
+
+**Placeholders.** The fixed texts (the summary instructions, the brief, the fallback summary, the
+index, the tool's prompt lines, the manual, error hints) name snippet forms, not snippets, and
+every value in them is a placeholder of one form: a raw string holding what goes there,
+``om.Recall(`<id>`)``, ``om.Recall(`<entry id>`)``, ``om.History(om.Search(`<words>`))``,
+``om.Saved(om.Search(`<words>`))``, ``om.Notes(om.From(`<first id>`).Through(`<last id>`))``,
+``om.Save(`<name>`, `<type>`, `<description>`, om.Body(`<body>`))``, and in the manual
+``om.Str(`<string name>`)`` and ``kept(`<definition>`)``. The set is closed
+(`om.IsPlaceholder`), and no generated id, date or word list takes one. Code holding one as a
+string literal is refused before anything runs ("nothing ran: `<words>` is a placeholder from the
+memory tool's instructions, not a value: replace it with the words to search for"), and
+`omhost` refuses one reaching an `om` call by another way (a named string), at any depth of the
+arguments. The snippets printed from real values (spans, pages, `Next`, hints) carry no
+placeholder and run as printed. The code tool's first build printed bare letters (``om.Recall(`id`)``,
+``om.Search(`w`)``); a model ran `w` literally and read 16 unrelated matches, which is why the form
+changed. Summaries that build wrote keep their tables paragraph as a frozen constant (see
+"Migration").
 
 A snippet must also survive every codec as printed. The rows codec quotes a value containing `,`,
 `"` or `|` and escapes inner quotes (`tables/rows_encode.go`), and jsonl escapes `"`. So snippets
@@ -1399,7 +1469,9 @@ keeps the retired defined-tool names, so it does not churn as well.
   frozen constant (`ledger.LegacyTablesRecallParagraph`, never edited) and `TablesSummaryBody`
   accepts either paragraph. Otherwise every summary written before the upgrade would stop parsing
   as a tables summary, its omitted span starts would read as empty, and `ModelKindCode` events
-  would count omitted hits as shown until the next compaction. A fixture in
+  would count omitted hits as shown until the next compaction. The paragraph the code tool's first
+  build wrote, with its bare-letter placeholders, is frozen the same way
+  (`ledger.FirstCodeTablesRecallParagraph`), so its summaries stay tables summaries too. A fixture in
   `hooks/migration_v2_test.go` holds a pre-upgrade tables summary and asserts that its omitted
   spans still classify hits as omitted.
 - **Old session entries.** Memory tool calls carrying `query` (no `code`) stay readable by level 0
@@ -1566,6 +1638,13 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
    remedies in the profile, `SettingTool`, `ToolDisabled`, `ModelKindDefined` grading,
    `runtime.SetDefinedTools`. Retired listing in `/om:status` and `om.Retired()`. Checks: `pig install --validate-only --json` shows the tool set exactly
    `{memory}`; a real session on a branch with old defined-tool calls skips and does not thin them.
+
+   As built (step 8): `harness.DefinedQueries` stays, keyed by the retired names, so
+   `dropped-then-queried` still expands an old defined-tool call's stored query, read-only
+   (`hooks/harness_v2.go`, `rules.MemoryAsks`; the table's `dropped-then-queried` row). Nothing
+   registers, activates or runs a defined query; `ForgetMemory` and `Feedback` refuse a name only
+   a retired definition holds, readable or not, since its file stays and nothing reads feedback on
+   it.
 9. **Detectors.** The per-run detector child and its read-only `om` table with the host-side method
    table, the `code` column, `codepolicy.CheckDetector` in `rules.CheckV2Proposal` and in the
    detector validator `rules` registers on `layer` (so `layer.Store`'s load runs it), the detector pass built in the hook, the background runs and the
@@ -1578,6 +1657,16 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
 10. **Delete the grammar.** Remove `memquery`'s lexer, parser, interpreter and writes, and the
     package once nothing imports it. Docs and CLAUDE.md. A final real PiG session and `pig install
     --validate-only --json`.
+
+    As built (step 10): the package is deleted whole, since only two tests still imported it.
+    `legacyquery`'s agreement test, which compared the frozen copy with `memquery`, goes with it;
+    the frozen recognizer keeps its own copied parser tests. `TestRetiredSnippetRunsAsCode`
+    compares each retired snippet's rows with the rows the old query returned over the same
+    fixture, recorded from `memquery.Run` before the deletion, and the declare test of schema
+    fields reads them through `omhost`'s `Notes`. `curated.DescribeDefinition`, used only by the
+    old `recall <name>` of a defined query, is deleted; `curated.Store.Define` stays only for tests
+    that write the store an earlier release left. `omhost`'s read engine, which the grammar
+    called, keeps every function: each is reached from `om` calls.
 
 ## Tests
 

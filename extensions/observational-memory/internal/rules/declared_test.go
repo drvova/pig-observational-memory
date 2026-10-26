@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -122,41 +123,42 @@ func TestDetectorDeclarations(t *testing.T) {
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "unscoped-figures", Model: "p/m", Text: "detector[1]{query,description}:\n  \"notes | where scope=\",notes without a scope"}); err == nil {
 		t.Fatal("a query that does not parse was accepted")
 	}
+	// A query detector of the removed language still loads, and is retired.
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "plans", Model: "p/m", Text: "detector[1]{query,description}:\n  \"notes | where kind=plan\",plans recorded"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "thin-chunk", Model: "p/m", Text: "detector[1]{check,description}:\n  thin-chunk,my words for it"}); err != nil {
 		t.Fatal(err)
 	}
+	// A Go detector: its code passes codepolicy.CheckDetector on every load.
+	code := "func Count() int { return om.Notes(om.Kind(`plan`)).Matched }"
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "go-plans", Model: "p/m", Text: CodeDetectorText(code, "plans recorded")}); err != nil {
+		t.Fatal(err)
+	}
+	for name, bad := range map[string]string{
+		"write":   "func Count() int { om.Save(`n`, `lesson`, `d`); return 1 }",
+		"init":    "func init() {}\nfunc Count() int { return 0 }",
+		"recall":  "func Count() int { t, _ := om.Recall(`e1`); return len(t.Body) }",
+		"no-func": "func count() int { return 0 }",
+	} {
+		if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "bad-" + name, Model: "p/m", Text: CodeDetectorText(bad, "bad")}); err == nil {
+			t.Fatalf("%s: a bad Go detector was accepted", name)
+		}
+	}
 	h, _, _ := ls.Load("p/m")
-	defs := ModelDetectors(h)
-	if len(defs) != 2 {
+	defs := map[string]DetectorDef{}
+	for _, d := range ModelDetectors(h) {
+		defs[d.Name] = d
+	}
+	if len(defs) != 3 || !defs["plans"].Retired() || !defs["go-plans"].IsCode() || defs["go-plans"].Code != code || defs["thin-chunk"].Check != DetectThinChunk {
 		t.Fatalf("model detectors %+v", defs)
 	}
+	// Model detectors never run at an extraction: only the kernel's findings are recorded there.
 	notes := []ledger.Observation{
 		{ID: "aaaaaaaaaaaa", Content: "User plans a trip.", Kind: "plan", Timestamp: "2026-05-02 10:30", Relevance: "low"},
 		{ID: "bbbbbbbbbbbb", Content: "User plans dinner.", Kind: "plan", Timestamp: "2026-05-02 10:31", Relevance: "low"},
-		{ID: "cccccccccccc", Content: "User owns a cat.", Kind: "fact", Timestamp: "2026-05-02 10:32", Relevance: "low"},
 	}
-	f := DetectV2(ObserverPass{Notes: notes, Detectors: defs})
-	if f.Defined["plans"] != 2 || f.Defined["thin-chunk"] != 0 {
-		t.Fatalf("defined %+v counts %+v", f.Defined, f.Counts)
-	}
-	// A query by subject reads the pass's notes grouped as the memory tool groups them: over
-	// the memory before the pass, under the recorded aliases.
-	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "running-notes", Model: "p/m", Text: "detector[1]{query,description}:\n  \"notes | where subject=running\",running notes"}); err != nil {
-		t.Fatal(err)
-	}
-	h, _, _ = ls.Load("p/m")
-	running := []ledger.Observation{{ID: "dddddddddddd", Content: "User ran 10k.", Kind: "event", Subject: "half marathon training", Timestamp: "2026-05-02 10:33", Relevance: "low"}}
-	known := []ledger.Observation{{ID: "eeeeeeeeeeee", Content: "User runs weekly.", Kind: "fact", Subject: "running", Timestamp: "2026-05-01 10:00", Relevance: "low"}}
-	aliased := DetectV2(ObserverPass{Notes: running, Known: known, Aliases: []ledger.SubjectAlias{{From: "half marathon training", To: "running"}}, Detectors: ModelDetectors(h)})
-	if aliased.Defined["running-notes"] != 1 {
-		t.Fatalf("aliased detector counted %+v", aliased.Defined)
-	}
-	if plain := DetectV2(ObserverPass{Notes: running, Known: known, Detectors: ModelDetectors(h)}); plain.Defined["running-notes"] != 0 {
-		t.Fatalf("unaliased detector counted %+v", plain.Defined)
-	}
+	f := DetectV2(ObserverPass{Notes: notes})
 	if err := RecordDetection(store, "p/m", f, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -164,9 +166,22 @@ func TestDetectorDeclarations(t *testing.T) {
 		t.Fatal(err)
 	}
 	events, _ := store.ModelEvents("p/m")
-	last := events[len(events)-1]
-	if last.Counts[DefinedCountKey("plans")] != 2 || last.Counts["plans"] != 0 {
-		t.Fatalf("counts %+v", last.Counts)
+	for _, e := range events {
+		for k := range e.Counts {
+			if strings.HasPrefix(k, DefinedCountKey("")) {
+				t.Fatalf("an extraction counted a model detector: %+v", e.Counts)
+			}
+		}
+	}
+	// A new proposal is Go: a query detector is refused at proposal time.
+	if err := CheckV2Proposal(layer.KindDetector, "plans", "detector[1]{query}:\n  \"notes | where kind=plan\""); err == nil || !strings.Contains(err.Error(), "query language is removed") {
+		t.Fatalf("a query proposal: %v", err)
+	}
+	if err := CheckV2Proposal(layer.KindDetector, "go-plans", CodeDetectorText(code, "plans")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckV2Proposal(layer.KindDetector, "go-save", CodeDetectorText("func Count() int { om.Save(`n`, `lesson`, `d`); return 1 }", "x")); err == nil {
+		t.Fatal("a proposal naming a write was accepted")
 	}
 }
 
@@ -218,5 +233,37 @@ func TestCheckFromModelRefusesCopiedText(t *testing.T) {
 		if (err != nil) != c.fail {
 			t.Errorf("%s: err %v, want failure %v", name, err, c.fail)
 		}
+	}
+}
+
+// A layer file edited by hand to hold a Go detector the policy refuses is refused at load: the
+// detector validator runs on every load, so it never reaches a pass.
+func TestHandEditedGoDetectorIsRefusedAtLoad(t *testing.T) {
+	ls := newStore(t).Layer()
+	good := "func Count() int { return om.Notes().Matched }"
+	if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: "edited", Model: "p/m", Text: CodeDetectorText(good, "notes")}); err != nil {
+		t.Fatal(err)
+	}
+	path := ls.Path("p/m", layer.KindDetector, "edited")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(data), "return om.Notes().Matched", "go func() {}(); om.Save(`n`, `lesson`, `d`); return 0", 1)
+	if bad == string(data) {
+		t.Fatal("the fixture did not change the file")
+	}
+	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, reports, err := ls.Load("p/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.Get(layer.KindDetector, "edited"); ok {
+		t.Fatal("a hand-edited bad detector loaded")
+	}
+	if len(reports) != 1 || reports[0].Name != "edited" {
+		t.Fatalf("reports %+v", reports)
 	}
 }

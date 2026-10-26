@@ -77,7 +77,9 @@ func DefinitionUsageKey(name string) string { return "query:" + name }
 
 // Define stores a new definition. A name a memory or another definition holds
 // is refused, and so is one the kernel owns (kernel.Owns): a defined tool never shadows the
-// memory tool or the query engine's words.
+// memory tool or the query engine's words. The defined tools are retired (docs/code-tool.md):
+// the extension never calls Define (om.Define refuses), and it stays only for tests that write
+// the store an earlier release left.
 func (s Store) Define(d Definition, source string) (Definition, error) {
 	if err := ValidateName(d.Name); err != nil {
 		return Definition{}, err
@@ -307,7 +309,8 @@ func legacyDefinition(name, path string) (layer.Definition, error) {
 }
 
 // RefusedDefinition is a defined tool written before the layer that the layer refused to
-// migrate, so it is not registered: its name and the layer's refusal.
+// migrate: its name and the layer's refusal. Like every defined tool, it is retired: listed,
+// never registered or run (harness.RetiredQueries).
 type RefusedDefinition struct {
 	Name, Reason string
 }
@@ -318,7 +321,7 @@ func (r RefusedDefinition) Message() string {
 }
 
 // RefusedDefinitions are the legacy defined tools the layer still refuses, each with the
-// refusal, for the user to be told (RegisterStored, /om:status). The files stay, renamed, and
+// refusal, for om.Retired and /om:status (harness.RetiredQueries). The files stay, renamed, and
 // are retried on every use.
 func (s Store) RefusedDefinitions() ([]RefusedDefinition, error) {
 	s.migrateDefinitions()
@@ -359,14 +362,4 @@ func legacyRows(dir, suffix string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// DescribeDefinition renders a definition in full for om.Recall(name).
-func DescribeDefinition(d Definition) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s [query]: %s\n\n%s\n\ndefined %s", d.Name, d.Description, d.Query, d.Created.Format("2006-01-02"))
-	if len(d.Sources) > 0 {
-		fmt.Fprintf(&b, ", sessions: %s", strings.Join(d.Sources, ", "))
-	}
-	return b.String()
 }

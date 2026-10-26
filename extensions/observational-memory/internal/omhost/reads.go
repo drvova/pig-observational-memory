@@ -1,7 +1,7 @@
 // Package omhost is the extension's side of the memory tool's domain API (docs/code-tool.md,
 // "The domain API"): the read engine every read is answered from. It holds the semantics the
-// query language's sources had (internal/memquery), moved here in step 1 of the design's order
-// of work so they no longer depend on the grammar: the notes, reflections and history rows, the
+// query language's sources had (the deleted internal/memquery), moved here in step 1 of the
+// design's order of work so they no longer depend on the grammar: the notes, reflections and history rows, the
 // point-in-time view, the off-path fallback, branch-position anchors, recall paging, clipping,
 // the reflections citing a record, and the history text quotes are checked against.
 //

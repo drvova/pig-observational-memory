@@ -71,6 +71,18 @@ func Recall(t testing.TB, entries []session.Entry, snippet string) string {
 	return run(t, &omhost.Call{Entries: entries, Skip: []string{omtool.ToolName}}, "r, err := "+snippet+"\nif err != nil { panic(err) }\nfmt.Print(r.String())")
 }
 
+// Try runs code over the call context c and returns everything the result holds (printed
+// output, last value and error), whatever its outcome.
+func Try(t testing.TB, c *omhost.Call, code string) string {
+	t.Helper()
+	p, err := codepolicy.Check(codepolicy.Input{Code: code})
+	if err != nil {
+		t.Fatalf("policy: %v\n%s", err, code)
+	}
+	res := supervisor().Run(context.Background(), sandbox.Request{Program: p}, c)
+	return res.Out + res.Val + res.Err
+}
+
 func run(t testing.TB, c *omhost.Call, code string) string {
 	t.Helper()
 	p, err := codepolicy.Check(codepolicy.Input{Code: code})

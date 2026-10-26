@@ -34,6 +34,8 @@ const ChildMarker = "__om_sandbox_child__"
 const (
 	// ModeNamespace is the namespace child: the agent's namespace for one conversation.
 	ModeNamespace = "namespace"
+	// ModeDetector is a detector child: one detector run (docs/code-tool.md, "Detectors").
+	ModeDetector = "detector"
 )
 
 // childMode runs a child of one mode with the arguments after the mode and returns its exit
@@ -45,6 +47,7 @@ type childMode func(args []string) int
 // present when init reads the marker.
 var childModes = map[string]childMode{
 	ModeNamespace: func(args []string) int { return namespaceMain(args, nil) },
+	ModeDetector:  func(args []string) int { return detectorMain(args, nil) },
 }
 
 func init() {

@@ -92,14 +92,11 @@ type ObserverPass struct {
 	Known []ledger.Observation
 	// Aliases are the subject aliases recorded before the pass, in ledger order: a detector's
 	// query reads the pass's notes with them, as the memory tool reads notes
-	// (memquery.Records.Aliases).
+	// (omhost.Records.Aliases).
 	Aliases []ledger.SubjectAlias
-	// Defined are the tools the agent defined, by name, with their stored queries: a call of
-	// one is a memory query too (MemoryQueries).
+	// Defined are the retired defined tools, by name, with their stored queries: a call of one
+	// on the branch is a memory query too (MemoryAsks).
 	Defined map[string]string
-	// Detectors are the detectors the worker model defined in its layer (ModelDetectors),
-	// counted beside the kernel's checks.
-	Detectors []DetectorDef
 }
 
 // Findings are what the detectors counted in one pass, and what they flagged for the remedies.
@@ -113,9 +110,6 @@ type Findings struct {
 	CrossScope []string
 	// DroppedKinds are the kinds of the dropped records a memory query asked for.
 	DroppedKinds map[string]int
-	// Defined are the counts of the detectors the model defined, by name; recorded under
-	// DefinedCountKey, never judging a rule.
-	Defined map[string]int
 }
 
 func kindName(kind ledger.ObservationKind) string {

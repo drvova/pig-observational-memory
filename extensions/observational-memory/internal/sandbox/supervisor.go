@@ -164,6 +164,14 @@ type Result struct {
 	Out, Val, Err string
 	HasVal        bool
 	Cut           int
+	// Discarded counts the expression statements before the last whose values the code
+	// dropped: only the last expression's value is shown. DiscardedFailed counts the failures
+	// among them (a non-nil last error, or a seeded function's "error: " string), and
+	// DiscardedErrs holds their texts within ResultChars together, so a refused write before
+	// the last expression is still reported.
+	Discarded       int
+	DiscardedFailed int
+	DiscardedErrs   []string
 	// Compiled has one character per chunk: 'c' for a declaration that compiled, 'x' for one
 	// that failed, '-' otherwise.
 	Compiled string
@@ -190,7 +198,7 @@ func (s *Supervisor) Run(ctx context.Context, req Request, h Handler) Result {
 		case codepolicy.Declaration:
 			run = append(run, wireChunk{Kind: kindDeclaration, Src: c.Src, Line: c.Line, Names: c.Names()})
 		default:
-			run = append(run, wireChunk{Kind: kindStatement, Src: c.Src, Line: c.Line})
+			run = append(run, wireChunk{Kind: kindStatement, Src: c.Src, Line: c.Line, Expr: c.DropsValue()})
 		}
 		index = append(index, i)
 	}
@@ -284,7 +292,7 @@ func (s *Supervisor) run(ctx context.Context, chunks []wireChunk, last bool, str
 					return s.lost(p)
 				}
 			case tResult:
-				res := Result{Outcome: m.Outcome, Out: m.Out, Val: m.Val, HasVal: m.HasVal, Err: m.Err, Cut: m.Cut, Compiled: m.Compiled, Generation: p.gen}
+				res := Result{Outcome: m.Outcome, Out: m.Out, Val: m.Val, HasVal: m.HasVal, Err: m.Err, Cut: m.Cut, Compiled: m.Compiled, Discarded: m.Discarded, DiscardedFailed: m.DiscardedFailed, DiscardedErrs: m.DiscardedErrs, Generation: p.gen}
 				if utf8.RuneCountInString(res.Out)+utf8.RuneCountInString(res.Val)+utf8.RuneCountInString(res.Err) > ResultChars {
 					// The child keeps to the bound; the extension does not rely on it.
 					res.Err, _ = cutChars(res.Err, ResultChars)

@@ -1,6 +1,10 @@
 package rules
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 )
 
@@ -99,12 +103,14 @@ func isV2Compaction(e curated.ModelEvent) bool {
 // (harness.ComputeWith).
 func IsV2Compaction(e curated.ModelEvent) bool { return isV2Compaction(e) }
 
-// DetectV2 runs memory v2's detectors over one level-0 extraction: p.Covered are the source
-// entries it read, p.Notes its records (before any remedy), p.Known the memory before it. It
-// counts uncited-assistant-specifics and dropped-then-queried, and the detectors the model
-// defined (p.Detectors) beside them; cross-scope-supersede is counted from level 1's refusals,
-// and decode-failure from the usage ledger, when the compaction is recorded (afterCompaction).
-// It is pure: the same extraction always gives the same findings.
+// DetectV2 runs memory v2's kernel detectors over one level-0 extraction: p.Covered are the
+// source entries it read, p.Notes its records (before any remedy), p.Known the memory before
+// it. It counts uncited-assistant-specifics and dropped-then-queried; cross-scope-supersede is
+// counted from level 1's refusals, and decode-failure from the usage ledger, when the compaction
+// is recorded (afterCompaction). The detectors a model defined never run here: Go detectors run
+// in the background after a compaction, over what it covered (docs/code-tool.md, "Running, and
+// the time bound"), and query detectors are retired. It is pure: the same extraction always
+// gives the same findings.
 func DetectV2(p ObserverPass) Findings {
 	f := Findings{Counts: map[string]int{}, DroppedKinds: map[string]int{}}
 	f.Uncited = UncitedAssistantSpecifics(p)
@@ -113,12 +119,6 @@ func DetectV2(p ObserverPass) Findings {
 	f.Counts[DetectDroppedThenQueried] = len(asked)
 	for _, o := range asked {
 		f.DroppedKinds[kindName(o.Kind)]++
-	}
-	for _, d := range p.Detectors {
-		if f.Defined == nil {
-			f.Defined = map[string]int{}
-		}
-		f.Defined[d.Name] = d.Count(p, f.Counts)
 	}
 	return f
 }
@@ -135,11 +135,6 @@ func RecordDetection(store curated.Store, model string, f Findings, tokens int) 
 	for d, n := range f.Counts {
 		if n > 0 {
 			e.Counts[d] = n
-		}
-	}
-	for d, n := range f.Defined {
-		if n > 0 {
-			e.Counts[DefinedCountKey(d)] = n
 		}
 	}
 	if len(f.DroppedKinds) > 0 {
@@ -238,4 +233,60 @@ func afterCompaction(store curated.Store, model string, pass Pass) ([]Transition
 		return nil
 	})
 	return transitions, err
+}
+
+// LatestDetectorPass is model's latest memory v2 detector pass event
+// (curated.ModelKindDetectorPass), the zero event for none: the errors that flag its written
+// detectors, and the run it killed unfinished, which the next pass's order starts after.
+func LatestDetectorPass(store curated.Store, model string) curated.ModelEvent {
+	events, err := store.ModelEvents(model)
+	if err != nil {
+		return curated.ModelEvent{}
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind == curated.ModelKindDetectorPass && events[i].Engine == curated.EngineV2 {
+			return events[i]
+		}
+	}
+	return curated.ModelEvent{}
+}
+
+// DetectorPassLine is /om:status's line for model's latest detector pass: the compaction it ran
+// after, each Go detector's count, and the runs that gave none with why (a written detector
+// listed there is flagged: it counted nothing for that pass and runs last in the next). false
+// when the model has none.
+func DetectorPassLine(store curated.Store, model string) (string, bool) {
+	e := LatestDetectorPass(store, model)
+	if e.Kind == "" {
+		return "", false
+	}
+	counts := []string{}
+	for k, n := range e.Counts {
+		if name, ok := strings.CutPrefix(k, DefinedCountKey("")); ok {
+			counts = append(counts, fmt.Sprintf("%s %d", name, n))
+		}
+	}
+	sort.Strings(counts)
+	line := fmt.Sprintf("Detector pass after the compaction at %s: ", e.Cut)
+	if len(counts) == 0 {
+		line += "no count"
+	} else {
+		line += strings.Join(counts, ", ")
+	}
+	if len(e.Errors) > 0 {
+		names := make([]string, 0, len(e.Errors))
+		for name := range e.Errors {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		parts := make([]string, 0, len(names))
+		for _, name := range names {
+			parts = append(parts, name+": "+e.Errors[name])
+		}
+		line += "; errors (a held one is reverted at the next compaction, a written one flagged): " + strings.Join(parts, "; ")
+	}
+	if len(e.Pending) > 0 {
+		line += "; smoke runs of level 1's proposals: " + strings.Join(e.Pending, ", ")
+	}
+	return line, true
 }

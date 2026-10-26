@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
+	"go/scanner"
+	"go/token"
 	"io/fs"
 	"os"
 	"regexp"
-	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -353,6 +353,13 @@ func (m *Manager) RunMemory(h host.ToolHost, params map[string]any) CodeResult {
 		m.recordCode(h, call, on, entries, d)
 		return CodeResult{Text: "Error: " + perr.Error() + manualFor(perr.Error()), IsError: true, Details: d}
 	}
+	if ph := placeholderLiteral(code); ph != "" {
+		// A fixed snippet form run as it stands: nothing runs, and the answer says what goes
+		// in the placeholder's place (omhost refuses one that arrives by another way).
+		d.Outcome = omtool.OutcomeCompile
+		m.recordCode(h, call, on, entries, d)
+		return CodeResult{Text: "Error: nothing ran: " + om.PlaceholderError(ph).Error(), IsError: true, Details: d}
+	}
 	all, skipped := p.Units()
 	for _, unit := range all {
 		u.declared = append(u.declared, unit.Name)
@@ -360,7 +367,7 @@ func (m *Manager) RunMemory(h host.ToolHost, params map[string]any) CodeResult {
 	for _, unit := range skipped {
 		u.declared = append(u.declared, unit.Name)
 	}
-	if p.LastExpr && printsOnly(p.Chunks[len(p.Chunks)-1].Src) {
+	if p.LastExpr && codepolicy.PrintsOnly(p.Chunks[len(p.Chunks)-1].Src) {
 		// fmt.Print's byte count and nil error are not the code's value.
 		p.LastExpr = false
 	}
@@ -505,30 +512,14 @@ func noCalls(context.Context, string, json.RawMessage) (json.RawMessage, error) 
 	return nil, errors.New("no om call is answered here")
 }
 
-// printsOnly reports whether expression src is a call of fmt.Print, Printf or Println, whose
-// results (the bytes written and a nil error) the result does not show as the last value.
-func printsOnly(src string) bool {
-	e, err := parser.ParseExpr(src)
-	if err != nil {
-		return false
-	}
-	call, ok := e.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "fmt" && (sel.Sel.Name == "Print" || sel.Sel.Name == "Printf" || sel.Sel.Name == "Println")
-}
-
 // omSymbol finds an om symbol, or a builtin the interpreter lacks, a compile error names.
 var omSymbol = regexp.MustCompile(`\bom\.([A-Z][A-Za-z0-9]*)|undefined: (min|max|clear)\b`)
 
 // manualFor is the manual section matching an om symbol msg names, "" for none.
 func manualFor(msg string) string {
+	if om.NamesPlaceholder(msg) {
+		return ""
+	}
 	m := omSymbol.FindStringSubmatch(msg)
 	if m == nil {
 		return ""
@@ -616,6 +607,15 @@ func codeText(res sandbox.Result, lines []string, writes []omtool.Write) string 
 			addLine("Writes that landed before the " + map[string]string{sandbox.OutcomeCancelled: "cancel", sandbox.OutcomeCrashed: "crash"}[res.Outcome] + ": " + strings.Join(ws, ", "))
 		}
 	}
+	if res.Discarded > 0 {
+		addLine(discardedLine(res.Discarded))
+	}
+	for _, e := range res.DiscardedErrs {
+		addLine("A discarded value was an error: " + strings.TrimPrefix(e, "error: "))
+	}
+	if more := res.DiscardedFailed - len(res.DiscardedErrs); more > 0 {
+		addLine(fmt.Sprintf("(%d more discarded %s left out)", more, map[bool]string{true: "error", false: "errors"}[more == 1]))
+	}
 	cut := res.Cut
 	for _, l := range lines {
 		addLine(l)
@@ -632,6 +632,36 @@ func codeText(res sandbox.Result, lines []string, writes []omtool.Write) string 
 		return "(no output)"
 	}
 	return text
+}
+
+// placeholderLiteral is the first string literal of code that is a placeholder of the fixed
+// texts (om.IsPlaceholder), "" when none is.
+func placeholderLiteral(code string) string {
+	fset := token.NewFileSet()
+	var sc scanner.Scanner
+	sc.Init(fset.AddFile("", fset.Base(), len(code)), []byte(code), func(token.Position, string) {}, 0)
+	for {
+		_, tok, lit := sc.Scan()
+		if tok == token.EOF {
+			return ""
+		}
+		if tok != token.STRING {
+			continue
+		}
+		if v, err := strconv.Unquote(lit); err == nil && om.IsPlaceholder(v) {
+			return v
+		}
+	}
+}
+
+// discardedLine names how many expression statements before the last had their values
+// dropped: the result shows only the last expression's value.
+func discardedLine(n int) string {
+	what := "1 expression value was"
+	if n > 1 {
+		what = strconv.Itoa(n) + " expression values were"
+	}
+	return "(" + what + " discarded: only the last expression's value is shown; print the others with fmt.Println, or put the wanted value last)"
 }
 
 // recordCode records one ModelKindCode event in the session model's usage ledger
@@ -666,23 +696,19 @@ func (m *Manager) recordCode(h host.ToolHost, call curated.Call, on bool, entrie
 }
 
 // SkipNames are the tools whose calls are memory plumbing (MemoryToolNames' source): the memory
-// tool, the defined tools this process registered, and the retired defined queries' names no
-// other tool holds, so old defined-tool calls on the branch stay plumbing whatever is
-// registered. The list only grows within a process.
+// tool, then the retired defined queries' names no other tool held (NoteRetired) in name order,
+// so old defined-tool calls on the branch stay plumbing. The list only grows within a process.
 func (m *Manager) SkipNames() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	names := []string{}
-	for name := range m.registered {
-		names = append(names, name)
-	}
+	names := make([]string, 0, len(m.retired))
 	for name := range m.retired {
-		if !slices.Contains(names, name) {
+		if name != omtool.ToolName {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
-	return append([]string{omtool.ToolName}, slices.DeleteFunc(names, func(n string) bool { return n == omtool.ToolName })...)
+	return append([]string{omtool.ToolName}, names...)
 }
 
 // CodeStatusLines are the memory tool's /om:status lines (docs/code-tool.md, "Replacing the

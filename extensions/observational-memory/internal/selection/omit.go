@@ -383,7 +383,7 @@ func dateRange(items []*item) (string, string) {
 }
 
 // positionalQuery is the snippet listing the records of read fn anchored from first through
-// last (om.Notes(om.From(`A`).Through(`B`))); n is how many it returns, so a limit is written
+// last (om.Notes(om.From(`<first id>`).Through(`<last id>`))); n is how many it returns, so a limit is written
 // only when the default would cut them.
 func positionalQuery(src read, first, last string, n int) string {
 	return snippet(src, omwire.Options{From: first, Through: last}, n)

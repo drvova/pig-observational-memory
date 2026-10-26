@@ -140,7 +140,7 @@ func parseSection(table, query, fields string) (SummarySection, error) {
 			}
 		}
 		if section.Fields[0] != "id" {
-			return SummarySection{}, fmt.Errorf("summary section %s must show id first, so its records can be read back (om.Recall(`id`)) and the omitted ones disclosed", table)
+			return SummarySection{}, fmt.Errorf("summary section %s must show id first, so its records can be read back (%s) and the omitted ones disclosed", table, om.SnippetRecall)
 		}
 		if !containsString(section.Fields, ledger.ContentField) {
 			return SummarySection{}, fmt.Errorf("summary section %s must show %s: a row without its record's content shows nothing of it, and the kernel discloses that record as omitted", table, ledger.ContentField)

@@ -1,6 +1,6 @@
 // Package legacyquery is the frozen recognizer of the memory tool's removed query language
-// (docs/code-tool.md, "Migration"): a copy of internal/memquery's lexer, parser and vocabulary
-// with no interpreter. It validates stored definitions written in the old grammar (summary
+// (docs/code-tool.md, "Migration"): a copy of the deleted internal/memquery's lexer, parser and
+// vocabulary, with no interpreter. It validates stored definitions written in the old grammar (summary
 // declarations, query detectors, defined queries), reads old memory tool calls in session
 // entries, and supplies the kernel's retired vocabulary. It never runs anything.
 //

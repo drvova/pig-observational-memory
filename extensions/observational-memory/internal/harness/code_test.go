@@ -372,7 +372,9 @@ func TestForgetRefusesANameTheCallDeclares(t *testing.T) {
 			t.Fatalf("the store holds %s", u.Src)
 		}
 	}
-	if strings.Join(names, ",") != "Box,twice" {
+	// The refused forget does not stop the code (its failure is its "error: ..." text), so
+	// the method the third call declares after it is kept.
+	if strings.Join(names, ",") != "Box,Box.Twice,twice" {
 		t.Fatalf("store %v", names)
 	}
 	// Forgotten in a call of its own, twice fails at once and is gone from the store.
@@ -429,5 +431,84 @@ func TestStoreErrorsNameNoPath(t *testing.T) {
 	}
 	if lines := strings.Join(m.CodeStatusLines(h), "\n"); !strings.Contains(lines, dir) {
 		t.Fatalf("status leaves the path out:\n%s", lines)
+	}
+}
+
+// A last (T, error) result shows T alone when the error is nil and "error: <message>" when it
+// is not, for the curated and layer writes and om.Recall alike; kept, forget and man return
+// their text alone, or "error: <message>"; a fmt printer last shows no byte count.
+func TestResultsRenderTheValueOrTheError(t *testing.T) {
+	h, _, m := session(t, tf.RawMessage("u2", "I indent with tabs, always."))
+	cases := []struct{ src, want string }{
+		{`om.Save("tabs", "user", "The user indents with tabs.", om.Quoting("I indent with tabs"))`, "Saved memory tabs [user]: The user indents with tabs."},
+		{`om.Edit("tabs", om.SetDescription("The user indents with tabs, always."))`, "Updated memory tabs [user]: The user indents with tabs, always."},
+		{`om.Edit("nope", om.SetBody("x"))`, "error: om.Edit: no memory by that name"},
+		{"om.Recall(`" + obsBake + "zz`)", "error: om.Recall: nothing called \"" + obsBake + "zz\": no record or reflection id, entry id or saved name on this branch; find ids with " + om.SnippetHistorySearch + " and names with " + om.SnippetSavedSearch},
+		{`fmt.Println("printed")`, "printed\n"},
+		{"func one() int { return 1 }", "kept: one"},
+		{`forget("nope")`, "error: forget: no kept unit is named nope: kept are one"},
+	}
+	for _, c := range cases {
+		r := code(t, h, m, c.src)
+		if r.Text != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.src, r.Text, c.want)
+		}
+		if strings.HasPrefix(r.Text, ",") || strings.Contains(r.Text, ", nil") {
+			t.Errorf("%s: %q", c.src, r.Text)
+		}
+	}
+	if r := code(t, h, m, `kept("one")`); !strings.HasSuffix(r.Text, "\nfunc one() int { return 1 }") {
+		t.Errorf("kept(one): %q", r.Text)
+	}
+	if r := code(t, h, m, "man()"); !strings.HasPrefix(r.Text, "── The memory tool ──") || strings.Contains(r.Text, "error: man") {
+		t.Errorf("man(): %.80q", r.Text)
+	}
+}
+
+// Several top-level expression statements: the last value is shown and one line says how many
+// values were discarded and what to do; printers and a single expression add no line.
+func TestDiscardedValuesAreNamed(t *testing.T) {
+	h, _, m := session(t)
+	r := codeOK(t, h, m, "om.Notes(om.Search(`sourdough`)).Len()\nom.Notes(om.Search(`boots`)).Len()\nom.Notes().Len()")
+	if r.Text != "2\n(2 expression values were discarded: only the last expression's value is shown; print the others with fmt.Println, or put the wanted value last)" {
+		t.Fatalf("%q", r.Text)
+	}
+	r = codeOK(t, h, m, "om.Notes().Len()\nx := 1\n_ = x")
+	if r.Text != "(1 expression value was discarded: only the last expression's value is shown; print the others with fmt.Println, or put the wanted value last)" {
+		t.Fatalf("%q", r.Text)
+	}
+	// A refused seeded call before the last expression is reported, not only counted.
+	r = codeOK(t, h, m, "forget(`never-kept`)\nom.Notes().Len()")
+	if !strings.Contains(r.Text, "\nA discarded value was an error: forget: ") {
+		t.Fatalf("%q", r.Text)
+	}
+	for _, src := range []string{"fmt.Println(om.Notes().Len())\nom.Notes().Len()", "om.Notes().Len()"} {
+		if r := codeOK(t, h, m, src); strings.Contains(r.Text, "discarded") {
+			t.Fatalf("%s: %q", src, r.Text)
+		}
+	}
+}
+
+// A fixed snippet form run as it stands is refused before anything runs, naming the
+// placeholder and what goes in its place, with no manual section; a placeholder that reaches
+// an om call another way (a named string) is refused by the extension too.
+func TestPlaceholdersAreRefused(t *testing.T) {
+	h, _, m := session(t)
+	for _, fixed := range []string{om.SnippetRecall, om.SnippetRecallEntry, om.SnippetRecallName, om.SnippetHistorySearch, om.SnippetSavedSearch, om.SnippetNotesSpan, om.SnippetSave, om.SnippetFeedback, "fmt.Println(" + om.SnippetHistorySearch + ".Len())"} {
+		r := code(t, h, m, fixed)
+		if !r.IsError || !strings.HasPrefix(r.Text, "Error: nothing ran: `<") || !om.NamesPlaceholder(r.Text) || strings.Contains(r.Text, "──") || len(r.Details.Writes) > 0 || len(r.Details.Searches) > 0 || len(r.Details.Recalled) > 0 {
+			t.Errorf("%s: %q %+v", fixed, r.Text, r.Details)
+		}
+	}
+	r := m.RunMemory(h, map[string]any{"code": "om.History(om.Search(om.Str(`w`)))", "strings": map[string]any{"w": om.PlaceholderWords}})
+	if !r.IsError || !om.NamesPlaceholder(r.Text) || strings.Contains(r.Text, "──") {
+		t.Fatalf("%q", r.Text)
+	}
+	// Real values in the same forms run.
+	if r := codeOK(t, h, m, "om.Notes(om.Search(`sourdough`)).Len()"); r.Text != "1" {
+		t.Fatalf("%q", r.Text)
+	}
+	if r := codeOK(t, h, m, "om.Recall(`"+obsBake+"`)"); !strings.Contains(r.Text, "sourdough") {
+		t.Fatalf("%q", r.Text)
 	}
 }

@@ -119,7 +119,7 @@ func TestStatusShowsPassiveAndInFlight(t *testing.T) {
 }
 
 // /om:status shows the session model's harness profile with the reasons for each switch, and
-// the defined tools' standing.
+// the retired defined queries.
 func TestStatusShowsHarnessProfile(t *testing.T) {
 	h := testfix.NewFakeHost()
 	h.Model = testfix.Model("p", "m")
@@ -139,7 +139,7 @@ func TestStatusShowsHarnessProfile(t *testing.T) {
 	expectContains(t, output, "── Harness ──",
 		"Profile (session model p/m, 6 events): codec rows, layout tables, summary 1/2 of the room",
 		"summary → 1/2 of the room: 3 queries for records the summary showed",
-		"Defined tools: bakes probation (0 calls")
+		"Retired defined queries (1;", "bakes: om.Notes()", "tool: bakes retired")
 }
 
 // Project settings apply only in a trusted project, and status says when they

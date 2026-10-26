@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 )
 
 // wireHost is a minimal PiG over a pipe: it reads the register frame, sends ready, and serves
@@ -18,6 +21,9 @@ type wireHost struct {
 	c    net.Conn
 	next int
 	reg  struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
 		Handlers []struct {
 			Event     string `json:"event"`
 			HandlerID int    `json:"handler_id"`
@@ -102,7 +108,13 @@ func (w *wireHost) request(req map[string]any) json.RawMessage {
 // directory, so nothing reaches the user's config, and sends ready.
 func connect(t *testing.T) *wireHost {
 	t.Helper()
-	t.Setenv("PIG_HOME", t.TempDir())
+	return connectHome(t, t.TempDir())
+}
+
+// connectHome is connect with PiG's home at home, a temporary directory the test prepared.
+func connectHome(t *testing.T, home string) *wireHost {
+	t.Helper()
+	t.Setenv("PIG_HOME", home)
 	hostSide, extSide := net.Pipe()
 	done := make(chan error, 1)
 	go func() { done <- Extension().RunWithConn(extSide) }()
@@ -126,10 +138,16 @@ func connect(t *testing.T) *wireHost {
 // event dispatches name to every handler the extension registered for it.
 func (w *wireHost) event(name string) {
 	w.t.Helper()
+	w.eventWith(name, map[string]any{})
+}
+
+// eventWith is event with the event's args.
+func (w *wireHost) eventWith(name string, args map[string]any) {
+	w.t.Helper()
 	n := 0
 	for _, h := range w.reg.Handlers {
 		if h.Event == name {
-			w.request(map[string]any{"method": "event", "event": name, "handler_id": h.HandlerID, "args": map[string]any{}})
+			w.request(map[string]any{"method": "event", "event": name, "handler_id": h.HandlerID, "args": args})
 			n++
 		}
 	}
@@ -193,4 +211,38 @@ func TestSessionBoundariesResetTheNamespace(t *testing.T) {
 		t.Fatalf("the kept definition after session_shutdown: %q", got)
 	}
 	w.event("session_shutdown")
+}
+
+// The defined tools are retired (docs/code-tool.md, step 8): with a definition an earlier
+// release stored, the extension registers exactly the memory tool, and neither session_start nor
+// before_agent_start registers a tool or changes the active list; the definition stays stored and
+// om.Retired lists it with the snippet that replaces it.
+func TestRetiredDefinedToolsAreNeverRegistered(t *testing.T) {
+	home := t.TempDir()
+	store := curated.New(curated.DefaultDir(home))
+	if _, err := store.Define(curated.Definition{Name: "bakes", Query: `notes | search "sourdough"`, Description: "Bakes."}, "s0"); err != nil {
+		t.Fatal(err)
+	}
+	w := connectHome(t, home)
+	var tools []string
+	for _, tool := range w.reg.Tools {
+		tools = append(tools, tool.Name)
+	}
+	if !slices.Equal(tools, []string{"memory"}) {
+		t.Fatalf("registered tools %v", tools)
+	}
+	w.event("session_start")
+	w.eventWith("before_agent_start", map[string]any{"prompt": "hi", "systemPrompt": "", "systemPromptOptions": map[string]any{}})
+	for _, method := range w.calls {
+		if method == "registerTool" || method == "registerDeclaration" || method == "setActiveTools" {
+			t.Fatalf("the extension called %s: %v", method, w.calls)
+		}
+	}
+	got := w.memory("for _, q := range om.Retired().Rows { fmt.Println(q.Name, q.Snippet) }")
+	if !strings.Contains(got, "bakes om.Notes(om.Search(") {
+		t.Fatalf("om.Retired: %q", got)
+	}
+	if _, err := store.GetDefinition("bakes"); err != nil {
+		t.Fatalf("the retired definition was removed: %v", err)
+	}
 }
