@@ -1,8 +1,9 @@
 // Package kernel is the part of the memory the model cannot change (docs/memory-interface.md,
 // section 8), after nodecode's kernel floor: storage and the om.* record kinds, the compaction
 // invariants, the query engine and its bounds, the memory tool, the event ledger and the
-// kernel events it counts, the room ceiling, subject canonicalization, and the text that states
-// these rules in the level-1 prompt.
+// kernel events it counts, the room ceiling, subject canonicalization, the names the memory
+// tool's Go code may not bind (OwnsCode), and the text that states these rules in the level-1
+// prompt.
 //
 // One ownership predicate, Owns, names it, and Check applies it to a definition. Every path that
 // accepts a definition into the model-built layer (internal/layer) calls Check when the
@@ -33,6 +34,12 @@ const (
 	kindSummary  = "summary"
 )
 
+// KindCode is the kind of the names the memory tool's Go code may not bind (docs/code-tool.md,
+// "Kernel ownership"). It is no layer kind: OwnsCode matches it exactly, since Go identifiers
+// are case-sensitive, and Owns and OwnsForEveryKind never fold another name onto it, so a
+// subject "time" or a layer detector named "errors" stays free.
+const KindCode = "code"
+
 // ledgerKinds are the kinds that read or act on the event ledger and the room budget, so the
 // only ones a kernel event or a room name can shadow: a detector counts events, a remedy sets
 // what a pass does, a summary runs under the room budget. A tool named "error" shadows
@@ -52,6 +59,11 @@ const (
 	OwnerPromptRules = "the kernel's fixed prompt rules"
 	OwnerNoteSchema  = "the note schema's kernel fields"
 	OwnerSubjects    = "the kernel's subject canonicalization"
+
+	OwnerGoPredeclared = "Go's predeclared identifiers (the interpreter's universe)"
+	OwnerCodeSeeded    = "the memory tool's seeded names"
+	OwnerCodePackage   = "the memory tool's allow-listed packages"
+	OwnerCodeEntry     = "the interpreter's entry points"
 )
 
 // entry is one kernel-owned name. Kinds limits it to definitions of those kinds; none means
@@ -65,8 +77,8 @@ type entry struct {
 // MemoryToolName is the base memory tool's name (memquery.ToolName).
 const MemoryToolName = "memory"
 
-// The query engine's vocabulary (memquery.Sources, memquery.Stages, memquery.Writes), with the
-// writes section 8 adds for the layer.
+// The query engine's vocabulary (legacyquery.Sources, legacyquery.Stages, legacyquery.Writes:
+// the frozen recognizer's copy of it), with the writes section 8 adds for the layer.
 var (
 	// "harness" is also a source (it lists the layer); it is owned as the write it was first.
 	querySources = []string{"notes", "reflections", "history", "saved", "recall"}
@@ -98,8 +110,8 @@ var invariantSettings = []string{
 // noteKernelFields are the fields every note carries that a schema definition only adds to.
 var noteKernelFields = []string{"id", "timestamp", "content", "sources", "sourceEntryIds", "relevance"}
 
-// levelZeroNoteNames are the notes source's fields memory v2's level 0 fills (memquery's
-// LevelZeroNoteFields): a schema field with one of these names would be shadowed by the
+// levelZeroNoteNames are the notes source's fields memory v2's level 0 fills
+// (om.LevelZeroNoteFields): a schema field with one of these names would be shadowed by the
 // kernel's, so a schema cannot declare one.
 var levelZeroNoteNames = []string{"status", "event_date", "source", "source_role", "source_time"}
 
@@ -108,6 +120,34 @@ var levelZeroNoteNames = []string{"status", "event_date", "source", "source_role
 // canonical grouping and the notes source's raw subject and subject scope fields. Owned for
 // every kind, so no definition, and no field a schema adds, can replace or shadow it.
 var subjectNames = []string{"subject-key", "canonical-subjects", "raw_subject", "subject_scope"}
+
+// The code group (KindCode): the names the memory tool's Go code may not bind at any depth
+// (internal/codepolicy), since binding one breaks the namespace for the rest of the session.
+var (
+	// codePredeclared is go/types.Universe less codeMissingBuiltins: the predeclared
+	// identifiers the interpreter implements.
+	codePredeclared = []string{
+		"any", "bool", "byte", "comparable", "complex64", "complex128", "error",
+		"float32", "float64", "int", "int8", "int16", "int32", "int64", "rune", "string",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+		"true", "false", "iota", "nil",
+		"append", "cap", "close", "complex", "copy", "delete", "imag", "len", "make", "new",
+		"panic", "print", "println", "real", "recover",
+	}
+	// codeSeeded are the names seeded into every namespace: the om package, the seeded
+	// functions (codepolicy.SeededFuncs), the capture function (codepolicy.CaptureName) and
+	// the held-value function (codepolicy.HeldName).
+	codeSeeded = []string{"om", "describe", "man", "kept", "forget", "_omCapture", "_omHeld"}
+	// codePackages are the allow-listed packages' names (codepolicy.AllowedImports).
+	codePackages = []string{"fmt", "strings", "strconv", "sort", "slices", "maps", "math", "unicode", "utf8", "bytes", "errors", "regexp", "cmp", "tabwriter", "time"}
+	// codeEntryPoints run on their own in the interpreter: init when defined, main after
+	// every later evaluation.
+	codeEntryPoints = []string{"init", "main"}
+)
+
+// CodeMissingBuiltins are the Go 1.21 builtins the interpreter (yaegi v0.16.1) does not
+// implement. They are not owned, so code may define them as ordinary functions.
+var CodeMissingBuiltins = []string{"min", "max", "clear"}
 
 // owned is the kernel's list, built once from the groups above.
 var owned = func() []entry {
@@ -134,6 +174,17 @@ var owned = func() []entry {
 	add(noteKernelFields, OwnerNoteSchema, kindSchema)
 	add(levelZeroNoteNames, OwnerNoteSchema, kindSchema)
 	add(subjectNames, OwnerSubjects)
+	// The code group is never kindless and is matched exactly, so it is added beside the
+	// folded names rather than through add: "forget" is a retired query write and a seeded
+	// function both.
+	for _, group := range []struct {
+		names []string
+		owner string
+	}{{codePredeclared, OwnerGoPredeclared}, {codeSeeded, OwnerCodeSeeded}, {codePackages, OwnerCodePackage}, {codeEntryPoints, OwnerCodeEntry}} {
+		for _, n := range group.names {
+			out = append(out, entry{name: n, owner: group.owner, kinds: []string{KindCode}})
+		}
+	}
 	return out
 }()
 
@@ -166,12 +217,15 @@ func normalize(name string) string {
 // something the kernel owns, and names the owner. It is the one ownership predicate: the layer
 // refuses such a definition when it is made and when it is loaded.
 func Owns(kind, name string) (owner string, ok bool) {
+	if kind == KindCode {
+		return OwnsCode(name)
+	}
 	key := normalize(name)
 	if key == "" {
 		return "", false
 	}
 	for _, e := range owned {
-		if normalize(e.name) != key {
+		if isCode(e) || normalize(e.name) != key {
 			continue
 		}
 		if len(e.kinds) == 0 || contains(e.kinds, kind) {
@@ -179,6 +233,24 @@ func Owns(kind, name string) (owner string, ok bool) {
 		}
 	}
 	return "", false
+}
+
+// OwnsCode reports whether the memory tool's Go code may not bind name (a predeclared
+// identifier, a seeded name, an allow-listed package's name, init or main), and names the
+// owner. It matches exactly: Go identifiers are case-sensitive, so "Len", "Error" and "New"
+// stay free for fields, methods and the agent's own names.
+func OwnsCode(name string) (owner string, ok bool) {
+	for _, e := range owned {
+		if isCode(e) && e.name == name {
+			return e.owner, true
+		}
+	}
+	return "", false
+}
+
+// isCode reports whether e belongs to the code group.
+func isCode(e entry) bool {
+	return len(e.kinds) == 1 && e.kinds[0] == KindCode
 }
 
 // OwnsForEveryKind reports whether name is owned for every definition kind, and names the

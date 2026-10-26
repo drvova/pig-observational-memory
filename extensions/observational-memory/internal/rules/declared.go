@@ -10,6 +10,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
@@ -45,7 +46,7 @@ const (
 
 // detectorSources are what a detector query reads: the pass's notes, and the history (user,
 // assistant and tool text) of the entries the pass covered.
-var detectorSources = []string{memquery.SourceNotes, memquery.SourceHistory}
+var detectorSources = []string{legacyquery.SourceNotes, legacyquery.SourceHistory}
 
 // DefinedCountKey is the usage-ledger count key of a detector a model defined: beside the
 // kernel's checks, never one of them, so no rule is judged by it.
@@ -66,7 +67,9 @@ func detectorSeed(name, description string) string {
 }
 
 // ParseDetector reads the detector declaration text named name: exactly one of a kernel check
-// and a query reading notes or history, of at most MaxDetectorQuery characters.
+// and a query reading notes or history, of at most MaxDetectorQuery characters. The query is
+// validated by the frozen recognizer (legacyquery), so a declaration it accepted once keeps
+// loading after the query language is removed.
 func ParseDetector(name, text string) (DetectorDef, error) {
 	decoded, err := tables.Rows.Decode(strings.TrimSpace(text))
 	if err != nil {
@@ -97,7 +100,7 @@ func ParseDetector(name, text string) (DetectorDef, error) {
 		if n := utf8.RuneCountInString(d.Query); n > MaxDetectorQuery {
 			return DetectorDef{}, fmt.Errorf("a detector query is at most %d characters (this one %d)", MaxDetectorQuery, n)
 		}
-		q, err := memquery.Parse(d.Query)
+		q, err := legacyquery.Parse(d.Query)
 		if err != nil {
 			return DetectorDef{}, fmt.Errorf("detector query %q: %w", d.Query, err)
 		}

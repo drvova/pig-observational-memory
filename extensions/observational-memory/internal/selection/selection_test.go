@@ -9,6 +9,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -497,7 +498,7 @@ func TestRenderRandomSupersedeChains(t *testing.T) {
 }
 
 // Folded span rows never print a query its limit cuts: a fold that would cover more than
-// memquery.MaxLimit records is split into more rows.
+// om.MaxLimit records is split into more rows.
 func TestRenderFoldsWithinTheQueryLimit(t *testing.T) {
 	entries := branch(460, func(i int, o *ledger.Observation) bool {
 		o.Content = plain(i)
@@ -515,7 +516,7 @@ func TestRenderFoldsWithinTheQueryLimit(t *testing.T) {
 			continue
 		}
 		for _, q := range r.Queries {
-			if strings.Contains(q, fmt.Sprintf("limit %d", memquery.MaxLimit)) {
+			if strings.Contains(q, fmt.Sprintf("limit %d", om.MaxLimit)) {
 				res := memquery.Run(memquery.Env{Entries: entries}, q)
 				if strings.Contains(res.Text, "matched") {
 					t.Fatalf("query %q is cut by its limit: %s", q, res.Text[:min(len(res.Text), 200)])
@@ -530,7 +531,7 @@ func TestRenderFoldsWithinTheQueryLimit(t *testing.T) {
 	}
 }
 
-// A capped list longer than memquery.MaxLimit is listed by positional chunks within the limit.
+// A capped list longer than om.MaxLimit is listed by positional chunks within the limit.
 func TestRenderLongListWithinTheQueryLimit(t *testing.T) {
 	entries := branch(230, func(i int, o *ledger.Observation) bool {
 		o.Kind, o.Target, o.Content = ledger.KindFile, fmt.Sprintf("/w/f%03d.go", i), fmt.Sprintf("f%03d.go edited", i)

@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 )
 
 // The sources a read query starts from.
@@ -73,10 +75,11 @@ const RecallOffset = "offset"
 // Writes lists the writes in the order the grammar names them.
 var Writes = []string{WriteSave, WriteEdit, WriteForget, WriteFeedback, WriteDefine, WritePropose, WriteHarness, WriteRollback}
 
-// The limit stage's bounds: a query without one shows DefaultLimit rows.
+// The limit stage's bounds: a query without one shows DefaultLimit rows (om.DefaultLimit and
+// om.MaxLimit).
 const (
-	DefaultLimit = 20
-	MaxLimit     = 200
+	DefaultLimit = om.DefaultLimit
+	MaxLimit     = om.MaxLimit
 )
 
 // writeArgs are each key=value write's keys, required ones first.

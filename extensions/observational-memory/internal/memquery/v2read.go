@@ -5,85 +5,41 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 )
 
 // RecallPageChars is the page memory v2's recall reads a long text in (docs/memory-v2.md,
 // "Memory tool"): the existing single-recall bound, serialize.RecallPageChars.
-const RecallPageChars = serialize.RecallPageChars
+const RecallPageChars = omhost.RecallPageChars
 
-// fallback is env reading the session file instead of the branch (docs/memory-v2.md,
-// "Branches"): the rows of entries and records on the branch are left out, since the branch
-// read found nothing among them, and the rest are labelled OffPathLabel, in session-file order.
+// fallback is env reading the session file instead of the branch (omhost.Reader.Fallback):
+// the rows of entries and records on the branch are left out, since the branch read found
+// nothing among them, and the rest are labelled OffPathLabel, in session-file order.
 func (e Env) fallback() Env {
-	on := map[string]bool{}
-	for _, entry := range e.Entries {
-		on[entry.ID] = true
-	}
-	for id := range ledger.FoldLedger(e.Entries, "").ObservationsByID {
-		on[id] = true
-	}
+	r := e.reader().Fallback()
 	off := e
-	off.Entries, off.SessionEntries = e.SessionEntries, nil
-	off.offPath, off.onBranch = true, on
+	off.Entries, off.SessionEntries, off.off = r.Entries, r.SessionEntries, r.Off
 	return off
 }
 
-// offPathRow reports whether a fallback read keeps the row of id, and the id it shows.
-func (e Env) offPathRow(id string) (string, bool) {
-	if !e.offPath {
-		return id, true
-	}
-	if e.onBranch[id] {
-		return "", false
-	}
-	return id + OffPathLabel, true
-}
-
-// currentTurnStart is the index of the current turn's first entry, the last user message on the
-// branch; len(entries) when there is none. Memory v2's history leaves the current turn out: it
-// is in the context already, and a search would find its own request.
-func currentTurnStart(entries []session.Entry) int {
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Type == "message" && entries[i].Message != nil && entries[i].Message["role"] == "user" {
-			return i
-		}
-	}
-	return len(entries)
-}
-
-// page cuts a recall text to one page of RecallPageChars characters from q's offset, ending on
-// a line boundary when one falls inside the page (a longer line is cut at the page size), and
-// names the offset of the next page; a text that fits from the offset is returned whole.
+// page cuts a recall text to one page of RecallPageChars characters from q's offset
+// (omhost.PageOf) and names the offset of the next page; a text that fits from the offset is
+// returned whole.
 func page(text string, q *Query) (string, error) {
-	runes := []rune(text)
-	total := len(runes)
-	offset := q.Offset
-	if offset > 0 && offset >= total {
-		return "", &Error{Msg: fmt.Sprintf("offset %d is past the end: %s is %d characters", offset, q.ID, total), Hint: "use an offset a paged recall named, or recall " + q.ID + " alone"}
+	p, ok := omhost.PageOf(text, q.Offset)
+	if !ok {
+		return "", &Error{Msg: fmt.Sprintf("offset %d is past the end: %s is %d characters", q.Offset, q.ID, p.Total), Hint: "use an offset a paged recall named, or recall " + q.ID + " alone"}
 	}
-	if offset == 0 && total <= RecallPageChars {
+	if p.Whole {
 		return text, nil
 	}
-	end := min(total, offset+RecallPageChars)
-	if end < total {
-		for i := end - 1; i > offset; i-- {
-			if runes[i] == '\n' {
-				end = i + 1
-				break
-			}
-		}
-	}
-	out := string(runes[offset:end])
-	note := fmt.Sprintf("[characters %d to %d of %d", offset, end, total)
-	if end < total {
-		note += fmt.Sprintf("; the next page: recall %s %s %d]", queryWord(q.ID), RecallOffset, end)
+	note := fmt.Sprintf("[characters %d to %d of %d", p.From, p.To, p.Total)
+	if p.To < p.Total {
+		note += fmt.Sprintf("; the next page: recall %s %s %d]", queryWord(q.ID), RecallOffset, p.To)
 	} else {
 		note += "]"
 	}
-	return strings.TrimRight(out, "\n") + "\n\n" + note, nil
+	return strings.TrimRight(p.Text, "\n") + "\n\n" + note, nil
 }
 
 // queryWord writes id as one word of a query, quoted when it is not a bare word.
@@ -135,7 +91,7 @@ func noMatchCounts(env Env, q *Query) (string, bool) {
 // newest-first branch order (a sort, count or group stage, or the off-path fallback) or nothing
 // was left out.
 func nextPageQuery(env Env, q *Query, rel *relation) string {
-	if q.Source != SourceHistory || env.offPath || rel.next == "" || rel.name != SourceHistory {
+	if q.Source != SourceHistory || env.off != nil || rel.next == "" || rel.name != SourceHistory {
 		return ""
 	}
 	for _, stage := range q.Stages {
@@ -184,16 +140,4 @@ func formatQuery(q *Query) string {
 		parts = append(parts, b.String())
 	}
 	return strings.Join(parts, " | ")
-}
-
-// historyText is an entry's text as memory v2's history reads it: what level 0's extraction
-// reads (serialize.HistoryText, thinking left out), with harness markup taken out of a user
-// message (serialize.WithoutMarkup).
-func historyText(entry session.Entry, v2 bool, skip []string) (string, string, bool) {
-	role, text, ok := serialize.HistoryText(entry, skip...)
-	if !ok || !v2 || role != serialize.HistoryUser {
-		return role, text, ok
-	}
-	text = serialize.WithoutMarkup(text)
-	return role, text, strings.TrimSpace(text) != ""
 }

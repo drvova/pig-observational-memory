@@ -9,9 +9,9 @@ import (
 	"unicode"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/recall"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
@@ -45,21 +45,9 @@ type Layerer interface {
 }
 
 // HarnessRow is one row of the harness source: a definition of a model's layer, or a seed
-// standing where the model defined nothing.
-type HarnessRow struct {
-	Model, Kind, Name string
-	// State is seed, held, written (with its probation: written, probation or established),
-	// or skipped for a file the layer refused.
-	State string
-	// Generation is the generation that wrote it, "" for a seed or a held definition.
-	Generation string
-	// Origin is seed (shipped and standing), override (the model's definition of a seed's
-	// name), extends or replaces (the model's instructions appended after the seed, or in its
-	// place: their mode) or own (a name no seed has).
-	Origin string
-	// Stale is why an override was skipped as stale, "" when it is not.
-	Stale string
-}
+// standing where the model defined nothing. It moved to internal/om as om.LayerRow
+// (docs/code-tool.md, "Order of work", step 1).
+type HarnessRow = om.LayerRow
 
 // Env is what a query runs against.
 type Env struct {
@@ -105,36 +93,27 @@ type Env struct {
 	// fallback (docs/memory-v2.md, "Branches"). Nil when the host cannot read them.
 	SessionEntries []session.Entry
 
-	// offPath marks the fallback read over SessionEntries: rows whose id is in onBranch are left
-	// out, and the others are labelled OffPathLabel.
-	offPath  bool
-	onBranch map[string]bool
+	// off marks the fallback read over SessionEntries (omhost.Reader.Fallback): rows on the
+	// branch are left out, and the others are labelled OffPathLabel. Nil on the branch.
+	off *omhost.OffPath
 }
 
 // OffPathLabel follows the id of a row or entry that is not on the current branch: a summary's
-// off-path span ends, and memory v2's fallback rows (docs/memory-v2.md, "Branches").
-const OffPathLabel = " (off-path)"
+// off-path span ends, and memory v2's fallback rows (omhost.OffPathLabel).
+const OffPathLabel = omhost.OffPathLabel
 
-// Records are a memory given to a query directly.
-type Records struct {
-	// Observations are the notes source's records, all active.
-	Observations []ledger.Observation
-	Reflections  []ledger.Reflection
-	// ReflectionDates are the reflections' date ranges (ledger.ReflectionDateRanges).
-	ReflectionDates map[string]string
-	// Aliases are the subject aliases the notes source reads subjects with
-	// (ledger.CanonicalSubjectsWithAliases).
-	Aliases []ledger.SubjectAlias
-	// SubjectContext are subjects of notes outside Observations that the canonical subjects
-	// are computed over beside the records' own, so a slice of the memory (one pass's notes)
-	// groups as the whole memory does; nil for none.
-	SubjectContext []string
-}
+// Records are a memory given to a query directly (omhost.Records).
+type Records = omhost.Records
 
 // memoryTools are the tools whose calls are memory queries: the memory tool and the defined
 // tools.
 func (e Env) memoryTools() []string {
 	return append([]string{ToolName}, e.DefinedTools...)
+}
+
+// reader is the read engine's view of env (omhost.Reader).
+func (e Env) reader() omhost.Reader {
+	return omhost.Reader{Entries: e.Entries, SessionEntries: e.SessionEntries, Records: e.Records, ToolCall: e.ToolCall, Skip: e.memoryTools(), Off: e.off}
 }
 
 // Details are a result's structured details, for the TUI renderer.
@@ -172,8 +151,9 @@ type Result struct {
 }
 
 // HistoryClipChars bounds a history row's content in a result: a window of this many
-// characters around the first searched word. recall <id> reads the entry in full.
-const HistoryClipChars = 400
+// characters around the first searched word. recall <id> reads the entry in full
+// (om.HistoryClipChars).
+const HistoryClipChars = om.HistoryClipChars
 
 // Run parses and runs one query.
 func Run(env Env, query string) Result {
@@ -643,7 +623,7 @@ func encodeRelation(rel *relation, words []string, group *Stage) []tables.Table 
 		absent := make([]bool, len(row))
 		for i, v := range row {
 			if rel.clip[rel.fields[i]] {
-				v = clipAround(v, words, HistoryClipChars)
+				v = omhost.ClipAround(v, words, HistoryClipChars)
 			}
 			cells[i] = v
 			// The first field (an id or a name) is always present; a single-field table
@@ -708,60 +688,10 @@ func groupTableName(base, value string) string {
 	return base + "." + name
 }
 
-// clipAround keeps n characters of s: a window starting a quarter of n before the first
-// occurrence of any of words (case-insensitive), else the start. A cut end is marked "…".
-func clipAround(s string, words []string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	lower := make([]rune, len(runes))
-	for i, r := range runes {
-		lower[i] = unicode.ToLower(r)
-	}
-	first := -1
-	for _, w := range words {
-		if at := runeIndex(lower, []rune(w)); at >= 0 && (first < 0 || at < first) {
-			first = at
-		}
-	}
-	start := 0
-	if first > 0 {
-		start = max(0, min(first-n/4, len(runes)-n))
-	}
-	end := start + n
-	text := string(runes[start:end])
-	if start > 0 {
-		text = "…" + text
-	}
-	if end < len(runes) {
-		text += "…"
-	}
-	return text
-}
-
-func runeIndex(hay, needle []rune) int {
-	if len(needle) == 0 {
-		return -1
-	}
-outer:
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		for j, r := range needle {
-			if hay[i+j] != r {
-				continue outer
-			}
-		}
-		return i
-	}
-	return -1
-}
-
 // errCuratedOff is the failure of a query that needs the curated store when it is off.
 var errCuratedOff = errors.New("curated memory is off (curatedMemory: false), or PiG's config directory could not be found; notes, reflections, history and recall of ids still work")
 
-// rowAnchors are the branch positions the from and through stages compare: each entry id's
-// index on the branch, and each row's anchor by its id (ledger.ObservationAnchor for a note,
-// ledger.ReflectionAnchor for a reflection, the entry itself for history).
+// rowAnchors are the branch positions the from and through stages compare (omhost.Anchors).
 type rowAnchors struct {
 	positions map[string]int
 	of        func(id string) (int, bool)
@@ -770,71 +700,33 @@ type rowAnchors struct {
 // newRowAnchors reads the anchors of source's rows; stage is the from or through stage that
 // asks, for the error when the rows have no branch position (a count, saved, harness).
 func newRowAnchors(env Env, source string, stage Stage) (*rowAnchors, error) {
-	positions := ledger.EntryIndexByID(env.Entries)
-	a := &rowAnchors{positions: positions}
+	kind := omhost.AnchorHistory
 	switch source {
 	case SourceHistory:
-		a.of = func(id string) (int, bool) {
-			at, ok := positions[id]
-			return at, ok
-		}
-	case SourceNotes, SourceReflections:
-		folded := ledger.FoldLedger(env.Entries, "")
-		byID := folded.ObservationsByID
-		reflections := folded.ReflectionsByID
-		if env.Records != nil {
-			byID = make(map[string]ledger.Observation, len(folded.ObservationsByID)+len(env.Records.Observations))
-			for id, o := range folded.ObservationsByID {
-				byID[id] = o
-			}
-			for _, o := range env.Records.Observations {
-				byID[o.ID] = o
-			}
-			reflections = make(map[string]ledger.Reflection, len(env.Records.Reflections))
-			for _, r := range env.Records.Reflections {
-				reflections[r.ID] = r
-			}
-		}
-		if source == SourceNotes {
-			a.of = func(id string) (int, bool) {
-				o, known := byID[id]
-				if !known {
-					return -1, false
-				}
-				_, at, ok := ledger.ObservationAnchor(o, positions)
-				return at, ok
-			}
-		} else {
-			a.of = func(id string) (int, bool) {
-				r, known := reflections[id]
-				if !known {
-					return -1, false
-				}
-				_, at, ok := ledger.ReflectionAnchor(r, byID, positions)
-				return at, ok
-			}
-		}
+	case SourceNotes:
+		kind = omhost.AnchorNotes
+	case SourceReflections:
+		kind = omhost.AnchorReflections
 	default:
 		return nil, &Error{Pos: stage.pos, Msg: stage.Kind + " filters notes, reflections and history by branch position", Hint: "put " + stage.Kind + " before count, on one of those sources"}
 	}
-	return a, nil
+	a := omhost.NewAnchors(env.Entries, env.Records, kind)
+	return &rowAnchors{positions: a.Positions, of: a.Of}, nil
 }
 
 // pointInTime is the bound of the point-in-time view (docs/memory-v2.md, "Memory tool"): until
-// DATE asof or through ID asof reads notes and reflections as the memory stood at the bound.
+// DATE asof or through ID asof reads notes and reflections as the memory stood at the bound
+// (omhost.PointInTime).
 type pointInTime struct {
-	// until is until's date, "" for through.
-	until string
-	// index is the bound's branch index: through's entry, or the last entry dated on or before
-	// until (-1 when none is). Drops and reflections recorded after it are not applied.
-	index int
-	// positions are the branch's entry indexes (ledger.EntryIndexByID).
-	positions map[string]int
-	// recorded are the observations recorded at or before index: in the memory at the bound.
-	recorded map[string]bool
-	// consolidated are the observations level 1 wrote at a compaction
-	// (ledger.ConsolidatedObservationIDs).
-	consolidated map[string]bool
+	view *omhost.PointInTime
+}
+
+// bound is the view the read engine reads at; nil for no view.
+func (v *pointInTime) bound() *omhost.PointInTime {
+	if v == nil {
+		return nil
+	}
+	return v.view
 }
 
 // newPointInTime reads q's asof bound; nil when q has none. One asof per query, and only on
@@ -851,82 +743,15 @@ func newPointInTime(env Env, q *Query) (*pointInTime, error) {
 		if q.Source != SourceNotes && q.Source != SourceReflections {
 			return nil, &Error{Pos: stage.pos, Msg: "asof reads notes and reflections as they stood at the bound", Hint: "use " + stage.Kind + " " + stage.Value + " without asof on " + q.Source}
 		}
-		positions := ledger.EntryIndexByID(env.Entries)
-		view = &pointInTime{index: -1, positions: positions}
 		if stage.Kind == StageThrough {
-			at, ok := positions[stage.Value]
+			at, ok := omhost.PointInTimeThrough(env.Entries, stage.Value)
 			if !ok {
 				return nil, &Error{Pos: stage.pos, Msg: fmt.Sprintf("entry %s is not on this branch", stage.Value), Hint: "take entry ids from history or from a summary line on this branch"}
 			}
-			view.index = at
+			view = &pointInTime{view: at}
 			continue
 		}
-		view.until = stage.Value
-		for i, entry := range env.Entries {
-			if day := entryDay(entry); day != "" && day <= stage.Value {
-				view.index = i
-			}
-		}
-	}
-	if view != nil {
-		view.recorded = map[string]bool{}
-		if view.index >= 0 {
-			for id := range ledger.FoldLedger(env.Entries[:view.index+1], "").ObservationsByID {
-				view.recorded[id] = true
-			}
-		}
-		view.consolidated = ledger.ConsolidatedObservationIDs(env.Entries)
+		view = &pointInTime{view: omhost.PointInTimeUntil(env.Entries, stage.Value)}
 	}
 	return view, nil
-}
-
-// holds reports whether o was in the memory at the bound: recorded at or before it, or, for a
-// record recorded later that level 0 (or a v1 worker) picked from what was said, said by then:
-// its newest source entry at or before through's entry, or its date (the newest of its sources')
-// on or before until's date, the one test for both bounds. A record level 1 wrote at a later
-// compaction (a merge, a label, a settled possible update) holds only from where it was
-// recorded: what it says was judged there, and it may carry a value said after the bound.
-func (v *pointInTime) holds(o ledger.Observation) bool {
-	if v.recorded[o.ID] {
-		return true
-	}
-	if v.consolidated[o.ID] {
-		return false
-	}
-	if v.until != "" {
-		day := dayOf(o.Timestamp)
-		return day != "" && day <= v.until
-	}
-	newest := -1
-	for _, id := range o.SourceEntryIDs {
-		if at, ok := v.positions[id]; ok {
-			newest = max(newest, at)
-		}
-	}
-	return newest >= 0 && newest <= v.index
-}
-
-// dropped are the ids dropped by the bound: the drops recorded at or before its index.
-func (v *pointInTime) dropped(entries []ledger.Entry) map[string]bool {
-	if v.index < 0 {
-		return map[string]bool{}
-	}
-	return ledger.FoldLedger(entries[:v.index+1], "").DroppedObservationIDs
-}
-
-// reflections are the reflections recorded at or before the bound's index.
-func (v *pointInTime) reflections(entries []ledger.Entry) []ledger.Reflection {
-	if v.index < 0 {
-		return []ledger.Reflection{}
-	}
-	return ledger.FoldLedger(entries[:v.index+1], "").Reflections
-}
-
-// entryDay is the date of an entry, as history dates it: its message's time, else the entry's.
-func entryDay(entry ledger.Entry) string {
-	var stamp any
-	if entry.Message != nil {
-		stamp = entry.Message["timestamp"]
-	}
-	return dayOf(serialize.FormatRecallTimestamp(stamp, entryTimestamp(entry)))
 }

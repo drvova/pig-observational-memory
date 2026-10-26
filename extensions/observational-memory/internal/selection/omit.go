@@ -7,6 +7,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 )
 
 // OffPathLabel follows an entry id that is not on the current branch (docs/memory-v2.md,
@@ -30,7 +31,7 @@ type spanRow struct {
 }
 
 // listTail ends a capped list: how many of its records the list leaves out, how many it holds
-// in all, and the queries that list the whole list (one when it fits memquery.MaxLimit rows,
+// in all, and the queries that list the whole list (one when it fits om.MaxLimit rows,
 // else one per positional chunk of at most that many), so each left-out record is returned by
 // one of them.
 type listTail struct {
@@ -188,11 +189,11 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 }
 
 // listQueries are the queries that list a capped list's records, all of them live: one over
-// the whole list when it fits memquery.MaxLimit rows; else one positional query per chunk of at
+// the whole list when it fits om.MaxLimit rows; else one positional query per chunk of at
 // most that many anchored records holding a left-out one, and one for the off-path records left
 // out (by date, as offPathRow).
 func (s *state) listQueries(base string, all []*item, p *selected) []string {
-	if len(all) <= memquery.MaxLimit {
+	if len(all) <= om.MaxLimit {
 		return []string{limited(base, len(all))}
 	}
 	var left, offLeft []*item
@@ -219,7 +220,7 @@ func (s *state) listQueries(base string, all []*item, p *selected) []string {
 
 // spans are the runs of left-out records of one source in anchor order, each bounded by the
 // anchors of its first and last record, so its positional query (from/through) lists it. A
-// run is cut before its query would return more than memquery.MaxLimit rows, so every query
+// run is cut before its query would return more than om.MaxLimit rows, so every query
 // the summary prints lists all of its span.
 func (s *state) spans(source string, all, left []*item, anchors []int, breaks func(*item) bool) []spanRow {
 	if len(left) == 0 {
@@ -259,7 +260,7 @@ func (s *state) spans(source string, all, left []*item, anchors []int, breaks fu
 		if !isLeft[it] {
 			continue
 		}
-		if len(run) > 0 && inRange(run[0].anchor, it.anchor) > memquery.MaxLimit {
+		if len(run) > 0 && inRange(run[0].anchor, it.anchor) > om.MaxLimit {
 			flush()
 		}
 		run = append(run, it)
@@ -311,7 +312,7 @@ func (s *state) offPathRow(source string, left, all []*item) spanRow {
 
 // fold joins the oldest k rows (k < 2 folds nothing) into as few rows as keep every query
 // listing all of its rows: consecutive rows join while the joined range returns at most
-// memquery.MaxLimit records (shown ones between the spans included), so a folded query is never
+// om.MaxLimit records (shown ones between the spans included), so a folded query is never
 // cut by its limit. A joined row has the rows' date range, total count, span count, the first
 // row's first id, the last row's last id, and one positional query over them.
 func fold(rows []spanRow, k int) []spanRow {
@@ -322,7 +323,7 @@ func fold(rows []spanRow, k int) []spanRow {
 	out := []spanRow{}
 	var joined *spanRow
 	for _, r := range rows[:k] {
-		if joined != nil && joined.inRange(joined.firstAt, r.lastAt) <= memquery.MaxLimit {
+		if joined != nil && joined.inRange(joined.firstAt, r.lastAt) <= om.MaxLimit {
 			joined.lastID, joined.lastAt = r.lastID, r.lastAt
 			joined.count += r.count
 			joined.spans += r.spans
@@ -369,13 +370,13 @@ func positionalQuery(source, first, last string, n int) string {
 	return limited(source+" | "+memquery.StageFrom+" "+queryWord(first)+" | "+memquery.StageThrough+" "+queryWord(last), n)
 }
 
-// limited is query with a limit stage when n rows exceed memquery.DefaultLimit, at most
-// memquery.MaxLimit (the result then says "matched N, showing M").
+// limited is query with a limit stage when n rows exceed om.DefaultLimit, at most
+// om.MaxLimit (the result then says "matched N, showing M").
 func limited(query string, n int) string {
-	if n <= memquery.DefaultLimit {
+	if n <= om.DefaultLimit {
 		return query
 	}
-	return query + " | " + memquery.StageLimit + " " + strconv.Itoa(min(n, memquery.MaxLimit))
+	return query + " | " + memquery.StageLimit + " " + strconv.Itoa(min(n, om.MaxLimit))
 }
 
 // queryWord is an id as a query word: bare when the lexer reads it as one word, else quoted.

@@ -5,8 +5,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 )
 
 // runWrite applies a write. It returns the model's text and, for a save, edit, define or
@@ -46,10 +45,10 @@ func runWrite(env Env, q *Query) (text, notify string, err error) {
 	op := map[string]string{WriteSave: curated.OpSave, WriteEdit: curated.OpEdit, WriteForget: curated.OpForget, WriteFeedback: curated.OpFeedback}[q.Write]
 	call := *env.Saved
 	if call.Evidence == nil {
-		call.Evidence = func(quote string) bool { return quotedInConversation(env.Entries, quote, env.memoryTools()) }
+		call.Evidence = func(quote string) bool { return omhost.QuotedInConversation(env.Entries, quote, env.memoryTools()) }
 	}
 	if call.UserEvidence == nil {
-		call.UserEvidence = func(quote string) bool { return quotedByUser(env.Entries, quote, env.memoryTools()) }
+		call.UserEvidence = func(quote string) bool { return omhost.QuotedByUser(env.Entries, quote, env.memoryTools()) }
 	}
 	text, err = call.Run(op, q.Args)
 	if err != nil {
@@ -59,39 +58,6 @@ func runWrite(env Env, q *Query) (text, notify string, err error) {
 		notify = text
 	}
 	return text, notify, nil
-}
-
-// quotedInConversation reports whether quote, whitespace collapsed and case ignored, is in
-// a user or assistant message on the branch. Tool output is not evidence (it may carry
-// injected text), nor are the calls of the memory tools in skip, the current feedback among
-// them.
-func quotedInConversation(entries []session.Entry, quote string, skip []string) bool {
-	return quotedIn(entries, quote, skip, false, serialize.HistoryUser, serialize.HistoryAssistant)
-}
-
-// quotedByUser reports whether quote, whitespace collapsed and case ignored, is in a user
-// message on the branch: memory v2's confirmation of a save and its evidence for a staged
-// memory (docs/memory-v2.md, "Curated memory"). The assistant's words confirm nothing, nor
-// does harness markup in a user message (an attached file, a reminder): it reads the text
-// memory v2's history reads (historyText).
-func quotedByUser(entries []session.Entry, quote string, skip []string) bool {
-	return quotedIn(entries, quote, skip, true, serialize.HistoryUser)
-}
-
-// quotedIn reports whether quote is in a message on the branch whose role is one of roles;
-// v2 reads it as memory v2's history does.
-func quotedIn(entries []session.Entry, quote string, skip []string, v2 bool, roles ...string) bool {
-	needle := strings.ToLower(strings.Join(strings.Fields(quote), " "))
-	for _, entry := range entries {
-		role, text, ok := historyText(entry, v2, skip)
-		if !ok || !contains(roles, role) {
-			continue
-		}
-		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), needle) {
-			return true
-		}
-	}
-	return false
 }
 
 // runDefine checks a definition by running its query once, then stores it.

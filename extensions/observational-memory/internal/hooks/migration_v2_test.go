@@ -15,6 +15,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -350,5 +351,46 @@ func TestV2HostSummaryStoredWhenTheCutIsNotOnTheBranch(t *testing.T) {
 	}
 	if counter.Total() != 0 {
 		t.Fatalf("requests %v", counter.ByStage())
+	}
+}
+
+// The code group the kernel gained for the memory tool's Go code (kernel.OwnsCode) is matched
+// exactly and never owned for every kind or for a layer kind, so data that loaded before keeps
+// loading: a subject "time" keeps its canonical path and its aliases, and a layer detector
+// named "errors" (or "time") is accepted when written and when loaded.
+func TestV2CodeNamesStayFreeForSubjectsAndLayer(t *testing.T) {
+	for _, subject := range []string{"time", "errors", "time/zones", "strings/builder"} {
+		if _, ok := ledger.SubjectPath(subject); !ok {
+			t.Errorf("subject %q is refused as a path", subject)
+		}
+		if stored, refused := ledger.RecordableSubject(subject); refused || stored != subject {
+			t.Errorf("subject %q stored as %q, refused %v", subject, stored, refused)
+		}
+	}
+	inForce, refused := ledger.CheckSubjectAliases([]string{"time", "clock"}, []ledger.SubjectAlias{{From: "clock", To: "time"}})
+	if len(refused) != 0 || len(inForce) != 1 {
+		t.Fatalf("aliases in force %+v, refused %+v", inForce, refused)
+	}
+
+	ls := curated.New(t.TempDir()).Layer()
+	for _, name := range []string{"errors", "time"} {
+		if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: name, Model: "p/m", Text: "detector[1]{query,description}:\n  \"notes | where kind=plan\",plans recorded"}); err != nil {
+			t.Fatalf("detector %q: %v", name, err)
+		}
+	}
+	h, reports, err := ls.Load("p/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reports {
+		t.Errorf("load report %+v", r)
+	}
+	var names []string
+	for _, d := range rules.ModelDetectors(h) {
+		names = append(names, d.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"errors", "time"}) {
+		t.Fatalf("detectors loaded %v", names)
 	}
 }

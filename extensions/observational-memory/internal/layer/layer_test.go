@@ -635,7 +635,7 @@ func TestRollbackKeeping(t *testing.T) {
 }
 
 // The from and through query stages are kernel-owned under every engine, as every stage is
-// (memquery.Stages): a definition stored under one of those names before the stages existed is
+// (legacyquery.Stages): a definition stored under one of those names before the stages existed is
 // refused at load with a report naming the query engine's stages, never loaded or registered.
 func TestStoredDefinitionNamedAfterANewStageIsReported(t *testing.T) {
 	s := newStore(t, nil)

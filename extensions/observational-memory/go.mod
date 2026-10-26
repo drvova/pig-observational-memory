@@ -2,4 +2,7 @@ module github.com/drvova/pig-observational-memory/extensions/observational-memor
 
 go 1.26
 
-require github.com/MichaelKinsy/PiG/extensions/sdk v0.5.1
+require (
+	github.com/MichaelKinsy/PiG/extensions/sdk v0.5.1
+	github.com/traefik/yaegi v0.16.1
+)

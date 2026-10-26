@@ -2,14 +2,20 @@ package kernel_test
 
 import (
 	"errors"
+	"go/types"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/codepolicy"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sandbox"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
@@ -21,9 +27,9 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 	}
 	groups := map[string][]string{
 		kernel.OwnerMemoryTool:  {memquery.ToolName},
-		kernel.OwnerQuerySource: memquery.Sources,
-		kernel.OwnerQueryStage:  memquery.Stages,
-		kernel.OwnerQueryWrite:  memquery.Writes,
+		kernel.OwnerQuerySource: legacyquery.Sources,
+		kernel.OwnerQueryStage:  legacyquery.Stages,
+		kernel.OwnerQueryWrite:  legacyquery.Writes,
 		kernel.OwnerStorage:     {ledger.OMObservationsRecorded, ledger.OMReflectionsRecorded, ledger.OMObservationsDropped, ledger.OMFolded, ledger.OMSubjectsAliased},
 		kernel.OwnerEventLedger: {curated.ModelKindMemory, curated.ModelKindDecode, curated.ModelKindDefined, curated.ModelKindPass, curated.ModelKindDetect,
 			curated.OutcomeOK, curated.OutcomeError, curated.OutcomeEmpty, curated.OutcomeShown, curated.OutcomeOmitted, curated.OutcomeColumns},
@@ -40,7 +46,7 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 				continue
 			}
 			// "harness" is a source and a write: whichever group lists it first owns it.
-			if ok && contains(memquery.Sources, name) && contains(memquery.Writes, name) && (got == kernel.OwnerQuerySource || got == kernel.OwnerQueryWrite) {
+			if ok && contains(legacyquery.Sources, name) && contains(legacyquery.Writes, name) && (got == kernel.OwnerQuerySource || got == kernel.OwnerQueryWrite) {
 				continue
 			}
 			if !ok || got != owner {
@@ -50,7 +56,7 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 	}
 	// The notes source's level-0 fields are owned for schemas, so no schema field shadows one,
 	// and a schema field cannot take them either.
-	for _, name := range memquery.LevelZeroNoteFields {
+	for _, name := range om.LevelZeroNoteFields {
 		if got, ok := kernel.Owns(layer.KindSchema, name); !ok || got != kernel.OwnerNoteSchema {
 			t.Errorf("Owns(schema, %q) = %q, %v; want %q", name, got, ok, kernel.OwnerNoteSchema)
 		}
@@ -69,6 +75,10 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 // owner, and a name owned for one kind only is free for the others.
 func TestCheckRefusesEveryKernelNameForEveryKind(t *testing.T) {
 	for _, n := range kernel.Owned() {
+		// The code group is no layer kind's: TestCodeGroup covers it.
+		if len(n.Kinds) == 1 && n.Kinds[0] == kernel.KindCode {
+			continue
+		}
 		for _, kind := range layer.Kinds {
 			err := kernel.Check(kernel.Def{Kind: kind, Name: n.Name, Text: "x"})
 			ownedHere := len(n.Kinds) == 0 || contains(n.Kinds, kind)
@@ -240,5 +250,109 @@ func TestOwnsForEveryKind(t *testing.T) {
 		if owner, ok := kernel.OwnsForEveryKind(name); ok {
 			t.Errorf("%q is owned for every kind by %s", name, owner)
 		}
+	}
+}
+
+// The code group (docs/code-tool.md, "Kernel ownership") is exactly go/types.Universe less the
+// builtins the interpreter lacks, the seeded names and the allow-listed packages' names, init
+// and main; it is matched exactly, and it is never owned for every kind or for a layer kind, so
+// a subject "time" and a layer detector named "errors" stay free.
+func TestCodeGroup(t *testing.T) {
+	groups := map[string][]string{}
+	for _, n := range kernel.Owned() {
+		if len(n.Kinds) == 1 && n.Kinds[0] == kernel.KindCode {
+			groups[n.Owner] = append(groups[n.Owner], n.Name)
+		}
+	}
+	var universe []string
+	for _, name := range types.Universe.Names() {
+		if !slices.Contains(kernel.CodeMissingBuiltins, name) {
+			universe = append(universe, name)
+		}
+	}
+	var packages []string
+	for _, path := range codepolicy.AllowedImports {
+		packages = append(packages, codepolicy.PackageName(path))
+	}
+	want := map[string][]string{
+		kernel.OwnerGoPredeclared: universe,
+		kernel.OwnerCodeSeeded:    append([]string{codepolicy.OMImport, codepolicy.CaptureName, codepolicy.HeldName}, codepolicy.SeededFuncs...),
+		kernel.OwnerCodePackage:   packages,
+		kernel.OwnerCodeEntry:     {"init", "main"},
+	}
+	if len(groups) != len(want) {
+		t.Fatalf("code owners %v", groups)
+	}
+	for owner, names := range want {
+		got := slices.Sorted(slices.Values(groups[owner]))
+		if w := slices.Sorted(slices.Values(names)); !slices.Equal(got, w) {
+			t.Errorf("%s: %v; want %v", owner, got, w)
+		}
+		for _, name := range names {
+			if o, ok := kernel.OwnsCode(name); !ok || o != owner {
+				t.Errorf("OwnsCode(%q) = %q, %v; want %q", name, o, ok, owner)
+			}
+			if o, ok := kernel.Owns(kernel.KindCode, name); !ok || o != owner {
+				t.Errorf("Owns(code, %q) = %q, %v", name, o, ok)
+			}
+		}
+	}
+	// The missing builtins are in the universe and free for code.
+	for _, name := range kernel.CodeMissingBuiltins {
+		if types.Universe.Lookup(name) == nil {
+			t.Errorf("%q is not a predeclared identifier", name)
+		}
+		if _, ok := kernel.OwnsCode(name); ok {
+			t.Errorf("%q is owned for code", name)
+		}
+	}
+	// Exact: case matters, and nothing is folded.
+	for _, name := range []string{"Len", "Error", "New", "String", "Time", "FMT", "notes", "memory", "init_", ""} {
+		if _, ok := kernel.OwnsCode(name); ok {
+			t.Errorf("%q is owned for code", name)
+		}
+	}
+	// No code name reaches every kind or a layer kind it did not reach before.
+	for _, name := range []string{"time", "errors", "strings", "len", "string", "describe", "kept", "main", "init", "om"} {
+		if owner, ok := kernel.OwnsForEveryKind(name); ok {
+			t.Errorf("%q is owned for every kind by %s", name, owner)
+		}
+		for _, kind := range layer.Kinds {
+			if r, refused := kernel.AsRefusal(kernel.Check(kernel.Def{Kind: kind, Name: name, Text: "x"})); refused {
+				t.Errorf("%s %q: %v", kind, name, r)
+			}
+		}
+	}
+}
+
+// The code group's seeded names are exactly what the sandbox child binds beside the packages,
+// and its package names exactly the packages the child's tables make importable (om aside).
+func TestCodeGroupMatchesTheSandbox(t *testing.T) {
+	var seeded, packages []string
+	for _, n := range kernel.Owned() {
+		if len(n.Kinds) != 1 || n.Kinds[0] != kernel.KindCode {
+			continue
+		}
+		switch n.Owner {
+		case kernel.OwnerCodeSeeded:
+			seeded = append(seeded, n.Name)
+		case kernel.OwnerCodePackage:
+			packages = append(packages, n.Name)
+		}
+	}
+	if got, want := slices.Sorted(slices.Values(sandbox.SeededSymbols())), slices.Sorted(slices.Values(seeded)); !slices.Equal(got, want) {
+		t.Errorf("the sandbox seeds %v; the kernel owns %v", got, want)
+	}
+	var importable []string
+	for _, path := range sandbox.Packages() {
+		if path != codepolicy.OMImport {
+			importable = append(importable, codepolicy.PackageName(path))
+		}
+	}
+	if got, want := slices.Sorted(slices.Values(importable)), slices.Sorted(slices.Values(packages)); !slices.Equal(got, want) {
+		t.Errorf("the sandbox's tables make %v importable; the kernel owns %v", got, want)
+	}
+	if !slices.Contains(sandbox.Packages(), codepolicy.OMImport) {
+		t.Error("the sandbox has no om table")
 	}
 }

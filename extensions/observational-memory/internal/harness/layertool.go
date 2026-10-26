@@ -12,7 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 )
 
@@ -132,7 +132,7 @@ func RollbackMessage(model string, gen layer.Generation, changes []layer.Change)
 // Listing is the session model's layer as the harness source lists it, then the definitions
 // memory v1 wrote for its memory-worker model (worker), which only a rollback with model=worker
 // changes.
-func (w layerWriter) Listing() ([]memquery.HarnessRow, error) {
+func (w layerWriter) Listing() ([]om.LayerRow, error) {
 	rows, err := LayerRows(w.store, w.session)
 	if err != nil || w.worker == "" {
 		return rows, err
@@ -180,7 +180,7 @@ const (
 // override with the seed standing in its place. A written definition probation judges, and a
 // written instructions replacement of the seed until probation decides it, is listed in its
 // probation state.
-func LayerRows(store curated.Store, model string) ([]memquery.HarnessRow, error) {
+func LayerRows(store curated.Store, model string) ([]om.LayerRow, error) {
 	ls := store.Layer()
 	h, reports, err := ls.Load(model)
 	if err != nil {
@@ -191,13 +191,13 @@ func LayerRows(store curated.Store, model string) ([]memquery.HarnessRow, error)
 		return nil, err
 	}
 	seeds := layer.Shipped()
-	rows := map[string]memquery.HarnessRow{}
+	rows := map[string]om.LayerRow{}
 	for key := range seeds {
 		kind, name, _ := strings.Cut(key, "/")
-		rows[key] = memquery.HarnessRow{Model: model, Kind: kind, Name: name, State: layer.StateSeed, Origin: layer.StateSeed}
+		rows[key] = om.LayerRow{Model: model, Kind: kind, Name: name, State: layer.StateSeed, Origin: layer.StateSeed}
 	}
 	for _, d := range h.List("") {
-		row := memquery.HarnessRow{Model: d.Model, Kind: d.Kind, Name: d.Name, State: d.State, Origin: "own"}
+		row := om.LayerRow{Model: d.Model, Kind: d.Kind, Name: d.Name, State: d.State, Origin: "own"}
 		if _, ok := seeds[d.Key()]; ok {
 			row.Origin = OriginOf(d)
 		}
@@ -219,12 +219,12 @@ func LayerRows(store curated.Store, model string) ([]memquery.HarnessRow, error)
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]memquery.HarnessRow, 0, len(keys)+len(reports))
+	out := make([]om.LayerRow, 0, len(keys)+len(reports))
 	for _, key := range keys {
 		out = append(out, rows[key])
 	}
 	for _, r := range reports {
-		row := memquery.HarnessRow{Model: r.Model, Kind: r.Kind, Name: r.Name, State: "skipped", Origin: "own"}
+		row := om.LayerRow{Model: r.Model, Kind: r.Kind, Name: r.Name, State: "skipped", Origin: "own"}
 		if _, ok := seeds[layer.SeedKey(r.Kind, r.Name)]; ok {
 			row.Origin = "override"
 		}
