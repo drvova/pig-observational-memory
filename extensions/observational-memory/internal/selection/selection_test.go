@@ -275,13 +275,35 @@ func TestRenderFilesAndCommitsLines(t *testing.T) {
 		t.Fatalf("the lists are inside the tables body: %q", body)
 	}
 	fixed := tokens.EstimateStringTokens(selection.TablesInstructions)
-	in := input(entries, fixed+60)
+	in := input(entries, fixed+noticeRoom()+60)
 	capped := selection.Render(in)
 	if !strings.Contains(capped.Text, " more, all 25: om.Notes(om.Kind(`file`).Limit(25))") {
 		t.Fatalf("capped files line:\n%s", capped.Text)
 	}
 	listed := runQueries(t, entries, in, capped)
 	everyOmittedIsListed(t, in, capped, listed)
+}
+
+// A summary with no tables, only a capped files line, has an empty tables body: the notice
+// names the files line's own +N more, and the trailer is never read as tables.
+func TestRenderCappedFilesOnly(t *testing.T) {
+	entries := branch(25, func(i int, o *ledger.Observation) bool {
+		o.Kind, o.Target, o.Content = ledger.KindFile, fmt.Sprintf("/w/f%02d.go", i), fmt.Sprintf("f%02d.go edited", i)
+		return true
+	})
+	in := input(entries, tokens.EstimateStringTokens(selection.TablesInstructions)+noticeRoom()+60)
+	r := selection.Render(in)
+	if r.Omitted == 0 || r.Spans != 0 || !strings.Contains(r.Text, "\n\n---\n\nfiles: ") {
+		t.Fatalf("want a capped files line and no spans:\n%s", r.Text)
+	}
+	checkNotice(t, selection.TablesInstructions, r)
+	if want := fmt.Sprintf("listed by the +%d more of the files line. ", r.Omitted); !strings.Contains(r.Text, want) || !strings.Contains(r.Text, fmt.Sprintf("+%d more, all 25: ", r.Omitted)) {
+		t.Fatalf("the notice does not name the files line's +%d more:\n%s", r.Omitted, r.Text)
+	}
+	if body, ok := ledger.TablesSummaryBody(r.Text); !ok || body != "" {
+		t.Fatalf("tables body %q, want empty", body)
+	}
+	everyOmittedIsListed(t, in, r, runQueries(t, entries, in, r))
 }
 
 // Reflections drop the records they cite, and their spans are listed by position too.
@@ -489,6 +511,7 @@ func TestRenderRandomSupersedeChains(t *testing.T) {
 				if got := tokens.EstimateStringTokens(r.Text); got > budget {
 					t.Fatalf("seed %d budget %d: %d tokens", seed, budget, got)
 				}
+				checkNotice(t, intro, r)
 				everyOmittedIsListed(t, in, r, runQueries(t, entries, in, r))
 				if t.Failed() {
 					t.Fatalf("seed %d %s budget %d:\n%s", seed, format, budget, r.Text)
@@ -544,4 +567,88 @@ func TestRenderLongListWithinTheQueryLimit(t *testing.T) {
 		t.Fatalf("queries %v\n%s", r.Snippets, r.Text)
 	}
 	everyOmittedIsListed(t, in, r, runQueries(t, entries, in, r))
+}
+
+// noticeRoom bounds what the omitted notice costs in the tests' summaries: its fixed advice
+// and the counts' sentence.
+func noticeRoom() int {
+	return tokens.EstimateStringTokens(selection.OmittedAdvice) + 40
+}
+
+// checkNotice checks r's omitted notice: one line right after intro exactly when r leaves
+// records out, with r's counts, ending with the fixed advice.
+func checkNotice(t *testing.T, intro string, r selection.Result) {
+	t.Helper()
+	rest, ok := strings.CutPrefix(r.Text, intro+"\n\n"+ledger.OmittedNoticeStart)
+	if r.Omitted == 0 {
+		if ok || strings.Contains(r.Text, selection.OmittedAdvice) {
+			t.Errorf("a summary that leaves nothing out prints the omitted notice:\n%s", r.Text)
+		}
+		return
+	}
+	if !ok {
+		t.Errorf("a summary that leaves %d records out prints no notice:\n%s", r.Omitted, r.Text)
+		return
+	}
+	line, _, _ := strings.Cut(rest, "\n")
+	shown := len(r.Observations) + len(r.Reflections)
+	if want := fmt.Sprintf("%d of %d records; %d left out, listed by ", shown, shown+r.Omitted, r.Omitted); !strings.HasPrefix(line, want) || !strings.HasSuffix(line, ". "+selection.OmittedAdvice) {
+		t.Errorf("notice %q, want it to start %q", line, want)
+	}
+	if spans := fmt.Sprintf(" %d %s under omitted", r.Spans, map[bool]string{true: "span", false: "spans"}[r.Spans == 1]); (r.Spans > 0) != strings.Contains(line, spans) {
+		t.Errorf("notice %q does not count %d spans", line, r.Spans)
+	}
+}
+
+// A summary that leaves records out says so before its tables, in both formats, with the
+// counts selection computed; the tables still decode after it.
+func TestRenderOmittedNotice(t *testing.T) {
+	entries := branch(30, func(i int, o *ledger.Observation) bool {
+		o.Content = plain(i)
+		return true
+	})
+	for _, format := range []string{ledger.FormatTables, ledger.FormatLines} {
+		intro := selection.TablesInstructions
+		if format == ledger.FormatLines {
+			intro = selection.LinesInstructions
+		}
+		in := input(entries, tokens.EstimateStringTokens(intro)+noticeRoom()+150)
+		in.Format = format
+		r := selection.Render(in)
+		if r.Omitted == 0 || r.Spans == 0 || len(r.Observations) == 0 {
+			t.Fatalf("%s: nothing left out:\n%s", format, r.Text)
+		}
+		checkNotice(t, intro, r)
+		if format == ledger.FormatTables {
+			if body, ok := ledger.TablesSummaryBody(r.Text); !ok || !strings.HasPrefix(body, "notes[") || strings.Contains(body, ledger.OmittedNoticeStart) {
+				t.Fatalf("the notice is read as the tables body: %q", body)
+			}
+		}
+		everyOmittedIsListed(t, in, r, runQueries(t, entries, in, r))
+	}
+}
+
+// A summary that shows every record, as when the answer is that something was never said,
+// prints no notice: the advice to search appears only when something was left out.
+func TestRenderNothingOmittedPrintsNoNotice(t *testing.T) {
+	entries := branch(5, func(i int, o *ledger.Observation) bool {
+		o.Content = plain(i)
+		return true
+	})
+	for _, format := range []string{ledger.FormatTables, ledger.FormatLines} {
+		intro := selection.TablesInstructions
+		if format == ledger.FormatLines {
+			intro = selection.LinesInstructions
+		}
+		in := input(entries, 100_000)
+		in.Format = format
+		r := selection.Render(in)
+		if r.Omitted != 0 || len(r.Observations) != 5 {
+			t.Fatalf("%s: left out %d:\n%s", format, r.Omitted, r.Text)
+		}
+		checkNotice(t, intro, r)
+		if strings.Contains(r.Text, ledger.OmittedNoticeStart) {
+			t.Fatalf("%s: notice printed:\n%s", format, r.Text)
+		}
+	}
 }

@@ -364,6 +364,17 @@ type selected struct {
 	requestText string
 }
 
+// shown counts the records p shows (the request is none).
+func (s *state) shown(p *selected) int {
+	n := 0
+	for _, it := range s.items {
+		if p.on[it] {
+			n++
+		}
+	}
+	return n
+}
+
 func (p *selected) count() int {
 	n := 0
 	for _, on := range p.on {

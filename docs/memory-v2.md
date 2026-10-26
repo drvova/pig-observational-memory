@@ -283,6 +283,14 @@ in "Branches"); a capped list ends with `+N more` and the query for the rest. Wh
 fit, the oldest fold into one line with a span count and its own query. A test parses and runs every
 query the renderer prints, including after a fork.
 
+A summary that leaves records out says so in one line between its instructions and its tables, in both
+formats: how many records it shows, how many it leaves out and in how many omitted spans (and whether a
+list ends with `+N more`), then fixed text that something missing from the summary may still be in memory,
+so an omitted row's snippet or ``om.History(om.Search(`<words>`))`` runs before the model says it was
+not mentioned. The numbers are the choice's (`Result.Omitted`, `Result.Spans`); the line costs its
+estimate inside the summary budget, and a summary that leaves nothing out prints none.
+`ledger.TablesSummaryBody` skips it (`ledger.OmittedNoticeStart`), so the tables still decode.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every

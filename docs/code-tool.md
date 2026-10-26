@@ -112,6 +112,9 @@ source; empty prints the manual", `strings` is "Optional named text values the c
 the manual". The tool also carries `Label`, `PromptSnippet` and `PromptGuidelines`, which enter the
 system prompt: they are fixed text too, naming only frozen snippet forms (``om.Recall(`<id>`)``,
 ``om.History(om.Search(`<words>`))``) and that empty code prints the manual, never an old-grammar form.
+One guideline asks the model to search memory before saying something was not discussed or is
+unknown when the compaction summary lists omitted records (the summary's omitted notice, docs/memory-v2.md
+"Selection"), and otherwise to read memory when a remembered detail will materially improve the next action.
 Capabilities are found only through the manual. A test serializes the whole advertised spec (name,
 label, description, parameter schema, `PromptSnippet` and `PromptGuidelines`) and asserts that it is
 byte-identical under two profiles with different codecs and before and after a definition is kept,

@@ -79,11 +79,11 @@ func TestV2SummaryQueriesRunAfterTheCompactionAndAFork(t *testing.T) {
 	entries = append(entries, userMessage("last", "Thanks, now the docs."))
 	rt, h := v2Setup(t, entries)
 	OnTurnEnd(rt, h)
-	// The budget: room for the instructions and a few rows (the threshold bound, which the
-	// hook derives from tokensBefore against PiG's window and reserve).
+	// The budget: room for the instructions, the omitted notice and a few rows (the threshold
+	// bound, which the hook derives from tokensBefore against PiG's window and reserve).
 	cut := v2SourceEntries(v2CutRange(h.Entries, v2Event(h.Entries, "last", 0, "threshold")))
 	removed := v2SourceTokens(cut)
-	room := tokens.EstimateStringTokens(selection.TablesInstructions) + 120
+	room := tokens.EstimateStringTokens(selection.TablesInstructions+selection.OmittedAdvice) + 140
 	event := v2Event(h.Entries, "last", 200_000-16_384+removed-room, "threshold")
 
 	c := expectV2Compaction(t, runV2Hook(rt, h, event), "last", h)

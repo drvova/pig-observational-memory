@@ -95,6 +95,9 @@ type layout struct {
 	codec  tables.Codec
 	intro  string
 	empty  map[string]int
+	// notice says a choice that leaves records out prints omittedNotice; the level-1 input's
+	// spans (OmittedSpans) print none.
+	notice bool
 }
 
 func newLayout(in Input) *layout {
@@ -102,7 +105,7 @@ func newLayout(in Input) *layout {
 	if codec == nil {
 		codec = tables.Rows
 	}
-	l := &layout{tables: in.Format != ledger.FormatLines, codec: codec, empty: map[string]int{}}
+	l := &layout{tables: in.Format != ledger.FormatLines, codec: codec, empty: map[string]int{}, notice: true}
 	l.intro = TablesInstructionsFor(in.Codec)
 	if !l.tables {
 		l.intro = LinesInstructions
@@ -112,6 +115,39 @@ func newLayout(in Input) *layout {
 
 // fixedCost is what every summary pays: the instructions and the blank line after them.
 func (l *layout) fixedCost() int { return estimate(l.intro) + 1 }
+
+// OmittedAdvice ends the omitted notice; it is fixed text, the same for every model.
+const OmittedAdvice = "Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or " + om.SnippetHistorySearch + "."
+
+// omittedNotice is the line between the instructions and the tables of a summary that leaves
+// records out: how many records it shows and leaves out and where the left-out ones are listed,
+// all counted from the choice (Result.Omitted, Result.Spans, each capped list's +N more), then
+// OmittedAdvice. "" when nothing is left out.
+func omittedNotice(shown int, o omission) string {
+	if o.records == 0 {
+		return ""
+	}
+	where := []string{}
+	if o.spans > 0 {
+		where = append(where, strconv.Itoa(o.spans)+" "+plural(o.spans, "span")+" under omitted")
+	}
+	for _, group := range []string{groupFiles, groupCommits} {
+		if t, ok := o.tails[group]; ok {
+			where = append(where, "the +"+strconv.Itoa(t.n)+" more of the "+group+" line")
+		}
+	}
+	return ledger.OmittedNoticeStart + strconv.Itoa(shown) + " of " + strconv.Itoa(shown+o.records) + " records; " +
+		strconv.Itoa(o.records) + " left out, listed by " + strings.Join(where, " and ") + ". " + OmittedAdvice
+}
+
+// noticeCost is what the omitted notice adds, 0 for none.
+func (l *layout) noticeCost(shown int, o omission) int {
+	notice := omittedNotice(shown, o)
+	if !l.notice || notice == "" {
+		return 0
+	}
+	return estimate("\n\n"+notice) + 1
+}
 
 // fieldsOf are a group's table fields.
 func fieldsOf(group string) []string {
@@ -364,6 +400,9 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		}
 	}
 	text := l.intro
+	if notice := omittedNotice(s.shown(p), o); l.notice && notice != "" {
+		text += "\n\n" + notice
+	}
 	if l.tables {
 		out := []tables.Table{}
 		for _, b := range blocks {

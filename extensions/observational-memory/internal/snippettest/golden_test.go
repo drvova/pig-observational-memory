@@ -113,6 +113,7 @@ func TestFixedTextsUseOnePlaceholderForm(t *testing.T) {
 	texts := map[string]string{
 		"tables":    selection.TablesInstructions,
 		"lines":     selection.LinesInstructions,
+		"notice":    selection.OmittedAdvice,
 		"brief":     serialize.BriefHeading,
 		"fallback":  hooks.V2FallbackSummary,
 		"index":     curated.IndexHeader,

@@ -154,7 +154,7 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 			o.spans += r.spans
 		}
 	}
-	tailCost := 0
+	tailCost := s.l.noticeCost(s.shown(p), o)
 	for group, t := range o.tails {
 		tailCost += s.l.tailCost(group, t, p.opened[group] > 0)
 	}
@@ -439,6 +439,7 @@ type Spans struct {
 // folded layout does not fit; need is then what it costs.
 func OmittedSpans(in SpansInput) (spans Spans, need int, ok bool) {
 	s := newState(Input{Reflections: in.Reflections, Observations: in.Observations, Folded: in.Folded, Branch: in.Branch, Format: ledger.FormatLines, ReflectionDates: ledger.ReflectionDateRanges(in.Folded)})
+	s.l.notice = false
 	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}}
 	for _, it := range s.items {
 		if in.Listed[it.id()] {

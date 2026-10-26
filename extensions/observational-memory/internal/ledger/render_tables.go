@@ -31,9 +31,20 @@ func TablesSummaryBody(summary string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// The files and commits lines follow the tables after a "---" line; cut them off first,
+	// so a summary with no tables (only a capped list) does not read its trailer as tables.
 	body, _, _ = strings.Cut(body, "\n\n---\n\n")
+	// A summary that leaves records out says so in one line before its tables.
+	if rest, noted := strings.CutPrefix(strings.TrimSpace(body), OmittedNoticeStart); noted {
+		_, body, _ = strings.Cut(rest, "\n\n")
+	}
 	return strings.TrimSpace(body), true
 }
+
+// OmittedNoticeStart opens the line a memory v2 summary prints between its instructions and its
+// tables when it leaves records out (selection's omitted notice); TablesSummaryBody skips that
+// line. Once printed into a summary it is frozen.
+const OmittedNoticeStart = "Shown here: "
 
 // TablesRecallParagraph is the last paragraph of TablesUsageInstructions. It
 // names the tool the extension registers and the om snippets that read a record

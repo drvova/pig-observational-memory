@@ -291,7 +291,7 @@ func level1CompactionOf2(t *testing.T, outcome BeforeCompactOutcome, firstKept s
 // layout).
 func TestV2HostSummaryRenderedOnOneLine(t *testing.T) {
 	// Long enough that the summary budget (never more than the range removes) holds the record.
-	pad := strings.Repeat(", after the usual checks", 40)
+	pad := strings.Repeat(", after the usual checks", 55)
 	entries := []ledger.Entry{
 		userMessage("u1", "Start"),
 		assistantMessage("a1", "Started"),
