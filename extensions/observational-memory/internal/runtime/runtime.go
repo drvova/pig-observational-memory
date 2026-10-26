@@ -94,6 +94,8 @@ type Runtime struct {
 	// definedTools lists the tools the agent defined that this process
 	// registered (SetDefinedTools); nil means none.
 	definedTools func() []string
+	// codeStatus is the memory tool's code lines for /om:status (SetCodeStatus); nil means none.
+	codeStatus func(h host.Host) []string
 	// shownOnce holds the notices ShowOnce already let through.
 	shownOnce map[string]bool
 }
@@ -188,17 +190,39 @@ func (r *Runtime) SetConfig(cfg config.Config) {
 	r.configFromDisk = false
 }
 
-// SetDefinedTools sets where DefinedTools reads the tools the agent defined
-// with the memory tool that this process registered (harness.Manager.Registered).
+// SetCodeStatus sets the memory tool's /om:status lines (harness.Manager.CodeStatusLines): the
+// kept definitions and the namespace child's recorded state, read without starting, killing or
+// replaying a child.
+func (r *Runtime) SetCodeStatus(lines func(h host.Host) []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.codeStatus = lines
+}
+
+// CodeStatus is the memory tool's /om:status lines for h; none when SetCodeStatus was never
+// called.
+func (r *Runtime) CodeStatus(h host.Host) []string {
+	r.mu.Lock()
+	lines := r.codeStatus
+	r.mu.Unlock()
+	if lines == nil {
+		return nil
+	}
+	return lines(h)
+}
+
+// SetDefinedTools sets where DefinedTools reads the memory plumbing beside the
+// memory tool: the tools the agent defined that this process registered and the
+// retired defined queries' names (harness.Manager.SkipNames).
 func (r *Runtime) SetDefinedTools(list func() []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.definedTools = list
 }
 
-// DefinedTools lists the tools the agent defined with the memory tool that
-// this process registered, as SetDefinedTools reads them; none when it was
-// never set.
+// DefinedTools lists the defined tools' names whose calls are memory plumbing
+// (registered by this process, or retired defined queries), as SetDefinedTools
+// reads them; none when it was never set.
 func (r *Runtime) DefinedTools() []string {
 	r.mu.Lock()
 	list := r.definedTools

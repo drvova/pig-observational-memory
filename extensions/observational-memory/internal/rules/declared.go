@@ -5,13 +5,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/provenance"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
@@ -402,81 +402,21 @@ func CheckFromModel(branch []ledger.Entry, d layer.Definition) error {
 	return nil
 }
 
-// MinCopiedWords is how many consecutive words of a definition make a quotation: a run of
-// that many found in the branch's output is refused wherever it sits in the text (inside a
-// line, between the model's own words). Shorter runs (a query, a delimiter, a field name) are
-// common words, and are checked only as the whole text.
-const MinCopiedWords = 6
+// MinCopiedWords is how many consecutive words of a definition make a quotation
+// (provenance.MinCopiedWords).
+const MinCopiedWords = provenance.MinCopiedWords
 
 // copiedSegment reports the first part of text found in output on branch: the whole text, or
-// any run of MinCopiedWords consecutive words (copiedRun), so a quotation is found inside a line
-// or a table value as well as on its own. A part that is also in seed (the shipped text of the
-// name) is the kernel's own, not a quotation.
+// any run of MinCopiedWords consecutive words (provenance.CopiedSegment). A part that is also in
+// seed (the shipped text of the name) is the kernel's own, not a quotation.
 func copiedSegment(branch []ledger.Entry, text, seed string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-	outputs := outputTexts(branch)
-	if len(outputs) == 0 {
-		return "", false
-	}
-	normalizedSeed := normalizeText(seed)
-	if whole := normalizeText(text); !(normalizedSeed != "" && strings.Contains(normalizedSeed, whole)) && containedIn(outputs, whole) {
-		return text, true
-	}
-	return copiedRun(outputs, text, seed)
+	return provenance.CopiedSegment(branch, text, seed)
 }
 
 // QuotedFromOutput reports the first run of MinCopiedWords consecutive words of text found in
-// output on branch (copiedRun), the whole text aside: the check for a text short enough to be
-// common words as a whole, such as a defined tool's query, which may well match a query the
-// branch's output already shows.
+// output on branch, the whole text aside (provenance.QuotedFromOutput).
 func QuotedFromOutput(branch []ledger.Entry, text string) (string, bool) {
-	outputs := outputTexts(branch)
-	if strings.TrimSpace(text) == "" || len(outputs) == 0 {
-		return "", false
-	}
-	return copiedRun(outputs, text, "")
-}
-
-// provenanceWords are text's words as the quotation check compares them: lowercased, split at
-// every character that is not a letter or a digit, so a word glued to a table's delimiter or
-// quote ("thin-chunk,ignore", "\"always") is still its own word.
-func provenanceWords(text string) []string {
-	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-}
-
-// copiedRun reports the first run of MinCopiedWords consecutive words of text (provenanceWords)
-// found in outputs, a run also in seed excluded.
-func copiedRun(outputs []string, text, seed string) (string, bool) {
-	seedWords := " " + strings.Join(provenanceWords(seed), " ") + " "
-	words := provenanceWords(text)
-	runs := map[string]bool{}
-	firsts := map[string]bool{}
-	for i := 0; i+MinCopiedWords <= len(words); i++ {
-		run := strings.Join(words[i:i+MinCopiedWords], " ")
-		if !strings.Contains(seedWords, " "+run+" ") {
-			runs[run] = true
-			firsts[words[i]] = true
-		}
-	}
-	if len(runs) == 0 {
-		return "", false
-	}
-	// Every run of the text is looked up while each output's words are scanned once.
-	for _, output := range outputs {
-		outWords := provenanceWords(output)
-		for i := 0; i+MinCopiedWords <= len(outWords); i++ {
-			if !firsts[outWords[i]] {
-				continue
-			}
-			if run := strings.Join(outWords[i:i+MinCopiedWords], " "); runs[run] {
-				return run, true
-			}
-		}
-	}
-	return "", false
+	return provenance.QuotedFromOutput(branch, text)
 }
 
 // clip shortens s to at most n runes for an error message.

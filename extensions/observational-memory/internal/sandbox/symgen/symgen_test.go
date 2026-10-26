@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 )
 
 // write makes TestTablesAreUpToDate write the tables instead of checking them: go generate
@@ -241,5 +243,20 @@ func TestYaegiStdlibIsNotLinked(t *testing.T) {
 		if strings.HasSuffix(d, "/internal/sandbox/symgen") || strings.Contains(d, "github.com/traefik/yaegi/extract") {
 			t.Errorf("%s is linked", d)
 		}
+	}
+}
+
+// The manual lists exactly the om table's names, so every entry point code can reach has its
+// line and doc there, and nothing the table lacks is offered.
+func TestManualListsTheOMTable(t *testing.T) {
+	var listed []string
+	for _, g := range om.ManualGroups {
+		listed = append(listed, g.Names...)
+	}
+	slices.Sort(listed)
+	names := slices.Clone(OMNames)
+	slices.Sort(names)
+	if !slices.Equal(listed, names) {
+		t.Fatalf("manual %v\ntable  %v", listed, names)
 	}
 }

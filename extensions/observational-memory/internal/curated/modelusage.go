@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ type ModelEvent struct {
 	Time string `json:"time"`
 	// Model is the model id the event is counted for (provider/id).
 	Model string `json:"model"`
-	// Kind is ModelKindMemory, ModelKindDecode or ModelKindDefined.
+	// Kind is one of the ModelKind constants.
 	Kind string `json:"kind"`
 	// Outcome is one of the Outcome constants.
 	Outcome string `json:"outcome"`
@@ -27,6 +28,9 @@ type ModelEvent struct {
 	Codec string `json:"codec,omitempty"`
 	// Syntax marks a memory call that failed to parse.
 	Syntax bool `json:"syntax,omitempty"`
+	// Legacy marks a memory tool code call (ModelKindCode) that was a query of the removed
+	// query language, answered with the removal notice and run as nothing.
+	Legacy bool `json:"legacy,omitempty"`
 	// Target is what a shown or omitted hit was checked against: TargetSummary or TargetIndex.
 	Target string `json:"target,omitempty"`
 	// Tool is a defined tool call's tool name.
@@ -72,6 +76,11 @@ const (
 	ModelKindDecode = "decode"
 	// ModelKindDefined is a call of a tool the agent defined.
 	ModelKindDefined = "defined"
+	// ModelKindCode is a call of the memory tool since it runs Go code (docs/code-tool.md):
+	// Outcome error for code that did not compile, panicked or crashed the child, ok for a
+	// write, empty when every read returned nothing, else shown or omitted against the summary
+	// and the index. It counts only toward the summary-size switch.
+	ModelKindCode = "code"
 	// ModelKindPass is one compaction (Stage "compaction"), with what the rules' detectors
 	// counted since the previous one (docs/memory-interface.md, section 7); memory v1 recorded
 	// one per worker pass, without an engine.
@@ -142,6 +151,34 @@ func (s Store) RecordModelLocked(e ModelEvent) error {
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
 	return err
+}
+
+// UsageModels are the models whose usage ledger holds at least one event, in name order: the
+// models /om:status and om.Info give a block each, whichever model is the session model.
+func (s Store) UsageModels() ([]string, error) {
+	entries, err := os.ReadDir(s.modelsDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if !ok || e.IsDir() {
+			continue
+		}
+		model, ok := layer.ModelOfDir(name)
+		if !ok {
+			continue
+		}
+		if events, err := s.ModelEvents(model); err == nil && len(events) > 0 {
+			out = append(out, model)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ModelEvents reads a model's usage ledger in the order it was written. A missing ledger is

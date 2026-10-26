@@ -13,7 +13,7 @@ import (
 
 // Check is memory v2's one validator, run on every write and every load of a memory
 // (docs/memory-v2.md, "Curated memory"): a valid name and type, a one-line description, staging
-// sessions only on a staged memory, and the whole memory as recall <name> shows it (Describe)
+// sessions only on a staged memory, and the whole memory as om.Recall(name) shows it (Describe)
 // within what one recall shows (serialize.RecallPageChars), which bounds the body. The fields a
 // file may hold are checked where it is read (Store.Get); pinned is the user's alone because
 // no write takes it (Store.Save clears it, Store.Update keeps the stored value).

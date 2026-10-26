@@ -3,8 +3,10 @@ package sandbox
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om/omwire"
 )
 
@@ -24,25 +26,50 @@ func mapTypes(capture reflect.Value) map[reflect.Value][]reflect.Type {
 	return m
 }
 
-// describe prints a value's type and one line per exported field and method. The docs come from
-// om's generated doc table (docs/code-tool.md, "describe(x) and its docs"), which arrives with
-// the om API; until then, and for a type the code defined, a line says "no doc".
+// describe prints a value's type and one line per exported field and method, each with its
+// one-line doc from om's generated doc table (docs/code-tool.md, "describe(x) and its docs"). A
+// type the code defined has no doc, and each of its lines says so; an om function value prints
+// its signature and doc.
 func describe(x any) string {
 	if x == nil {
 		return "nil"
 	}
 	t := reflect.TypeOf(x)
-	var b strings.Builder
-	b.WriteString(t.String())
+	if t.Kind() == reflect.Func {
+		if f := runtime.FuncForPC(reflect.ValueOf(x).Pointer()); f != nil && strings.HasPrefix(f.Name(), omPkgPath+".") {
+			name := strings.TrimPrefix(f.Name(), omPkgPath+".")
+			if sig, doc, ok := om.Doc(name); ok {
+				return "om." + sig + " // " + doc
+			}
+		}
+		return t.String() + " // no doc"
+	}
 	st := t
 	for st.Kind() == reflect.Pointer {
 		st = st.Elem()
+	}
+	fromOM := st.PkgPath() == omPkgPath
+	doc := func(member string) string {
+		if !fromOM {
+			return " // no doc"
+		}
+		if _, d, ok := om.Doc(st.Name() + "." + member); ok && d != "" {
+			return " // " + d
+		}
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(t.String())
+	if fromOM {
+		if _, d, ok := om.Doc(st.Name()); ok {
+			b.WriteString(" // " + d)
+		}
 	}
 	if st.Kind() == reflect.Struct {
 		for i := 0; i < st.NumField(); i++ {
 			f := st.Field(i)
 			if f.IsExported() {
-				fmt.Fprintf(&b, "\n  %s %s", f.Name, f.Type)
+				fmt.Fprintf(&b, "\n  %s %s%s", f.Name, f.Type, doc(f.Name))
 			}
 		}
 	}
@@ -57,7 +84,11 @@ func describe(x any) string {
 				sig = "()" + sig[close+1:]
 			}
 		}
-		fmt.Fprintf(&b, "\n  %s%s // no doc", m.Name, sig)
+		d := doc(m.Name)
+		if d == "" {
+			d = " // no doc"
+		}
+		fmt.Fprintf(&b, "\n  %s%s%s", m.Name, sig, d)
 	}
 	return b.String()
 }

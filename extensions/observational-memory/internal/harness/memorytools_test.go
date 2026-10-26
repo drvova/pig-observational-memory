@@ -8,7 +8,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -18,7 +18,7 @@ import (
 // stays among them; the detectors' stored queries are those of the memory tools still stored.
 func TestMemoryToolNamesAreTheRegisteredTools(t *testing.T) {
 	rt := runtime.New()
-	if got := harness.MemoryToolNames(rt); !reflect.DeepEqual(got, []string{memquery.ToolName}) {
+	if got := harness.MemoryToolNames(rt); !reflect.DeepEqual(got, []string{omtool.ToolName}) {
 		t.Fatalf("unwired %v", got)
 	}
 	h := tf.NewFakeHost()
@@ -32,8 +32,8 @@ func TestMemoryToolNamesAreTheRegisteredTools(t *testing.T) {
 	}
 	m := harness.NewManager(func(host.ToolHost) (curated.Call, bool) { return curated.Call{Store: store, Source: "s0"}, true })
 	m.RegisterStored(h)
-	rt.SetDefinedTools(m.Registered)
-	want := []string{memquery.ToolName, "half-plan", "plan"}
+	rt.SetDefinedTools(m.SkipNames)
+	want := []string{omtool.ToolName, "half-plan", "plan"}
 	if got := harness.MemoryToolNames(rt); !reflect.DeepEqual(got, want) {
 		t.Fatalf("memory tools %v, want %v", got, want)
 	}

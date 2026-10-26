@@ -266,6 +266,11 @@ func (s *Supervisor) run(ctx context.Context, chunks []wireChunk, last bool, str
 				if ctx.Err() != nil {
 					continue
 				}
+				if errors.Is(err, omwire.ErrBadArgs) {
+					// The stubs always send what decodes: the child is corrupted.
+					s.drop(p)
+					return s.crashed(p, fmt.Sprintf("the arguments of %s do not decode into its parameters", m.M))
+				}
 				reply := msg{T: tReply, Gen: p.gen, Call: id, Seq: m.Seq, Res: res}
 				if err != nil {
 					reply.Res, reply.Err = nil, err.Error()

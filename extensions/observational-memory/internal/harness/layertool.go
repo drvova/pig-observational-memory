@@ -13,6 +13,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 )
 
@@ -52,10 +53,11 @@ type layerWriter struct {
 
 func (w layerWriter) notify(message string) { w.h.Notify(message, "info") }
 
-// ErrDefinedInLevel1 refuses the memory tool's harness and propose writes: the model defines
-// part of its harness only inside the compaction's level-1 request (docs/memory-v2.md,
-// "Self-built harness"); forget and rollback still apply.
-var ErrDefinedInLevel1 = errors.New("refused: harness definitions and rules are proposed only inside the compaction's consolidation request, when your harness evidence changed; forget and rollback still apply")
+// ErrDefinedInLevel1 refuses the memory tool's harness and propose writes, and om.Propose: the
+// model defines part of its harness only inside the compaction's level-1 request
+// (docs/memory-v2.md, "Self-built harness"); forget and rollback still apply. It is
+// omhost.ErrDefinedInLevel1, so both tools answer with one error.
+var ErrDefinedInLevel1 = omhost.ErrDefinedInLevel1
 
 // Define refuses the memory tool's harness write (ErrDefinedInLevel1).
 func (w layerWriter) Define(kind, name, text string) (string, error) {
@@ -194,10 +196,10 @@ func LayerRows(store curated.Store, model string) ([]om.LayerRow, error) {
 	rows := map[string]om.LayerRow{}
 	for key := range seeds {
 		kind, name, _ := strings.Cut(key, "/")
-		rows[key] = om.LayerRow{Model: model, Kind: kind, Name: name, State: layer.StateSeed, Origin: layer.StateSeed}
+		rows[key] = om.LayerRow{Model: model, Kind: kind, Name: name, State: layer.StateSeed, Origin: layer.StateSeed, Text: seeds[key]}
 	}
 	for _, d := range h.List("") {
-		row := om.LayerRow{Model: d.Model, Kind: d.Kind, Name: d.Name, State: d.State, Origin: "own"}
+		row := om.LayerRow{Model: d.Model, Kind: d.Kind, Name: d.Name, State: d.State, Origin: "own", Engine: d.Engine, Text: d.Text}
 		if _, ok := seeds[d.Key()]; ok {
 			row.Origin = OriginOf(d)
 		}

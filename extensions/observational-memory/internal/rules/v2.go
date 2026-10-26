@@ -45,8 +45,9 @@ var Level1Counts = []string{CountLevel1Refused, CountLevel1SpecificsRefused, Cou
 //     refuses (level 0 sets no scope, so its corrections never cross one);
 //   - dropped-then-queried: memory queries in the read entries asking for records a
 //     compaction dropped, by rule or by level 1 (DroppedThenQueried);
-//   - decode-failure: the session model's memory queries that did not parse, and rows that
-//     did not decode, since the previous compaction.
+//   - decode-failure: rows that did not decode in the summary's codec since the previous
+//     compaction (codec failures only: a memory tool call's compile errors are recorded on its
+//     ModelKindCode event and feed no remedy, since no remedy may change the tool by model).
 //
 // The other two have no v2 meaning: unresolved-relative-date counts phrases a worker left
 // relative, but level 0 picks lines verbatim and every relative date is resolved by code when
@@ -62,8 +63,10 @@ var V2Detectors = []string{DetectUncitedAssistantSpecifics, DetectCrossScopeSupe
 // validation refuses a cross-scope supersede already), and split-chunk no chunk. switch-codec
 // stays in the list but the harness never writes it under v2: its evidence is the codec decode
 // failures (CountCodecDecodeFailure), and under v2 nothing decodes rows the model wrote (only
-// v1's observer records them), so a v2 pass never counts one.
-var V2Remedies = []string{RemedyKeepHead, RemedySwitchCodec, RemedyLongSpec}
+// v1's observer records them), so a v2 pass never counts one. long-spec is retired with the
+// query language (docs/code-tool.md): it changed the memory tool's description by model, which
+// the code tool never does, so a v2 rule naming it loads and is listed, never applied.
+var V2Remedies = []string{RemedyKeepHead, RemedySwitchCodec}
 
 // ofV2 are the rules of all memory v2 wrote (Rule.Engine): the only ones that apply, are
 // decided and are counted (StatusLines). A rule memory v1 wrote still loads (its remedy may be
@@ -185,7 +188,7 @@ func afterCompaction(store curated.Store, model string, pass Pass) ([]Transition
 		}
 		e.Revisions = Revisions()
 		e.Level1 = pass.Level1
-		codec, syntax := 0, 0
+		codec := 0
 		for _, ev := range events[sinceV2Compaction(events):] {
 			if ev.Engine != curated.EngineV2 {
 				continue
@@ -204,8 +207,6 @@ func afterCompaction(store curated.Store, model string, pass Pass) ([]Transition
 				}
 			case ev.Kind == curated.ModelKindDecode && ev.Outcome == curated.OutcomeError:
 				codec++
-			case ev.Kind == curated.ModelKindMemory && ev.Syntax:
-				syntax++
 			}
 		}
 		for k, n := range pass.Counts {
@@ -213,11 +214,9 @@ func afterCompaction(store curated.Store, model string, pass Pass) ([]Transition
 				e.Counts[k] += n
 			}
 		}
-		if e.Tokens > 0 && codec+syntax > 0 {
-			e.Counts[DetectDecodeFailure] += codec + syntax
-			if codec > 0 {
-				e.Counts[CountCodecDecodeFailure] += codec
-			}
+		if e.Tokens > 0 && codec > 0 {
+			e.Counts[DetectDecodeFailure] += codec
+			e.Counts[CountCodecDecodeFailure] += codec
 		}
 		if err := store.RecordModelLocked(e); err != nil {
 			return err

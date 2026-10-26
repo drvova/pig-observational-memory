@@ -8,9 +8,9 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/snippettest"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
@@ -62,23 +62,24 @@ func shownIDs(r selection.Result) map[string]bool {
 	return out
 }
 
-// runQueries runs every query the summary prints through the memory tool on entries, with
-// the summary's drops applied, and returns what they list. Every query must parse and run.
+// runQueries runs every snippet the summary prints as memory tool code in a namespace child
+// over entries, with the summary's drops applied, and returns the ids they list. Every snippet
+// must be printed verbatim, pass the code policy and run.
 func runQueries(t *testing.T, entries []ledger.Entry, in selection.Input, r selection.Result) string {
 	t.Helper()
 	if drops := extract.Drops(in.Observations, r.Observations, r.Reflections, in.Folded.ObservationsByID); len(drops) > 0 {
 		entries = append(append([]ledger.Entry{}, entries...), testfix.ObservationsDroppedEntry("drop", drops, entries[len(entries)-1].ID))
 	}
 	var out strings.Builder
-	for _, q := range r.Queries {
-		if !strings.Contains(r.Text, q) && !strings.Contains(r.Text, strings.ReplaceAll(q, `"`, `\"`)) {
-			t.Fatalf("query %q is not in the summary:\n%s", q, r.Text)
+	for _, q := range r.Snippets {
+		if !strings.Contains(r.Text, q) {
+			t.Fatalf("snippet %q is not in the summary:\n%s", q, r.Text)
 		}
-		res := memquery.Run(memquery.Env{Entries: entries}, q)
-		if res.IsError {
-			t.Fatalf("query %q failed: %s", q, res.Text)
+		res := snippettest.Run(t, entries, q)
+		if res.Cut() {
+			t.Fatalf("snippet %q is cut by its limit: %d of %d", q, res.Showing, res.Matched)
 		}
-		out.WriteString(res.Text)
+		out.WriteString(strings.Join(res.IDs, "\n"))
 		out.WriteByte('\n')
 	}
 	return out.String()
@@ -130,7 +131,7 @@ func TestRenderNothingWithoutBudgetOrRecords(t *testing.T) {
 func TestRenderEverythingFitsWithSources(t *testing.T) {
 	entries := branch(4, func(int, *ledger.Observation) bool { return true })
 	r := selection.Render(input(entries, 10_000))
-	if len(r.Observations) != 4 || r.Omitted != 0 || len(r.Queries) != 0 || strings.Contains(r.Text, "omitted[") {
+	if len(r.Observations) != 4 || r.Omitted != 0 || len(r.Snippets) != 0 || strings.Contains(r.Text, "omitted[") {
 		t.Fatalf("result %+v\n%s", r, r.Text)
 	}
 	for i := range 4 {
@@ -244,7 +245,7 @@ func TestRenderFoldsTheOldestSpans(t *testing.T) {
 		if r.Folded == 0 {
 			continue
 		}
-		if !strings.Contains(r.Text, "omitted[") || r.Spans <= len(r.Queries) {
+		if !strings.Contains(r.Text, "omitted[") || r.Spans <= len(r.Snippets) {
 			t.Fatalf("folded result %+v\n%s", r, r.Text)
 		}
 		listed := runQueries(t, entries, in, r)
@@ -267,7 +268,7 @@ func TestRenderFilesAndCommitsLines(t *testing.T) {
 		return true
 	})
 	all := selection.Render(input(entries, 100_000))
-	if !strings.Contains(all.Text, "\n\n---\n\nfiles: f00.go edited (m00), f01.go edited (m01)") || !strings.Contains(all.Text, "\ncommits: abc0025 add part zulu (m25)") || len(all.Queries) != 0 {
+	if !strings.Contains(all.Text, "\n\n---\n\nfiles: f00.go edited (m00), f01.go edited (m01)") || !strings.Contains(all.Text, "\ncommits: abc0025 add part zulu (m25)") || len(all.Snippets) != 0 {
 		t.Fatalf("lists:\n%s", all.Text)
 	}
 	if body, ok := ledger.TablesSummaryBody(all.Text); !ok || strings.Contains(body, "files:") {
@@ -276,7 +277,7 @@ func TestRenderFilesAndCommitsLines(t *testing.T) {
 	fixed := tokens.EstimateStringTokens(selection.TablesInstructions)
 	in := input(entries, fixed+60)
 	capped := selection.Render(in)
-	if !strings.Contains(capped.Text, " more, all 25: notes | where kind=file | limit 25") {
+	if !strings.Contains(capped.Text, " more, all 25: om.Notes(om.Kind(`file`).Limit(25))") {
 		t.Fatalf("capped files line:\n%s", capped.Text)
 	}
 	listed := runQueries(t, entries, in, capped)
@@ -515,11 +516,10 @@ func TestRenderFoldsWithinTheQueryLimit(t *testing.T) {
 		if r.Text == "" || r.Folded == 0 {
 			continue
 		}
-		for _, q := range r.Queries {
-			if strings.Contains(q, fmt.Sprintf("limit %d", om.MaxLimit)) {
-				res := memquery.Run(memquery.Env{Entries: entries}, q)
-				if strings.Contains(res.Text, "matched") {
-					t.Fatalf("query %q is cut by its limit: %s", q, res.Text[:min(len(res.Text), 200)])
+		for _, q := range r.Snippets {
+			if strings.Contains(q, fmt.Sprintf("Limit(%d)", om.MaxLimit)) {
+				if res := snippettest.Run(t, entries, q); res.Cut() {
+					t.Fatalf("snippet %q is cut by its limit: %d of %d", q, res.Showing, res.Matched)
 				}
 			}
 		}
@@ -540,8 +540,8 @@ func TestRenderLongListWithinTheQueryLimit(t *testing.T) {
 	fixed := tokens.EstimateStringTokens(selection.TablesInstructions)
 	in := input(entries, fixed+200)
 	r := selection.Render(in)
-	if len(r.Queries) < 2 || !strings.Contains(r.Text, "more, all 230: ") {
-		t.Fatalf("queries %v\n%s", r.Queries, r.Text)
+	if len(r.Snippets) < 2 || !strings.Contains(r.Text, "more, all 230: ") {
+		t.Fatalf("queries %v\n%s", r.Snippets, r.Text)
 	}
 	everyOmittedIsListed(t, in, r, runQueries(t, entries, in, r))
 }

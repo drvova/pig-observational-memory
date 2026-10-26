@@ -24,7 +24,7 @@ func (o Opt) with(set func(*omwire.Options)) Opt {
 // Search keeps rows matching every literal word, case-insensitive, over every column.
 func Search(words string) Opt { return Opt{}.Search(words) }
 
-// From keeps rows at or after this entry id (an anchor or a record id); " (off-path)" is accepted.
+// From keeps rows at or after this entry id (an anchor or a record id).
 func From(id string) Opt { return Opt{}.From(id) }
 
 // Through keeps rows at or before this entry id.
@@ -36,13 +36,13 @@ func Since(date string) Opt { return Opt{}.Since(date) }
 // Until keeps rows on or before this date (YYYY-MM-DD, entry time).
 func Until(date string) Opt { return Opt{}.Until(date) }
 
-// ByEvent makes Since and Until compare a record's event date when it has one; never with AsOf.
+// ByEvent makes Since and Until compare a record's event date when it has one.
 func ByEvent() Opt { return Opt{}.ByEvent() }
 
-// AsOf reads the last Until or Through as the point-in-time view (notes and reflections).
+// AsOf reads notes and reflections as they stood at the Until or Through bound.
 func AsOf() Opt { return Opt{}.AsOf() }
 
-// Where keeps rows whose field equals value; an unknown field is an error naming the valid ones.
+// Where keeps rows whose field equals value (case-insensitive).
 func Where(field, value string) Opt { return Opt{}.Where(field, value) }
 
 // Contains keeps rows whose field contains value.
@@ -184,7 +184,7 @@ func Body(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Body: &text}}
 // Scope sets where the memory applies: "global" or "project".
 func Scope(scope string) SaveOpt { return SaveOpt{omwire.SaveOptions{Scope: &scope}} }
 
-// Quoting gives a user's words that confirm the memory, which saves it live rather than staged.
+// Quoting gives the user's words that confirm the memory, which saves it live.
 func Quoting(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Quoting: &text}} }
 
 func mergeSave(opts []SaveOpt) omwire.SaveOptions {

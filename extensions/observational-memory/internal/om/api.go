@@ -29,8 +29,7 @@ func mustCall(method string, out any, args ...any) {
 	}
 }
 
-// ErrNoCall is the error an om call gets when no memory tool call is in flight to answer it, as
-// while saved definitions are replayed.
+// ErrNoCall is the error of an om call made with no memory tool call in flight (at replay).
 func ErrNoCall() error { return omwire.ErrNoCall() }
 
 // Notes lists the active folded records: the branch's, else the off-path fallback's.
@@ -47,16 +46,14 @@ func Reflections(opts ...Opt) ReflectionList {
 	return l
 }
 
-// History lists user, assistant and tool text, newest first, leaving out the current turn and
-// memory tool calls.
+// History lists user, assistant and tool text, newest first, without the current turn.
 func History(opts ...Opt) EntryList {
 	var l EntryList
 	mustCall(omwire.MHistory, &l, mergeOpts(opts))
 	return l
 }
 
-// Recall reads a record's sources (without thinking, with cited_by), else an entry (paged),
-// else a saved memory by name.
+// Recall reads a record's sources, else an entry (paged), else a saved memory by name.
 func Recall(id string, opts ...Opt) (Text, error) {
 	var t Text
 	err := call(omwire.MRecall, &t, id, mergeOpts(opts))
@@ -98,7 +95,7 @@ func Attempts(opts ...Opt) NoteList {
 	return l
 }
 
-// Dropped lists the records dropped by rule, still folded and read-only.
+// Dropped lists the records dropped by rule.
 func Dropped(opts ...Opt) NoteList {
 	var l NoteList
 	mustCall(omwire.MDropped, &l, mergeOpts(opts))
@@ -119,21 +116,21 @@ func Saved(opts ...Opt) MemoryList {
 	return l
 }
 
-// Info is the /om:status figures, every model's profile labelled with its model.
+// Info is the /om:status figures, each model's labelled with its model.
 func Info() StatusInfo {
 	var s StatusInfo
 	mustCall(omwire.MInfo, &s)
 	return s
 }
 
-// Layer lists every model's layer definitions, rules included, read-only.
+// Layer lists every model's layer definitions, rules included.
 func Layer(opts ...Opt) LayerList {
 	var l LayerList
 	mustCall(omwire.MLayer, &l, mergeOpts(opts))
 	return l
 }
 
-// Retired lists the retired defined queries with their stored text and equivalent snippet.
+// Retired lists the retired defined queries with their equivalent snippets.
 func Retired(opts ...Opt) RetiredList {
 	var l RetiredList
 	mustCall(omwire.MRetired, &l, mergeOpts(opts))
@@ -147,8 +144,7 @@ func Str(name string) string {
 	return s
 }
 
-// Save saves a curated memory: staged, unless Quoting gives a user's words in the conversation
-// that confirm it.
+// Save saves a curated memory, staged unless Quoting gives the user's confirming words.
 func Save(name, typ, description string, opts ...SaveOpt) (string, error) {
 	var s string
 	err := call(omwire.MSave, &s, name, typ, description, mergeSave(opts))
@@ -169,8 +165,7 @@ func ForgetMemory(name string) (string, error) {
 	return s, err
 }
 
-// Feedback records that a memory helped or harmed; the quote must be in a user or assistant
-// message.
+// Feedback records that a memory helped or harmed, quoting the conversation.
 func Feedback(name, outcome, quote string) (string, error) {
 	var s string
 	err := call(omwire.MFeedback, &s, name, outcome, quote)
@@ -184,17 +179,17 @@ func LayerForget(kind, name string) (string, error) {
 	return s, err
 }
 
-// LayerRollback rolls the session model's layer back n changes; never a rule.
-func LayerRollback(n int) (string, error) {
+// LayerRollback makes the session model's layer what it was at generation gen (0 is before its first change, every seed standing); never a rule.
+func LayerRollback(gen int) (string, error) {
 	var s string
-	err := call(omwire.MLayerRollback, &s, n)
+	err := call(omwire.MLayerRollback, &s, gen)
 	return s, err
 }
 
-// Propose always refuses: definitions are proposed only inside the level-1 request.
+// Propose always refuses: definitions are proposed only at a compaction.
 func Propose(kind, name, text string) error {
 	return call(omwire.MPropose, nil, kind, name, text)
 }
 
-// Define always refuses: defined tools are retired, and a kept Go function replaces one.
+// Define always refuses: a kept Go function replaces a defined tool.
 func Define(name string) error { return call(omwire.MDefine, nil, name) }

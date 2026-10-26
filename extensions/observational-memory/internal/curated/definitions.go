@@ -361,7 +361,7 @@ func legacyRows(dir, suffix string) ([]string, error) {
 	return out, nil
 }
 
-// DescribeDefinition renders a definition in full for recall <name>.
+// DescribeDefinition renders a definition in full for om.Recall(name).
 func DescribeDefinition(d Definition) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s [query]: %s\n\n%s\n\ndefined %s", d.Name, d.Description, d.Query, d.Created.Format("2006-01-02"))

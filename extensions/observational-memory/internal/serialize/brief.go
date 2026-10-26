@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
@@ -19,7 +20,7 @@ const (
 )
 
 // BriefHeading opens a full minimal brief.
-const BriefHeading = "Brief of the compacted conversation: its opening request and one line per tool call. The memory tool searches the full text (history | search \"words\")."
+const BriefHeading = "Brief of the compacted conversation: its opening request and one line per tool call. The memory tool searches the full text (" + om.SnippetHistorySearch + ")."
 
 // BriefKeyArgRunes bounds a tool call's key argument on its brief line, as a clipped
 // observation's content is bounded.
@@ -175,10 +176,10 @@ func omittedPointer(entries []session.Entry) string {
 	if first.ID != "" && last.ID != "" {
 		pointer += " (" + first.ID + " to " + last.ID + ")"
 	}
-	return pointer + `; the memory tool searches them (history | search "words").`
+	return pointer + "; the memory tool searches them (" + om.SnippetHistorySearch + ")."
 }
 
-// shortPointer is the omitted pointer without dates or the memory query: the count and the
+// shortPointer is the omitted pointer without dates or the snippet: the count and the
 // first and last ids.
 func shortPointer(entries []session.Entry) string {
 	if len(entries) == 0 {

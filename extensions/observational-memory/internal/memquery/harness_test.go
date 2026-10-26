@@ -2,10 +2,7 @@ package memquery
 
 import (
 	"reflect"
-	"strings"
 	"testing"
-
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
 // Results name the records they show, so the harness can check them against the summary.
@@ -52,18 +49,5 @@ func TestSubstitute(t *testing.T) {
 	q, err := Parse(Substitute(`notes | search $input`, `x" | forget name=y`))
 	if err != nil || q.Write != "" || len(q.Stages) != 1 {
 		t.Fatalf("injected query %+v, %v", q, err)
-	}
-}
-
-func TestDescriptionForLongSpec(t *testing.T) {
-	short, long := DescriptionFor(tables.JSONLines, false), DescriptionFor(tables.JSONLines, true)
-	if !strings.Contains(short, tables.JSONLines.Spec()) || strings.Contains(short, "Common query mistakes") {
-		t.Fatalf("short description: %s", short)
-	}
-	if !strings.Contains(long, tables.LongSpec(tables.JSONLines)) || !strings.Contains(long, "Common query mistakes") {
-		t.Fatalf("long description: %s", long)
-	}
-	if Description(nil) != DescriptionFor(tables.Rows, false) {
-		t.Fatal("Description is not the default codec's short description")
 	}
 }

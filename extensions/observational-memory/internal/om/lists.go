@@ -74,7 +74,9 @@ func listString(table string, matched, showing int, next string) string {
 
 // NoteList is a page of records.
 type NoteList struct {
-	Rows             []Note
+	// Rows are the rows held.
+	Rows []Note
+	// Matched is how many rows matched, Showing how many are held.
 	Matched, Showing int
 	// Next is the snippet for the next page, "" when every match is shown.
 	Next string
@@ -93,7 +95,7 @@ func (l NoteList) IDs() []string {
 }
 
 // Table is the rows in the rows codec, the same for every model.
-func (l NoteList) Table() string { return tableOf("notes", NoteFields, l.Rows, Note.field) }
+func (l NoteList) Table() string { return tableOf("notes", NoteFields, l.Rows, Note.cell) }
 
 // Count counts the rows by the value of a field.
 func (l NoteList) Count(field string) map[string]int { return countOf(l.Rows, field, Note.field) }
@@ -118,9 +120,12 @@ func (l NoteList) String() string { return listString(l.Table(), l.Matched, l.Sh
 
 // ReflectionList is a page of standing reflections.
 type ReflectionList struct {
-	Rows             []Reflection
+	// Rows are the rows held.
+	Rows []Reflection
+	// Matched is how many rows matched, Showing how many are held.
 	Matched, Showing int
-	Next             string
+	// Next is the snippet for the next page, "" when every match is shown.
+	Next string
 }
 
 // Len is the number of rows held.
@@ -137,7 +142,7 @@ func (l ReflectionList) IDs() []string {
 
 // Table is the rows in the rows codec.
 func (l ReflectionList) Table() string {
-	return tableOf("reflections", ReflectionFields, l.Rows, Reflection.field)
+	return tableOf("reflections", ReflectionFields, l.Rows, Reflection.cell)
 }
 
 // Count counts the rows by the value of a field.
@@ -167,9 +172,12 @@ func (l ReflectionList) String() string {
 
 // EntryList is a page of history, newest first.
 type EntryList struct {
-	Rows             []Entry
+	// Rows are the rows held.
+	Rows []Entry
+	// Matched is how many rows matched, Showing how many are held.
 	Matched, Showing int
-	Next             string
+	// Next is the snippet for the next page, "" when every match is shown.
+	Next string
 	// Counts are, for a search with no match, each word's matches on the current branch.
 	Counts map[string]int
 }
@@ -187,7 +195,7 @@ func (l EntryList) IDs() []string {
 }
 
 // Table is the rows in the rows codec.
-func (l EntryList) Table() string { return tableOf("history", entryFields, l.Rows, Entry.field) }
+func (l EntryList) Table() string { return tableOf("history", entryFields, l.Rows, Entry.cell) }
 
 // Count counts the rows by the value of a field.
 func (l EntryList) Count(field string) map[string]int { return countOf(l.Rows, field, Entry.field) }
@@ -223,9 +231,12 @@ func (l EntryList) String() string {
 
 // MemoryList is a page of curated memories.
 type MemoryList struct {
-	Rows             []Memory
+	// Rows are the rows held.
+	Rows []Memory
+	// Matched is how many rows matched, Showing how many are held.
 	Matched, Showing int
-	Next             string
+	// Next is the snippet for the next page, "" when every match is shown.
+	Next string
 }
 
 // Len is the number of rows held.
@@ -266,9 +277,12 @@ func (l MemoryList) String() string { return listString(l.Table(), l.Matched, l.
 
 // LayerList is a page of the layer listing, every model's rows labelled with their model.
 type LayerList struct {
-	Rows             []LayerRow
+	// Rows are the rows held.
+	Rows []LayerRow
+	// Matched is how many rows matched, Showing how many are held.
 	Matched, Showing int
-	Next             string
+	// Next is the snippet for the next page, "" when every match is shown.
+	Next string
 }
 
 // Len is the number of rows held.
@@ -311,9 +325,12 @@ func (l LayerList) String() string { return listString(l.Table(), l.Matched, l.S
 
 // RetiredList is a page of retired defined queries.
 type RetiredList struct {
-	Rows             []RetiredQuery
+	// Rows are the rows held.
+	Rows []RetiredQuery
+	// Matched is how many rows matched, Showing how many are held.
 	Matched, Showing int
-	Next             string
+	// Next is the snippet for the next page, "" when every match is shown.
+	Next string
 }
 
 // Len is the number of rows held.

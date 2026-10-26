@@ -129,7 +129,7 @@ func TestStatusShowsHarnessProfile(t *testing.T) {
 	h.Home = t.TempDir()
 	store := curated.New(curated.DefaultDir(h.Home))
 	for i := 0; i < harness.MinEvidence; i++ {
-		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindMemory, Outcome: curated.OutcomeShown, Target: curated.TargetSummary, Engine: curated.EngineV2})
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindCode, Outcome: curated.OutcomeShown, Target: curated.TargetSummary, Engine: curated.EngineV2})
 		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100})
 	}
 	if _, err := store.Define(curated.Definition{Name: "bakes", Query: "notes", Description: "Notes."}, "s"); err != nil {
@@ -137,7 +137,7 @@ func TestStatusShowsHarnessProfile(t *testing.T) {
 	}
 	output = statusOutput(t, statusRuntime(statusConfig()), h)
 	expectContains(t, output, "── Harness ──",
-		"Profile (session model p/m, 6 events): codec rows, layout tables, summary 1/2 of the room, short spec",
+		"Profile (session model p/m, 6 events): codec rows, layout tables, summary 1/2 of the room",
 		"summary → 1/2 of the room: 3 queries for records the summary showed",
 		"Defined tools: bakes probation (0 calls")
 }
@@ -295,4 +295,43 @@ func TestStatusV2EvidenceSinceTheLastOffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectContains(t, statusOutput(t, statusRuntime(cfg), h), "Evidence: 0 compactions counted since the last level-1 offer")
+}
+
+// om.Info's figures (commands.Info) never read the session model: under two session models with
+// different windows they are byte-identical, list every model's figures labelled with it, carry
+// no compaction threshold, window or suspension, and are exactly the start of /om:status, which
+// then prints its session-model lines.
+func TestInfoIsTheSharedPartOfStatus(t *testing.T) {
+	h := testfix.NewFakeHost(testfix.RawMessage("u1", "hello"))
+	h.Home = t.TempDir()
+	store := curated.New(curated.DefaultDir(h.Home))
+	for _, model := range []string{"p/m", "q/n"} {
+		for i := 0; i < harness.MinEvidence; i++ {
+			_ = store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 100})
+		}
+	}
+	rt := statusRuntime(statusConfig())
+	var infos []string
+	for _, m := range []struct {
+		provider, id string
+		window       int
+	}{{"p", "m", 100_000}, {"q", "n", 300_000}} {
+		h.Model = testfix.Model(m.provider, m.id, map[string]any{"contextWindow": m.window})
+		info, err := commands.Info(rt, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := info.String()
+		infos = append(infos, text)
+		expectContains(t, text, "model p/m:\n  Profile (3 events): codec rows", "model q/n:\n  Profile (3 events)", "Detector counts for q/n")
+		expectLacks(t, text, "threshold", "window", "suspended", "session model")
+		status := statusOutput(t, rt, h)
+		if !strings.HasPrefix(status, text+"\n") {
+			t.Fatalf("/om:status does not start with the shared figures:\n%s\n---\n%s", text, status)
+		}
+		expectContains(t, strings.TrimPrefix(status, text), "── Compaction ──", "Profile (session model "+m.provider+"/"+m.id+", 3 events)")
+	}
+	if infos[0] != infos[1] {
+		t.Fatalf("the figures differ by session model:\n%s\n---\n%s", infos[0], infos[1])
+	}
 }

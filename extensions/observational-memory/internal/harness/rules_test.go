@@ -13,11 +13,12 @@ import (
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
-// switch-codec and long-spec rules make the profile switches section 6 would make.
+// A switch-codec rule makes the codec switch section 6 would make, for the summary; a long-spec
+// rule loads and is never applied (long-spec is retired with the query language).
 func TestProfileAppliesSwitchRules(t *testing.T) {
 	h, store, _ := session(t)
 	cfg := config.Defaults
-	if p := profileFor(h, cfg, h.Model); p.Codec != tables.Rows.Name() || p.LongSpec {
+	if p := profileFor(h, cfg, h.Model); p.Codec != tables.Rows.Name() {
 		t.Fatalf("default profile %+v", p)
 	}
 	for _, remedy := range []string{rules.RemedySwitchCodec, rules.RemedyLongSpec} {
@@ -26,10 +27,10 @@ func TestProfileAppliesSwitchRules(t *testing.T) {
 		}
 	}
 	p := profileFor(h, cfg, h.Model)
-	if p.Codec != tables.JSONLines.Name() || !p.LongSpec || len(p.Switches) != 2 || !strings.Contains(p.Switches[0].Reason, "rule ") {
+	if p.Codec != tables.JSONLines.Name() || len(p.Switches) != 1 || !strings.Contains(p.Switches[0].Reason, "rule ") {
 		t.Fatalf("profile %+v", p)
 	}
-	if other := profileFor(h, cfg, tf.Model("p", "other")); other.Codec != tables.Rows.Name() || other.LongSpec {
+	if other := profileFor(h, cfg, tf.Model("p", "other")); other.Codec != tables.Rows.Name() {
 		t.Fatalf("another model's profile %+v", other)
 	}
 }

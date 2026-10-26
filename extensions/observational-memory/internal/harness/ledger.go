@@ -8,7 +8,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 )
@@ -159,7 +159,7 @@ func DefinedQueries(h host.Host, cfg config.Config, memoryTools []string) map[st
 	}
 	out := make(map[string]string, len(definitions))
 	for _, d := range definitions {
-		if d.Name != memquery.ToolName && slices.Contains(memoryTools, d.Name) {
+		if d.Name != omtool.ToolName && slices.Contains(memoryTools, d.Name) {
 			out[d.Name] = d.Query
 		}
 	}
@@ -182,10 +182,10 @@ func MemoryToolNames(rt *runtime.Runtime) []string {
 	defined := rt.DefinedTools()
 	names := make([]string, 0, len(defined)+1)
 	for _, name := range defined {
-		if name != memquery.ToolName && !slices.Contains(names, name) {
+		if name != omtool.ToolName && !slices.Contains(names, name) {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
-	return append([]string{memquery.ToolName}, names...)
+	return append([]string{omtool.ToolName}, names...)
 }

@@ -178,7 +178,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		"omittedActive":      prompt.OmittedActive,
 		"reflections":        len(prompt.Reflections),
 		"omittedReflections": prompt.OmittedReflections,
-		"memoryQueries":      len(prompt.MemoryQueries),
+		"memorySnippets":     len(prompt.MemorySnippets),
 		"subjectsShown":      prompt.SubjectsShown,
 		"links":              len(prompt.Links),
 		"omittedLinks":       prompt.OmittedLinks,

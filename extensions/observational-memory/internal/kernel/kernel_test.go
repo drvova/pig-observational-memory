@@ -13,8 +13,8 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sandbox"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
@@ -22,11 +22,11 @@ import (
 // The kernel's lists are data; these are the packages that define the names they hold, so a
 // new verb, record kind or event cannot be added without the kernel owning it.
 func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
-	if kernel.MemoryToolName != memquery.ToolName {
-		t.Fatalf("the kernel names the memory tool %q, memquery %q", kernel.MemoryToolName, memquery.ToolName)
+	if kernel.MemoryToolName != omtool.ToolName {
+		t.Fatalf("the kernel names the memory tool %q, omtool %q", kernel.MemoryToolName, omtool.ToolName)
 	}
 	groups := map[string][]string{
-		kernel.OwnerMemoryTool:  {memquery.ToolName},
+		kernel.OwnerMemoryTool:  {omtool.ToolName},
 		kernel.OwnerQuerySource: legacyquery.Sources,
 		kernel.OwnerQueryStage:  legacyquery.Stages,
 		kernel.OwnerQueryWrite:  legacyquery.Writes,
@@ -42,7 +42,7 @@ func TestKernelOwnsWhatTheCodeDefines(t *testing.T) {
 			// A detector reads the event ledger, so every group is owned for it.
 			got, ok := kernel.Owns(layer.KindDetector, name)
 			// "memory" is both the tool and an event kind; the tool owns it first.
-			if name == memquery.ToolName && ok {
+			if name == omtool.ToolName && ok {
 				continue
 			}
 			// "harness" is a source and a write: whichever group lists it first owns it.

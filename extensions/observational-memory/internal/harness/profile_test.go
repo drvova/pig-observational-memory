@@ -56,7 +56,14 @@ func decode(codec, outcome string) curated.ModelEvent {
 	return curated.ModelEvent{Kind: curated.ModelKindDecode, Codec: codec, Outcome: outcome}
 }
 
+// memory is a code call of the memory tool (ModelKindCode); syntax marks it as the query
+// language's calls were marked, which the code tool never grades.
 func memory(outcome, target string, syntax bool) curated.ModelEvent {
+	return curated.ModelEvent{Kind: curated.ModelKindCode, Outcome: outcome, Target: target, Syntax: syntax}
+}
+
+// queryCall is a call of the removed query language (ModelKindMemory): history, never graded.
+func queryCall(outcome, target string, syntax bool) curated.ModelEvent {
 	return curated.ModelEvent{Kind: curated.ModelKindMemory, Outcome: outcome, Target: target, Syntax: syntax}
 }
 
@@ -66,10 +73,10 @@ func defined(tool, outcome string) curated.ModelEvent {
 
 func TestDefaultProfile(t *testing.T) {
 	p := harness.Compute(model, nil, nil)
-	if p.Codec != tables.Codecs()[0].Name() || p.Layout != ledger.FormatTables || p.SummaryHalvings != 0 || p.LongSpec || len(p.DisabledTools) != 0 || len(p.Switches) != 0 {
+	if p.Codec != tables.Codecs()[0].Name() || p.Layout != ledger.FormatTables || p.SummaryHalvings != 0 || len(p.DisabledTools) != 0 || len(p.Switches) != 0 {
 		t.Fatalf("default profile %+v", p)
 	}
-	if p.SummaryScale() != 1 || p.ApplySummary(50_000) != 50_000 || p.Spec() != tables.Rows.Spec() {
+	if p.SummaryScale() != 1 || p.ApplySummary(50_000) != 50_000 || p.CodecValue().Spec() != tables.Rows.Spec() {
 		t.Fatalf("default profile does not use the whole room and the short spec")
 	}
 }
@@ -113,8 +120,8 @@ func TestLayoutSwitch(t *testing.T) {
 	if p.Layout != ledger.FormatLines || p.SummaryFormat(config.Defaults) != ledger.FormatLines {
 		t.Fatalf("layout %s", p.Layout)
 	}
-	if p.Codec != rows || p.LongSpec {
-		t.Fatalf("wrong columns are not syntax errors: %+v", p)
+	if p.Codec != rows {
+		t.Fatalf("wrong columns switched the codec: %+v", p)
 	}
 	p = harness.Compute(model, units(concat(repeat(3, decode(rows, curated.OutcomeColumns)), repeat(3, decode(rows, curated.OutcomeOK)))...), nil)
 	if p.Layout != ledger.FormatLines {
@@ -132,25 +139,22 @@ func TestLayoutSwitch(t *testing.T) {
 	}
 }
 
-// Instructions: repeated syntax errors (queries that did not parse, rows that did not decode)
-// carry the long spec.
-func TestLongSpecSwitch(t *testing.T) {
+// The long-spec instructions setting is retired with the query language (docs/code-tool.md):
+// no error of a code call, no decode error and no query-language syntax error switches
+// anything, since no switch may change the memory tool by model.
+func TestNoSwitchChangesTheTool(t *testing.T) {
 	p := harness.Compute(model, units(concat(
-		repeat(1, memory(curated.OutcomeOK, "", false)),
-		repeat(2, memory(curated.OutcomeError, "", true)),
-		repeat(1, decode(tables.JSONLines.Name(), curated.OutcomeError)),
+		repeat(4, memory(curated.OutcomeError, "", true)),
+		repeat(4, queryCall(curated.OutcomeError, "", true)),
+		repeat(1, decode(tables.Rows.Name(), curated.OutcomeOK)),
 	)...), nil)
-	if !p.LongSpec || p.Spec() != tables.LongSpec(p.CodecValue()) {
+	if len(p.Switches) != 0 {
 		t.Fatalf("profile %+v", p)
 	}
-	last := p.Switches[len(p.Switches)-1]
-	if last.Setting != harness.SettingSpec || !strings.Contains(last.Reason, "3 syntax errors vs 1") {
-		t.Fatalf("switch %+v", last)
-	}
-	// Errors that are not syntax errors do not count.
-	p = harness.Compute(model, units(repeat(5, memory(curated.OutcomeError, "", false))...), nil)
-	if p.LongSpec {
-		t.Fatal("a failed but parsed query counted as a syntax error")
+	// Query-language calls stay history: their shown hits never halve the summary.
+	shown := queryCall(curated.OutcomeShown, curated.TargetSummary, false)
+	if p := harness.Compute(model, units(repeat(6, shown)...), nil); p.SummaryHalvings != 0 {
+		t.Fatalf("query-language hits halved the summary: %+v", p.Switches)
 	}
 }
 
@@ -258,27 +262,15 @@ var v2Compaction = curated.ModelEvent{Kind: curated.ModelKindPass, Stage: "compa
 // setting, the same errors over MinEvidence compactions do, and events after the latest
 // compaction wait for the next.
 func TestV2ProfileCountsCompactions(t *testing.T) {
-	syntax := v2(memory(curated.OutcomeError, "", true))
 	shown := v2(memory(curated.OutcomeShown, curated.TargetSummary, false))
-	ok := v2(memory(curated.OutcomeOK, "", false))
 
-	p := harness.Compute(model, events(concat(repeat(5, syntax), repeat(1, v2Compaction))...), nil)
-	if p.LongSpec {
-		t.Fatalf("one compaction switched the spec: %+v", p.Switches)
+	p := harness.Compute(model, events(concat(repeat(9, shown), repeat(1, v2Compaction))...), nil)
+	if p.SummaryHalvings != 0 {
+		t.Fatalf("one compaction halved the summary: %+v", p.Switches)
 	}
-	p = harness.Compute(model, events(repeat(9, syntax)...), nil)
-	if p.LongSpec {
+	p = harness.Compute(model, events(repeat(9, shown)...), nil)
+	if p.SummaryHalvings != 0 {
 		t.Fatal("events with no compaction after them counted")
-	}
-	unit := concat(repeat(2, syntax), repeat(1, ok), repeat(1, v2Compaction))
-	p = harness.Compute(model, events(concat(unit, unit, unit)...), nil)
-	if !p.LongSpec || !strings.Contains(p.Switches[len(p.Switches)-1].Reason, "3 syntax errors vs 0") {
-		t.Fatalf("three compactions did not switch the spec: %+v", p.Switches)
-	}
-	// A tie gives no unit either way.
-	tie := concat(repeat(1, syntax), repeat(1, ok), repeat(1, v2Compaction))
-	if p = harness.Compute(model, events(concat(tie, tie, tie, tie)...), nil); p.LongSpec {
-		t.Fatal("ties switched the spec")
 	}
 	// The summary halves on MinEvidence compactions whose queries hit shown records.
 	shrink := concat(repeat(4, shown), repeat(1, v2Compaction))
@@ -294,7 +286,8 @@ func TestV2ProfileCountsCompactions(t *testing.T) {
 		t.Fatalf("profile %+v", p)
 	}
 	// Memory v1's events (no engine) never count.
-	if p = harness.Compute(model, events(concat(repeat(3, memory(curated.OutcomeError, "", true)), repeat(1, v2Compaction), repeat(3, memory(curated.OutcomeError, "", true)), repeat(1, v2Compaction), repeat(3, memory(curated.OutcomeError, "", true)), repeat(1, v2Compaction))...), nil); p.LongSpec {
+	v1Shown := memory(curated.OutcomeShown, curated.TargetSummary, false)
+	if p = harness.Compute(model, events(concat(repeat(3, v1Shown), repeat(1, v2Compaction), repeat(3, v1Shown), repeat(1, v2Compaction), repeat(3, v1Shown), repeat(1, v2Compaction))...), nil); p.SummaryHalvings != 0 {
 		t.Fatal("v1's events counted")
 	}
 }
@@ -304,7 +297,7 @@ func TestV2ProfileCountsCompactions(t *testing.T) {
 func TestProfileEnginesNeverMix(t *testing.T) {
 	rows := tables.Rows.Name()
 	v1Errors := concat(repeat(3, decode(rows, curated.OutcomeColumns)), repeat(3, memory(curated.OutcomeError, "", true)), repeat(3, memory(curated.OutcomeShown, curated.TargetSummary, false)))
-	if p := harness.Compute(model, events(v1Errors...), nil); p.Codec != rows || p.LongSpec || p.SummaryHalvings != 0 || len(p.Switches) != 0 {
+	if p := harness.Compute(model, events(v1Errors...), nil); p.Codec != rows || p.SummaryHalvings != 0 || len(p.Switches) != 0 {
 		t.Fatalf("v1 evidence shaped the v2 profile: %+v", p)
 	}
 	shrink := concat(repeat(4, v2(memory(curated.OutcomeShown, curated.TargetSummary, false))), repeat(1, v2Compaction))

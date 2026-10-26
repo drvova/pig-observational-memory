@@ -62,7 +62,7 @@ func TestMinimalBriefPointer(t *testing.T) {
 		max  int
 		want string
 	}{
-		{30, `omitted: 5 entries from 2026-05-02 to 2026-05-02 (u1 to u2); the memory tool searches them (history | search "words").`},
+		{30, "omitted: 5 entries from 2026-05-02 to 2026-05-02 (u1 to u2); the memory tool searches them (om.History(om.Search(`w`)))."},
 		{9, "omitted: 5 entries (u1 to u2)."},
 		{5, "omitted: 5 entries."},
 		{3, serialize.BriefSmallest},

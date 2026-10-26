@@ -320,8 +320,8 @@ func SerializeConversation(messages []map[string]any, skipTools ...string) strin
 const MaxRecordContentChars = 10_000
 
 // RecallPageChars is the most one recall shows (docs/memory-v2.md, "Memory tool"): a record's
-// content bound, the largest text recall <id> returns for one record. Under memory v2,
-// recall <entry id> pages a longer entry at this size, and a curated memory must fit it whole.
+// content bound, the largest text om.Recall(id) returns for one record. Under memory v2,
+// om.Recall(entry id) pages a longer entry at this size, and a curated memory must fit it whole.
 const RecallPageChars = MaxRecordContentChars
 
 // TruncateRecordContent keeps the first MaxRecordContentChars characters.
@@ -577,12 +577,12 @@ func renderRecallMessage(entry session.Entry, thinking bool) (string, bool) {
 	return "[Tool result: " + jsString(msg["toolName"]) + " @ " + timestamp + "]: " + textAndPlaceholders(msg["content"], placeholderOptions{}), true
 }
 
-// RenderRecallSourceEntry renders one source entry for recall <id>.
+// RenderRecallSourceEntry renders one source entry for om.Recall(id).
 func RenderRecallSourceEntry(entry session.Entry) (string, bool) {
 	return renderRecallSourceEntry(entry, true)
 }
 
-// RenderRecallSourceEntryText renders one source entry for memory v2's recall <entry id>: as
+// RenderRecallSourceEntryText renders one source entry for memory v2's om.Recall(entry id): as
 // RenderRecallSourceEntry, with thinking left out, as extraction and history leave it out
 // (docs/memory-v2.md, "Memory tool").
 func RenderRecallSourceEntryText(entry session.Entry) (string, bool) {

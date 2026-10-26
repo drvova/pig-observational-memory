@@ -381,15 +381,25 @@ func TestSymbolTableIsTheWall(t *testing.T) {
 	}
 }
 
-// describe lists an om value's fields and methods.
+// describe lists an om value's fields and methods with their docs from the generated table, an
+// om function's signature and doc, and a type the code defined with "no doc".
 func TestDescribe(t *testing.T) {
 	s := newSup(t, Config{})
 	r := runCode(t, context.Background(), s, "describe(om.NoteList{})", nil)
 	ok(t, r)
-	for _, want := range []string{"om.NoteList", "Rows []om.Note", "Len() int", "Count(string) map[string]int", "Filter(func(om.Note) bool) om.NoteList"} {
+	for _, want := range []string{"om.NoteList // NoteList is a page of records.", "Rows []om.Note // Rows are the rows held.", "Len() int // Len is the number of rows held.", "Count(string) map[string]int // Count counts", "Filter(func(om.Note) bool) om.NoteList // Filter keeps"} {
 		if !strings.Contains(r.Val, want) {
 			t.Errorf("describe lacks %q:\n%s", want, r.Val)
 		}
+	}
+	r = runCode(t, context.Background(), s, "describe(om.Notes)", nil)
+	if ok(t, r); r.Val != "om.Notes(opts ...Opt) NoteList // Notes lists the active folded records: the branch's, else the off-path fallback's." {
+		t.Fatalf("%q", r.Val)
+	}
+	r = runCode(t, context.Background(), s, "type Box struct{ N int }\nfunc (b Box) Twice() int { return 2 * b.N }\ndescribe(Box{})", nil)
+	// The interpreter's own types carry no method set reflection can see; their fields print.
+	if ok(t, r); !strings.Contains(r.Val, "N int // no doc") {
+		t.Fatalf("%q", r.Val)
 	}
 }
 

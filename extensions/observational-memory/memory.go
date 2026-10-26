@@ -5,11 +5,13 @@ import (
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
 )
@@ -74,52 +76,63 @@ func migrateLayerV2(h host.Host) {
 	harness.MigrateLayerV2(h, call.Store, harness.ModelKey(h.SessionModel()), harness.WorkerModelKey(h, cfg))
 }
 
-// memoryToolSpec is the memory tool with description, run by the harness's manager.
-func memoryToolSpec(manager *harness.Manager, description string) host.ToolSpec {
+// memoryToolSpec is the memory tool (docs/code-tool.md, "The tool"): fixed text, the same for
+// every model and every store state, registered once; the harness's manager runs each call on
+// the namespace child.
+func memoryToolSpec(manager *harness.Manager) host.ToolSpec {
 	return host.ToolSpec{
-		Name:             memquery.ToolName,
-		Label:            memquery.Label,
-		Description:      description,
-		PromptSnippet:    memquery.PromptSnippet,
-		PromptGuidelines: memquery.PromptGuidelines,
-		Parameters:       memquery.Parameters,
+		Name:             omtool.ToolName,
+		Label:            omtool.Label,
+		Description:      omtool.Description,
+		PromptSnippet:    omtool.PromptSnippet,
+		PromptGuidelines: omtool.PromptGuidelines,
+		Parameters:       omtool.Parameters,
 		Execute: func(h host.ToolHost, params map[string]any) host.ToolResult {
-			query, _ := params["query"].(string)
-			result := manager.RunMemory(h, query)
+			result := manager.RunMemory(h, params)
 			return host.ToolResult{Text: result.Text, IsError: result.IsError, Details: result.Details}
 		},
 		RenderCall: func(args map[string]any) []string {
-			query, _ := args["query"].(string)
-			return []string{memquery.FormatCallForTui(query)}
+			return strings.Split(omtool.FormatCallForTui(args), "\n")
 		},
 		RenderResult: func(details any, text string, expanded bool) []string {
-			return strings.Split(memquery.FormatRenderedResultForTui(memquery.DetailsFrom(details), text, expanded), "\n")
+			return strings.Split(omtool.FormatRenderedResultForTui(details, text, expanded), "\n")
 		},
 	}
 }
 
-// registerMemory wires the memory tool (docs/memory-interface.md, section 5), the
-// per-model harness and the tools the agent defines (section 6), and the
-// curated memory index section of the system prompt. rt reads the defined
-// tools the manager registered, the memory tools level-0 extraction leaves out
-// of what it reads (harness.MemoryToolNames).
+// statusInfo is the closure a code tool call answers om.Info with (docs/code-tool.md, "Order of
+// work"): commands.Info over the call's host, so om.Info and /om:status print one set of shared
+// figures. An unreadable branch is reported in the figures rather than failing the call.
+func statusInfo(rt *runtime.Runtime, h host.Host) func() om.StatusInfo {
+	return func() om.StatusInfo {
+		info, err := commands.Info(rt, h)
+		if err != nil {
+			return om.StatusInfo{Lines: []string{"Status unavailable: " + err.Error()}}
+		}
+		return info
+	}
+}
+
+// registerMemory wires the memory tool (docs/code-tool.md), the per-model
+// harness and the tools the agent defined before it (docs/memory-interface.md,
+// section 6), and the curated memory index section of the system prompt. rt
+// reads the memory plumbing the manager knows (the defined tools it registered
+// and the retired defined queries' names), the tools level-0 extraction leaves
+// out of what it reads (harness.MemoryToolNames).
 func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	manager := harness.NewManager(func(h host.ToolHost) (curated.Call, bool) {
 		call, _, on := curatedCall(h)
 		return call, on
 	})
-	manager.MemoryTool = func(description string) host.ToolSpec { return memoryToolSpec(manager, description) }
+	manager.Info = func(h host.ToolHost) func() om.StatusInfo { return statusInfo(rt, h) }
 	manager.IndexShown = memoryPin.Shown
-	manager.WorkerKey = func(h host.ToolHost) string {
-		_, cfg, _ := curatedCall(h)
-		return harness.WorkerModelKey(h, cfg)
-	}
-	rt.SetDefinedTools(manager.Registered)
+	rt.SetDefinedTools(manager.SkipNames)
+	rt.SetCodeStatus(manager.CodeStatusLines)
 
 	ext.OnEvent(sdk.EventBeforeAgentStart, func(ctx sdk.Context, data map[string]any) (any, error) {
 		h := sdkhost.New(ctx)
-		// The session model's profile: the memory tool's codec and spec, and the
-		// defined tools it keeps active.
+		// The session model's profile: the defined tools it keeps active. The memory
+		// tool itself is the same for every model.
 		manager.BeforeAgentStart(h)
 		options, _ := data["systemPromptOptions"].(map[string]any)
 		sections, _ := options["sections"].(*sdk.SystemPromptSections)
@@ -143,6 +156,8 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	// stored definitions as tools (once per process: the host keeps them).
 	ext.OnEvent(sdk.EventSessionStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
 		memoryPin.Reset()
+		// The namespace resets: only kept definitions reach the next conversation.
+		manager.Namespace().Reset()
 		h := sdkhost.New(ctx)
 		manager.RegisterStored(h)
 		migrateLayerV2(h)
@@ -160,5 +175,10 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 		return nil, nil
 	})
 
-	ext.RegisterTool(sdkhost.Definition(memoryToolSpec(manager, memquery.Description(nil))))
+	ext.OnEvent(sdk.EventSessionShutdown, func(sdk.Context, map[string]any) (any, error) {
+		manager.Namespace().Reset()
+		return nil, nil
+	})
+
+	ext.RegisterTool(sdkhost.Definition(memoryToolSpec(manager)))
 }

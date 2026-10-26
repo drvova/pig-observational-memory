@@ -3,6 +3,8 @@ package ledger
 import (
 	"strings"
 	"unicode"
+
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 )
 
 // TablesSummaryIntro starts the instructions of every tables summary, whatever
@@ -18,16 +20,28 @@ func TablesSummaryBody(summary string) (string, bool) {
 	}
 	_, body, ok := strings.Cut(summary, TablesRecallParagraph)
 	if !ok {
-		return "", false
+		// A summary written before the code tool ends its instructions with the frozen
+		// paragraph of the query language.
+		if _, body, ok = strings.Cut(summary, LegacyTablesRecallParagraph); !ok {
+			return "", false
+		}
 	}
 	body, _, _ = strings.Cut(body, "\n\n---\n\n")
 	return strings.TrimSpace(body), true
 }
 
 // TablesRecallParagraph is the last paragraph of TablesUsageInstructions. It
-// names the tool the extension registers and its queries (memquery.ToolName,
-// which this package cannot import; memquery's tests check the name).
-const TablesRecallParagraph = `The memory tool reads any record back with its exact source, omitted ones included (recall <id>), and searches what these tables condensed (history | search "words"); use it when precision needs the source.`
+// names the tool the extension registers and the om snippets that read a record
+// back and search the condensed text (om.SnippetRecall, om.SnippetHistorySearch;
+// omtool.ToolName, which this package does not import; omtool's tests check the
+// name).
+const TablesRecallParagraph = "The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (" + om.SnippetRecall + "), and searches what these tables condensed (" + om.SnippetHistorySearch + "); use it when precision needs the source."
+
+// LegacyTablesRecallParagraph is TablesRecallParagraph as summaries wrote it
+// before the code tool (docs/code-tool.md, "Migration"). It is frozen, never
+// edited: TablesSummaryBody still finds the tables of a summary written then, so
+// its omitted spans keep classifying hits as omitted.
+const LegacyTablesRecallParagraph = `The memory tool reads any record back with its exact source, omitted ones included (recall <id>), and searches what these tables condensed (history | search "words"); use it when precision needs the source.`
 
 // Table names and fields of the tables format.
 const (

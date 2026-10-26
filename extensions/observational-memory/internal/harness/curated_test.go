@@ -23,7 +23,7 @@ func TestRunMemoryFallsBackToTheSessionFile(t *testing.T) {
 	h, _, m := session(t)
 	h.SessionEntries = append(append([]ledger.Entry{}, h.Entries...), tf.RawMessage("o1", "The kiln fires at 900C."))
 	h.Entries = append(h.Entries, tf.RawMessage("u9", "kiln?"))
-	if r := m.RunMemory(h, `history | search "900C"`); r.IsError || !strings.Contains(r.Text, "o1 (off-path)") {
+	if r := m.RunMemory(h, map[string]any{"code": `om.History(om.Search("900C"))`}); r.IsError || !strings.Contains(r.Text, "o1 (off-path)") {
 		t.Fatalf("v2 history %q", r.Text)
 	}
 	if counter.Total() != 0 {

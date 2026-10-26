@@ -69,8 +69,8 @@ type Result struct {
 	// Spans counts the omitted spans, folded ones included; Folded the span rows that hold
 	// more than one span.
 	Spans, Folded int
-	// Queries are every memory query the summary prints, in order.
-	Queries []string
+	// Snippets are every om snippet the summary prints, in order.
+	Snippets []string
 }
 
 // role is what an item renders as.
@@ -546,7 +546,7 @@ func clipRunes(runes []rune, n int) string {
 
 // result is the Result of a rendered choice.
 func (s *state) result(text string, p *selected, o omission) Result {
-	r := Result{Text: text, Reflections: []ledger.Reflection{}, Observations: []ledger.Observation{}, Omitted: o.records, Spans: o.spans, Folded: o.folded, Queries: o.queries()}
+	r := Result{Text: text, Reflections: []ledger.Reflection{}, Observations: []ledger.Observation{}, Omitted: o.records, Spans: o.spans, Folded: o.folded, Snippets: o.snippets()}
 	for _, it := range s.items {
 		if !p.on[it] {
 			continue

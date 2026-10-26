@@ -51,8 +51,9 @@ func TestModelCatalogueAppliesToItsModel(t *testing.T) {
 		t.Fatal("the model's catalogue reached another model")
 	}
 	// For decode failures this model tries long-spec first (its switch-codec ranks after it):
-	// the harness writes it, not the seed's switch-codec, and AfterPass reads the catalogue from
-	// the model's layer.
+	// long-spec is retired with the query language (never applied, so never written under v2),
+	// so the harness writes switch-codec, and AfterPass reads the catalogue from the model's
+	// layer.
 	if _, err := ls.Put(layer.Definition{Kind: layer.KindRemedy, Name: RemedySwitchCodec, Model: "p/m", Text: "catalogue[1]{detector,rank}:\n  decode-failure,3"}); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestModelCatalogueAppliesToItsModel(t *testing.T) {
 	}
 	codec := map[string]int{DetectDecodeFailure: 1, CountCodecDecodeFailure: 1}
 	changed, _ := evaluate("p/m", []curated.ModelEvent{pass(100, codec), pass(100, codec), pass(100, codec)}, nil, t0, c)
-	if len(changed) != 1 || changed[0].Remedy != RemedyLongSpec {
+	if len(changed) != 1 || changed[0].Remedy != RemedySwitchCodec {
 		t.Fatalf("changed %+v", changed)
 	}
 	for i := 0; i < MinEvidence; i++ {
@@ -71,7 +72,7 @@ func TestModelCatalogueAppliesToItsModel(t *testing.T) {
 		v2Compaction(t, store, 100, nil, nil)
 	}
 	all, _ := List(store)
-	if len(all) != 1 || all[0].Remedy != RemedyLongSpec {
+	if len(all) != 1 || all[0].Remedy != RemedySwitchCodec {
 		t.Fatalf("rules %+v", all)
 	}
 	for name, d := range map[string]layer.Definition{

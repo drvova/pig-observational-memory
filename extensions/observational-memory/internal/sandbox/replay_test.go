@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -117,5 +118,23 @@ func TestTopLevelDeclarationsOverHostValues(t *testing.T) {
 	h2["Notes"] = func(ctx context.Context, args []json.RawMessage) (any, error) { calls++; return inner(ctx, args) }
 	if r := runCode(t, ctx, s, "q := om.Notes().Rows[0]\nq.ID", h2); r.Val != "a1" || calls != 1 {
 		t.Fatalf("%+v, %d calls", r, calls)
+	}
+}
+
+// A call the handler finds undecodable (omwire.ErrBadArgs: the stubs never send one, so the
+// child is corrupted) kills the child and the call returns crashed; the next call starts anew.
+func TestBadArgumentsKillTheChild(t *testing.T) {
+	s := newSup(t, Config{})
+	h := fake{omwire.MNotes: func(context.Context, []json.RawMessage) (any, error) {
+		return nil, fmt.Errorf("Notes: %w", omwire.ErrBadArgs)
+	}}
+	ok(t, runCode(t, context.Background(), s, "1", nil))
+	pid := livePID(s)
+	r := runCode(t, context.Background(), s, "om.Notes()", h)
+	if r.Outcome != OutcomeCrashed || !strings.Contains(r.Err, "do not decode") || !gone(pid) {
+		t.Fatalf("%+v", r)
+	}
+	if r := runCode(t, context.Background(), s, "2", nil); r.Val != "2" {
+		t.Fatalf("%+v", r)
 	}
 }

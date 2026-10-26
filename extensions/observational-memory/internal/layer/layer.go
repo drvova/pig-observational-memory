@@ -309,6 +309,9 @@ func ModelDir(model string) string {
 	return b.String()
 }
 
+// ModelOfDir inverts ModelDir; false for a name ModelDir never makes.
+func ModelOfDir(dir string) (string, bool) { return modelOfDir(dir) }
+
 // modelOfDir inverts ModelDir; false for a name ModelDir never makes.
 func modelOfDir(dir string) (string, bool) {
 	var b strings.Builder

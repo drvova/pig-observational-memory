@@ -29,7 +29,7 @@ This extension does the memory work while the session runs, so it is ready befor
 
 - **No summary chains.** Records are saved as entries in the session, and every compaction renders them as written. They are never re-summarized.
 - **No extra requests.** Records are picked out of the conversation by code at every turn end. A compaction makes at most one model request, on the session model, to merge and reflect, in place of PiG's own summarizer; nothing runs between compactions.
-- **Traceable memory.** Every line ends with the entry it came from, and the agent can read it back with the `memory` tool (`recall <id>`), or search the raw history behind the summary. Whatever the summary leaves out is printed as the query that lists it.
+- **Traceable memory.** Every line ends with the entry it came from, and the agent can read it back with the `memory` tool (``om.Recall(`id`)``), or search the raw history behind the summary. Whatever the summary leaves out is printed as the snippet that lists it.
 - **Unread history is never lost.** Before rendering, the compaction reads whatever of the removed range no turn end read, and a record is dropped only when the record replacing it carries every specific it carries.
 
 ## Quick start
@@ -87,12 +87,12 @@ notes.graphql_migration[2]{id,when,kind,status,scope,content,superseded_by,sourc
   d4e5f6a1b2c3,2026-01-15,correction,,public API,"Use GraphQL for the public API, not REST",,m41
   e5f6a1b2c3d4,2026-01-15,attempt,,public API,go test ./api/... worked,,m57
 omitted[1]{from,to,count,spans,first_id,last_id,query}:
-  2026-01-08,2026-01-14,38,3,m02,m39,"notes | from m02 | through m39"
+  2026-01-08,2026-01-14,38,3,m02,m39,om.Notes(om.From(`m02`).Through(`m39`))
 ```
 
-When a record is too compressed to act on, the agent queries the `memory` tool with `recall <id>` and gets the original conversation back. The `memoryFormat` setting switches to a bracketed line layout; [Summary format](docs/concepts.md#summary-format) describes both.
+When a record is too compressed to act on, the agent runs ``om.Recall(`id`)`` with the `memory` tool and gets the original conversation back. The `memoryFormat` setting switches to a bracketed line layout; [Summary format](docs/concepts.md#summary-format) describes both.
 
-The summary budget is derived from what PiG reports: never more than PiG's threshold leaves room for, the model's output limit, or what the compaction removed; `compactionSummaryMaxTokens` caps it. Before each request, aged tool results the latest compaction retained are sent as their one-line record and the query that recalls the original. [How it works](docs/how-it-works.md) covers the lifecycle and the ledger; [memory v2](docs/memory-v2.md) is the design.
+The summary budget is derived from what PiG reports: never more than PiG's threshold leaves room for, the model's output limit, or what the compaction removed; `compactionSummaryMaxTokens` caps it. Before each request, aged tool results the latest compaction retained are sent as their one-line record and the snippet that recalls the original. [How it works](docs/how-it-works.md) covers the lifecycle and the ledger; [memory v2](docs/memory-v2.md) is the design.
 
 ## Commands
 
@@ -104,13 +104,14 @@ The summary budget is derived from what PiG reports: never more than PiG's thres
 | `/om:view` | The memory in the latest compaction summary, also copied to the clipboard; before the first compaction it says how many records exist and points to `/om:view full` |
 | `/om:view full` | All memory recorded on this branch except dropped records, also copied to the clipboard |
 
-Commands only read state or settings. The agent reaches its memory through one tool, `memory`, which takes one query string: a source (`notes`, `reflections`, `history`, `saved`, or `recall <id>`) followed by stages, or one write (`save`, `edit`, `forget`, `feedback`, `define`). Results are tables. [The memory tool](docs/concepts.md#the-memory-tool) has the grammar.
+Commands only read state or settings. The agent reaches its memory through one tool, `memory`, which runs Go code over the `om` API (reads such as `om.Notes`, `om.History` and `om.Recall`, the curated writes, and its own kept functions) in a child process; empty code prints the manual. The tool is the same for every model. [The code tool](docs/code-tool.md) is the design.
 
-```text
-notes | search "sourdough" | where kind=event | count by subject
-history | search "india online store" | limit 5
-recall 3f9a2c1d7b4e
-save type=user name=prefers-tabs description="The user indents with tabs."
+```go
+om.Notes(om.Search(`sourdough`).Kind(`event`)).Count("subject")
+om.History(om.Search(`india online store`).Limit(5))
+om.Recall(`3f9a2c1d7b4e`)
+om.Save("prefers-tabs", "user", "The user indents with tabs.", om.Quoting("tabs please"))
+func bakes() int { return om.Notes(om.Subject("baking")).Len() } // kept for later sessions
 ```
 
 ## Configuration
@@ -154,8 +155,10 @@ extensions/observational-memory/   the extension, a standalone Go module
     ├── ledger/                    memory model, projections
     ├── agents/                    the single model request
     ├── runtime/                   per-process state, session model resolution
-    ├── memquery/                  the memory tool's query language: parser and interpreter
-    ├── commands/, recall/         /om:status, /om:view, recall <id> evidence
+    ├── omtool/, om/, omhost/      the memory tool: its surface, the om API, the extension's answers
+    ├── sandbox/, codepolicy/, codestore/  the child process, the code policy, kept definitions
+    ├── memquery/, legacyquery/    the removed query language (still run by defined tools) and its frozen recognizer
+    ├── commands/, recall/         /om:status, /om:view, om.Recall evidence
     ├── curated/, harness/, rules/ long-lived memories, the per-model harness, rules
     ├── kernel/, layer/, declare/  what no definition may touch; the model-built layer
     ├── host/                      host interfaces the packages run against
@@ -187,7 +190,8 @@ go test -race ./...
 | [Configuration](docs/configuration.md) | Every setting, debugging and the removed settings |
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
-| [Memory interface](docs/memory-interface.md) | The memory tool's language, the harness, the kernel and the layer |
+| [Memory interface](docs/memory-interface.md) | Tables and codecs, the harness, the kernel and the layer |
+| [The code tool](docs/code-tool.md) | The `memory` tool: Go code over the `om` API in a child process |
 
 ## Credits
 

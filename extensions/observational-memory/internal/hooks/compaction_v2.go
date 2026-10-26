@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
@@ -29,7 +30,7 @@ const (
 
 // V2FallbackSummary is the memory v2 summary when building every other one panicked: it
 // still points at what the compaction removed, so PiG never falls through to its summarizer.
-const V2FallbackSummary = `omitted: the compacted conversation; the memory tool searches it (history | search "words").`
+const V2FallbackSummary = "omitted: the compacted conversation; the memory tool searches it (" + om.SnippetHistorySearch + ")."
 
 // renderV2Records renders the ledger's records for a memory v2 summary; tests replace it.
 var renderV2Records = selection.Render

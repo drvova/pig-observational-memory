@@ -139,3 +139,8 @@ type EditOptions struct {
 	Description *string `json:"description,omitempty"`
 	Body        *string `json:"body,omitempty"`
 }
+
+// ErrBadArgs is wrapped by the host's answer to a call whose arguments do not decode into its
+// method's parameters. The child's stubs always send what decodes, so such a call means code
+// corrupted the child: the supervisor kills it (docs/code-tool.md, "The protocol").
+var ErrBadArgs = errors.New("the arguments do not decode into the method's parameters")

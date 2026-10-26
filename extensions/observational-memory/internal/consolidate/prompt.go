@@ -32,7 +32,7 @@ type PromptInput struct {
 	MemoryBudget int
 	// Branch is the current branch with level 0's records folded in, and Folded its ledger:
 	// they place the records the current memory leaves out, so each omitted span is written
-	// with the memory query that lists it (selection.OmittedSpans).
+	// with the om snippet that lists it (selection.OmittedSpans).
 	Branch []ledger.Entry
 	Folded ledger.FoldedLedger
 	// Curated are the curated memories that apply in the project, in the index's order; the
@@ -52,10 +52,10 @@ type Prompt struct {
 	Reflections []ledger.Reflection
 	// OmittedCandidates, OmittedActive and OmittedReflections did not fit.
 	OmittedCandidates, OmittedActive, OmittedReflections int
-	// MemoryQueries are the memory queries the omitted spans of the current memory print, in
+	// MemorySnippets are the om snippets the omitted spans of the current memory print, in
 	// order; none when nothing is omitted or the spans did not fit (the omitted line then says
 	// so).
-	MemoryQueries []string
+	MemorySnippets []string
 	// SubjectsShown reports whether the subjects section fit; when it did not, a line says so.
 	SubjectsShown bool
 	// Links are the possible updates listed, each between two records the prompt shows;
@@ -116,7 +116,7 @@ func ReflectionLine(r ledger.Reflection) string {
 // each get a line
 // whose room is reserved before anything is filled, so the model is always told what it is not
 // shown; the older memory's line is followed, room permitting, by its omitted spans, each with
-// the runnable memory query that lists it (selection.OmittedSpans, as the summary writes
+// the runnable om snippet that lists it (selection.OmittedSpans, as the summary writes
 // them). ok is false when no candidate fits, so no request is worth making.
 func BuildPrompt(in PromptInput) (Prompt, bool) {
 	out := Prompt{CutTotal: len(in.Cut)}
@@ -175,7 +175,7 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 	}
 
 	// The current memory under the summary budget, and the omitted spans of what it leaves out,
-	// each with the memory query that lists it. The spans are paid from the room left after the
+	// each with the om snippet that lists it. The spans are paid from the room left after the
 	// memory shown; when they do not fit, the memory is chosen again under a budget less what
 	// they needed, so the reserve only grows (bounded by the room, and the rounds by the
 	// records' count, since a round that changes nothing ends the loop). When even the most
@@ -223,7 +223,7 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 				text := strings.Join(spans.Lines, "\n")
 				parts = append(parts, text)
 				remaining -= tokens.EstimateStringTokens("\n" + text)
-				out.MemoryQueries = spans.Queries
+				out.MemorySnippets = spans.Snippets
 			}
 		}
 		memorySection = strings.Join(parts, "\n")
@@ -353,15 +353,15 @@ func omittedCandidatesLine(n int) string {
 }
 
 // omittedMemoryLine is the line closing the current memory when records and reflections of it
-// did not fit: with spans, the span lines that follow it list them with their memory queries;
+// did not fit: with spans, the span lines that follow it list them with their om snippets;
 // without, it says there was no room for those. The variant without spans is the longer, so
 // the reserve takes it.
 func omittedMemoryLine(records, reflections int, spans bool) string {
 	line := fmt.Sprintf("omitted: %d older records and %d older reflections are not shown; they stay as they are and cannot be cited.", records, reflections)
 	if spans {
-		return line + " Each line below is a span of them: dates, count, first and last entry id, and the memory query that lists it."
+		return line + " Each line below is a span of them: dates, count, first and last entry id, and the om snippet (memory tool code) that lists it."
 	}
-	return line + " There is no room for the spans and the memory queries that list them; the memory tool's notes and reflections sources return them after this compaction."
+	return line + " There is no room for the spans and the snippets that list them; the memory tool's om.Notes() and om.Reflections() return them after this compaction."
 }
 
 // linkLine is how the level-1 input lists a possible update.

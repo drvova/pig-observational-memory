@@ -68,7 +68,7 @@ func TestV2ThinsAgedToolResultsWithoutRequests(t *testing.T) {
 		t.Fatalf("thinned %d", n)
 	}
 	thinned := resultTextOf(first, "pc1")
-	if !strings.HasPrefix(thinned, "[thinned] bash \"go test ./...\" failed: --- FAIL: TestLoad") || !strings.Contains(thinned, `memory "recall pt1"`) {
+	if !strings.HasPrefix(thinned, "[thinned] bash \"go test ./...\" failed: --- FAIL: TestLoad") || !strings.Contains(thinned, "memory: om.Recall(`pt1`)") {
 		t.Fatalf("thinned to %q", thinned)
 	}
 	// The fresh turn after the compaction, and the original on the branch, stay whole.

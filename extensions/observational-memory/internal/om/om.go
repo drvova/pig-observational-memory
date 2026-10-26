@@ -1,10 +1,11 @@
 // Package om is the memory tool's domain API (docs/code-tool.md, "The domain API"): the value,
 // option and list types the agent's Go code reads, their pure methods, and the constants every
-// read is bounded by. It sits at the bottom of the import graph: besides the standard library it
-// imports only internal/tables (for the lists' Table) and its own transport, internal/om/omwire,
-// and neither imports anything beyond the standard library. So every package that prints a
-// snippet or bounds a list can import it without a cycle, and neither of those two may ever
-// import om or a package that does.
+// read is bounded by, the snippet formatter, the generated doc table and the manual. It sits at
+// the bottom of the import graph: besides the standard library it imports only internal/tables
+// (for the lists' Table), internal/ids (the id formats the strict snippet formatter checks) and
+// its own transport, internal/om/omwire, none of which imports anything beyond the standard
+// library. So every package that prints a snippet or bounds a list can import it without a
+// cycle, and none of those three may ever import om or a package that does.
 //
 // Step 1 of the design's order of work moves the read bounds, the notes and reflections fields
 // and the layer listing's row type here out of the query language (internal/memquery), which
@@ -67,7 +68,8 @@ var LevelZeroNoteFields = []string{FieldStatus, FieldEventDate, FieldSource, Fie
 // LayerRow is one row of the layer listing: a definition of a model's layer, or a seed standing
 // where the model defined nothing.
 type LayerRow struct {
-	// Model is the model whose layer holds the row.
+	// Model is the model whose layer holds the row; om.Layer lists the shared layer (the seeds
+	// and the definitions kept for every model) as "".
 	Model string
 	// Kind and Name are the definition's kind and name.
 	Kind, Name string

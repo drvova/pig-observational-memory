@@ -1,6 +1,13 @@
 # The code tool: one `memory` tool that runs Go
 
-Status: proposed, nothing built. This design replaces the memory tool's query language
+Status: steps 1 to 7 of the order of work are built and pass CI's checks: the `memory` tool runs
+code. Outstanding: step 7's manual gate, the real PiG session (code calls, a definition kept
+across a PiG restart, a cancelled loop, a compaction whose printed snippets run when pasted, request
+events staying at 0 between compactions), has not been run, and neither has step 4's packed-size
+report; both are run, and their output pasted into the pull request, before the steps merge.
+Defined tools stay registered until step 8 (in the interim their results still print the old
+grammar's paging and recall pointers, which the memory tool answers with the removal notice and
+the snippet to run instead), Go detectors are step 9 and the grammar's deletion step 10. This design replaces the memory tool's query language
 (`internal/memquery`'s pipeline grammar), the agent-defined tools, `define` and the defined queries
 with one tool that runs Go code through the yaegi interpreter (`github.com/traefik/yaegi` v0.16.1).
 The interpreter and its namespace live in one long-lived child process, and `om` calls come back to
@@ -728,7 +735,7 @@ func ForgetMemory(name string) (string, error)                            // ret
 func Feedback(name, outcome, quote string) (string, error)                // helped or harmed; the quote must be in a user or assistant message
 
 func LayerForget(kind, name string) (string, error) // forgets one definition from the session model's layer; never a rule
-func LayerRollback(n int) (string, error)           // rolls the session model's layer back n changes; never a rule
+func LayerRollback(gen int) (string, error)         // the session model's layer as it was at generation gen (0: before its first change); never a rule
 func Propose(kind, name, text string) error         // always harness.ErrDefinedInLevel1
 func Define(name string) error                      // always the retirement notice (see below)
 ```
@@ -1087,6 +1094,13 @@ brings the live namespace in line as the open decision in "Lifetime" settles (op
 child when the call returns, since yaegi cannot remove a symbol, and says that unsaved variables are
 gone; option B shadows a forgotten function with a refusing stub). Forgetting a type also reports the methods and units that depend on it, which
 then fail to load and are listed until forgotten or redefined. Both are calls back to the extension.
+`forget` refuses a name the same call declares (a function, method, type, constant or variable,
+or a type whose method the call declares), in either order: the call keeps what it declares when it
+returns, so a forget of the same name would leave the store holding one thing and the live
+namespace another. Whenever the child is killed (a restart after forget, `session_start`,
+`session_shutdown`, a store change), the namespace's known types and digests are re-read from the
+store, so the next call's policy check sees the namespace that call will run in. A store I/O error
+reaches the code without the store's path; `/om:status` shows the whole error.
 
 ## Detectors
 
@@ -1263,7 +1277,7 @@ Every dependent of the grammar and its replacement:
 | Level 0 notes (`extract.note`) | parses `args["query"]` for `save`/`edit` | reads `details.writes` from the memory tool's persisted result, whatever its error flag (a `runtime`, `cancelled` or `crashed` result still carries the writes that landed; see "Cancellation is a kill"); entries written before the change still parse `args["query"]` with the frozen recognizer, and keep today's early return on a failed result |
 | Skip lists (`harness.MemoryToolNames`: extraction, minimal brief, level-1 input, thinning, evidence closures) | memory plus defined tools | `memory` plus the names of the retired defined queries (`KindTool` layer rows and legacy `definitions/*.rows`, read through `legacyquery`), minus any name a tool registered now holds; so old defined-tool calls on the branch stay plumbing, are not extracted and are not thinned |
 | `dropped-then-queried` | parses `recall <id>` and `search` stages from args, defined tools via `Substitute` | reads `details.recalled` and `details.searches`; old entries parse `args["query"]` with the frozen recognizer; old defined-tool calls expand their stored query, read-only; `CountRevision` bumped |
-| `decode-failure` | rows that did not decode, plus memory queries that did not parse | rows that did not decode only (`CountCodecDecodeFailure`), for the summary codec; compile errors of code calls are recorded on `ModelKindCode` events and shown in `/om:status`, and feed no remedy, since no remedy may change the tool by model; `CountRevision` bumped |
+| `decode-failure` | rows that did not decode, plus memory queries that did not parse | rows that did not decode only (`CountCodecDecodeFailure`), for the summary codec; compile errors of code calls are recorded on `ModelKindCode` events and shown in `/om:status` (each model's `Code calls: N (E errors, L queries of the removed language)` line, read from its usage ledger), and feed no remedy, since no remedy may change the tool by model; `CountRevision` bumped |
 | Remedies `switch-codec`, `long-spec` | change the tool's codec and description per model | `long-spec` retired: listed, never applied, like v1's remedies. `switch-codec` acts only on the compaction summary's codec (`profile.CodecValue` in `hooks/compaction_v2.go`), never on the tool. The summary layout and size switches stay. |
 | Agent-defined tools (`define`, `DefinedToolSpec`, `RegisterStored`, `RunDefined`, probation, `BeforeAgentStart` activation, `SettingTool`, `ToolDisabled`, `ModelKindDefined`, `runtime.SetDefinedTools`, `harness.DefinedQueries`) | a host tool per definition, switched per model | removed (the named deviation above); kept Go definitions replace them |
 | Curated defined queries (`KindTool` layer rows, `curated.Define`) | stored, registered, run | still loaded, never run by the extension; listed by `om.Retired()` with their stored text and, for a pure read, the equivalent snippet the model can run as its own code (see "Migration") |
@@ -1541,6 +1555,9 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
    kills the children; the legacy path answers with the removal notice and a snippet hint, running
    nothing. This is one step because any split
    would leave summaries or stubs printing pointers the tool refuses, or evidence counting nothing.
+   The defined tools' own results are the accepted interim exception: they still run the grammar
+   and print its paging and `recall` pointers until step 8 removes them, and the memory tool answers
+   such a pointer with the removal notice and the equivalent snippet.
    Checks: the tests run every snippet through the namespace child, plus the golden set; `pig
    install --validate-only --json`; a real PiG session with code calls, a definition kept across a
    PiG restart, a cancelled loop, a compaction whose printed snippets run when pasted, and request

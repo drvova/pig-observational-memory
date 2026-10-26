@@ -288,7 +288,7 @@ query the renderer prints, including after a fork.
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every
 round after that. Once per compaction, the extension shortens every tool result in the retained tail
 that the model has already answered after to its level-0 record line (tool, key argument, outcome) and
-the memory query that returns the original, never the newest round, never a fresh result, never the
+the om snippet that returns the original (``memory: om.Recall(`<entry id>`)``), never the newest round, never a fresh result, never the
 split turn's opening request, never the result of a memory tool or a tool the agent defined with it, never a
 result whose call is off the branch or whose tool call id names another result in the tail, never one
 whose thinned text would not be shorter. There is no stop and no limit to tune: every answered result is
@@ -297,7 +297,7 @@ thinned, and every original stays recallable. It does so as a deterministic per-
 defined tool names, decided at the first request after that compaction and cached in the process, so the
 bytes are stable between requests (after a restart they are decided again, and change once only if the
 defined tools changed) and the prompt cache prefix breaks only where a compaction already broke it.
-The session file keeps every original for `recall`. Smaller context means PiG compacts less often, so
+The session file keeps every original for `om.Recall`. Smaller context means PiG compacts less often, so
 thinning lowers PiG's own request count.
 
 ### Level 1: one request at compaction (on by default, `consolidate: false` turns it off)
@@ -399,20 +399,29 @@ off-path. The extension does not replace PiG's branch summary by default (option
 
 ### Memory tool
 
+Since the code tool ([code-tool.md](code-tool.md)), the memory tool runs Go code over the `om` API and
+the query language below is removed: old queries are answered with a removal notice and the
+equivalent snippet, never run. The reads keep the semantics this section records under their om
+names: `recall` is `om.Recall`, `history` `om.History`, `notes` `om.Notes`, `saved` `om.Saved`, the
+`search`, `where`, `since`/`until`, `from`/`through` and `asof` stages the options `om.Search`,
+`om.Where`, `om.Since`/`om.Until`, `om.From`/`om.Through` and `om.AsOf()`, `event` `om.ByEvent()`, and
+the next-page query a list's `Next` snippet. The defined tools still run the grammar until they are
+removed (code-tool.md, order of work step 8).
+
 - `recall` takes record ids, then branch entry ids.
 - `history` excludes the current turn (from the last user message on the branch), tags every hit
   with its role and entry id, and when the search
   finds nothing reports how many entries on the current branch match each word, matched as the
   search matches (over the whole row), instead of an empty table (after pi-vcc's "mode detection
   must never silently lose results").
-- `recall <entry id>` pages a long entry on line boundaries and names the next offset; the page size
+- ``om.Recall(`<entry id>`)`` pages a long entry on line boundaries and names the next offset; the page size
   is the existing single-recall result bound.
 - When rows exceed the result bound, the result leads with `matched N, showing M` and the query for the
   next older page, bounded before the oldest entry shown by branch position (after nodecode's
   `(:matched N :showing M)` marker and `:before` paging). Fallback rows from off the current path come in
   session-file order with their own label.
 - Matching and display run on the same filtered text extraction uses, so thinking is never matched,
-  counted or returned, by `recall <record id>`'s source entries either. Search tokens are literal
+  counted or returned, by ``om.Recall(`<record id>`)``'s source entries either. Search tokens are literal
   (no wildcards). A tool the agent defined runs its query the same way.
 - Matching stays literal and ranked newest first; pi-vcc's BM25 floor, caps and page size are tuned on
   its benchmark and are not adopted.
@@ -439,12 +448,14 @@ off-path. The extension does not replace PiG's branch summary by default (option
   v1 records leave the level-0 ones empty. No schema may declare these names; a field a schema
   stored before took one reads as `schema_<name>` in a memory tool call and keeps its name (filling
   that column) in a detector's query (`memquery.Env.ToolCall` unset).
-- **What rests on a record.** Under v2, `recall <record id>` lists `cited_by`: the reflections that
+- **What rests on a record.** Under v2, ``om.Recall(`<record id>`)`` lists `cited_by`: the reflections that
   cite it and still stand (`ledger.ActiveReflections`; a replaced one rests on nothing held), from the reverse links the fold computes (`FoldedLedger.CitedBy`, never stored), so
   retiring a record shows what loses support. A level-1 merge keeps its sources' entry ids, not
   their record ids, so it cites no record; what it replaced shows through `superseded_by`.
 
 ### Curated memory
+
+The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` and `om.Feedback` since the code tool; `saved` is `om.Saved` and `recall <name>` ``om.Recall(`<name>`)``.
 
 - A `save` confirmed by a verbatim user quote (the check `feedback` uses) is live at once in the store
   and in `saved`, and enters the always-loaded index at its next render (session start or after a
@@ -466,7 +477,7 @@ off-path. The extension does not replace PiG's branch summary by default (option
   touches a pinned memory. Nothing cools by time.
 - One validator on every write and every load: allowed fields, a body bound derived from what one
   `recall` can show, and a `pinned` flag only the user sets. The bound is the whole memory as
-  `recall <name>` shows it within one recall page (the record content bound); `pinned: true` is
+  ``om.Recall(`<name>`)`` shows it within one recall page (the record content bound); `pinned: true` is
   written by the user in the memory's file, cleared on every save and kept by every edit. A file
   the validator refuses (a v1 memory past the bound, a hand-written field) is not loaded, but
   never silently: `saved` lists it with state `refused` and its reason, and `/om:status` names
@@ -519,7 +530,7 @@ off-path. The extension does not replace PiG's branch summary by default (option
     `thin-chunk` (no chunks; what level 1 would lose is the union count).
   - The v2 remedies are `keep-head` (its notes ride in the batch of their entry's cut-point segment,
     only for an extraction that recorded something, citing only entries it read), `switch-codec` and
-    `long-spec` (profile switches). The harness never writes `switch-codec` under v2: its evidence is
+    `long-spec` (profile switches; the code tool retired `long-spec`, which is listed, never applied, since the memory tool's text is the same for every model). The harness never writes `switch-codec` under v2: its evidence is
     the codec decode failures, and under v2 nothing decodes rows the model wrote, so none is counted. `require-kind`, `split-chunk`, `prompt-line`, `protect-kind` and
     `block-link` never act (their names stay in the catalogue so v1's rules parse), and a level-1
     rule proposal is held to the same list.
@@ -534,8 +545,9 @@ off-path. The extension does not replace PiG's branch summary by default (option
 - Built (definitions proposed in level 1, and settlement; `internal/rules/proposal_v2.go`,
   `internal/hooks/definitions_v2.go`, `internal/consolidate/definitions.go`). The build and revision
   passes are deleted, and the memory tool's `harness` and `propose` writes are refused
-  (`harness.ErrDefinedInLevel1`; `harness forget` and `rollback` still apply, and `define` still
-  registers a tool, which is no definition the memory runs with). Every hold carries its engine
+  (`harness.ErrDefinedInLevel1`; `harness forget` and `rollback` still apply, now as
+  `om.LayerForget` and `om.LayerRollback(generation)`, and `define`, which registered a tool that is no
+  definition the memory runs with, is refused by the code tool's `om.Define`). Every hold carries its engine
   (`layer.Definition.Engine`, set by `layer.Store.HoldLocked` from the store's `Engine`, which
   `curated.Store.Layer` always sets to v2), and the store loads, reports and settles only v2's holds:
   a definition v1 held never reaches the level-1 prompt, never blocks an offer and is never settled.

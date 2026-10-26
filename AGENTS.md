@@ -17,7 +17,9 @@ background workers, scheduling, catch-up, moved cut and worker models are delete
 wrote (records, `om.folded` compactions with `foldThroughEntryId`, coverage markers, layer files,
 held definitions, rules, the curated store) must keep loading. Check: `cd extensions/observational-memory && gofmt -l . &&
 go vet ./... && go test -race ./...` (CI runs the same `go` job); registrations: `pig install
-./extensions/observational-memory --validate-only --json`. Building the PiG checkout itself needs
+./extensions/observational-memory --validate-only --json`. The code tool's `internal/om/docs_gen.go` and
+`internal/sandbox/symbols` are generated (`go generate ./internal/om ./internal/sandbox`, run as tests with
+`-write`, since PiG refuses a main package); their tests fail on a diff or an undocumented om export. Building the PiG checkout itself needs
 `GOFLAGS` unset (it is a Go workspace).
 
 ## README animations
@@ -31,23 +33,29 @@ The Clayzo agent skills live in `.agents/skills/` (linked from `.claude/skills/`
 
 ## The memory tool, curated memory and the harness
 
-The extension registers one tool, `memory` (`internal/memquery`: one query string, parsed and interpreted over the
-folded ledger, the branch's raw text and the curated store; spec in `docs/memory-interface.md` section 5, v2's
-changes in `docs/memory-v2.md`). Slash commands stay read-only views (`/om:status`, `/om:view`). A memory tool or
-defined tool call runs with `memquery.Env.ToolCall` set (history leaves out the current turn, paging, off-path
-fallback); a detector's query (`rules.DetectorDef.Count`) leaves it unset, so do not make it unconditional.
+The extension registers one tool, `memory`, which runs Go code (`docs/code-tool.md`; surface in `internal/omtool`,
+fixed text identical for every model, never re-registered): `harness.Manager.RunMemory` checks it with
+`internal/codepolicy`, runs it in the namespace child (`internal/sandbox`, one per process, killed at
+`session_start`/`session_shutdown`), answers `om` calls with `internal/omhost` over a branch snapshot, keeps compiled
+declarations in `internal/codestore` (provenance via `internal/provenance`), and records one `ModelKindCode` event
+from `omtool.Details`, which level 0 (`writes`) and `dropped-then-queried` (`recalled`, `searches`) read back. Old
+query text is never run: `internal/legacyquery` (frozen) answers it with a snippet hint and still reads old calls,
+stored definitions and `ledger.LegacyTablesRecallParagraph` summaries. Every printed pointer is an om snippet from
+`om.FormatRead` (no comma, quote or `|`, so it survives every codec); tests run them through a real child with
+`internal/snippettest`. A child kill goes through `harness.Namespace.kill`, which re-reads the store's types and digests for the next call's policy check, and `forget` refuses a name its own call declares. The root `lifecycle_test.go` drives events and tool calls through the registered extension over a pipe with `PIG_HOME` set to a temp dir (a root test that reaches the real host must never write `~/.pig`). Defined tools (`memquery.Run`) stay until step 8. Slash commands stay read-only views
+(`/om:status`, `/om:view`); `/om:status` reads the code store and the supervisor's record, never starting a child.
 `internal/curated` is the agent-written memory (store under PiG's config root, defined queries, ranked index, staging
-and `curated.Check` on every write and load, forget retires); writes go through `curated.Call.Run`, and `define`
-through the `memquery.Definer` interface. `internal/harness` is the per-model harness: profiles are a pure function of
+and `curated.Check` on every write and load, forget retires); writes go through `curated.Call.Run`.
+`internal/harness` is the per-model harness: profiles are a pure function of
 `<store>/models/<model>.jsonl` (`harness.Compute`, `MinEvidence`) over the events tagged `engine: v2` only, one unit
 per compaction; it owns the memory tool's execution and the agent-defined tools, which it registers and
 (de)activates only through `host.Tools`; it never touches the `memory` tool's activation or a tool it did not
-register. The memory tool's `harness` and `propose` writes are refused (`harness.ErrDefinedInLevel1`); `harness
-forget` and `rollback` act on the session model's layer and never touch rules (`rules.IsRule`). Definitions and
+register. `om.Propose` is refused (`omhost.ErrDefinedInLevel1`); `om.LayerForget` and `om.LayerRollback` act on the session
+model's layer and never touch rules (`rules.IsRule`). Definitions and
 rules are proposed only inside the level-1 request (`hooks/definitions_v2.go`, `rules.CheckV2Definition`), pass
 `harness.CheckModelDefinition`, are held and settled only by `rules.SettleV2` on later compactions' evidence.
-`internal/rules` decides only rules tagged `engine: v2` (v2 detectors, code remedies `keep-head`, `switch-codec`,
-`long-spec`); v1's rules and remedy names still parse (`rules.Check`, `ProtectKindMaxFullness`) and are listed,
+`internal/rules` decides only rules tagged `engine: v2` (v2 detectors, code remedies `keep-head`, `switch-codec`;
+`long-spec` is retired and listed, never applied); v1's rules and remedy names still parse (`rules.Check`, `ProtectKindMaxFullness`) and are listed,
 never applied. `internal/kernel` is what no definition may touch (`kernel.Owns`, `Check`, the floor,
 `kernel-consolidate`; v1's retired prompt ids stay owned); `internal/layer` stores the model-built definitions and
 re-runs `kernel.Check` on every load; `curated.Store.Layer` always applies only v2's holds, so a definition v1
@@ -82,7 +90,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - Pi context pressure and compactable history are separate conditions: `Host.Compact` can fail before `session_before_compact` when Pi finds no removable range. The only trigger (`hooks.maybeTriggerCompactionV2`) runs with PiG's auto-compaction off, at an idle `agent_settled`, when reported context > window - reserveTokens (`config.PiCompactionTokens.ReserveTokensFor`, read under trust), never with unknown usage; after "Nothing to compact" it is suspended until the branch tip changes (`runtime.CompactionBackoff.TipID`), since `firstKeptEntryId` is a retention boundary and retained source can stay above the threshold.
 - `session_before_compact` (`hooks/compaction_v2.go`) always returns a compaction on PiG's exact cut, never nil or cancel; a panic anywhere in the handler (`extension.go` included) is recovered into `hooks.RecoveredCompactionV2`, the brief is bounded by the removed source tokens, and only the request's own context cancels it (`sdkhost.Host.RequestContext`, never `ctx.Signal()`).
 - Compaction must never discard source no extraction read: level 0 (`internal/extract`, pure; `hooks/extract_v2.go`) runs at `turn_end` and, for the unextracted cut range, inside the hook before rendering. Records go in one `om.observations.recorded` batch per cut-point segment (a cut-point entry and its tool results), so a cut folds exactly the batches whose entries it removes, plus an `om.extracted` marker when the last batch stops short (`ledger.ExtractionProgressIndex`); appends are deduplicated against a fresh `GetBranch()` under `extractMu`. Coverage markers are positional claims: code that appends one must have read every source entry after the previous one.
-- The summary is `selection.Render` from the ledger, never summary-of-summary: ordered classes, no weights, every line ending with its anchor (`ledger.ObservationAnchor`), and everything left out printed as a memquery query that must list it (tests run it through `memquery.Run`); its drops are `extract.Drops` over what it shows. `details` carry the full projection.
+- The summary is `selection.Render` from the ledger, never summary-of-summary: ordered classes, no weights, every line ending with its anchor (`ledger.ObservationAnchor`), and everything left out printed as an om snippet that must list it (tests run it through `internal/snippettest`); its drops are `extract.Drops` over what it shows. `details` carry the full projection.
 - Thinning (`internal/thin`, the `context` event in `hooks/thin_v2.go`) edits messages in place and returns nil (a replaced list makes PiG collapse its system messages); its plan reads the branch only up to the latest compaction and is cached per compaction (`Runtime.CachedThinPlan`), so request bytes change only at a compaction.
 - Level 1 (`hooks/consolidate_v2.go`, validation in `internal/consolidate`, fixed rules in `kernel.TextConsolidateRules`, `kernel-consolidate` first in the prompt) is one `agents.RunSingleRequest` on the session model, skipped with `consolidate: false`, passive, overflow, the extension's own compaction (`rt.CompactInFlight()`), a cancelled request context, or when it does not fit the window (`config.PiGContextSafetyTokens`). It accepts only ids the prompt showed, drops a record only when the one standing for it carries its specifics as whole items (`consolidate.dropsSpecifics`, never `ledger.MissingSpecifics`' substring match), appends nothing on any failure, and records its result in `details.consolidation`.
 - One status rule: `ledger.MaySupersede` (a plan or condition never supersedes a fact; a retraction withdraws only a plan or condition) governs level 0's corrections and links and level 1's supersedes and confirms; level 1 never merges records with different statuses and settles only the `possibly_updates` pairs its prompt listed (`consolidate.Input.Links`). Level-1 records name what they replace (`Observation.Replaces`, legacy via `ledger/replace.go`), folded through `FoldedLedger.ReplacedBy` to `ledger.Standing`; only the point-in-time view (`asof`) uses `FoldLedgerUnresolved` + `ResolveFolded`, and plain `until`/`through` must keep filtering current memory because the summary's printed queries rely on it.
