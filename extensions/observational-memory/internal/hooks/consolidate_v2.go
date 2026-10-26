@@ -15,6 +15,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
@@ -46,6 +47,9 @@ type level1Result struct {
 	// (level1Counts, and rules.CountLevel1Failed for output nothing was recorded from); nil
 	// when no response came back.
 	counts map[string]int
+	// pending are the Go detectors the response defined, smoke-run in the compaction's
+	// detector pass and held only on a count (holdDefinitionsV2).
+	pending []layer.Definition
 }
 
 // consolidateV2 is memory v2's level 1 (docs/memory-v2.md, "Level 1: one request at
@@ -178,7 +182,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		"omittedActive":      prompt.OmittedActive,
 		"reflections":        len(prompt.Reflections),
 		"omittedReflections": prompt.OmittedReflections,
-		"memoryQueries":      len(prompt.MemoryQueries),
+		"memorySnippets":     len(prompt.MemorySnippets),
 		"subjectsShown":      prompt.SubjectsShown,
 		"links":              len(prompt.Links),
 		"omittedLinks":       prompt.OmittedLinks,
@@ -234,7 +238,10 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		// The offer was shown and answered: what it defined is held and the offer marked, so the
 		// next one waits for changed evidence, whatever else of the output stands.
 		out.report.HarnessOffered = true
-		out.report.Defined, _ = holdDefinitionsV2(ctx, request, h, store, model, entries, result, evidence)
+		out.report.Defined, _, out.pending = holdDefinitionsV2(ctx, request, h, store, model, entries, result, evidence)
+		for _, d := range out.pending {
+			out.report.Pending = append(out.report.Pending, d.Kind+"/"+d.Name)
+		}
 		logData["defined"] = out.report.Defined
 	}
 	if result.Failure != "" {

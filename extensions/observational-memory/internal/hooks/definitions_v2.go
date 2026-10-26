@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/codepolicy"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/debuglog"
@@ -70,7 +72,24 @@ func harnessEvidenceText(evidence rules.Evidence, active declare.Active) string 
 	}
 	fmt.Fprintf(&b, "You may define: %s (instructions only %q, added after the kernel's rules and the seed, which they extend and never replace); rules: a detector of %s with a remedy of %s.",
 		strings.Join(rules.V2DefinitionKinds, ", "), agents.InstructionsConsolidation, strings.Join(rules.V2Detectors, ", "), strings.Join(rules.V2Remedies, ", "))
+	b.WriteString("\n" + detectorFormat)
 	return b.String()
+}
+
+// detectorFormat tells level 1 what a detector definition is (docs/code-tool.md, "A detector is
+// Go"): fixed text, the same for every model.
+var detectorFormat = "A detector's text is one " + rules.DetectorTable + " row in the rows codec with a code column and a description, for example " +
+	strconv.Quote(rules.CodeDetectorText("func Count() int { return om.Notes(om.Kind(`plan`)).Matched }", "plans recorded")) +
+	": Go declarations with exactly one func " + codepolicy.DetectorEntry + "() int, reading only " + strings.Join(detectorReadNames(), ", ") +
+	" with their options, and no writes. It runs after the compaction, in the background, over what the compaction removed, and is held only when that first run returns a count."
+
+// detectorReadNames are the reads a detector calls.
+func detectorReadNames() []string {
+	out := []string{}
+	for _, n := range []string{"Notes", "History", "Subjects", "NoteByID"} {
+		out = append(out, "om."+n)
+	}
+	return out
 }
 
 // holdDefinitionsV2 holds what one level-1 response defined for model, once validation found it
@@ -81,9 +100,11 @@ func harnessEvidenceText(evidence rules.Evidence, active declare.Active) string 
 // instructions only extend the seed), is refused when identical to its
 // seed, and passes harness.CheckModelDefinition (the layer's checks and rules.CheckFromModel
 // against the branch entries); each rule goes through rules.Propose, which holds it for v2.
-// Nothing is held or marked once the request context is done. The user is told of each hold and
-// refusal. It returns how many were held and refused.
-func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.Store, model string, entries []ledger.Entry, result consolidate.Result, evidence rules.Evidence) (held, refused int) {
+// A Go detector is not held here: it is returned as pending, smoke-run first in the compaction's
+// detector pass, and held only when that run returns a count. Nothing is held or marked once the
+// request context is done. The user is told of each hold, pending detector and refusal. It
+// returns how many were held and refused, and the pending detectors.
+func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.Store, model string, entries []ledger.Entry, result consolidate.Result, evidence rules.Evidence) (held, refused int, pending []layer.Definition) {
 	defs := []layer.Definition{}
 	refuse := func(what string, err error) {
 		refused++
@@ -105,10 +126,16 @@ func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.
 			refuse(what, err)
 			continue
 		}
+		if isCodeDetector(d) {
+			// A Go detector is held only once its smoke run over this compaction's own pass
+			// returns a count, in the background after the compaction (startDetectorPassV2).
+			pending = append(pending, d)
+			continue
+		}
 		defs = append(defs, d)
 	}
 	if request.Err() != nil {
-		return 0, refused
+		return 0, refused, nil
 	}
 	heldDefs, storeRefused, _, err := store.Layer().HoldPass(model, defs, layer.Generation{Op: layer.OpPropose, Evidence: evidence.Digest(), Events: evidence.Events, Session: h.SessionID(), Reason: "level 1"})
 	if err != nil {
@@ -135,8 +162,21 @@ func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.
 		held++
 		notifyUI(h, fmt.Sprintf("Observational memory: %s proposed rule %s in level 1; held until a later compaction proves it, then judged by %s", model, r.Describe(), r.Detector), "info")
 	}
-	debuglog.Log(ctx, "harness.v2.proposal", map[string]any{"model": model, "held": held, "refused": refused})
-	return held, refused
+	for _, d := range pending {
+		notifyUI(h, fmt.Sprintf("Observational memory: %s defined detector %s in level 1; its smoke run over this compaction follows in the background, and only a count holds it", model, d.Name), "info")
+	}
+	debuglog.Log(ctx, "harness.v2.proposal", map[string]any{"model": model, "held": held, "refused": refused, "pending": len(pending)})
+	return held, refused, pending
+}
+
+// isCodeDetector reports whether d is a Go detector (its code column), which is smoke-run before
+// it is held.
+func isCodeDetector(d layer.Definition) bool {
+	if d.Kind != layer.KindDetector {
+		return false
+	}
+	def, err := rules.ParseDetector(d.Name, d.Text)
+	return err == nil && def.IsCode()
 }
 
 // sameAsSeed reports whether d's text (an instructions body after its mode line) is its seed's,

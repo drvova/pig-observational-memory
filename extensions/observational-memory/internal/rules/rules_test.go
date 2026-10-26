@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -250,38 +251,48 @@ func TestDroppedThenQueried(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "aaaaaaaaaaaa" {
 		t.Fatalf("defined tool call asked for %+v", got)
 	}
+	// A code call is read from its result's details: the ids it recalled and the words it
+	// searched, never its code.
+	codeCall := func(id string) map[string]any {
+		return map[string]any{"type": "toolCall", "id": id, "name": "memory", "arguments": map[string]any{"code": "om.Recall(`aaaaaaaaaaaa`) // clint"}}
+	}
+	codeResult := func(entryID, callID string, d omtool.Details) ledger.Entry {
+		return testfix.MessageEntry(entryID, map[string]any{"role": "toolResult", "toolCallId": callID, "toolName": "memory", "content": []any{map[string]any{"type": "text", "text": "x"}}, "details": testfix.ToJSONValue(d)})
+	}
+	viaCode := append(append([]ledger.Entry{}, branch[:3]...),
+		assistant("a3", "Looking.", codeCall("k1"), codeCall("k2"), codeCall("k3")),
+		codeResult("r1", "k1", omtool.Details{Code: "x", Outcome: omtool.OutcomeOK, Recalled: []string{"aaaaaaaaaaaa"}}),
+		codeResult("r2", "k2", omtool.Details{Code: "x", Outcome: omtool.OutcomeOK, Searches: []string{"Starter CLINT"}}),
+		codeResult("r3", "k3", omtool.Details{Code: "x", Outcome: omtool.OutcomeOK, Searches: []string{"oven"}}),
+	)
+	got = DroppedThenQueried(viaCode, viaCode[3:4], nil)
+	if len(got) != 2 || got[0].ID != "aaaaaaaaaaaa" || got[1].ID != "aaaaaaaaaaaa" {
+		t.Fatalf("code calls asked for %+v", got)
+	}
 }
 
-// Memory queries that did not parse are syntax errors no codec can fix: when they are the only
-// decode failures, the harness skips switch-codec and writes long-spec; codec failures write
-// switch-codec, judged on the codec failures alone.
-func TestSyntaxOnlyDecodeFailuresNeverSwitchCodec(t *testing.T) {
+// A query-language call that did not parse counted toward decode-failure before the code tool;
+// it counts nothing now (decode-failure is codec failures only, at revision 2), so it writes no
+// rule, and long-spec, retired, is never written.
+func TestQuerySyntaxErrorsCountNothing(t *testing.T) {
 	store := newStore(t)
 	for i := 0; i < MinEvidence; i++ {
 		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindMemory, Outcome: curated.OutcomeError, Syntax: true, Engine: curated.EngineV2})
+		_ = store.RecordModel(curated.ModelEvent{Model: "p/m", Kind: curated.ModelKindCode, Outcome: curated.OutcomeError, Engine: curated.EngineV2})
 		v2Compaction(t, store, 100, nil, nil)
 	}
 	events, _ := store.ModelEvents("p/m")
-	if last := events[len(events)-1]; last.Counts[DetectDecodeFailure] != 1 || last.Counts[CountCodecDecodeFailure] != 0 {
-		t.Fatalf("pass counts %+v", last.Counts)
+	if last := events[len(events)-1]; last.Counts[DetectDecodeFailure] != 0 || last.Revisions[DetectDecodeFailure] != 2 {
+		t.Fatalf("pass %+v", last)
 	}
-	all, _ := List(store)
-	if len(all) != 1 || all[0].Remedy != RemedyLongSpec || all[0].Detector != DetectDecodeFailure {
+	if all, _ := List(store); len(all) != 0 {
 		t.Fatalf("rules %+v", all)
 	}
-
-	mixed := map[string]int{DetectDecodeFailure: 2, CountCodecDecodeFailure: 1}
-	syntax := map[string]int{DetectDecodeFailure: 1}
-	changed, _ := evaluateSeed("p/m", []curated.ModelEvent{pass(100, syntax), pass(100, mixed), pass(100, syntax)}, nil, t0)
-	if len(changed) != 1 || changed[0].Remedy != RemedySwitchCodec || changed[0].BaselineEvents != 1 {
-		t.Fatalf("changed %+v", changed)
-	}
-	// Probation reads the codec failures: syntax errors that did not fall do not retire it.
-	r := changed[0]
-	r.Start = 3
-	after := []curated.ModelEvent{pass(100, syntax), pass(100, mixed), pass(100, syntax), pass(100, syntax), pass(100, syntax), pass(100, syntax)}
-	if decided, _ := evaluateSeed("p/m", after, []Rule{r}, t0); len(decided) == 0 || decided[0].ID != r.ID || decided[0].State != StateEstablished {
-		t.Fatalf("decided %+v", decided)
+	// A pass counted by revision 1 is no evidence for decode-failure.
+	old := pass(100, map[string]int{DetectDecodeFailure: 1, CountCodecDecodeFailure: 1})
+	old.Revisions = map[string]int{}
+	if changed, _ := evaluateSeed("p/m", []curated.ModelEvent{old, old, old}, nil, t0); len(changed) != 0 {
+		t.Fatalf("revision 1 counts wrote %+v", changed)
 	}
 }
 
@@ -477,17 +488,11 @@ func TestProbationRetiresWhenRateHolds(t *testing.T) {
 	if more, _ := evaluateSeed("p/m", events, []Rule{retired}, t0); len(more) != 0 {
 		t.Fatalf("rewrote on old evidence: %+v", more)
 	}
+	// The next remedy in the catalogue, long-spec, is retired: with every v2 remedy tried,
+	// nothing more is written.
 	events = append(events, pass(100, codec))
-	more, _ := evaluateSeed("p/m", events, []Rule{retired}, t0)
-	if len(more) != 1 || more[0].Remedy != RemedyLongSpec {
-		t.Fatalf("next remedy %+v", more)
-	}
-	// With every remedy tried, nothing more is written.
-	tried := more[0]
-	tried.State, tried.End = StateRetired, len(events)
-	events = append(events, pass(100, codec), pass(100, codec), pass(100, codec))
-	if last, _ := evaluateSeed("p/m", events, []Rule{retired, tried}, t0); len(last) != 0 {
-		t.Fatalf("wrote past the catalogue: %+v", last)
+	if more, _ := evaluateSeed("p/m", events, []Rule{retired}, t0); len(more) != 0 {
+		t.Fatalf("wrote past the catalogue: %+v", more)
 	}
 }
 

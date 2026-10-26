@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
@@ -60,7 +60,7 @@ func result(id, callID, name, text string, isError bool) session.Entry {
 }
 
 func run(entries []session.Entry, mutate ...func(*Input)) Result {
-	in := Input{Entries: entries, Start: 0, End: len(entries), SkipTools: []string{memquery.ToolName, "bake-count"}, Ledger: ledger.FoldLedger(entries, ""), Cwd: cwd}
+	in := Input{Entries: entries, Start: 0, End: len(entries), SkipTools: []string{omtool.ToolName, "bake-count"}, Ledger: ledger.FoldLedger(entries, ""), Cwd: cwd}
 	for _, m := range mutate {
 		m(&in)
 	}
@@ -331,17 +331,17 @@ func TestCommits(t *testing.T) {
 // Memory tool notes are records the model wrote; its reads, failed writes and the defined
 // tools are not records, and the words before a memory call stay a reply.
 func TestMemoryToolNotes(t *testing.T) {
-	memory := func(id, query string) call { return call{id, memquery.ToolName, map[string]any{"query": query}} }
+	memory := func(id, query string) call { return call{id, omtool.ToolName, map[string]any{"query": query}} }
 	entries := []session.Entry{
 		user("u1", "Remember how we deploy"),
 		assistant("a1", "Saving the rule that Fly deploys go to Frankfurt first.", memory("c1", `save type=project name=deploy-order description="Deploys go to the Frankfurt region first, then Virginia."`), memory("c2", `notes | search "deploy"`)),
-		result("t1", "c1", memquery.ToolName, "saved deploy-order", false),
-		result("t2", "c2", memquery.ToolName, "notes: Deploys to Frankfurt", false),
+		result("t1", "c1", omtool.ToolName, "saved deploy-order", false),
+		result("t2", "c2", omtool.ToolName, "notes: Deploys to Frankfurt", false),
 		assistant("a2", memory("c3", `edit name=deploy-order description="Deploys go to Frankfurt, then Virginia, then Tokyo."`), call{"c4", "bake-count", map[string]any{"input": "x"}}),
-		result("t3", "c3", memquery.ToolName, "edited", false),
+		result("t3", "c3", omtool.ToolName, "edited", false),
 		result("t4", "c4", "bake-count", "42 bakes", false),
 		assistant("a3", memory("c5", `save type=project name=bad description="Broken Note 7"`)),
-		result("t5", "c5", memquery.ToolName, "error: no store", true),
+		result("t5", "c5", omtool.ToolName, "error: no store", true),
 	}
 	r := run(entries)
 	first := find(t, r, "note", "Deploys go to the Frankfurt region first, then Virginia.")
@@ -359,6 +359,50 @@ func TestMemoryToolNotes(t *testing.T) {
 	for _, o := range r.Observations() {
 		if o.Kind == ledger.KindAttempt {
 			t.Fatalf("memory plumbing became an attempt: %q", o.Content)
+		}
+	}
+}
+
+// A code call's notes come from its result's details (omtool.Details' writes), whatever its
+// error flag: a save that landed before a runtime panic or a cancel is still a note, and a call
+// whose writes are only reads, or a layer write, is no note.
+func TestCodeCallNotes(t *testing.T) {
+	code := func(id, src string) call { return call{id, omtool.ToolName, map[string]any{"code": src}} }
+	codeResult := func(id, callID, text string, isError bool, d omtool.Details) session.Entry {
+		e := result(id, callID, omtool.ToolName, text, isError)
+		e.Message["details"] = tf.ToJSONValue(d)
+		return e
+	}
+	save := func(name, description string) omtool.Write {
+		return omtool.Write{Op: omtool.WriteSave, Name: name, Type: "project", Description: description}
+	}
+	entries := []session.Entry{
+		user("u1", "Remember how we deploy"),
+		assistant("a1", "Saving the deploy order.", code("c1", `om.Save("deploy-order", "project", "Deploys go to Frankfurt first.")`)),
+		codeResult("t1", "c1", "Saved memory deploy-order", false, omtool.Details{Code: "x", Outcome: omtool.OutcomeOK, Writes: []omtool.Write{save("deploy-order", "Deploys go to Frankfurt first.")}}),
+		assistant("a2", code("c2", "...")),
+		codeResult("t2", "c2", "Error: panic", true, omtool.Details{Code: "x", Outcome: omtool.OutcomeRuntime, Writes: []omtool.Write{save("panic-note", "Saved before a panic.")}}),
+		assistant("a3", code("c3", "...")),
+		codeResult("t3", "c3", "cancelled", true, omtool.Details{Code: "x", Outcome: omtool.OutcomeCancelled, Writes: []omtool.Write{save("cancel-note", "Saved before a cancel.")}}),
+		assistant("a4", code("c4", "...")),
+		codeResult("t4", "c4", "notes", false, omtool.Details{Code: "x", Outcome: omtool.OutcomeOK, Hits: []string{"aaaaaaaaaaaa"}, Writes: []omtool.Write{{Op: "layer-rollback", Name: "1"}}}),
+		assistant("a5", code("c5", "...")),
+		codeResult("t5", "c5", "edited", false, omtool.Details{Code: "x", Outcome: omtool.OutcomeOK, Writes: []omtool.Write{{Op: omtool.WriteEdit, Name: "deploy-order", Description: "Deploys go to Frankfurt, then Tokyo."}}}),
+	}
+	r := run(entries)
+	first := find(t, r, "note", "Deploys go to Frankfurt first.")
+	if first.Origin != ledger.OriginModel || first.Target != "deploy-order" {
+		t.Fatalf("note %+v", first)
+	}
+	find(t, r, "note", "Saved before a panic.")
+	find(t, r, "note", "Saved before a cancel.")
+	edited := find(t, r, "note", "then Tokyo.")
+	if len(edited.Supersedes) != 1 || edited.Supersedes[0] != first.ID {
+		t.Fatalf("edit %+v", edited)
+	}
+	for _, o := range r.Observations() {
+		if o.Kind == ledger.KindNote && o.Target == "1" {
+			t.Fatalf("a layer write became a note: %+v", o)
 		}
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/provenance"
 )
 
 // Transition is one change Evaluate made: a rule added, established, retired, or promoted to a
@@ -37,8 +37,12 @@ func (t Transition) Message() string {
 // countRevisions are the revisions of the pass counts whose meaning changed after the usage
 // ledger had recorded them. uncited-assistant-specifics is at 2: from then on it counts only the
 // specifics a reply added to its exchange (UncitedAssistantSpecifics), where revision 1 counted
-// every uncited reply with specifics, echoes included.
-var countRevisions = map[string]int{DetectUncitedAssistantSpecifics: 2}
+// every uncited reply with specifics, echoes included. dropped-then-queried and decode-failure
+// are at 2 since the memory tool runs code (docs/code-tool.md): the first counts from a code
+// call's details (recalled ids and searched words) where revision 1 parsed query arguments,
+// and the second counts codec decode failures only where revision 1 added memory queries
+// that did not parse, so no window mixes counts from query calls with counts from code calls.
+var countRevisions = map[string]int{DetectUncitedAssistantSpecifics: 2, DetectDroppedThenQueried: 2, DetectDecodeFailure: 2}
 
 // CountRevision is the revision of what count key counts now: 1 for a count whose meaning never
 // changed.
@@ -425,55 +429,9 @@ func IsRule(kind, name string) bool {
 }
 
 // copiedFromOutput reports whether text, whitespace collapsed and case ignored, appears in a
-// tool result, a custom message or a summary on the branch: output the model read, not words
-// it wrote.
+// tool result, a custom message or a summary on the branch (provenance.CopiedFromOutput).
 func copiedFromOutput(branch []ledger.Entry, text string) bool {
-	return containedIn(outputTexts(branch), normalizeText(text))
-}
-
-// normalizeText is text with whitespace collapsed and case ignored, as the provenance checks
-// compare it.
-func normalizeText(text string) string {
-	return strings.ToLower(strings.Join(strings.Fields(text), " "))
-}
-
-// outputTexts are the texts on branch the model read rather than wrote (tool results, custom
-// messages, summaries, `!command` runs), each normalized (normalizeText).
-func outputTexts(branch []ledger.Entry) []string {
-	out := []string{}
-	for _, entry := range branch {
-		var haystack string
-		switch {
-		case entry.Type == "message" && entry.Message != nil && entry.Message["role"] == "bashExecution":
-			// A `!command` run keeps its command and output in their own fields, not content.
-			haystack = serialize.BashExecutionText(entry.Message)
-		case entry.Type == "message" && entry.Message != nil && entry.Message["role"] != "user" && entry.Message["role"] != "assistant":
-			haystack = blockText(entry.Message["content"])
-		case entry.Type == "custom_message":
-			haystack = blockText(entry.Content)
-		case entry.Type == "branch_summary" || entry.Type == "compaction":
-			haystack, _ = entry.Summary.(string)
-		default:
-			continue
-		}
-		if haystack = normalizeText(haystack); haystack != "" {
-			out = append(out, haystack)
-		}
-	}
-	return out
-}
-
-// containedIn reports whether needle (normalized) appears in any of haystacks.
-func containedIn(haystacks []string, needle string) bool {
-	if needle == "" {
-		return false
-	}
-	for _, h := range haystacks {
-		if strings.Contains(h, needle) {
-			return true
-		}
-	}
-	return false
+	return provenance.CopiedFromOutput(branch, text)
 }
 
 // For reads the rules that apply to model in store, from its effective layer: the written and
@@ -487,6 +445,35 @@ func For(store curated.Store, model string) Active {
 		return Active{}
 	}
 	return ActiveFor(ofV2(rulesOf(h.List(layer.KindRemedy))), model)
+}
+
+// DetectorCountsLine is model's detector counts over its last compactions (at most
+// MinEvidence), the kernel's detectors and the level-1 counts with a nonzero count; false when
+// the model has no compaction pass.
+func DetectorCountsLine(store curated.Store, model string) (string, bool) {
+	events, err := store.ModelEvents(model)
+	if err != nil {
+		return "", false
+	}
+	passes := passesFrom(events, 0)
+	if len(passes) == 0 {
+		return "", false
+	}
+	if len(passes) > MinEvidence {
+		passes = passes[len(passes)-MinEvidence:]
+	}
+	parts := []string{}
+	for _, d := range append(append([]string{}, V2Detectors...), Level1Counts...) {
+		if count, _ := window(events, passes, d); count > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", d, count))
+		}
+	}
+	_, tokens := window(events, passes, "")
+	counts := "none"
+	if len(parts) > 0 {
+		counts = strings.Join(parts, ", ")
+	}
+	return fmt.Sprintf("Detector counts for %s over its last %d compactions (%d tokens): %s", model, len(passes), tokens, counts), true
 }
 
 // StatusLines is the rules section of /om:status: every active memory v2 rule (ofV2) with its
@@ -522,29 +509,9 @@ func StatusLines(store curated.Store, models []string) []string {
 	out := []string{header}
 	out = append(out, lines...)
 	for _, model := range models {
-		events, err := store.ModelEvents(model)
-		if err != nil {
-			continue
+		if line, ok := DetectorCountsLine(store, model); ok {
+			out = append(out, "  "+line)
 		}
-		passes := passesFrom(events, 0)
-		if len(passes) == 0 {
-			continue
-		}
-		if len(passes) > MinEvidence {
-			passes = passes[len(passes)-MinEvidence:]
-		}
-		parts := []string{}
-		for _, d := range append(append([]string{}, V2Detectors...), Level1Counts...) {
-			if count, _ := window(events, passes, d); count > 0 {
-				parts = append(parts, fmt.Sprintf("%s %d", d, count))
-			}
-		}
-		_, tokens := window(events, passes, "")
-		counts := "none"
-		if len(parts) > 0 {
-			counts = strings.Join(parts, ", ")
-		}
-		out = append(out, fmt.Sprintf("  Detector counts for %s over its last %d compactions (%d tokens): %s", model, len(passes), tokens, counts))
 	}
 	return out
 }

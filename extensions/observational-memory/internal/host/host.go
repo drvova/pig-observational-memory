@@ -210,7 +210,7 @@ type Host interface {
 
 // ConfigHomer is a host that knows PiG's config root, where the curated store and the
 // per-model usage ledgers live. A host without one runs with no store: curated memory, the
-// usage ledgers and defined tools are then off and every model gets the default profile.
+// usage ledgers and the retired defined queries are then off and every model gets the default profile.
 type ConfigHomer interface {
 	// ConfigHome is PiG's config root, "" when it cannot be found.
 	ConfigHome() string

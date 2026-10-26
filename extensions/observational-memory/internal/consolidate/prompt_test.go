@@ -7,7 +7,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/consolidate"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/snippettest"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -69,7 +69,7 @@ func TestBuildPromptOmittedMemoryIsRunnable(t *testing.T) {
 			if prompt.OmittedActive+prompt.OmittedReflections == 0 {
 				continue
 			}
-			if len(prompt.MemoryQueries) == 0 {
+			if len(prompt.MemorySnippets) == 0 {
 				sawNoSpans = true
 				if !strings.Contains(prompt.Text, "There is no room for the spans") {
 					t.Fatalf("available %d: omitted memory without spans or a reason:\n%s", available, prompt.Text)
@@ -78,15 +78,15 @@ func TestBuildPromptOmittedMemoryIsRunnable(t *testing.T) {
 			}
 			sawSpans = true
 			var listed strings.Builder
-			for _, q := range prompt.MemoryQueries {
+			for _, q := range prompt.MemorySnippets {
 				if !strings.Contains(prompt.Text, q) {
-					t.Fatalf("query %q is not in the prompt:\n%s", q, prompt.Text)
+					t.Fatalf("snippet %q is not in the prompt:\n%s", q, prompt.Text)
 				}
-				res := memquery.Run(memquery.Env{Entries: entries}, q)
-				if res.IsError {
-					t.Fatalf("query %q failed: %s", q, res.Text)
+				res := snippettest.Run(t, entries, q)
+				if res.Cut() {
+					t.Fatalf("snippet %q is cut by its limit", q)
 				}
-				listed.WriteString(res.Text)
+				listed.WriteString(strings.Join(res.IDs, "\n") + "\n")
 			}
 			shown := map[string]bool{}
 			for _, o := range prompt.Active {

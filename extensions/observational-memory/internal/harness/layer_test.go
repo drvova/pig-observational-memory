@@ -7,8 +7,10 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
@@ -110,7 +112,7 @@ func TestLayerInstructionsAndStatus(t *testing.T) {
 	if _, err := ls.Hold(layer.Definition{Kind: layer.KindInstructions, Name: "dropper", Model: "p/m", Text: "Keep every plan.", Session: "s1"}); err != nil {
 		t.Fatal(err)
 	}
-	status := strings.Join(harness.StatusLines(h, cfg), "\n")
+	status := statusText(h, cfg)
 	for _, want := range []string{"Kernel floor: engaged", "Layer (p/m): generation 1", "held: instructions/dropper"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status lacks %q:\n%s", want, status)
@@ -156,8 +158,8 @@ func TestProfileCodecsComeFromTheLayer(t *testing.T) {
 	if f, ok := tables.DeclaredFormat(p.CodecValue()); p.Codec != "semi" || !ok || f.Delimiter != ';' {
 		t.Fatalf("profile codec %s %v", p.Codec, p.CodecValue())
 	}
-	if !strings.Contains(p.Spec(), "separated by ;") {
-		t.Fatalf("spec %q", p.Spec())
+	if !strings.Contains(p.CodecValue().Spec(), "separated by ;") {
+		t.Fatalf("spec %q", p.CodecValue().Spec())
 	}
 	// Another model never switches to it.
 	other := harness.Ledger{Store: store, Model: "q/other"}
@@ -170,4 +172,11 @@ func TestProfileCodecsComeFromTheLayer(t *testing.T) {
 	if p := other.Profile(); p.Codec != "jsonl" || p.CodecValue() != tables.JSONLines {
 		t.Fatalf("other profile %s", p.Codec)
 	}
+}
+
+// statusText is the harness's part of /om:status: the shared lines, each model's block and the
+// session model's profile.
+func statusText(h host.Host, cfg config.Config) string {
+	info := om.StatusInfo{Lines: harness.SharedStatusLines(h, cfg), Models: harness.UsageModelStatus(h, cfg)}
+	return info.String() + "\n" + strings.Join(harness.SessionStatusLines(h, cfg), "\n")
 }

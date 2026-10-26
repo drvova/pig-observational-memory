@@ -2,16 +2,35 @@ package selection
 
 import (
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om/omwire"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 )
 
 // OffPathLabel follows an entry id that is not on the current branch (docs/memory-v2.md,
-// "Branches"): the id names where the record came from, but no range query can start there.
-const OffPathLabel = memquery.OffPathLabel
+// "Branches"): the id names where the record came from, but no range snippet can start there.
+const OffPathLabel = omhost.OffPathLabel
+
+// The om reads a span's snippet calls (docs/code-tool.md, "The summary's snippets and their
+// test"): once printed into a summary on a branch, these names are frozen.
+const (
+	readNotes       = omwire.MNotes
+	readReflections = omwire.MReflections
+	readCommits     = omwire.MCommits
+)
+
+// read is the om read a row's snippet calls, with the options every snippet of it carries.
+type read struct {
+	fn   string
+	opts omwire.Options
+}
+
+// fileKind is the option a capped files list's snippet reads with: om.Notes(om.Kind(`file`))
+// lists every active file record, where om.Files() keeps only each path's newest state, which
+// would leave out older records of a path the summary also leaves out.
+var fileKind = read{fn: readNotes, opts: omwire.Options{Where: []omwire.Pair{{Field: "kind", Value: string(ledger.KindFile)}}}}
 
 // spanRow is one row of the omitted table: a span of records left out (or several, folded),
 // with its date range, record count, first and last entry id and the query that lists it.
@@ -21,7 +40,7 @@ type spanRow struct {
 	firstID         string
 	lastID          string
 	query           string
-	source          string
+	source          read
 	firstAt, lastAt int
 	// positional says the query bounds the span by branch position (from/through), so spans
 	// of it can fold into one positional row.
@@ -30,7 +49,7 @@ type spanRow struct {
 }
 
 // listTail ends a capped list: how many of its records the list leaves out, how many it holds
-// in all, and the queries that list the whole list (one when it fits memquery.MaxLimit rows,
+// in all, and the queries that list the whole list (one when it fits om.MaxLimit rows,
 // else one per positional chunk of at most that many), so each left-out record is returned by
 // one of them.
 type listTail struct {
@@ -46,8 +65,8 @@ type omission struct {
 	records, spans, folded int
 }
 
-// queries are every query the omission prints: the rows', then the tails' in list order.
-func (o omission) queries() []string {
+// snippets are every snippet the omission prints: the rows', then the tails' in list order.
+func (o omission) snippets() []string {
 	out := []string{}
 	for _, r := range o.rows {
 		out = append(out, r.query)
@@ -108,11 +127,11 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 	}
 	o := omission{tails: map[string]listTail{}}
 	if files > 0 {
-		o.tails[groupFiles] = listTail{n: files, all: len(fileItems), queries: s.listQueries(memquery.SourceNotes+" | where kind=file", fileItems, p)}
+		o.tails[groupFiles] = listTail{n: files, all: len(fileItems), queries: s.listQueries(fileKind, fileItems, p)}
 		o.records += files
 	}
 	if commits > 0 {
-		o.tails[groupCommits] = listTail{n: commits, all: len(commitItems), queries: s.listQueries(memquery.SourceNotes+" | where kind=commit", commitItems, p)}
+		o.tails[groupCommits] = listTail{n: commits, all: len(commitItems), queries: s.listQueries(read{fn: readCommits}, commitItems, p)}
 		o.records += commits
 	}
 	allNotes := sortedAnchors(noteAnchors)
@@ -120,14 +139,14 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 	// A shown record breaks a span: the runs are over every live record of the source in
 	// anchor order, files and commits passing through (their lists show them).
 	breaks := func(it *item) bool { return p.on[it] && (it.role == roleNote || it.role == roleReflection) }
-	noteRows := s.spans(memquery.SourceNotes, noteAnchors, notes, allNotes, breaks)
-	reflectionRows := s.spans(memquery.SourceReflections, reflectionAnchors, reflections, allReflections, breaks)
+	noteRows := s.spans(read{fn: readNotes}, noteAnchors, notes, allNotes, breaks)
+	reflectionRows := s.spans(read{fn: readReflections}, reflectionAnchors, reflections, allReflections, breaks)
 	var offRows []spanRow
 	if len(offReflections) > 0 {
-		offRows = append(offRows, s.offPathRow(memquery.SourceReflections, offReflections, reflectionAnchors))
+		offRows = append(offRows, s.offPathRow(read{fn: readReflections}, offReflections, reflectionAnchors))
 	}
 	if len(offNotes) > 0 {
-		offRows = append(offRows, s.offPathRow(memquery.SourceNotes, offNotes, noteAnchors))
+		offRows = append(offRows, s.offPathRow(read{fn: readNotes}, offNotes, noteAnchors))
 	}
 	for _, rows := range [][]spanRow{noteRows, reflectionRows, offRows} {
 		for _, r := range rows {
@@ -188,12 +207,12 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 }
 
 // listQueries are the queries that list a capped list's records, all of them live: one over
-// the whole list when it fits memquery.MaxLimit rows; else one positional query per chunk of at
+// the whole list when it fits om.MaxLimit rows; else one positional query per chunk of at
 // most that many anchored records holding a left-out one, and one for the off-path records left
 // out (by date, as offPathRow).
-func (s *state) listQueries(base string, all []*item, p *selected) []string {
-	if len(all) <= memquery.MaxLimit {
-		return []string{limited(base, len(all))}
+func (s *state) listQueries(base read, all []*item, p *selected) []string {
+	if len(all) <= om.MaxLimit {
+		return []string{snippet(base, omwire.Options{}, len(all))}
 	}
 	var left, offLeft []*item
 	for _, it := range all {
@@ -219,9 +238,9 @@ func (s *state) listQueries(base string, all []*item, p *selected) []string {
 
 // spans are the runs of left-out records of one source in anchor order, each bounded by the
 // anchors of its first and last record, so its positional query (from/through) lists it. A
-// run is cut before its query would return more than memquery.MaxLimit rows, so every query
+// run is cut before its query would return more than om.MaxLimit rows, so every query
 // the summary prints lists all of its span.
-func (s *state) spans(source string, all, left []*item, anchors []int, breaks func(*item) bool) []spanRow {
+func (s *state) spans(source read, all, left []*item, anchors []int, breaks func(*item) bool) []spanRow {
 	if len(left) == 0 {
 		return nil
 	}
@@ -259,7 +278,7 @@ func (s *state) spans(source string, all, left []*item, anchors []int, breaks fu
 		if !isLeft[it] {
 			continue
 		}
-		if len(run) > 0 && inRange(run[0].anchor, it.anchor) > memquery.MaxLimit {
+		if len(run) > 0 && inRange(run[0].anchor, it.anchor) > om.MaxLimit {
 			flush()
 		}
 		run = append(run, it)
@@ -269,7 +288,7 @@ func (s *state) spans(source string, all, left []*item, anchors []int, breaks fu
 }
 
 // positionalRow is the row of one run of anchored records.
-func (s *state) positionalRow(source string, run []*item, inRange func(lo, hi int) int) spanRow {
+func (s *state) positionalRow(source read, run []*item, inRange func(lo, hi int) int) spanRow {
 	first, last := run[0], run[len(run)-1]
 	r := spanRow{count: len(run), spans: 1, firstID: first.anchorID, lastID: last.anchorID, source: source, firstAt: first.anchor, lastAt: last.anchor, positional: true, inRange: inRange}
 	r.from, r.to = dateRange(run)
@@ -280,7 +299,7 @@ func (s *state) positionalRow(source string, run []*item, inRange func(lo, hi in
 // offPathRow is the one row of a source's records whose first source is not on the branch:
 // their ids are labelled off-path, and the query bounds them by date when every one is dated,
 // else lists the whole source.
-func (s *state) offPathRow(source string, left, all []*item) spanRow {
+func (s *state) offPathRow(source read, left, all []*item) spanRow {
 	r := spanRow{count: len(left), spans: 1, source: source}
 	r.from, r.to = dateRange(left)
 	if id := left[0].anchorID; id != "" {
@@ -302,16 +321,16 @@ func (s *state) offPathRow(source string, left, all []*item) spanRow {
 				n++
 			}
 		}
-		r.query = limited(source+" | since "+r.from+" | until "+r.to, n)
+		r.query = snippet(source, omwire.Options{Since: r.from, Until: r.to}, n)
 	} else {
-		r.query = limited(source, len(all))
+		r.query = snippet(source, omwire.Options{}, len(all))
 	}
 	return r
 }
 
 // fold joins the oldest k rows (k < 2 folds nothing) into as few rows as keep every query
 // listing all of its rows: consecutive rows join while the joined range returns at most
-// memquery.MaxLimit records (shown ones between the spans included), so a folded query is never
+// om.MaxLimit records (shown ones between the spans included), so a folded query is never
 // cut by its limit. A joined row has the rows' date range, total count, span count, the first
 // row's first id, the last row's last id, and one positional query over them.
 func fold(rows []spanRow, k int) []spanRow {
@@ -322,7 +341,7 @@ func fold(rows []spanRow, k int) []spanRow {
 	out := []spanRow{}
 	var joined *spanRow
 	for _, r := range rows[:k] {
-		if joined != nil && joined.inRange(joined.firstAt, r.lastAt) <= memquery.MaxLimit {
+		if joined != nil && joined.inRange(joined.firstAt, r.lastAt) <= om.MaxLimit {
 			joined.lastID, joined.lastAt = r.lastID, r.lastAt
 			joined.count += r.count
 			joined.spans += r.spans
@@ -363,27 +382,24 @@ func dateRange(items []*item) (string, string) {
 	return from, to
 }
 
-// positionalQuery lists the records of source anchored from first through last; n is how many
-// it returns, so a limit is written only when the default would cut them.
-func positionalQuery(source, first, last string, n int) string {
-	return limited(source+" | "+memquery.StageFrom+" "+queryWord(first)+" | "+memquery.StageThrough+" "+queryWord(last), n)
+// positionalQuery is the snippet listing the records of read fn anchored from first through
+// last (om.Notes(om.From(`<first id>`).Through(`<last id>`))); n is how many it returns, so a limit is written
+// only when the default would cut them.
+func positionalQuery(src read, first, last string, n int) string {
+	return snippet(src, omwire.Options{From: first, Through: last}, n)
 }
 
-// limited is query with a limit stage when n rows exceed memquery.DefaultLimit, at most
-// memquery.MaxLimit (the result then says "matched N, showing M").
-func limited(query string, n int) string {
-	if n <= memquery.DefaultLimit {
-		return query
+// snippet is the read src with its options and the bounds o, through om's one snippet
+// formatter, with a Limit when n rows exceed om.DefaultLimit, at most om.MaxLimit (the list
+// then says "matched N, showing M"). It holds no comma, double quote or |, so it survives every
+// codec as printed.
+func snippet(src read, o omwire.Options, n int) string {
+	o.Where = src.opts.Where
+	if n > om.DefaultLimit {
+		limit := min(n, om.MaxLimit)
+		o.Limit = &limit
 	}
-	return query + " | " + memquery.StageLimit + " " + strconv.Itoa(min(n, memquery.MaxLimit))
-}
-
-// queryWord is an id as a query word: bare when the lexer reads it as one word, else quoted.
-func queryWord(id string) string {
-	if id != "" && !strings.ContainsAny(id, " \t\r\n\"|=~\\") {
-		return id
-	}
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(id) + `"`
+	return om.FormatRead(src.fn, "", o)
 }
 
 // SpansInput is a memory some of whose records are listed elsewhere (the level-1 input's
@@ -410,8 +426,8 @@ type Spans struct {
 	// entry id, query), then the capped files and commits lists' ends (+N more and the queries
 	// that list the whole list).
 	Lines []string
-	// Queries are every memory query Lines print, in order.
-	Queries []string
+	// Snippets are every om snippet Lines print, in order.
+	Snippets []string
 	// Records counts the records left out.
 	Records int
 }
@@ -433,7 +449,7 @@ func OmittedSpans(in SpansInput) (spans Spans, need int, ok bool) {
 	if !ok {
 		return Spans{}, need, false
 	}
-	spans = Spans{Lines: []string{}, Queries: o.queries(), Records: o.records}
+	spans = Spans{Lines: []string{}, Snippets: o.snippets(), Records: o.records}
 	for _, r := range o.rows {
 		spans.Lines = append(spans.Lines, omittedLine(r))
 	}

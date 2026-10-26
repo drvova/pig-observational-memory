@@ -2,12 +2,13 @@ package hooks
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/snippettest"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -56,12 +57,15 @@ func printedQueries(t *testing.T, summary string) []string {
 	}
 	_, lists, _ := strings.Cut(summary, "\n\n---\n\n")
 	for _, line := range strings.Split(lists, "\n") {
-		if _, tail, ok := strings.Cut(line, " more: "); ok {
-			out = append(out, tail)
+		if m := listTail.FindStringSubmatch(line); m != nil {
+			out = append(out, strings.Split(m[1], "; ")...)
 		}
 	}
 	return out
 }
+
+// listTail is the end of a capped files or commits line: the snippets listing the whole list.
+var listTail = regexp.MustCompile(` more, all \d+: (.+)$`)
 
 // Under a budget too small for every record, the hook's summary lists the rest as omitted
 // spans and capped lists whose queries run on the branch after the compaction, and still run
@@ -98,12 +102,12 @@ func TestV2SummaryQueriesRunAfterTheCompactionAndAFork(t *testing.T) {
 	}
 	listed := ""
 	for _, q := range queries {
-		res := memquery.Run(memquery.Env{Entries: after}, q)
-		again := memquery.Run(memquery.Env{Entries: fork}, q)
-		if res.IsError || again.IsError || res.Text != again.Text {
-			t.Fatalf("query %q: %s / after the fork: %s", q, res.Text, again.Text)
+		res := snippettest.Run(t, after, q)
+		again := snippettest.Run(t, fork, q)
+		if res.Cut() || strings.Join(res.IDs, " ") != strings.Join(again.IDs, " ") {
+			t.Fatalf("snippet %q: %v / after the fork: %v", q, res.IDs, again.IDs)
 		}
-		listed += res.Text
+		listed += strings.Join(res.IDs, "\n") + "\n"
 	}
 	for _, o := range c.Details.Observations {
 		if !shown[o.ID] && !strings.Contains(listed, o.ID) {

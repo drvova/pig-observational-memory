@@ -3,8 +3,8 @@
 // with every line ending in the entry id it was picked from and everything left out written
 // as a runnable memory query. The order is lexicographic over facts the ledger holds (kind,
 // supersedes, outcome, specifics, citations); there are no weights, shares or caps, and every
-// bound comes from the budget or from the memory tool's own limits (memquery.DefaultLimit,
-// memquery.MaxLimit). Lines are picked, never reworded: a record's content is shown as
+// bound comes from the budget or from the memory tool's own limits (om.DefaultLimit,
+// om.MaxLimit). Lines are picked, never reworded: a record's content is shown as
 // recorded, with relative dates annotated, and only the split turn's opening request is
 // clipped when it alone does not fit.
 package selection
@@ -69,8 +69,8 @@ type Result struct {
 	// Spans counts the omitted spans, folded ones included; Folded the span rows that hold
 	// more than one span.
 	Spans, Folded int
-	// Queries are every memory query the summary prints, in order.
-	Queries []string
+	// Snippets are every om snippet the summary prints, in order.
+	Snippets []string
 }
 
 // role is what an item renders as.
@@ -148,7 +148,7 @@ func estimate(text string) int { return tokens.EstimateStringTokens(text) }
 // drops the records it supersedes, transitively, and the final choice drops exactly what the
 // compaction's drop rule does (extract.Drops over the shown records). What is left out
 // becomes omitted spans with runnable memory queries; capped lists (files, commits) end with
-// +N more and the queries that list the whole list, each within memquery.MaxLimit rows; when
+// +N more and the queries that list the whole list, each within om.MaxLimit rows; when
 // the span rows do not fit, the oldest fold into as few rows as keep every query within that
 // limit. The result's text is at most in.Budget tokens, or "" when nothing
 // fits.
@@ -546,7 +546,7 @@ func clipRunes(runes []rune, n int) string {
 
 // result is the Result of a rendered choice.
 func (s *state) result(text string, p *selected, o omission) Result {
-	r := Result{Text: text, Reflections: []ledger.Reflection{}, Observations: []ledger.Observation{}, Omitted: o.records, Spans: o.spans, Folded: o.folded, Queries: o.queries()}
+	r := Result{Text: text, Reflections: []ledger.Reflection{}, Observations: []ledger.Observation{}, Omitted: o.records, Spans: o.spans, Folded: o.folded, Snippets: o.snippets()}
 	for _, it := range s.items {
 		if !p.on[it] {
 			continue

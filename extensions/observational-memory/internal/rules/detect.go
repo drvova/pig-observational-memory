@@ -6,7 +6,8 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
 
@@ -28,7 +29,7 @@ const (
 	// DetectDroppedThenQueried counts records the dropper retired that a later memory query
 	// asked for.
 	DetectDroppedThenQueried = "dropped-then-queried"
-	// DetectDecodeFailure counts rows and queries that did not decode in the model's codec.
+	// DetectDecodeFailure counts rows that did not decode in the model's codec.
 	DetectDecodeFailure = "decode-failure"
 )
 
@@ -52,7 +53,7 @@ var detectorDescriptions = map[string]string{
 	DetectUnresolvedRelativeDate:    "relative-date phrases in new notes the renderer had to resolve",
 	DetectThinChunk:                 "chunks whose notes are far shorter than their source with specifics left uncited",
 	DetectDroppedThenQueried:        "records the dropper retired that a later memory query asked for",
-	DetectDecodeFailure:             "rows or queries that did not decode in the model's codec",
+	DetectDecodeFailure:             "rows that did not decode in the summary's codec",
 }
 
 // DetectorSeeds are the shipped detectors as declarations (DetectorTable), the seeds a model's
@@ -91,14 +92,11 @@ type ObserverPass struct {
 	Known []ledger.Observation
 	// Aliases are the subject aliases recorded before the pass, in ledger order: a detector's
 	// query reads the pass's notes with them, as the memory tool reads notes
-	// (memquery.Records.Aliases).
+	// (omhost.Records.Aliases).
 	Aliases []ledger.SubjectAlias
-	// Defined are the tools the agent defined, by name, with their stored queries: a call of
-	// one is a memory query too (MemoryQueries).
+	// Defined are the retired defined tools, by name, with their stored queries: a call of one
+	// on the branch is a memory query too (MemoryAsks).
 	Defined map[string]string
-	// Detectors are the detectors the worker model defined in its layer (ModelDetectors),
-	// counted beside the kernel's checks.
-	Detectors []DetectorDef
 }
 
 // Findings are what the detectors counted in one pass, and what they flagged for the remedies.
@@ -112,9 +110,6 @@ type Findings struct {
 	CrossScope []string
 	// DroppedKinds are the kinds of the dropped records a memory query asked for.
 	DroppedKinds map[string]int
-	// Defined are the counts of the detectors the model defined, by name; recorded under
-	// DefinedCountKey, never judging a rule.
-	Defined map[string]int
 }
 
 func kindName(kind ledger.ObservationKind) string {
@@ -257,7 +252,7 @@ func isMemoryResult(entry ledger.Entry, defined map[string]string) bool {
 		return false
 	}
 	name, _ := entry.Message["toolName"].(string)
-	if name == memquery.ToolName {
+	if name == omtool.ToolName {
 		return true
 	}
 	_, ok := defined[name]
@@ -273,12 +268,15 @@ func isRole(entry ledger.Entry, role string) bool {
 // recall of a record the dropper had retired before the call, or a search whose words all
 // appear in such a record. Each record counts once per call, of the memory tool or of a tool
 // the agent defined (defined, by name). Only calls in the covered entries are read, so a call
-// is counted by the one pass that covered it.
+// is counted by the one pass that covered it. A code call is read from its result's details
+// (the ids it recalled and the words it searched, omtool.Details); a call written before the
+// code tool, and a defined tool's call, from its query (MemoryAsks).
 func DroppedThenQueried(branch, covered []ledger.Entry, defined map[string]string) []ledger.Observation {
 	inCovered := map[string]bool{}
 	for _, e := range covered {
 		inCovered[e.ID] = true
 	}
+	results := memoryResults(branch)
 	records := map[string]ledger.Observation{}
 	droppedAt := map[string]int{}
 	out := []ledger.Observation{}
@@ -307,22 +305,15 @@ func DroppedThenQueried(branch, covered []ledger.Entry, defined map[string]strin
 		if !inCovered[entry.ID] {
 			continue
 		}
-		for _, query := range MemoryQueries(entry, defined) {
-			q, err := memquery.Parse(query)
-			if err != nil || q.Write != "" {
-				continue
-			}
+		for _, ask := range MemoryAsks(entry, defined, results) {
 			asked := map[string]bool{}
-			if q.Source == memquery.SourceRecall {
-				if _, dropped := droppedAt[q.ID]; dropped {
-					asked[q.ID] = true
+			for _, id := range ask.Recalled {
+				if _, dropped := droppedAt[id]; dropped {
+					asked[id] = true
 				}
 			}
-			for _, stage := range q.Stages {
-				if stage.Kind != memquery.StageSearch {
-					continue
-				}
-				words := strings.Fields(strings.ToLower(stage.Words))
+			for _, search := range ask.Searches {
+				words := strings.Fields(strings.ToLower(search))
 				for id := range droppedAt {
 					if o, ok := records[id]; ok && len(words) > 0 && containsAll(strings.ToLower(o.Content), words) {
 						asked[id] = true
@@ -353,15 +344,41 @@ func containsAll(text string, words []string) bool {
 	return true
 }
 
-// MemoryQueries are the queries of the memory tool calls an assistant entry made, and of its
-// calls of the tools the agent defined (defined maps a defined tool's name to its stored
-// query): the stored query with the call's input substituted, as the tool runs it.
-func MemoryQueries(entry ledger.Entry, defined map[string]string) []string {
+// memoryResults are the details of the memory tool's results on branch, by tool call id.
+func memoryResults(branch []ledger.Entry) map[string]any {
+	out := map[string]any{}
+	for _, e := range branch {
+		if !isRole(e, "toolResult") {
+			continue
+		}
+		if name, _ := e.Message["toolName"].(string); name != omtool.ToolName {
+			continue
+		}
+		if id, _ := e.Message["toolCallId"].(string); id != "" {
+			out[id] = e.Message["details"]
+		}
+	}
+	return out
+}
+
+// Ask is what one memory call asked for: the ids it recalled and the words it searched.
+type Ask struct {
+	Recalled []string
+	Searches []string
+}
+
+// MemoryAsks are what the memory tool calls an assistant entry made asked for, and its calls
+// of the tools the agent defined (defined maps a defined tool's name to its stored query). A
+// code call is read from its result's details (results, by tool call id: omtool.Details'
+// recalled and searches); a call written before the code tool parses its query with the frozen
+// recognizer, and a defined tool's call its stored query with the call's input substituted, as
+// the tool ran it. A write asks for nothing.
+func MemoryAsks(entry ledger.Entry, defined map[string]string, results map[string]any) []Ask {
 	if entry.Type != "message" || entry.Message == nil || entry.Message["role"] != "assistant" {
 		return nil
 	}
 	blocks, _ := entry.Message["content"].([]any)
-	out := []string{}
+	out := []Ask{}
 	for _, raw := range blocks {
 		block, ok := raw.(map[string]any)
 		if !ok || block["type"] != "toolCall" {
@@ -370,17 +387,47 @@ func MemoryQueries(entry ledger.Entry, defined map[string]string) []string {
 		name, _ := block["name"].(string)
 		args, _ := block["arguments"].(map[string]any)
 		query := ""
-		if name == memquery.ToolName {
-			query, _ = args["query"].(string)
+		if name == omtool.ToolName {
+			if _, isCode, old := omtool.CallArgs(args); isCode {
+				id, _ := block["id"].(string)
+				if d := omtool.DetailsFrom(results[id]); d != nil && (len(d.Recalled) > 0 || len(d.Searches) > 0) {
+					out = append(out, Ask{Recalled: d.Recalled, Searches: d.Searches})
+				}
+				continue
+			} else {
+				query = old
+			}
 		} else if stored, ok := defined[name]; ok {
-			input, _ := args[memquery.InputParameter].(string)
-			query = memquery.Substitute(stored, input)
+			input, _ := args[legacyquery.InputParameter].(string)
+			query = legacyquery.Substitute(stored, input)
 		}
-		if strings.TrimSpace(query) != "" {
-			out = append(out, query)
+		if ask, ok := legacyAsk(query); ok {
+			out = append(out, ask)
 		}
 	}
 	return out
+}
+
+// legacyAsk is what a query of the removed language asked for, false for a write or a query
+// that does not parse.
+func legacyAsk(query string) (Ask, bool) {
+	if strings.TrimSpace(query) == "" {
+		return Ask{}, false
+	}
+	q, err := legacyquery.Parse(query)
+	if err != nil || q.Write != "" {
+		return Ask{}, false
+	}
+	var ask Ask
+	if q.Source == legacyquery.SourceRecall {
+		ask.Recalled = append(ask.Recalled, q.ID)
+	}
+	for _, stage := range q.Stages {
+		if stage.Kind == legacyquery.StageSearch {
+			ask.Searches = append(ask.Searches, stage.Words)
+		}
+	}
+	return ask, true
 }
 
 // SourceTokens is the estimated tokens of entries: a pass's observed source tokens.

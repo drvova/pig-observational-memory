@@ -91,11 +91,71 @@ type Runtime struct {
 	// derived from (CachedThinPlan).
 	thinKey  string
 	thinPlan map[string]string
-	// definedTools lists the tools the agent defined that this process
-	// registered (SetDefinedTools); nil means none.
-	definedTools func() []string
+	// skipTools lists the tools whose calls are memory plumbing (SetSkipTools); nil means
+	// the memory tool alone.
+	skipTools func() []string
+	// codeStatus is the memory tool's code lines for /om:status (SetCodeStatus); nil means none.
+	codeStatus func(h host.Host) []string
 	// shownOnce holds the notices ShowOnce already let through.
 	shownOnce map[string]bool
+	// detectorPass is the detector pass in flight (SwapDetectorPass), nil when none runs.
+	detectorPass DetectorPass
+}
+
+// The reasons a detector pass is stopped (DetectorPass.Stop): a run it kills unfinished is an
+// error for that detector, with the reason (docs/code-tool.md, "Running, and the time bound").
+const (
+	DetectorStopCompaction = "unfinished at the next compaction"
+	DetectorStopSessionEnd = "unfinished at session end"
+)
+
+// DetectorPass is one compaction's detector pass running in the background.
+type DetectorPass interface {
+	// Stop kills the run in flight, with reason (a DetectorStop constant) as its error, starts
+	// no other, and returns once the pass's event is written.
+	Stop(reason string)
+	// Done is closed once the pass ended and its event is written.
+	Done() <-chan struct{}
+}
+
+// SwapDetectorPass makes p the detector pass in flight and stops the previous one, if any, as
+// the next compaction's: one detector child at most runs at a time.
+func (r *Runtime) SwapDetectorPass(p DetectorPass) {
+	r.mu.Lock()
+	previous := r.detectorPass
+	r.detectorPass = p
+	r.mu.Unlock()
+	if previous != nil && previous != p {
+		previous.Stop(DetectorStopCompaction)
+	}
+}
+
+// StopDetectorPass stops the detector pass in flight, if any (the start of the next
+// session_before_compact, session_start, session_shutdown), and waits for its event.
+func (r *Runtime) StopDetectorPass(reason string) {
+	r.mu.Lock()
+	p := r.detectorPass
+	r.detectorPass = nil
+	r.mu.Unlock()
+	if p != nil {
+		p.Stop(reason)
+	}
+}
+
+// ClearDetectorPass forgets p once it ended on its own; a newer pass stays.
+func (r *Runtime) ClearDetectorPass(p DetectorPass) {
+	r.mu.Lock()
+	if r.detectorPass == p {
+		r.detectorPass = nil
+	}
+	r.mu.Unlock()
+}
+
+// DetectorPassInFlight is the detector pass in flight, nil when none runs.
+func (r *Runtime) DetectorPassInFlight() DetectorPass {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.detectorPass
 }
 
 // New creates a runtime with the default configuration.
@@ -188,20 +248,42 @@ func (r *Runtime) SetConfig(cfg config.Config) {
 	r.configFromDisk = false
 }
 
-// SetDefinedTools sets where DefinedTools reads the tools the agent defined
-// with the memory tool that this process registered (harness.Manager.Registered).
-func (r *Runtime) SetDefinedTools(list func() []string) {
+// SetCodeStatus sets the memory tool's /om:status lines (harness.Manager.CodeStatusLines): the
+// kept definitions and the namespace child's recorded state, read without starting, killing or
+// replaying a child.
+func (r *Runtime) SetCodeStatus(lines func(h host.Host) []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.definedTools = list
+	r.codeStatus = lines
 }
 
-// DefinedTools lists the tools the agent defined with the memory tool that
-// this process registered, as SetDefinedTools reads them; none when it was
-// never set.
-func (r *Runtime) DefinedTools() []string {
+// CodeStatus is the memory tool's /om:status lines for h; none when SetCodeStatus was never
+// called.
+func (r *Runtime) CodeStatus(h host.Host) []string {
 	r.mu.Lock()
-	list := r.definedTools
+	lines := r.codeStatus
+	r.mu.Unlock()
+	if lines == nil {
+		return nil
+	}
+	return lines(h)
+}
+
+// SetSkipTools sets where SkipTools reads the memory plumbing beside the memory tool: the
+// retired defined queries' names no other tool holds (harness.Manager.SkipNames), so calls the
+// removed defined tools left on the branch stay plumbing (docs/code-tool.md, "Replacing the
+// query language").
+func (r *Runtime) SetSkipTools(list func() []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.skipTools = list
+}
+
+// SkipTools lists the tools' names whose calls are memory plumbing, as SetSkipTools reads
+// them; none when it was never set.
+func (r *Runtime) SkipTools() []string {
+	r.mu.Lock()
+	list := r.skipTools
 	r.mu.Unlock()
 	if list == nil {
 		return nil

@@ -9,7 +9,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
@@ -209,9 +209,9 @@ func (a Active) Has(remedy string) bool {
 }
 
 // KeepHeadChars bounds a keep-head note's content: the window the memory tool's history source
-// shows of an entry (memquery.HistoryClipChars), so a kept head reads like a history row and
+// shows of an entry (om.HistoryClipChars), so a kept head reads like a history row and
 // recall <id> still reads the entry whole.
-const KeepHeadChars = memquery.HistoryClipChars
+const KeepHeadChars = om.HistoryClipChars
 
 // KeepHead is the keep-head remedy: a low-relevance kind=assistant note holding the opening of
 // each flagged assistant entry, citing it. Only entries at or before coversUpToID in the chunk

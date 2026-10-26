@@ -1,13 +1,15 @@
 // Package harness is the per-model harness (docs/memory-interface.md, section 6): each model
-// id gets a profile (the codec it reads and writes, the summary layout and size, which tools
-// the agent defined stay active for it, and how long a format spec it is given) computed as a
-// pure function of the model's usage ledger in the curated store. The package also owns the
-// tools the agent defines with the memory tool: their probation, registration and per-model
-// activation.
+// id gets a profile (the codec its compaction summary is written in, and the summary layout and
+// size) computed as a pure function of the model's usage ledger in the curated store. The
+// memory tool itself is the same for every model (docs/code-tool.md): no profile changes its
+// description, schema or output, and no profile registers, activates or deactivates a tool.
+// The package also runs the memory tool's calls on the namespace child. The tools the agent
+// defined with the removed query language are retired (docs/code-tool.md, "Named deviation:
+// agent-defined tools"): their definitions stay stored and are listed (RetiredQueries), never
+// registered or run, and their names stay memory plumbing (Manager.SkipNames).
 //
-// The harness never changes the base memory tool or the room budget: a profile can pick a
-// codec, a layout and a smaller summary within the room, and deactivate defined tools, but the
-// memory tool stays registered and active and the summary is never larger than the room.
+// The harness never changes the memory tool or the room budget: a profile can pick a codec, a
+// layout and a smaller summary within the room, and the summary is never larger than the room.
 package harness
 
 import (
@@ -44,15 +46,12 @@ const (
 	SettingCodec   = "codec"
 	SettingLayout  = "layout"
 	SettingSummary = "summary"
-	SettingSpec    = "instructions"
-	SettingTool    = "tool"
 )
 
 // Switch is one change the profile made, with the evidence that made it.
 type Switch struct {
 	Setting string
-	// To is the new value: a codec name, a layout, a summary scale, "long spec", or for a tool
-	// "<name> off".
+	// To is the new value: a codec name, a layout or a summary scale.
 	To     string
 	Reason string
 	// At is when the deciding event was recorded.
@@ -80,10 +79,6 @@ type Profile struct {
 	// divided by 2^SummaryHalvings, never less than the summary floor, never more than the
 	// room (ApplySummary).
 	SummaryHalvings int
-	// LongSpec carries the codec's longer spec with examples instead of its short one.
-	LongSpec bool
-	// DisabledTools are defined tools deactivated for this model.
-	DisabledTools []string
 	// Switches are the changes from the default, in the order they were made.
 	Switches []Switch
 	// Events is how many ledger events the profile was computed from.
@@ -94,9 +89,9 @@ type Profile struct {
 }
 
 // Default is the profile every model starts with: the first codec, the tables layout, the
-// whole room, the short spec, every defined tool active.
+// whole room.
 func Default(model string) Profile {
-	return Profile{Model: model, Codec: tables.Codecs()[0].Name(), Layout: ledger.FormatTables, DisabledTools: []string{}, Switches: []Switch{}}
+	return Profile{Model: model, Codec: tables.Codecs()[0].Name(), Layout: ledger.FormatTables, Switches: []Switch{}}
 }
 
 // CodecValue is the profile's codec: the codec its name stands for in the model's layer (a
@@ -110,14 +105,6 @@ func (p Profile) CodecValue() tables.Codec {
 		return c
 	}
 	return tables.Codecs()[0]
-}
-
-// Spec is the format spec the model is given: the codec's long spec when LongSpec is set.
-func (p Profile) Spec() string {
-	if p.LongSpec {
-		return tables.LongSpec(p.CodecValue())
-	}
-	return p.CodecValue().Spec()
 }
 
 // SummaryScale is the share of the room the summary gets, 1 for the whole room.
@@ -147,16 +134,6 @@ func (p Profile) SummaryFormat(cfg config.Config) string {
 	return ledger.FormatTables
 }
 
-// ToolDisabled reports whether the defined tool name is deactivated for this model.
-func (p Profile) ToolDisabled(name string) bool {
-	for _, n := range p.DisabledTools {
-		if n == name {
-			return true
-		}
-	}
-	return false
-}
-
 // tally counts the events for and against a switch since the setting last switched.
 type tally struct{ against, keep int }
 
@@ -168,8 +145,8 @@ func (t tally) reason(against, keep string) string {
 	return fmt.Sprintf("%d %s vs %d %s since the last switch (needs at least %d and a majority)", t.against, against, t.keep, keep, MinEvidence)
 }
 
-// Compute is a model's profile from its usage ledger, read in the order it was written, and
-// the store's definitions, with the shipped codecs (ComputeWith). It is pure: the same events
+// Compute is a model's profile from its usage ledger, read in the order it was written, with
+// the shipped codecs (ComputeWith). It is pure: the same events
 // give the same profile. The rules:
 //
 //   - codec: rows decodes in the current codec; it switches to the next codec (tables.Codecs
@@ -177,22 +154,22 @@ func (t tally) reason(against, keep string) string {
 //     last codec is kept: there is no further one to try, and cycling back would oscillate.
 //   - layout: rows decodes that parsed with the wrong columns against those that parsed with
 //     the right ones; tables switches to lines, once.
-//   - instructions: syntax errors (memory queries that did not parse, rows the codec could
-//     not decode) against syntactically valid queries and rows; the long spec is carried from
-//     then on, once.
-//   - summary: memory tool hits on records the current summary already showed against hits
-//     on records it omitted. Shown hits halve the summary (it was not used); omitted hits
-//     double it back toward the whole room. Each switch resets both counts.
-//   - tools: a defined tool's calls by this model since it was (re)defined (calls before its
-//     definition's creation time are of an earlier definition of the name and do not count);
-//     it is deactivated for this model when errors meet the minimum-evidence rule against
-//     calls without error, and stays so until it is redefined.
-func Compute(model string, events []curated.ModelEvent, definitions []curated.Definition) Profile {
+//   - summary: memory tool code calls' hits (ModelKindCode) on records the current summary
+//     already showed against hits on records it omitted. Shown hits halve the summary (it was
+//     not used); omitted hits double it back toward the whole room. Each switch resets both
+//     counts. A code call's errors count toward nothing: no switch may change the tool by
+//     model, so the long-spec instructions setting is retired, and the query language's
+//     events (ModelKindMemory) stay as history and are never graded.
+//
+// No setting switches a tool: the defined tools are retired with the query language
+// (docs/code-tool.md), so their calls' events (ModelKindDefined) stay as history and are never
+// graded either.
+func Compute(model string, events []curated.ModelEvent) Profile {
 	names := []string{}
 	for _, c := range tables.Codecs() {
 		names = append(names, c.Name())
 	}
-	return ComputeWith(model, events, definitions, names)
+	return ComputeWith(model, events, names)
 }
 
 // ComputeWith is Compute switching codecs through codecs, in order: the codec names of the
@@ -207,7 +184,7 @@ func Compute(model string, events []curated.ModelEvent, definitions []curated.De
 // the previous compaction, one for keeping it when the reverse, none on a tie. The
 // minimum-evidence rule then asks for MinEvidence compactions, not MinEvidence calls of one
 // turn. Events after the latest compaction wait for the next.
-func ComputeWith(model string, events []curated.ModelEvent, definitions []curated.Definition, codecs []string) Profile {
+func ComputeWith(model string, events []curated.ModelEvent, codecs []string) Profile {
 	own := make([]curated.ModelEvent, 0, len(events))
 	for _, e := range events {
 		if e.Engine == curated.EngineV2 {
@@ -221,10 +198,7 @@ func ComputeWith(model string, events []curated.ModelEvent, definitions []curate
 		codecs = []string{p.Codec}
 	}
 	p.Codec = codecs[0]
-	c := &computation{p: &p, codecs: codecs, created: map[string]time.Time{}, toolTally: map[string]*tally{}, disabled: map[string]bool{}}
-	for _, d := range definitions {
-		c.created[d.Name] = d.Created
-	}
+	c := &computation{p: &p, codecs: codecs}
 	window := newVotes()
 	for _, e := range events {
 		at, _ := time.Parse(time.RFC3339, e.Time)
@@ -233,7 +207,7 @@ func ComputeWith(model string, events []curated.ModelEvent, definitions []curate
 			window = newVotes()
 			continue
 		}
-		c.classify(e, at, window)
+		c.classify(e, window)
 	}
 	p.Codec = codecs[c.codecIndex]
 	return p
@@ -242,37 +216,21 @@ func ComputeWith(model string, events []curated.ModelEvent, definitions []curate
 // computation is one ComputeWith's state: the profile being built, where it stands in the codec
 // rotation, and the tallies since each setting last switched.
 type computation struct {
-	p                            *Profile
-	codecs                       []string
-	codecIndex                   int
-	codec, layout, spec, summary tally
-	created                      map[string]time.Time
-	toolTally                    map[string]*tally
-	disabled                     map[string]bool
+	p                      *Profile
+	codecs                 []string
+	codecIndex             int
+	codec, layout, summary tally
 }
 
 // votes are the events for and against each setting in one window: the events since the
 // previous compaction. codecName is the codec the codec votes were
 // cast in, the current codec when they were classified.
 type votes struct {
-	codec, layout, spec, summary tally
-	codecName                    string
-	tools                        map[string]*tally
-	toolOrder                    []string
+	codec, layout, summary tally
+	codecName              string
 }
 
-func newVotes() *votes { return &votes{tools: map[string]*tally{}} }
-
-// tool is the tally for defined tool name in the window, kept in first-seen order.
-func (v *votes) tool(name string) *tally {
-	t := v.tools[name]
-	if t == nil {
-		t = &tally{}
-		v.tools[name] = t
-		v.toolOrder = append(v.toolOrder, name)
-	}
-	return t
-}
+func newVotes() *votes { return &votes{} }
 
 // unit is t as one evidence unit: one against when its events against outnumber those that
 // keep, one keep when the reverse, none on a tie.
@@ -288,28 +246,17 @@ func (t tally) unit() tally {
 
 // units are the window's votes as one evidence unit per setting (tally.unit).
 func (v *votes) units() *votes {
-	out := &votes{codec: v.codec.unit(), layout: v.layout.unit(), spec: v.spec.unit(), summary: v.summary.unit(), codecName: v.codecName, tools: map[string]*tally{}}
-	for _, name := range v.toolOrder {
-		u := v.tools[name].unit()
-		out.tools[name] = &u
-		out.toolOrder = append(out.toolOrder, name)
-	}
-	return out
+	return &votes{codec: v.codec.unit(), layout: v.layout.unit(), summary: v.summary.unit(), codecName: v.codecName}
 }
 
 // classify adds e's votes to v, judged against the profile as it stands: a decode votes on the
-// spec, on the codec when it was in the current codec (and a later one exists), and on the
-// layout while it is tables; a memory call on the spec and, for a hit checked against the
-// summary, on its size; a defined tool's call on that tool, unless it is off or the call was of
-// an earlier definition of its name.
-func (c *computation) classify(e curated.ModelEvent, at time.Time, v *votes) {
+// codec when it was in the current codec (and a later one exists), and on the layout while it
+// is tables; a code call, for a hit checked against the summary, on its size. A query-language
+// memory call (ModelKindMemory) and a retired defined tool's call (ModelKindDefined) vote on
+// nothing.
+func (c *computation) classify(e curated.ModelEvent, v *votes) {
 	switch e.Kind {
 	case curated.ModelKindDecode:
-		if e.Outcome == curated.OutcomeError {
-			v.spec.against++
-		} else {
-			v.spec.keep++
-		}
 		if e.Codec == c.codecs[c.codecIndex] && c.codecIndex < len(c.codecs)-1 {
 			v.codecName = e.Codec
 			if e.Outcome == curated.OutcomeError {
@@ -326,12 +273,7 @@ func (c *computation) classify(e curated.ModelEvent, at time.Time, v *votes) {
 				v.layout.keep++
 			}
 		}
-	case curated.ModelKindMemory:
-		if e.Syntax {
-			v.spec.against++
-		} else {
-			v.spec.keep++
-		}
+	case curated.ModelKindCode:
 		if e.Target == curated.TargetSummary {
 			switch e.Outcome {
 			case curated.OutcomeShown:
@@ -340,23 +282,11 @@ func (c *computation) classify(e curated.ModelEvent, at time.Time, v *votes) {
 				v.summary.keep++
 			}
 		}
-	case curated.ModelKindDefined:
-		if e.Tool == "" || c.disabled[e.Tool] {
-			break
-		}
-		if created, ok := c.created[e.Tool]; ok && at.Before(created) {
-			break
-		}
-		if e.Outcome == curated.OutcomeError {
-			v.tool(e.Tool).against++
-		} else {
-			v.tool(e.Tool).keep++
-		}
 	}
 }
 
 // apply adds a window's votes to the tallies and makes every switch they make due, in the
-// order the switches have always been checked: codec, layout, summary, tools, then the spec.
+// order the switches have always been checked: codec, layout, then summary.
 func (c *computation) apply(v *votes, at time.Time) {
 	p := c.p
 	record := func(setting, to, reason string) {
@@ -393,36 +323,14 @@ func (c *computation) apply(v *votes, at time.Time) {
 			c.summary = tally{}
 		}
 	}
-	for _, name := range v.toolOrder {
-		if c.disabled[name] {
-			continue
-		}
-		t := c.toolTally[name]
-		if t == nil {
-			t = &tally{}
-			c.toolTally[name] = t
-		}
-		t.against += v.tools[name].against
-		t.keep += v.tools[name].keep
-		if t.due() {
-			c.disabled[name] = true
-			p.DisabledTools = append(p.DisabledTools, name)
-			record(SettingTool, name+" off", t.reason("errors", "calls without error"))
-		}
-	}
-	c.spec.against += v.spec.against
-	c.spec.keep += v.spec.keep
-	if !p.LongSpec && c.spec.due() {
-		p.LongSpec = true
-		record(SettingSpec, "long spec", c.spec.reason("syntax errors", "valid queries and rows"))
-	}
 }
 
-// ApplyRules applies the switch-codec and long-spec rules that apply to the model
-// (docs/memory-interface.md, section 7) to a computed profile: switch-codec makes the codec
-// switch section 6's decode evidence would make (the next codec, unless the profile already
-// left the first), long-spec carries the long spec. Each is recorded as a switch naming the
-// rule. No rule touches the memory tool or the room.
+// ApplyRules applies the switch-codec rules that apply to the model (docs/memory-interface.md,
+// section 7) to a computed profile: switch-codec makes the codec switch section 6's decode
+// evidence would make (the next codec, unless the profile already left the first), for the
+// compaction summary only, recorded as a switch naming the rule. long-spec is retired with the
+// query language (docs/code-tool.md): a rule naming it loads and is listed, never applied. No
+// rule touches the memory tool or the room.
 func ApplyRules(p Profile, active rules.Active) Profile {
 	codecs := tables.Codecs()
 	for _, r := range active.Rules {
@@ -431,11 +339,6 @@ func ApplyRules(p Profile, active rules.Active) Profile {
 			if p.Codec == codecs[0].Name() && len(codecs) > 1 {
 				p.Codec = codecs[1].Name()
 				p.Switches = append(p.Switches, Switch{Setting: SettingCodec, To: p.Codec, Reason: "rule " + r.ID + " (" + r.State + ")", At: r.Created})
-			}
-		case rules.RemedyLongSpec:
-			if !p.LongSpec {
-				p.LongSpec = true
-				p.Switches = append(p.Switches, Switch{Setting: SettingSpec, To: "long spec", Reason: "rule " + r.ID + " (" + r.State + ")", At: r.Created})
 			}
 		}
 	}

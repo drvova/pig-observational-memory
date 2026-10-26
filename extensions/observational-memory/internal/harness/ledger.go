@@ -8,7 +8,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/declare"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 )
@@ -90,7 +90,7 @@ func For(h host.Host, cfg config.Config, model host.Model) (Ledger, bool) {
 	return Ledger{Store: store, Model: key}, true
 }
 
-// Profile computes the model's profile from its ledger and the store's definitions, with the
+// Profile computes the model's profile from its ledger, with the
 // profile rules that apply to the model (ApplyRules), its codecs read from the model's layer
 // (Layer): the formats it declared are among the codecs it can be switched to, and a name it
 // redeclared stands for its own declaration. A ledger that cannot be read gives the default
@@ -105,8 +105,7 @@ func (l Ledger) ProfileWith(active declare.Active) Profile {
 	if err != nil {
 		return Default(l.Model)
 	}
-	definitions, _ := l.Store.ListDefinitions()
-	p := ApplyRules(ComputeWith(l.Model, events, definitions, active.CodecNames()), rules.For(l.Store, l.Model))
+	p := ApplyRules(ComputeWith(l.Model, events, active.CodecNames()), rules.For(l.Store, l.Model))
 	if c, ok := active.Codec(p.Codec); ok {
 		p.codec = c
 	}
@@ -144,10 +143,11 @@ func (l Ledger) Record(e curated.ModelEvent) {
 	_ = l.Store.RecordModel(e)
 }
 
-// DefinedQueries are the stored queries of memoryTools (MemoryToolNames) by name: a call of a
-// defined tool is a memory query (rules.MemoryQueries). A stored definition this process did not
-// register (another tool holds its name) is not among them, and neither is a registered tool
-// whose definition was forgotten (it has no stored query). None without a store.
+// DefinedQueries are the stored queries of memoryTools (MemoryToolNames) by name: a call the
+// retired defined tool of that name left on the branch is a memory query, read but never run
+// (rules.MemoryQueries, dropped-then-queried). A stored definition whose name another tool holds
+// is not among them (that tool's calls are conversation), and neither is a forgotten one (it has
+// no stored query). None without a store.
 func DefinedQueries(h host.Host, cfg config.Config, memoryTools []string) map[string]string {
 	store, ok := StoreOf(h, cfg)
 	if !ok {
@@ -159,7 +159,7 @@ func DefinedQueries(h host.Host, cfg config.Config, memoryTools []string) map[st
 	}
 	out := make(map[string]string, len(definitions))
 	for _, d := range definitions {
-		if d.Name != memquery.ToolName && slices.Contains(memoryTools, d.Name) {
+		if d.Name != omtool.ToolName && slices.Contains(memoryTools, d.Name) {
 			out[d.Name] = d.Query
 		}
 	}
@@ -167,25 +167,25 @@ func DefinedQueries(h host.Host, cfg config.Config, memoryTools []string) map[st
 }
 
 // MemoryToolNames are the tools whose calls are memory plumbing, not conversation: the memory
-// tool and the tools the agent defined with it that this process registered
-// (runtime.Runtime.DefinedTools, harness.Manager.Registered), the memory tool first and the
-// rest in name order. Level-0 extraction leaves their calls and results out (extract.Input's
-// SkipTools): the memory tool's writes persist in the curated store, and extracting them would
-// feed memory back into itself.
+// tool and the retired defined queries' names (runtime.Runtime.SkipTools,
+// harness.Manager.SkipNames), the memory tool first and the rest in name order. Level-0
+// extraction leaves their calls and results out (extract.Input's SkipTools), and so do the
+// minimal brief, the level-1 input, thinning and the curated evidence: the memory tool's writes
+// persist in the curated store, and extracting them would feed memory back into itself, and the
+// calls the removed defined tools left on the branch stay what they were when they were made.
 //
-// The list is the registered tools, not the store's definitions: a stored definition whose
-// name another tool holds is never registered (Manager.RegisterStored), so that tool's calls
-// stay conversation. It only grows within a process: a forgotten definition's tool stays
-// registered, so calls of it already on the branch stay skipped and needing no coverage, as
-// they did when they were made. An extraction resolves it once and uses that list throughout.
+// A retired name another tool holds is left out, so that tool's calls stay conversation. The
+// list only grows within a process: a forgotten definition's name stays, so its calls already on
+// the branch stay skipped and needing no coverage. An extraction resolves it once and uses that
+// list throughout.
 func MemoryToolNames(rt *runtime.Runtime) []string {
-	defined := rt.DefinedTools()
+	defined := rt.SkipTools()
 	names := make([]string, 0, len(defined)+1)
 	for _, name := range defined {
-		if name != memquery.ToolName && !slices.Contains(names, name) {
+		if name != omtool.ToolName && !slices.Contains(names, name) {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
-	return append([]string{memquery.ToolName}, names...)
+	return append([]string{omtool.ToolName}, names...)
 }

@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/snippettest"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/thin"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
@@ -82,7 +83,7 @@ func TestThinsAnsweredRetainedResultsOnly(t *testing.T) {
 	if len(plan) != 1 || plan["c1"] == "" || plan["c2"] != "" {
 		t.Fatalf("plan %v", plan)
 	}
-	if !strings.Contains(plan["c1"], `bash "go test ./..." failed: FAIL x_test.go`) || !strings.Contains(plan["c1"], `memory "recall r1"`) {
+	if !strings.Contains(plan["c1"], `bash "go test ./..." failed: FAIL x_test.go`) || !strings.Contains(plan["c1"], "the full result: memory: om.Recall(`r1`)") {
 		t.Fatalf("c1 thinned to %q", plan["c1"])
 	}
 	// The read the final answer came from, thinned once a later round answered after it.
@@ -90,9 +91,10 @@ func TestThinsAnsweredRetainedResultsOnly(t *testing.T) {
 	if got := thin.Compute(input(later)); !strings.Contains(got["c2"], `read "x.go" worked`) || got["c9"] != "" {
 		t.Fatalf("plan with a later round %v", got)
 	}
-	// The query the thinned text names returns the original.
-	if res := memquery.Run(memquery.Env{Entries: entries}, "recall r1"); res.IsError || !strings.Contains(res.Text, "FAIL x_test.go") || !strings.Contains(res.Text, "output line") {
-		t.Fatalf("recall: %+v", res)
+	// The snippet the thinned text names, run as memory tool code, returns the original.
+	_, snippet, _ := strings.Cut(plan["c1"], "the full result: memory: ")
+	if text := snippettest.Recall(t, entries, snippet); !strings.Contains(text, "FAIL x_test.go") || !strings.Contains(text, "output line") {
+		t.Fatalf("recall: %s", text)
 	}
 
 	messages := contextOf(entries)
@@ -166,10 +168,10 @@ func TestNoCompactionNoThinning(t *testing.T) {
 
 func TestMemoryToolResultsAreNotThinned(t *testing.T) {
 	entries := branch()
-	entries[6] = call("a2", "c2", memquery.ToolName, map[string]any{"query": "notes"})
-	entries[7] = result("r2", "c2", memquery.ToolName, big, false)
+	entries[6] = call("a2", "c2", omtool.ToolName, map[string]any{"code": "om.Notes()"})
+	entries[7] = result("r2", "c2", omtool.ToolName, big, false)
 	in := input(entries)
-	in.SkipTools = []string{memquery.ToolName}
+	in.SkipTools = []string{omtool.ToolName}
 	if plan := thin.Compute(in); plan["c2"] != "" || plan["c1"] == "" {
 		t.Fatalf("plan %v", plan)
 	}

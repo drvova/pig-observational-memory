@@ -1,5 +1,5 @@
 // Package recall reads back the exact evidence behind a memory id: the
-// memory tool's recall <id> query (internal/memquery) and its TUI rendering.
+// memory tool's om.Recall of a record id (internal/omhost) and its TUI rendering.
 package recall
 
 import (

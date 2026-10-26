@@ -1,6 +1,6 @@
 # Memory interface (design)
 
-> **Status.** The query language, the codecs, the curated store and the kernel stand as written here. The parts that ran through memory v1's background workers (the observer's rows, the build and revision passes, the `harness` and `propose` writes, the v1 remedies, v1's probation and grading) are superseded by [memory v2](memory-v2.md), the only engine: definitions and rules are proposed only inside a compaction's level-1 request, and only the `keep-head`, `switch-codec` and `long-spec` remedies act. Section 4's budget is v1's: the v2 summary budget is `config.ResolveV2SummaryBudget` ([configuration](configuration.md#the-summary-budget)), and `compactAfterTokens` and the proactive trigger are removed. Identifiers named here that the cleanup deleted (`agents.RunBuilder`, `ledger.RenderSectionsSummary`, `ledger.RenderSummaryWithOptions`, `config.ResolveSummaryBudget`, `rules.JudgeDefinitions`, `rules.RevisionDue`, `rules.StageOfRemedy`, `rules.GradingKeys`, `harness.DefinitionModel`, `harness.LayerReportsFor`) are historical. Where this page and memory-v2.md differ, memory-v2.md holds.
+> **Status.** The codecs, the curated store and the kernel stand as written here. The query language is removed by the [code tool](code-tool.md) (section 5): its interpreter (`internal/memquery`) is deleted, and only the frozen recognizer (`internal/legacyquery`) still reads text written in it. The parts that ran through memory v1's background workers (the observer's rows, the build and revision passes, the `harness` and `propose` writes, the v1 remedies, v1's probation and grading) are superseded by [memory v2](memory-v2.md), the only engine: definitions and rules are proposed only inside a compaction's level-1 request, and only the `keep-head`, `switch-codec` and `long-spec` remedies act. Section 4's budget is v1's: the v2 summary budget is `config.ResolveV2SummaryBudget` ([configuration](configuration.md#the-summary-budget)), and `compactAfterTokens` and the proactive trigger are removed. Identifiers named here that the cleanup deleted (`agents.RunBuilder`, `ledger.RenderSectionsSummary`, `ledger.RenderSummaryWithOptions`, `config.ResolveSummaryBudget`, `rules.JudgeDefinitions`, `rules.RevisionDue`, `rules.StageOfRemedy`, `rules.GradingKeys`, `harness.DefinitionModel`, `harness.LayerReportsFor`) are historical. Where this page and memory-v2.md differ, memory-v2.md holds. Section 6's defined tools (`define`, their registration, probation and per-model activation) are retired by the [code tool](code-tool.md): their stored definitions are listed by `om.Retired()` and `/om:status`, never registered or run.
 
 The memory's model-facing surface: one format the model reads and writes, one tool it calls,
 and tools it can define for itself. Storage does not change: records stay JSON in Pi's session
@@ -161,7 +161,7 @@ the same way for every model, never rewriting a stored record:
   reflector appends it after them (one without the claim folds by its position), into the
   compaction's `om.folded` details (`aliases`, omitted when empty), and the memory view, the
   notes source, a model's summary, the observer's subject list and the detectors a model
-  defines (over the memory before the pass, `memquery.Records.SubjectContext`) all read them.
+  defines (over the memory before the pass, `omhost.Records.SubjectContext`) all read them.
 
 ## 3. The memory view (compaction summary)
 
@@ -226,77 +226,38 @@ rule that retained source plus summary fit within `compactionMaxRetainedTokens` 
 
 ## 5. The memory tool
 
-One tool, `memory`, with one string parameter, `query`, replaces `recall` and the six curated
-tools. A query is a source followed by stages, or a single write.
+The memory tool runs Go code: one tool, `memory`, taking `code` (Go source; empty prints the
+manual) and optional `strings` (named text values the code reads with `om.Str`). The design,
+the `om` API, the child process, persistence, the code policy and the limits are in
+[docs/code-tool.md](code-tool.md); this section only records what changed here.
 
-```
-notes | search "sourdough" | where kind=event | count by subject
-history | search "india online store" | limit 5
-recall 3f9a2c1d7b4e
-saved | where type=feedback
-save type=user name=prefers-tabs description="The user indents with tabs."
-feedback name=prefers-tabs outcome=helped quote="tabs please, like last time"
-define bake-count = notes | where subject=baking | count "How many times the user baked"
+```go
+om.Recall(`3f9a2c1d7b4e`)
+om.History(om.Search(`india online store`).Limit(5))
+om.Notes(om.Search(`sourdough`).Kind(`event`)).Count("subject")
+om.Save("prefers-tabs", "user", "The user indents with tabs.", om.Quoting("tabs please"))
+func bakes() int { return om.Notes(om.Subject("baking")).Len() } // kept for later sessions
 ```
 
-- Sources: `notes` (active observations; `subject` is the canonical subject of section 2,
-  `scope` the scope as stored, `subject_scope` what the written subject adds to the canonical
-  one, and `raw_subject` what the observer wrote, so `where subject=running` finds `running
-  shoes` and summaries a model defines group the same way; `where subject=` and `subject~` also
-  match `raw_subject`, so a definition filtering on a written subject keeps its rows when a
-  shorter subject appears, while `group by subject` follows the canonical subject and its
-  table names move with it; a field a schema added as `raw_subject` or `subject_scope` before
-  the kernel took the name reads as `schema_raw_subject` or `schema_subject_scope`),
-  the level-0 fields of memory v2 follow: `status` (`proposed`, `hypothetical` or `retracted`,
-  empty for a statement of fact), `event_date` (the date the record is about), and `source`,
-  `source_role` and `source_time` (its first source entry, that entry's role as `history`
-  names it, and its time; role and time empty when the entry is off the branch); no schema may
-  declare one of these names (the kernel owns them for schemas), and a field a schema stored
-  before then added under one reads as `schema_<name>` under memory v2, while under v1, whose
-  records leave these fields empty, it keeps its name and fills that column),
-  `reflections`, `history` (raw user and assistant
-  text on the branch, the way nodecode's `recall-log` scans its log, without the calls and
-  results of the memory tool and the defined tools), `saved` (curated
-  memories), and `recall <id>` (one record with its source, as the old recall tool did; under
-  memory v2 a note's recall also lists `cited_by`, the reflections still standing that cite it,
-  from the fold's reverse links, and leaves thinking out of its source entries). `recall <id> offset N` reads a paged text on from character N.
-- Stages: `search "words"` (all words, case-insensitive, literal), `where field=value`,
-  `where field~"text"`, `since DATE`, `until DATE`, `from ID`, `through ID` (by branch position),
-  `sort field [desc]`, `limit N` (default 20, at most 200), `count [by field]`, `group by field`.
-  A bound may end with a fixed word: `since DATE event` and `until DATE event` compare a
-  note's `event_date` (its entry time when it has none), as `sort event_date` orders; `until
-  DATE asof` and `through ID asof` read notes and reflections as the memory stood at the bound
-  (the point-in-time view): drops and reflections recorded after it are not applied, a record
-  not yet in the memory then is not listed (a record level 1 wrote at a later compaction holds
-  only from where it was recorded, under either bound), and a record superseding after it is
-  listed in `superseded_by` with `(later)`, so the record it replaced reads as the value current
-  then. Without `asof`, `until` and `through` filter the
-  current memory, which keeps every query the summary prints listing exactly what it counts.
-  `event` and `asof` are words after a bound, not stages, so they take no name from
-  definitions; one `asof` per query, never with `event`.
-  Every stage name is kernel-owned under either engine (section 8), `from` and `through`
-  included: a defined query or tool stored under one of those names before the stages existed
-  is refused when the layer loads, with a report naming the query engine's stages, and a new
-  `define` under them is refused.
-- Writes: `save`, `edit`, `forget`, `feedback` (with an evidence `quote`, as nodecode's
-  experience cell requires: words copied verbatim from a user or assistant message on the
-  branch, whitespace and case aside; a quote found only in tool output or in memory tool calls
-  is refused, since tool output may carry injected text), and `define`, which names a query as
-  a new tool (section 6).
-- Results are tables in the active codec with a `matched N, showing M` line when cut. Errors name the
-  position and the fix. Queries cannot loop or run code; every query finishes.
-- Under memory v2 (docs/memory-v2.md, "Memory tool" and "Curated memory"): `history` leaves out
-  the current turn and harness markup and lists newest first; a search with no hit gives the
-  count of entries on the current branch holding each word, matched as the search matches; a cut result leads with `matched N, showing M` and, for
-  `history`, the query for the next older page (`through` the first entry left out); `recall`
-  pages a text longer than one record's content bound on line boundaries, naming the next
-  offset, and leaves thinking out of an entry; when the branch has nothing, `history`, `notes`
-  and `recall` read the session file, labelling rows `(off-path)`. `save` takes `quote=`, a
-  user's words that make it live at once; without one it is staged (shown in `saved` with
-  `state` `staged` only in its session, absent from the index) until code finds evidence;
-  `forget` retires; `saved` adds `state` (`live`, `staged`, `pinned`, `flagged`, and `refused`
-  for a memory file the validator refuses on load, listed with its reason; `edit` within the
-  validator or `forget` still reach it). Defined tools run their queries the same way.
+- The tool's description, schema, prompt lines and output are the same for every model; no
+  profile changes them (the `long-spec` setting and remedy are retired, and `decode-failure`
+  counts codec failures only).
+- The reads keep the query language's semantics (the current turn left out of `History`, the
+  off-path fallback labelled `(off-path)`, canonical subjects, `cited_by`, the point-in-time
+  view with `AsOf()` while plain `Until`/`Through` filter the current memory, paging with a
+  `Next` snippet, no thinking); the writes still go through `curated.Call.Run`.
+- Top-level functions, methods, types and constants a call compiles are kept per project and
+  replayed into every new namespace; variables live for one conversation.
+- Summaries, the level-1 prompt, the thinning stub and the fixed texts print om snippets
+  (``om.Notes(om.From(`<first id>`).Through(`<last id>`))``, ``om.Recall(`<id>`)``), which survive every codec.
+
+**Removed: the query language.** A source followed by `|` stages (`notes | search "x" | limit
+5`, `recall <id>`) or one write (`save name=...`, `define ...`). Its lexer, parser, interpreter
+and writes (`internal/memquery`) are deleted. Old queries are never run: the
+tool answers one with a removal notice and, for a read, the equivalent snippet, generated by
+the strict formatter (`internal/legacyquery`). Stored defined queries, old memory tool calls on
+the branch and old summaries keep loading through the frozen recognizer, and
+`om.Retired()` lists the defined queries with their snippets.
 
 ## 6. The per-model harness
 
@@ -431,7 +392,7 @@ is recorded with who asked and why, before it takes effect.
 | `instructions` | its own observer, reflector and dropper instructions | always after the kernel's fixed rules, which carry every rule the code relies on (the note fields among them); by default an addition appended after the seed instructions (kernel rules, seed, the model's text); a text opening with `mode: replace` replaces the seed instructions only, is held, then on probation, and is shown so in `/om:status` |
 | `summary` | the memory query that selects and groups what the summary shows | run under the room budget; the kernel still discloses every omitted span |
 | `tool` | named queries (section 6) | registered, never shadowing `memory` |
-| `detector` | a query over its notes and the event ledger that counts a failure | flags problems; never judges a remedy written after it |
+| `detector` | a kernel check, or Go code (`func Count() int` over a read-only `om`, see `docs/code-tool.md`, "Detectors"); a query of the removed language still loads and is retired | flags problems; never judges a remedy written after it |
 | `remedy` | an instruction line, a note template, or a setting within kernel bounds | applied to that model only |
 
 - **Layer files.** Each definition is written atomically to
@@ -527,11 +488,14 @@ is recorded with who asked and why, before it takes effect.
   the four structured fields and add fields of type text, enum, number or date, which the
   observer offers, validates and stores in `Observation.fields`; a summary is one query or a
   declaration of up to eight sections, each reading `notes` or `reflections` through
-  `memquery.Select` over the compaction's projection, laid out under the room budget by the
+  the query language over the compaction's projection (under v2 a declaration is only validated,
+  by the frozen recognizer, and never run), laid out under the room budget by the
   kernel (`ledger.RenderSectionsSummary`), which always appends the `omitted` table for every
-  record not shown (no section may take its name); a detector declares a kernel check or a query
-  over the pass's notes and covered history and is counted as `defined:<name>` beside the
-  kernel's checks, which alone judge rules; a catalogue entry must answer a detector within
+  record not shown (no section may take its name); a detector declares a kernel check, or Go code
+  that passes `codepolicy.CheckDetector` and runs in the background after each compaction over
+  what it removed, counted as `defined:<name>` in that pass's `detector-pass` event beside the
+  kernel's checks, which alone judge rules (a `query` detector of the removed language still loads
+  and is retired: it counts nothing and a held one is never settled); a catalogue entry must answer a detector within
   `Answers` and pass `rules.Check`. The session model's layer selects the summary, the worker
   model's layer the observer's codec, schema and instructions and its catalogue; the profile's
   codecs are the shipped ones then the model's newly named formats. A name standing as its seed

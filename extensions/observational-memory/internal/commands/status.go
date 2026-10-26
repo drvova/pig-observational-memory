@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/jsfmt"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 )
 
@@ -136,12 +137,14 @@ func recordsLines(entries []ledger.Entry) []string {
 	return []string{line, fmt.Sprintf("Reflections: %d recorded / %d standing", len(folded.Reflections), len(ledger.ActiveReflections(folded.Reflections)))}
 }
 
-// statusLines is the /om:status report (docs/memory-v2.md, "Status"): PiG's threshold and the
-// context against it, whether auto-compaction is on, the last compaction's level, request
-// count and level-1 failure reason, the records by who added them, the curated memories staged
-// and live, the harness evidence since the last level-1 offer, the removed settings still set
-// and the project's trust.
-func statusLines(rt *runtime.Runtime, h host.Host, cfg config.Config, entries []ledger.Entry) []string {
+// StatusFigures are the /om:status figures that do not depend on the session model
+// (docs/code-tool.md, "Order of work"): the mode, the settings, the memory and the latest
+// compaction, what is in flight, the curated memories, the harness lines that belong to no
+// model, then one block per model with usage events, each computed from that model's own
+// ledger and layer and labelled with it. It never reads the session model: om.Info answers
+// with it, so the same store prints the same figures under any session model, and /om:status
+// prints it before its session-model lines.
+func StatusFigures(rt *runtime.Runtime, h host.Host, cfg config.Config, entries []ledger.Entry) om.StatusInfo {
 	lines := []string{}
 	if cfg.Passive {
 		lines = append(lines, "── Mode ──", "Passive: turn-end extraction, level 1, thinning and the extension's compaction trigger are off; PiG's compactions, commands and recall remain active", "")
@@ -156,12 +159,8 @@ func statusLines(rt *runtime.Runtime, h host.Host, cfg config.Config, entries []
 		lines = append(append(append(lines, "── Settings ──"), settings...), "")
 	}
 	lines = append(append(lines, "── Memory ──"), recordsLines(entries)...)
-	lines = append(lines, "", "── Compaction ──", compactionLine(cfg, h))
 	if line := lastCompactionLine(entries); line != "" {
 		lines = append(lines, line)
-	}
-	if suspension := hooks.ActiveV2CompactionSuspension(rt, h, entries); suspension != nil {
-		lines = append(lines, fmt.Sprintf("Compaction trigger suspended: %s; asks again once the branch grows", suspension.Reason))
 	}
 	if state := rt.Snapshot(); state.CompactInFlight || state.CompactHookInFlight {
 		lines = append(lines, "", "── In flight ──")
@@ -175,8 +174,30 @@ func statusLines(rt *runtime.Runtime, h host.Host, cfg config.Config, entries []
 	if curatedLines := harness.CuratedStatusLines(h, cfg); len(curatedLines) > 0 {
 		lines = append(append(lines, ""), curatedLines...)
 	}
-	if harnessLines := harness.StatusLines(h, cfg); len(harnessLines) > 0 {
+	if harnessLines := harness.SharedStatusLines(h, cfg); len(harnessLines) > 0 {
 		lines = append(append(lines, ""), harnessLines...)
+	}
+	return om.StatusInfo{Lines: lines, Models: harness.UsageModelStatus(h, cfg)}
+}
+
+// statusLines is the /om:status report (docs/memory-v2.md, "Status"): the shared figures
+// (StatusFigures: records, the last compaction's level, request count and level-1 failure
+// reason, the curated memories, the harness, and one block per model with usage events), then
+// the lines that depend on the session model: PiG's threshold and the context against it,
+// whether auto-compaction is on, the trigger's suspension, and the session model's profile;
+// last the memory tool's kept definitions and namespace child (runtime.Runtime.CodeStatus),
+// which this process's state, not the store alone, decides, so om.Info leaves them out.
+func statusLines(rt *runtime.Runtime, h host.Host, cfg config.Config, entries []ledger.Entry) []string {
+	lines := strings.Split(StatusFigures(rt, h, cfg, entries).String(), "\n")
+	lines = append(lines, "", "── Compaction ──", compactionLine(cfg, h))
+	if suspension := hooks.ActiveV2CompactionSuspension(rt, h, entries); suspension != nil {
+		lines = append(lines, fmt.Sprintf("Compaction trigger suspended: %s; asks again once the branch grows", suspension.Reason))
+	}
+	if session := harness.SessionStatusLines(h, cfg); len(session) > 0 {
+		lines = append(append(lines, ""), session...)
+	}
+	if code := rt.CodeStatus(h); len(code) > 0 {
+		lines = append(append(lines, "", "── Code ──"), code...)
 	}
 	return lines
 }
@@ -190,6 +211,19 @@ func StatusLines(rt *runtime.Runtime, h host.Host) ([]string, error) {
 		return nil, err
 	}
 	return statusLines(rt, h, cfg, entries), nil
+}
+
+// Info is om.Info's answer (StatusFigures over h's branch and live configuration): the figures
+// that belong to no model, then one block per model, never anything read from the session
+// model. It starts, kills or replays no child.
+func Info(rt *runtime.Runtime, h host.Host) (om.StatusInfo, error) {
+	rt.EnsureConfig(h)
+	cfg := rt.LiveConfig(h.Cwd())
+	entries, err := h.GetBranch()
+	if err != nil {
+		return om.StatusInfo{}, err
+	}
+	return StatusFigures(rt, h, cfg, entries), nil
 }
 
 // RunStatus is the /om:status handler.

@@ -43,8 +43,8 @@ func TestDetectV2CountsOnlyV2Detectors(t *testing.T) {
 }
 
 // One evidence unit is one compaction: its pass sums the detector runs since the previous
-// compaction (counts and tokens), adds level 1's code checks and the memory syntax errors
-// counted under v2 since then, and ignores what v1 counted.
+// compaction (counts and tokens) and adds level 1's code checks; a query-language syntax error
+// counts nothing (decode-failure is codec failures only), and what v1 counted is ignored.
 func TestV2CompactionSumsDetectorRunsSinceTheLastOne(t *testing.T) {
 	store := newStore(t)
 	_ = RecordDetection(store, "p/m", Findings{Counts: map[string]int{DetectUncitedAssistantSpecifics: 1}}, 40)
@@ -56,7 +56,7 @@ func TestV2CompactionSumsDetectorRunsSinceTheLastOne(t *testing.T) {
 	}
 	events, _ := store.ModelEvents("p/m")
 	p := events[len(events)-1]
-	want := map[string]int{DetectUncitedAssistantSpecifics: 3, DetectDroppedThenQueried: 1, DetectDecodeFailure: 1, CountLevel1Refused: 2}
+	want := map[string]int{DetectUncitedAssistantSpecifics: 3, DetectDroppedThenQueried: 1, CountLevel1Refused: 2}
 	if p.Kind != curated.ModelKindPass || p.Stage != StageCompaction || p.Engine != curated.EngineV2 || p.Tokens != 100 || !reflect.DeepEqual(p.Counts, want) || p.Kinds["fact"] != 1 {
 		t.Fatalf("pass %+v", p)
 	}

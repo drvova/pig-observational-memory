@@ -68,7 +68,7 @@ func TestV2ThinsAgedToolResultsWithoutRequests(t *testing.T) {
 		t.Fatalf("thinned %d", n)
 	}
 	thinned := resultTextOf(first, "pc1")
-	if !strings.HasPrefix(thinned, "[thinned] bash \"go test ./...\" failed: --- FAIL: TestLoad") || !strings.Contains(thinned, `memory "recall pt1"`) {
+	if !strings.HasPrefix(thinned, "[thinned] bash \"go test ./...\" failed: --- FAIL: TestLoad") || !strings.Contains(thinned, "memory: om.Recall(`pt1`)") {
 		t.Fatalf("thinned to %q", thinned)
 	}
 	// The fresh turn after the compaction, and the original on the branch, stay whole.
@@ -208,8 +208,8 @@ func TestV2NothingToCompactSuspendsUntilTheTipChanges(t *testing.T) {
 	}
 }
 
-// The plan is derived once per compaction: a change between two compactions (here a defined
-// tool registered under the thinned result's tool name) leaves every request's bytes as they
+// The plan is derived once per compaction: a change between two compactions (here the skip list
+// gaining the thinned result's tool name) leaves every request's bytes as they
 // were; the next compaction derives a new plan, thinning every answered result it retained.
 func TestV2ThinPlanFixedUntilTheNextCompaction(t *testing.T) {
 	counter := testfix.CountRequests(t)
@@ -218,11 +218,11 @@ func TestV2ThinPlanFixedUntilTheNextCompaction(t *testing.T) {
 	if n := OnContext(rt, h, contextMessages(t, entries)); n != 1 {
 		t.Fatalf("thinned %d", n)
 	}
-	rt.SetDefinedTools(func() []string { return []string{"bash"} })
+	rt.SetSkipTools(func() []string { return []string{"bash"} })
 	if n := OnContext(rt, h, contextMessages(t, entries)); n != 1 {
 		t.Fatalf("the plan changed without a compaction: thinned %d", n)
 	}
-	rt.SetDefinedTools(nil)
+	rt.SetSkipTools(nil)
 	compacted := append(append([]ledger.Entry{}, entries...), testfix.CompactionEntry("k2", testfix.CompactionArgs{FirstKeptEntryID: "pu", Summary: "summary two"}))
 	h.SetBranch(compacted)
 	// pc1 and qc1 are answered; qc3 is the newest round, and the "ok" results would not shrink.

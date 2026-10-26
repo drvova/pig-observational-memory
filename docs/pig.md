@@ -35,7 +35,8 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 | `internal/ledger` | record types, fold, extraction progress, projections, recall sources |
 | `internal/agents` | the single model request (`agents.Request`) and the level-1 prompt composition |
 | `internal/runtime` | per-process state and session model resolution |
-| `internal/commands`, `internal/recall`, `internal/memquery` | `/om:status`, `/om:view`, the `memory` tool and its `recall <id>` evidence |
+| `internal/commands`, `internal/recall` | `/om:status`, `/om:view`, and the source evidence `om.Recall` returns |
+| `internal/omtool`, `internal/om`, `internal/omhost`, `internal/codepolicy`, `internal/sandbox`, `internal/codestore`, `internal/provenance`, `internal/legacyquery` | the `memory` tool, which runs Go code ([code-tool.md](code-tool.md)): its fixed surface, the `om` API, the extension's answers to `om` calls, the code policy, the namespace child, kept definitions, and the frozen recognizer of the removed query language |
 | `internal/curated`, `internal/harness`, `internal/rules`, `internal/kernel`, `internal/layer`, `internal/declare` | curated memory, the per-model harness, rules, the kernel and the model-built layer |
 | `internal/config`, `internal/serialize`, `internal/session`, `internal/tokens`, `internal/tables`, `internal/ids`, `internal/jsfmt`, `internal/debuglog`, `internal/clipboard` | settings, source serialization and session files, token estimates, codecs, ids, formatting, debug log, clipboard |
 | `internal/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call its static helpers) |
@@ -55,10 +56,10 @@ These notes are for users of the TypeScript Pi extension [pi-observational-memor
 ### What differs
 
 * **No background workers.** The TypeScript extension's observer, reflector and dropper ran model requests between compactions. This extension records memory by code at every turn end and makes at most one request per compaction, on the session model ([memory-v2.md](memory-v2.md)). Their settings (`observeAfterTokens`, `reflectAfterTokens`, `model`, `fallbackModel`, the pool and chunk settings, `compactAfterTokens` and the rest) are ignored and listed in `/om:status`; see [Removed settings](configuration.md#removed-settings).
-* **Every compaction PiG prepares is owned, on PiG's exact cut.** The hook never delegates to PiG's summarizer, never moves the cut, and renders the summary from the ledger by code under a budget derived from what PiG reports, with every omitted span printed as a `memory` tool query.
+* **Every compaction PiG prepares is owned, on PiG's exact cut.** The hook never delegates to PiG's summarizer, never moves the cut, and renders the summary from the ledger by code under a budget derived from what PiG reports, with every omitted span printed as a `memory` tool om snippet.
 * **The extension compacts only when PiG's automatic compaction is off**, at PiG's own threshold; otherwise PiG decides when to compact.
-* **`recall` is a query of the `memory` tool** (`recall <id>`), beside notes, reflections, history and the curated store.
-* **Thinking blocks never reach memory.** Level 0 and level 1 see the assistant's text, tool calls and tool results; a model's private reasoning is left out. `recall <id>` of a record still shows thinking in its source evidence.
+* **`recall` is an `om` call of the `memory` tool** (``om.Recall(`<id>`)``), beside notes, reflections, history and the curated store; the tool runs Go code, not a query language.
+* **Thinking blocks never reach memory.** Level 0 and level 1 see the assistant's text, tool calls and tool results; a model's private reasoning is left out. `om.Recall` of a record never returns thinking either.
 * **`customInstructions` passed to a compaction are honoured**: they go to level 1's input when it runs, and otherwise ride along after the memory when they fit the budget.
 * **Shell executions (`!command`) are serialized with their command and output**; `!!command` runs, which PiG keeps out of the agent's context, stay out of memory too.
 * **Coverage requires a valid record entry.** An entry with one malformed record is ignored by memory and by coverage alike, so its span is extracted again rather than silently lost.

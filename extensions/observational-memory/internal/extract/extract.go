@@ -12,7 +12,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -47,7 +47,7 @@ type Input struct {
 	Start, End int
 	// SkipTools are the memory tool and the tools the agent defined with it
 	// (harness.MemoryToolNames): their calls and results are not conversation. The memory
-	// tool's own notes are still read (memquery.ToolName).
+	// tool's own notes are still read (omtool.ToolName).
 	SkipTools []string
 	// Ledger is the memory folded from the branch (ledger.FoldLedger): its active records give
 	// the subjects, the open attempts, the file states and the notes this extraction continues,
@@ -402,5 +402,5 @@ func SegmentEnd(entries []session.Entry, anchor, last int) int {
 
 // isSkipped reports a call or result of a memory tool or a defined tool.
 func (x *extraction) isSkipped(name string) bool {
-	return name != "" && (name == memquery.ToolName || slices.Contains(x.in.SkipTools, name))
+	return name != "" && (name == omtool.ToolName || slices.Contains(x.in.SkipTools, name))
 }

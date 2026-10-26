@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ type ModelEvent struct {
 	Time string `json:"time"`
 	// Model is the model id the event is counted for (provider/id).
 	Model string `json:"model"`
-	// Kind is ModelKindMemory, ModelKindDecode or ModelKindDefined.
+	// Kind is one of the ModelKind constants.
 	Kind string `json:"kind"`
 	// Outcome is one of the Outcome constants.
 	Outcome string `json:"outcome"`
@@ -27,6 +28,9 @@ type ModelEvent struct {
 	Codec string `json:"codec,omitempty"`
 	// Syntax marks a memory call that failed to parse.
 	Syntax bool `json:"syntax,omitempty"`
+	// Legacy marks a memory tool code call (ModelKindCode) that was a query of the removed
+	// query language, answered with the removal notice and run as nothing.
+	Legacy bool `json:"legacy,omitempty"`
 	// Target is what a shown or omitted hit was checked against: TargetSummary or TargetIndex.
 	Target string `json:"target,omitempty"`
 	// Tool is a defined tool call's tool name.
@@ -59,6 +63,18 @@ type ModelEvent struct {
 	// before its level 1, so a held definition is settled only on passes that ran under exactly
 	// its text, whichever session or process recorded others in between (rules.SettleV2).
 	RanHeld []string `json:"ranHeld,omitempty"`
+	// Cut is, for a detector pass (ModelKindDetectorPass), the id of the compaction's
+	// firstKeptEntryId: the cut whose removed range the pass's detectors read.
+	Cut string `json:"cut,omitempty"`
+	// Errors are, for a detector pass, the detectors whose run gave no count, by name, with the
+	// reason (a compile failure, a panic, a crash, a disallowed method, or killed unfinished).
+	Errors map[string]string `json:"errors,omitempty"`
+	// Unfinished is, for a detector pass, the detector whose run was killed unfinished, so the
+	// next pass starts its order after it (docs/code-tool.md, "Running, and the time bound").
+	Unfinished string `json:"unfinished,omitempty"`
+	// Pending are, for a detector pass, the detectors level 1 proposed at the compaction whose
+	// smoke run the pass made first: held when it returned a count, refused otherwise.
+	Pending []string `json:"pending,omitempty"`
 }
 
 // EngineV2 is ModelEvent.Engine for an event counted under memory v2 (config.EngineV2).
@@ -70,8 +86,14 @@ const (
 	ModelKindMemory = "memory"
 	// ModelKindDecode is one decode of a rows table the observer was sent.
 	ModelKindDecode = "decode"
-	// ModelKindDefined is a call of a tool the agent defined.
+	// ModelKindDefined is a call of a tool the agent defined with the removed query language:
+	// history, never graded (the defined tools are retired, docs/code-tool.md).
 	ModelKindDefined = "defined"
+	// ModelKindCode is a call of the memory tool since it runs Go code (docs/code-tool.md):
+	// Outcome error for code that did not compile, panicked or crashed the child, ok for a
+	// write, empty when every read returned nothing, else shown or omitted against the summary
+	// and the index. It counts only toward the summary-size switch.
+	ModelKindCode = "code"
 	// ModelKindPass is one compaction (Stage "compaction"), with what the rules' detectors
 	// counted since the previous one (docs/memory-interface.md, section 7); memory v1 recorded
 	// one per worker pass, without an engine.
@@ -82,6 +104,14 @@ const (
 	// since the previous one, so one evidence unit is one compaction (docs/memory-v2.md,
 	// "Self-built harness").
 	ModelKindDetect = "detect"
+	// ModelKindDetectorPass is one detector pass (docs/code-tool.md, "Running, and the time
+	// bound"): the Go detectors a model defined, run in the background after a compaction over
+	// what it covered, each in a detector child of its own. Counts carry each detector's count
+	// under rules.DefinedCountKey (zero included, so a run that counted is told from one that
+	// did not run) and the smoke runs refused (rules.CountLevel1Refused); Errors the runs that
+	// gave no count; RanHeld the held texts whose run started. Never a judge of a rule: the
+	// kernel's findings stay on the compaction pass.
+	ModelKindDetectorPass = "detector-pass"
 )
 
 // The model event outcomes.
@@ -142,6 +172,34 @@ func (s Store) RecordModelLocked(e ModelEvent) error {
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
 	return err
+}
+
+// UsageModels are the models whose usage ledger holds at least one event, in name order: the
+// models /om:status and om.Info give a block each, whichever model is the session model.
+func (s Store) UsageModels() ([]string, error) {
+	entries, err := os.ReadDir(s.modelsDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if !ok || e.IsDir() {
+			continue
+		}
+		model, ok := layer.ModelOfDir(name)
+		if !ok {
+			continue
+		}
+		if events, err := s.ModelEvents(model); err == nil && len(events) > 0 {
+			out = append(out, model)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ModelEvents reads a model's usage ledger in the order it was written. A missing ledger is

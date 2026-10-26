@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
@@ -34,52 +35,20 @@ type Definition struct {
 // tool's description in every later session, so it stays one short sentence.
 const MaxDefinitionDescriptionChars = 200
 
-// MaxDefinitionQueryChars and MaxDefinitionLiteralChars bound a definition's
-// query, in characters, and each quoted text in it. The query is shown in the
-// tool's description in every later session too, so its text is bounded like
-// the description's: a whole query of one short line, whose quoted texts are a
-// few search words or a field value, not sentences.
+// MaxDefinitionQueryChars and MaxDefinitionLiteralChars bound a definition's query, in
+// characters, and each quoted text in it (legacyquery.CheckDefinitionBounds).
 const (
-	MaxDefinitionQueryChars   = 200
-	MaxDefinitionLiteralChars = 40
+	MaxDefinitionQueryChars   = legacyquery.MaxDefinitionQueryChars
+	MaxDefinitionLiteralChars = legacyquery.MaxDefinitionLiteralChars
 )
 
-// checkDefinitionQuery refuses a query over MaxDefinitionQueryChars characters
-// or holding a quoted text over MaxDefinitionLiteralChars. It is checked when
-// a definition is stored and again when one is read, so a file written by
-// hand or by an earlier version never reaches a tool description unbounded.
+// checkDefinitionQuery refuses a query over MaxDefinitionQueryChars characters or holding a
+// quoted text over MaxDefinitionLiteralChars, through the frozen recognizer's load check
+// (legacyquery.CheckDefinitionBounds). It is checked when a definition is stored and again when
+// one is read, so a file written by hand or by an earlier version never reaches a tool
+// description unbounded.
 func checkDefinitionQuery(query string) error {
-	if n := utf8.RuneCountInString(query); n > MaxDefinitionQueryChars {
-		return fmt.Errorf("a defined query is at most %d characters (this one has %d): keep it to a source and a few stages", MaxDefinitionQueryChars, n)
-	}
-	for _, literal := range quotedTexts(query) {
-		if n := utf8.RuneCountInString(literal); n > MaxDefinitionLiteralChars {
-			return fmt.Errorf("a quoted text in a defined query is at most %d characters (%q has %d): search for a few words, or use $input for the rest", MaxDefinitionLiteralChars, literal, n)
-		}
-	}
-	return nil
-}
-
-// quotedTexts are the "..." texts of a query, escapes kept as written; an
-// unterminated one runs to the end.
-func quotedTexts(query string) []string {
-	out := []string{}
-	start := -1
-	for i := 0; i < len(query); i++ {
-		switch {
-		case start >= 0 && query[i] == '\\':
-			i++
-		case query[i] == '"' && start < 0:
-			start = i + 1
-		case query[i] == '"':
-			out = append(out, query[start:i])
-			start = -1
-		}
-	}
-	if start >= 0 {
-		out = append(out, query[start:])
-	}
-	return out
+	return legacyquery.CheckDefinitionBounds(query)
 }
 
 // definitionTable is the table a definition's text holds, in the rows codec.
@@ -108,7 +77,9 @@ func DefinitionUsageKey(name string) string { return "query:" + name }
 
 // Define stores a new definition. A name a memory or another definition holds
 // is refused, and so is one the kernel owns (kernel.Owns): a defined tool never shadows the
-// memory tool or the query engine's words.
+// memory tool or the query engine's words. The defined tools are retired (docs/code-tool.md):
+// the extension never calls Define (om.Define refuses), and it stays only for tests that write
+// the store an earlier release left.
 func (s Store) Define(d Definition, source string) (Definition, error) {
 	if err := ValidateName(d.Name); err != nil {
 		return Definition{}, err
@@ -338,7 +309,8 @@ func legacyDefinition(name, path string) (layer.Definition, error) {
 }
 
 // RefusedDefinition is a defined tool written before the layer that the layer refused to
-// migrate, so it is not registered: its name and the layer's refusal.
+// migrate: its name and the layer's refusal. Like every defined tool, it is retired: listed,
+// never registered or run (harness.RetiredQueries).
 type RefusedDefinition struct {
 	Name, Reason string
 }
@@ -349,7 +321,7 @@ func (r RefusedDefinition) Message() string {
 }
 
 // RefusedDefinitions are the legacy defined tools the layer still refuses, each with the
-// refusal, for the user to be told (RegisterStored, /om:status). The files stay, renamed, and
+// refusal, for om.Retired and /om:status (harness.RetiredQueries). The files stay, renamed, and
 // are retried on every use.
 func (s Store) RefusedDefinitions() ([]RefusedDefinition, error) {
 	s.migrateDefinitions()
@@ -390,14 +362,4 @@ func legacyRows(dir, suffix string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// DescribeDefinition renders a definition in full for recall <name>.
-func DescribeDefinition(d Definition) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s [query]: %s\n\n%s\n\ndefined %s", d.Name, d.Description, d.Query, d.Created.Format("2006-01-02"))
-	if len(d.Sources) > 0 {
-		fmt.Fprintf(&b, ", sessions: %s", strings.Join(d.Sources, ", "))
-	}
-	return b.String()
 }

@@ -14,8 +14,12 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ids"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om/omwire"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/snippettest"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
@@ -172,8 +176,8 @@ func TestV2MigrationFromV1Session(t *testing.T) {
 		if _, recorded := folded.ObservationsByID[id]; !recorded || !folded.DroppedObservationIDs[id] {
 			t.Fatalf("v1 record %s neither dropped by its rendered reflection nor kept", id)
 		}
-		if res := memquery.Run(memquery.Env{Entries: h.Entries}, "recall "+id); res.IsError || !strings.Contains(res.Text, id) {
-			t.Fatalf("recall %s: %s", id, res.Text)
+		if text := snippettest.Recall(t, h.Entries, om.FormatRead(omwire.MRecall, id, omwire.Options{})); !strings.Contains(text, id) {
+			t.Fatalf("recall %s: %s", id, text)
 		}
 	}
 	if !strings.Contains(c.Summary, "Postgres 15.2") || !strings.Contains(c.Summary, "6379") {
@@ -266,11 +270,7 @@ func TestV2HostSummaryOmittedWhenItDoesNotFit(t *testing.T) {
 	after := append(append([]ledger.Entry{}, h.Entries...), testfix.CompactionEntry("c2", testfix.CompactionArgs{Summary: c.Summary, FirstKeptEntryID: "u3", Details: testfix.ToJSONValue(c.Details)}))
 	listed := ""
 	for _, q := range printedQueries(t, c.Summary) {
-		res := memquery.Run(memquery.Env{Entries: after}, q)
-		if res.IsError {
-			t.Fatalf("query %q: %s", q, res.Text)
-		}
-		listed += res.Text
+		listed += strings.Join(snippettest.Run(t, after, q).IDs, "\n") + "\n"
 	}
 	if !strings.Contains(listed, hosts[0].ID) {
 		t.Fatalf("no printed query lists the host record:\n%s", c.Summary)
@@ -350,5 +350,86 @@ func TestV2HostSummaryStoredWhenTheCutIsNotOnTheBranch(t *testing.T) {
 	}
 	if counter.Total() != 0 {
 		t.Fatalf("requests %v", counter.ByStage())
+	}
+}
+
+// The code group the kernel gained for the memory tool's Go code (kernel.OwnsCode) is matched
+// exactly and never owned for every kind or for a layer kind, so data that loaded before keeps
+// loading: a subject "time" keeps its canonical path and its aliases, and a layer detector
+// named "errors" (or "time") is accepted when written and when loaded.
+func TestV2CodeNamesStayFreeForSubjectsAndLayer(t *testing.T) {
+	for _, subject := range []string{"time", "errors", "time/zones", "strings/builder"} {
+		if _, ok := ledger.SubjectPath(subject); !ok {
+			t.Errorf("subject %q is refused as a path", subject)
+		}
+		if stored, refused := ledger.RecordableSubject(subject); refused || stored != subject {
+			t.Errorf("subject %q stored as %q, refused %v", subject, stored, refused)
+		}
+	}
+	inForce, refused := ledger.CheckSubjectAliases([]string{"time", "clock"}, []ledger.SubjectAlias{{From: "clock", To: "time"}})
+	if len(refused) != 0 || len(inForce) != 1 {
+		t.Fatalf("aliases in force %+v, refused %+v", inForce, refused)
+	}
+
+	ls := curated.New(t.TempDir()).Layer()
+	for _, name := range []string{"errors", "time"} {
+		if _, err := ls.Put(layer.Definition{Kind: layer.KindDetector, Name: name, Model: "p/m", Text: "detector[1]{query,description}:\n  \"notes | where kind=plan\",plans recorded"}); err != nil {
+			t.Fatalf("detector %q: %v", name, err)
+		}
+	}
+	h, reports, err := ls.Load("p/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reports {
+		t.Errorf("load report %+v", r)
+	}
+	var names []string
+	for _, d := range rules.ModelDetectors(h) {
+		names = append(names, d.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"errors", "time"}) {
+		t.Fatalf("detectors loaded %v", names)
+	}
+}
+
+// A tables summary written before the code tool ends its instructions with the query language's
+// paragraph (ledger.LegacyTablesRecallParagraph, frozen): its tables are still found, so its
+// omitted span starts keep classifying a code call's hits as omitted (its printed old queries
+// get the removal notice and a snippet hint: harness TestLegacyQueriesNeverRun). So does one the
+// code tool's first build wrote, whose paragraph held its first placeholders
+// (ledger.FirstCodeTablesRecallParagraph, frozen).
+func TestPreUpgradeTablesSummaryStillClassifiesHits(t *testing.T) {
+	for _, frozen := range []string{ledger.LegacyTablesRecallParagraph, ledger.FirstCodeTablesRecallParagraph} {
+		preUpgradeTablesSummaryClassifies(t, frozen)
+	}
+	if ledger.FirstCodeTablesRecallParagraph == ledger.TablesRecallParagraph || !strings.Contains(ledger.FirstCodeTablesRecallParagraph, "om.Search(`w`)") {
+		t.Fatal("the first build's paragraph is frozen as it was written")
+	}
+}
+
+func preUpgradeTablesSummaryClassifies(t *testing.T, frozen string) {
+	t.Helper()
+	body := tables.Rows.Encode(
+		tables.Table{Name: "notes", Fields: []string{"id", "when", "relevance", "content"}, Rows: [][]string{{"aaaaaaaaaaa1", "2026-05-02", "high", "Shown."}}},
+		tables.Table{Name: "omitted", Fields: []string{"from", "to", "count", "first_id", "query"}, Rows: [][]string{{"2026-05-01", "2026-05-01", "2", "aaaaaaaaaaa2", "notes | from u0 | through u1"}}},
+	)
+	legacyInstructions := strings.Replace(selection.TablesInstructions, ledger.TablesRecallParagraph, frozen, 1)
+	if legacyInstructions == selection.TablesInstructions || !strings.Contains(ledger.LegacyTablesRecallParagraph, "recall <id>") {
+		t.Fatal("the fixture needs the frozen paragraph")
+	}
+	summary := legacyInstructions + "\n\n" + body
+	if got, ok := ledger.TablesSummaryBody(summary); !ok || got != strings.TrimSpace(body) {
+		t.Fatalf("pre-upgrade body %q %v", got, ok)
+	}
+	details := testfix.MemoryDetails(testfix.MemoryDetailsArgs{FullFold: true, Observations: []ledger.Observation{testfix.Observation("aaaaaaaaaaa1"), testfix.Observation("aaaaaaaaaaa2"), testfix.Observation("aaaaaaaaaaa3")}})
+	entries := []ledger.Entry{testfix.RawMessage("u1", "hi"), testfix.CompactionEntry("c1", testfix.CompactionArgs{FirstKeptEntryID: "u1", Details: details, Summary: summary})}
+	v := harness.VisibilityOf(entries, nil)
+	if outcome, target := v.Classify([]string{"aaaaaaaaaaa2"}); outcome != curated.OutcomeOmitted || target != curated.TargetSummary {
+		t.Fatalf("an omitted span start classified %s %s", outcome, target)
+	}
+	if outcome, _ := v.Classify([]string{"aaaaaaaaaaa1"}); outcome != curated.OutcomeShown {
+		t.Fatalf("a shown record classified %s", outcome)
 	}
 }

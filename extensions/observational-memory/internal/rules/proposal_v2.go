@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/agents"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/codepolicy"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 )
@@ -60,7 +61,7 @@ func CheckV2Definition(kind, name string) error {
 	case layer.KindSchema:
 		return fmt.Errorf("a schema changes nothing: level 0 is code and level 1's tool fields are the kernel's")
 	case layer.KindTool:
-		return fmt.Errorf("a tool is defined with define <name> = <query> \"what it returns\", which registers it")
+		return fmt.Errorf("defined tools are retired: the agent keeps code definitions with the memory tool")
 	}
 	return fmt.Errorf("unknown definition kind %q; kinds are %s", kind, strings.Join(layer.Kinds, ", "))
 }
@@ -72,6 +73,15 @@ func CheckV2Definition(kind, name string) error {
 func CheckV2Proposal(kind, name, text string) error {
 	if err := CheckV2Definition(kind, name); err != nil {
 		return err
+	}
+	if kind == layer.KindDetector {
+		d, err := ParseDetector(name, text)
+		if err != nil {
+			return err
+		}
+		if d.Retired() {
+			return fmt.Errorf("the query language is removed: a detector declares Go code in its code column (func %s() int over the detector's om), or a kernel check", codepolicy.DetectorEntry)
+		}
 	}
 	if kind == layer.KindInstructions {
 		mode, _, err := layer.SplitMode(text)
@@ -97,12 +107,21 @@ func SettlesUnderV2(d layer.Definition) bool {
 		r, err := parse(d.Kind+"/"+d.Name, d.Text)
 		return err == nil && r.Engine == curated.EngineV2
 	}
+	if d.Kind == layer.KindDetector {
+		// A held query detector is retired: it stays as held data, never run, never judged, and
+		// never blocks an offer.
+		if def, err := ParseDetector(d.Name, d.Text); err == nil && def.Retired() {
+			return false
+		}
+	}
 	return CheckV2Definition(d.Kind, d.Name) == nil
 }
 
 // V2EvidenceOf is model's memory v2 harness evidence: the counts of its last MinEvidence
 // compactions that carried a rate (the detector runs they summed, the decode failures and level
-// 1's code checks), the source tokens those runs read, and its v2 rules with their states.
+// 1's code checks), the source tokens those runs read, the counts of the model's own Go
+// detectors in those compactions' detector passes (definedCounts), and its v2 rules with their
+// states.
 func V2EvidenceOf(store curated.Store, model string) (Evidence, error) {
 	events, err := store.ModelEvents(model)
 	if err != nil {
@@ -122,11 +141,45 @@ func V2EvidenceOf(store curated.Store, model string) (Evidence, error) {
 			}
 		}
 	}
+	for k, n := range definedCounts(events, passes) {
+		e.Counts[k] += n
+	}
 	for _, r := range For(store, model).Rules {
 		e.Rules = append(e.Rules, r.Describe()+" "+r.State)
 	}
 	sort.Strings(e.Rules)
 	return e, nil
+}
+
+// definedCounts are the non-zero defined:<name> counts of the detector pass events
+// (curated.ModelKindDetectorPass) that belong to one of the compaction passes window indexes. A
+// detector pass belongs to the memory v2 compaction recorded last before it: the hook starts it
+// once its compaction was recorded, and the next compaction stops it, writing its event, before
+// recording its own pass. Only the model's detector counts are taken; a pass's other counts
+// (rules.CountLevel1Refused for a refused smoke run) are not offer evidence. Its source tokens
+// are the compaction's, already counted.
+func definedCounts(events []curated.ModelEvent, window []int) map[string]int {
+	in := make(map[int]bool, len(window))
+	for _, i := range window {
+		in[i] = true
+	}
+	out := map[string]int{}
+	owner := -1
+	for i, ev := range events {
+		if isV2Compaction(ev) {
+			owner = i
+			continue
+		}
+		if ev.Kind != curated.ModelKindDetectorPass || ev.Engine != curated.EngineV2 || !in[owner] {
+			continue
+		}
+		for k, n := range ev.Counts {
+			if n > 0 && strings.HasPrefix(k, DefinedCountKey("")) {
+				out[k] += n
+			}
+		}
+	}
+	return out
 }
 
 // ProposalDue reports whether model's next level-1 request may define, with the evidence it
@@ -188,6 +241,18 @@ var level1Losses = []string{CountLevel1Failed, CountLevel1SpecificsRefused, Coun
 // clean writes it (layer.Store.ClaimHeld), and otherwise it is reverted with reason.
 func SettleV2(events []curated.ModelEvent, d layer.Definition) (decided, clean bool, reason string) {
 	id := d.HeldID()
+	if d.Kind == layer.KindDetector {
+		def, err := ParseDetector(d.Name, d.Text)
+		switch {
+		case err != nil:
+		case def.Retired():
+			// Retired with the query language: no pass runs it, and it is never judged.
+			return false, false, ""
+		case def.IsCode():
+			// A Go detector's evidence is its own runs, in the detector pass events.
+			return settleCodeDetector(events, d, id)
+		}
+	}
 	tokens, answered, compactions := 0, 0, 0
 	counts := map[string]int{}
 	for _, e := range events {
@@ -232,10 +297,41 @@ func SettleV2(events []curated.ModelEvent, d layer.Definition) (decided, clean b
 	return true, true, fmt.Sprintf("the turns under it (%d source tokens over %d later %s) counted no failure it could cause", tokens, compactions, pluralWord(compactions, "compaction"))
 }
 
+// settleCodeDetector decides held Go detector d (held id id) from the detector pass events
+// whose run started with exactly its held text (RanHeld) after it was held: reverted when any of
+// those runs gave no count (a compile failure, a panic, a crash, a disallowed method, or a run
+// killed unfinished at the next compaction or at session end), written when at least one
+// counted and none failed, and left held while none has run. A pass that never started it
+// names it nowhere and is no evidence.
+func settleCodeDetector(events []curated.ModelEvent, d layer.Definition, id string) (decided, clean bool, reason string) {
+	counted := 0
+	for _, e := range events {
+		if e.Kind != curated.ModelKindDetectorPass || e.Engine != curated.EngineV2 || !slices.Contains(e.RanHeld, id) {
+			continue
+		}
+		if t, ok := eventTime(e); !ok || !t.After(d.Time) {
+			continue
+		}
+		if why, failed := e.Errors[d.Name]; failed {
+			return true, false, fmt.Sprintf("its run after the compaction at %s gave no count: %s", e.Cut, why)
+		}
+		if _, ok := e.Counts[DefinedCountKey(d.Name)]; ok {
+			counted++
+		}
+	}
+	if counted == 0 {
+		return false, false, ""
+	}
+	return true, true, fmt.Sprintf("it counted at %d later detector %s with no error", counted, pluralWord(counted, "pass"))
+}
+
 // pluralWord is word for n, with an s unless n is 1.
 func pluralWord(n int, word string) string {
-	if n == 1 {
+	switch {
+	case n == 1:
 		return word
+	case strings.HasSuffix(word, "s"):
+		return word + "es"
 	}
 	return word + "s"
 }

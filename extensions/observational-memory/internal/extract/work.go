@@ -9,7 +9,8 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 )
 
@@ -51,6 +52,8 @@ type toolResult struct {
 	text    string
 	failed  bool
 	present bool
+	// details are the result's details, as the entry holds them.
+	details any
 }
 
 // fileEvent is the newest ordered evidence of a path's state in the range.
@@ -107,7 +110,7 @@ func (x *extraction) assistant(i int) {
 	}
 	for n, call := range calls {
 		result := x.resultOf(i, call.id)
-		if call.name == memquery.ToolName {
+		if call.name == omtool.ToolName {
 			x.note(i, call, result)
 			continue
 		}
@@ -145,7 +148,7 @@ func (x *extraction) resultOf(call int, id string) toolResult {
 		if m := exitCode.FindStringSubmatch(text); m != nil && m[1] != "0" {
 			failed = true
 		}
-		return toolResult{index: i, text: text, failed: failed, present: true}
+		return toolResult{index: i, text: text, failed: failed, present: true, details: entry.Message["details"]}
 	}
 	return toolResult{}
 }
@@ -317,19 +320,41 @@ func failureLine(text string) string {
 	return ""
 }
 
-// note reads a memory tool call: a save or edit that succeeded is a note the session model
-// wrote, recorded with origin model and its description as written. A later note under the
-// same name supersedes the earlier one.
+// note reads a memory tool call: a save or edit that landed is a note the session model wrote,
+// recorded with origin model and its description as written. A later note under the same name
+// supersedes the earlier one. A code call is read from its result's details (omtool.Details'
+// writes), whatever its error flag: a save that landed before a panic, a cancel or a crash is
+// still a note. A call written before the code tool parses its query with the frozen recognizer,
+// and only when its result did not fail.
 func (x *extraction) note(i int, call toolCall, result toolResult) {
-	if !result.present || result.failed {
+	if !result.present {
 		return
 	}
-	query, _ := call.args["query"].(string)
-	parsed, err := memquery.Parse(query)
-	if err != nil || (parsed.Write != memquery.WriteSave && parsed.Write != memquery.WriteEdit) {
+	if _, isCode, query := omtool.CallArgs(call.args); !isCode {
+		if result.failed {
+			return
+		}
+		parsed, err := legacyquery.Parse(query)
+		if err != nil || (parsed.Write != legacyquery.WriteSave && parsed.Write != legacyquery.WriteEdit) {
+			return
+		}
+		x.addNote(i, result, parsed.Args["name"], parsed.Args["description"])
 		return
 	}
-	name, description := parsed.Args["name"], strings.TrimSpace(parsed.Args["description"])
+	d := omtool.DetailsFrom(result.details)
+	if d == nil {
+		return
+	}
+	for _, w := range d.Writes {
+		if w.Op == omtool.WriteSave || w.Op == omtool.WriteEdit {
+			x.addNote(i, result, w.Name, w.Description)
+		}
+	}
+}
+
+// addNote records the note a save or edit of name wrote, superseding the earlier one under it.
+func (x *extraction) addNote(i int, result toolResult, name, description string) {
+	description = strings.TrimSpace(description)
 	if name == "" || description == "" {
 		return
 	}

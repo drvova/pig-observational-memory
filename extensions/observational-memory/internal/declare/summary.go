@@ -6,7 +6,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/legacyquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 // summarySources are the sources a summary query may read: the memory the compaction folds.
-var summarySources = []string{memquery.SourceNotes, memquery.SourceReflections}
+var summarySources = []string{legacyquery.SourceNotes, legacyquery.SourceReflections}
 
 // SummarySection is one section of a summary declaration.
 type SummarySection struct {
@@ -48,7 +49,8 @@ type Summary struct {
 }
 
 // ParseSummary reads a summary declaration: a SummaryTable in the rows codec, or a single
-// query (one section named after its source). Each query must parse, read notes or
+// query (one section named after its source). Each query must parse in the frozen recognizer
+// (legacyquery: summary queries are validated, never run, under memory v2), read notes or
 // reflections, and stay within MaxSummaryQuery characters; a section's fields must be fields
 // of its source (for notes, also fields a note schema adds), start with id and include
 // content, so every shown record can be read back and the omitted ones disclosed (a query that
@@ -98,7 +100,7 @@ func parseSection(table, query, fields string) (SummarySection, error) {
 	if n := utf8.RuneCountInString(query); n == 0 || n > MaxSummaryQuery {
 		return SummarySection{}, fmt.Errorf("a summary query is 1 to %d characters (this one %d)", MaxSummaryQuery, n)
 	}
-	q, err := memquery.Parse(query)
+	q, err := legacyquery.Parse(query)
 	if err != nil {
 		return SummarySection{}, fmt.Errorf("summary query %q: %w", query, err)
 	}
@@ -107,8 +109,8 @@ func parseSection(table, query, fields string) (SummarySection, error) {
 	}
 	counted, sorted := false, false
 	for _, stage := range q.Stages {
-		counted = counted || stage.Kind == memquery.StageCount
-		sorted = sorted || stage.Kind == memquery.StageSort
+		counted = counted || stage.Kind == legacyquery.StageCount
+		sorted = sorted || stage.Kind == legacyquery.StageSort
 	}
 	if table == "" {
 		table = q.Source
@@ -124,12 +126,12 @@ func parseSection(table, query, fields string) (SummarySection, error) {
 		if counted {
 			return SummarySection{}, fmt.Errorf("summary query %q counts; it shows its count fields, so leave fields empty", query)
 		}
-		known := memquery.NoteFields
-		if q.Source == memquery.SourceReflections {
-			known = memquery.ReflectionFields
+		known := om.NoteFields
+		if q.Source == legacyquery.SourceReflections {
+			known = om.ReflectionFields
 		}
 		for _, f := range section.Fields {
-			if q.Source == memquery.SourceNotes && ledger.SchemaAddedFieldName(f) {
+			if q.Source == legacyquery.SourceNotes && ledger.SchemaAddedFieldName(f) {
 				// A field a note schema adds; notes without it show it as absent.
 				continue
 			}
@@ -138,7 +140,7 @@ func parseSection(table, query, fields string) (SummarySection, error) {
 			}
 		}
 		if section.Fields[0] != "id" {
-			return SummarySection{}, fmt.Errorf("summary section %s must show id first, so its records can be read back (recall <id>) and the omitted ones disclosed", table)
+			return SummarySection{}, fmt.Errorf("summary section %s must show id first, so its records can be read back (%s) and the omitted ones disclosed", table, om.SnippetRecall)
 		}
 		if !containsString(section.Fields, ledger.ContentField) {
 			return SummarySection{}, fmt.Errorf("summary section %s must show %s: a row without its record's content shows nothing of it, and the kernel discloses that record as omitted", table, ledger.ContentField)

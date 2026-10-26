@@ -1,7 +1,7 @@
 // Package thin is memory v2's thinning of aged tool results (docs/memory-v2.md, "Thinning aged
 // tool results"): a pure function of the branch that shortens, in each provider request's
 // context, the tool results the model already answered before the latest compaction to their
-// level-0 record line and the memory query that returns the original. It makes no request,
+// level-0 record line and the om snippet that returns the original. It makes no request,
 // and the session file keeps every original.
 //
 // What is thinned is decided from the branch up to the latest compaction entry alone, so the
@@ -14,6 +14,8 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om/omwire"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
 )
@@ -142,10 +144,10 @@ func toolCallIDs(entry session.Entry) []string {
 	return ids
 }
 
-// Text is a thinned tool result: its level-0 record line and the memory query that returns the
-// original result entry.
+// Text is a thinned tool result: its level-0 record line and the memory tool's om snippet that
+// returns the original result entry (om.Recall of its id, through om's snippet formatter).
 func Text(line, entryID string) string {
-	return "[thinned] " + line + `; the full result: memory "recall ` + entryID + `"`
+	return "[thinned] " + line + "; the full result: memory: " + om.FormatRead(omwire.MRecall, entryID, omwire.Options{})
 }
 
 // callArguments are the arguments of the tool call callID, looked up in the assistant messages

@@ -192,7 +192,7 @@ func stateNote(m Memory) string {
 	return ""
 }
 
-// Describe renders a memory in full for the memory tool's recall <name>.
+// Describe renders a memory in full for the memory tool's om.Recall(name).
 func Describe(m Memory) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s [%s]%s%s: %s\n", m.Name, m.Type, scopeNote(m), stateNote(m), m.Description)

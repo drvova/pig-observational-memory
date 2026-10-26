@@ -11,6 +11,8 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
@@ -29,7 +31,7 @@ const (
 
 // V2FallbackSummary is the memory v2 summary when building every other one panicked: it
 // still points at what the compaction removed, so PiG never falls through to its summarizer.
-const V2FallbackSummary = `omitted: the compacted conversation; the memory tool searches it (history | search "words").`
+const V2FallbackSummary = "omitted: the compacted conversation; the memory tool searches it (" + om.SnippetHistorySearch + ")."
 
 // renderV2Records renders the ledger's records for a memory v2 summary; tests replace it.
 var renderV2Records = selection.Render
@@ -46,8 +48,16 @@ func handleBeforeCompactV2(request context.Context, rt *runtime.Runtime, h host.
 		request = context.Background()
 	}
 	if request.Err() != nil {
+		// An attempt cancelled before the hook ran compacts nothing, so it leaves the previous
+		// compaction's detector pass running: its run in flight is not unfinished at a
+		// compaction.
 		return BeforeCompactOutcome{}
 	}
+	// The previous compaction's detector pass ends here, before anything reads evidence: its run
+	// in flight is killed (an error for that detector: unfinished) and its event written, so
+	// this compaction settles held detectors on it. This is a kill and a wait on a process;
+	// nothing here waits on model code.
+	rt.StopDetectorPass(runtime.DetectorStopCompaction)
 	// A concurrent hook is not cancelled, and it appends its extraction and drops like any
 	// other: extractCutV2 measures what is left to extract on a fresh branch under one lock, so
 	// two compactions rendering at once never append the same records twice, and whichever one
@@ -157,6 +167,7 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// once its pass is recorded (settleDefinitionsV2), so one this level 1 holds is never
 	// settled by the compaction that proposed it.
 	snapshot := active.Harness()
+	level0Entries := entries
 	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, active, spent)
 	if len(level1.entries) > 0 {
 		entries = append(append(make([]ledger.Entry, 0, len(entries)+len(level1.entries)), entries...), level1.entries...)
@@ -267,6 +278,12 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	}
 	if request.Err() == nil && (owner || !rt.CompactHookOwnerLive()) {
 		recordCompactionV2(ctx, rt, h, entries, cut, level1.counts, snapshot)
+		// The detector pass is built as data beside the summary, only when a detector would
+		// run, and runs in the background once the compaction is produced; a compaction PiG
+		// discards (a cancelled request) starts none.
+		if l, ok := harness.For(h, cfg, model); ok && request.Err() == nil {
+			startDetectorPassV2(ctx, rt, l, event.FirstKeptEntryID, func() *omhost.DetectorPass { return detectorPassData(level0Entries, entries, cut) }, level1.pending)
+		}
 	}
 	return CompactionResult{
 		Summary:          summary,

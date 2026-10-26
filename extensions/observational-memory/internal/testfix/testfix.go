@@ -453,6 +453,17 @@ type FakeHost struct {
 	Trusted    bool
 	TrustErr   error
 	TrustCalls int
+	// Ctx is the request's cancellation RequestContext reports (a tool call's: PiG cancels it
+	// on the user's abort); nil never cancels.
+	Ctx context.Context
+}
+
+// RequestContext is the cancellation of the request the host answers (Ctx).
+func (h *FakeHost) RequestContext() context.Context {
+	if h.Ctx == nil {
+		return context.Background()
+	}
+	return h.Ctx
 }
 
 // NewFakeHost creates a host with a UI, a cwd and the given entries.

@@ -1,6 +1,8 @@
 package declare_test
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,9 +12,13 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/kernel"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/layer"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/memquery"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om/omwire"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omhost"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/rules"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
+	tf "github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
 const model = "p/m"
@@ -170,10 +176,10 @@ func TestNewFormatsJoinInTheOrderFirstWritten(t *testing.T) {
 	}
 }
 
-// Fields a note schema adds are read back: the level-1 input lines show them, notes queries
-// select them, and a summary section may name them.
+// Fields a note schema adds are read back: the level-1 input lines show them, om.Notes filters
+// on them, and a summary section may name them.
 func TestSchemaFieldsAreReadBack(t *testing.T) {
-	reflections, observations, _ := memory()
+	_, observations, _ := memory()
 	for i := range observations {
 		if i%2 == 0 {
 			observations[i].Fields = map[string]string{"project": "bakery"}
@@ -182,9 +188,18 @@ func TestSchemaFieldsAreReadBack(t *testing.T) {
 	if line := ledger.ObservationToObserverLine(observations[0]); !strings.Contains(line, "project: bakery") {
 		t.Fatalf("observer line %q", line)
 	}
-	sel, err := memquery.Select(memquery.Env{Records: &memquery.Records{Observations: observations, Reflections: reflections}}, "notes | where project = bakery | count", memquery.SourceNotes)
-	if err != nil || sel.Count != 6 {
-		t.Fatalf("select project: %+v %v", sel.Count, err)
+	for i := range observations {
+		observations[i].SourceEntryIDs = []string{"u1"}
+	}
+	c := &omhost.Call{Entries: []session.Entry{tf.RawMessage("u1", "notes"), tf.ObservationsRecordedEntry("r1", observations, "u1")}}
+	args, _ := json.Marshal([]any{omwire.Options{Where: []omwire.Pair{{Field: "project", Value: "bakery"}}}})
+	raw, err := c.Call(context.Background(), omwire.MNotes, args)
+	var notes om.NoteList
+	if err == nil {
+		err = json.Unmarshal(raw, &notes)
+	}
+	if err != nil || notes.Len() != 6 {
+		t.Fatalf("notes where project: %d %v", notes.Len(), err)
 	}
 	if _, err := declare.ParseSummary("summary[1]{table,query,fields}:\n  notes,notes,id project content"); err != nil {
 		t.Fatal(err)

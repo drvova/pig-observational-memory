@@ -36,9 +36,9 @@ func OnContext(rt *runtime.Runtime, h host.Host, messages []host.ContextMessage)
 	if c < 0 {
 		return 0
 	}
-	// The plan is derived once per compaction, from the branch and defined tools as they stand
-	// at the first request after it, and reused until the next compaction: a defined tool
-	// registered or forgotten, or a result landing later, changes no request's bytes between two
+	// The plan is derived once per compaction, from the branch and the skip list as they stand
+	// at the first request after it, and reused until the next compaction: a retired name added
+	// to the skip list, or a result landing later, changes no request's bytes between two
 	// compactions.
 	key := sessionIdentityOf(h) + "\x00" + entries[c].ID
 	plan, cached := rt.CachedThinPlan(key)

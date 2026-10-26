@@ -122,6 +122,12 @@ func layerStatusLines(store curated.Store, model string) []string {
 		if r.Model != model {
 			item += ", for all models"
 		}
+		if r.Kind == layer.KindDetector && r.State == stateRetired {
+			item += " (query language removed)"
+		}
+		if r.Flagged != "" {
+			item += ", flagged: " + r.Flagged
+		}
 		byKind[r.Kind] = append(byKind[r.Kind], item)
 	}
 	_, built, _ := ls.LastPass(model)
