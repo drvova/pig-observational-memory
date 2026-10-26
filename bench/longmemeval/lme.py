@@ -69,7 +69,14 @@ AUTH_ERROR = re.compile(r"\b(401|403)\b|unauthori[sz]ed|invalid[_ ]grant|refresh
 RATE_ERROR = re.compile(r"\b429\b|rate[_ -]?limit|too many requests|quota|usage limit", re.I)
 
 PRINT_LOCK = threading.Lock()
-STOP = threading.Event()  # set when auth is lost: no further question starts
+QUOTA_ERROR = re.compile(r"usage limit|quota", re.I)
+
+
+class QuotaExhausted(Exception):
+    """The plan's usage limit was reached: nothing from this point is a measurement."""
+
+
+STOP = threading.Event()  # set when auth is lost or the usage limit is reached: no further question starts
 
 
 def log(msg):
@@ -793,6 +800,9 @@ class Question:
                     if "error" in rec:
                         suspended_at = st["size"]
                     log("%s %s at chunk %d/%d: %s" % (self.dirname, rec["run"], i + 1, len(chunks), compact_line(rec)))
+                    reason = str((rec.get("consolidation") or {}).get("reason") or "")
+                    if QUOTA_ERROR.search(reason):
+                        raise QuotaExhausted("level 1 hit the usage limit at %s: %s" % (rec["run"], reason))
                 st["checked"] = st["chunks_done"]
                 self.save_state(st)
             if st["chunks_done"] >= len(chunks):
@@ -1097,6 +1107,13 @@ def run_one(out, q, cfg, dirname, agent_dir, system_tokens, tpl, judge_home, ind
                 res["answer_tool_calls"], res["evidence_location"], time.time() - t0, res["hypothesis"].replace("\n", " ")[:80]))
             return res
         except Exception as e:  # retried once, then recorded
+            if isinstance(e, QuotaExhausted) or QUOTA_ERROR.search(str(e)):
+                # A usage limit is not a property of the question: stop the run, record nothing,
+                # and remove the partial question so a rerun starts it from scratch.
+                STOP.set()
+                shutil.rmtree(qd, ignore_errors=True)
+                log("usage limit reached during %s: stopping without recording it; rerun the same command later (%s)" % (dirname, e))
+                return "stopped"
             errors.append({"error": "%s: %s" % (type(e).__name__, e), "category": error_category(str(e))})
             log("%s attempt %d failed (%s): %s" % (dirname, attempt, errors[-1]["category"], errors[-1]["error"]))
             if auth_status(cfg, judge_home, agent_dir) != "ready":
