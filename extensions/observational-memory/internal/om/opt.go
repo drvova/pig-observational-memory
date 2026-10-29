@@ -21,7 +21,9 @@ func (o Opt) with(set func(*omwire.Options)) Opt {
 	return o
 }
 
-// Search keeps rows matching every literal word, case-insensitive, over every column.
+// Search keeps rows matching every literal word, case-insensitive, over every column; when no
+// row matches every word, Notes, Reflections and History rank the rows by how many of the words
+// each contains instead, and mark the list Partial.
 func Search(words string) Opt { return Opt{}.Search(words) }
 
 // From keeps rows at or after this entry id (an anchor or a record id).
@@ -75,7 +77,7 @@ func Worked() Opt { return Opt{}.Worked() }
 // Open keeps attempts with no outcome yet.
 func Open() Opt { return Opt{}.Open() }
 
-// Search adds a search for every literal word.
+// Search adds a search for every literal word (see the function Search).
 func (o Opt) Search(words string) Opt {
 	return o.with(func(w *omwire.Options) { w.Search = append(w.Search, words) })
 }

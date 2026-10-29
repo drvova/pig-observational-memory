@@ -115,6 +115,10 @@ system prompt: they are fixed text too, naming only frozen snippet forms (``om.R
 One guideline asks the model to search memory before saying something was not discussed or is
 unknown when the compaction summary lists omitted records (the summary's omitted notice, docs/memory-v2.md
 "Selection"), and otherwise to read memory when a remembered detail will materially improve the next action.
+Under the same omitted-records condition, another asks it to look up what the user said about themselves
+before personal advice or recommendations; a third asks for short searches, one per item, before counting
+or totalling things mentioned across several exchanges, and says a search no row matches with every word
+returns the closest rows marked partial.
 Capabilities are found only through the manual. A test serializes the whole advertised spec (name,
 label, description, parameter schema, `PromptSnippet` and `PromptGuidelines`) and asserts that it is
 byte-identical under two profiles with different codecs and before and after a definition is kept,
@@ -587,7 +591,7 @@ concrete. Every name below compiles: no type and function share a name.
 ```go
 type Opt struct{ /* unexported */ }
 
-func Search(words string) Opt      // literal words, all must match, case-insensitive, over every column
+func Search(words string) Opt      // literal words, all must match, case-insensitive, over every column; see Partial
 func From(id string) Opt           // at or after this entry id (anchor or record id); " (off-path)" accepted
 func Through(id string) Opt        // at or before this entry id
 func Since(date string) Opt        // YYYY-MM-DD, entry time
@@ -701,8 +705,16 @@ func (l NoteList) String() string                        // the table, then "mat
 `Next` is the runnable snippet for the next older page: for history, the same call with
 `.Through(`<first id left out>`)` chained (the old `nextPageQuery`). An `EntryList` from a search
 with no match carries `Counts map[string]int` (per-word matches on the current branch, the old
-`noMatchCounts`), and its `String()` prints them. List methods run in the child on the rows it
-holds, so they cost no callback.
+`noMatchCounts`), and its `String()` prints them. When a search of `Notes` (and the other notes
+reads), `Reflections` or `History` matches no row with every word, on the branch and off it, the
+read ranks instead: it keeps the rows containing at least one searched word (over every search of
+the call), most distinct words first, ties in the read's own order, and sets `Partial` on the list,
+whose `String()` then starts with `om.PartialNotice`. A partial list pages by a bigger `Limit`, never
+by `Through`, since its order is not branch order. A detector's reads never rank, so a detector's
+count means what its search says. The fallback exists because a model's searches are often long
+phrases: in the LongMemEval run of `docs/bench-results.md`, half of all searches matched nothing
+with every word required, while the entry holding the answer contained most of the words. List
+methods run in the child on the rows it holds, so they cost no callback.
 
 ### Reads
 

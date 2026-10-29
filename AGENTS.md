@@ -38,7 +38,9 @@ fixed text identical for every model, never re-registered): `harness.Manager.Run
 `internal/codepolicy`, runs it in the namespace child (`internal/sandbox`, one per process, killed at
 `session_start`/`session_shutdown`), answers `om` calls with `internal/omhost` over a branch snapshot, keeps compiled
 declarations in `internal/codestore` (provenance via `internal/provenance`), and records one `ModelKindCode` event
-from `omtool.Details`, which level 0 (`writes`) and `dropped-then-queried` (`recalled`, `searches`) read back. Old
+from `omtool.Details`, which level 0 (`writes`) and `dropped-then-queried` (`recalled`, `searches`) read back. A search no row matches with
+every word ranks the rows by matched words instead (`Partial`, `om.PartialNotice`, paged by `Limit`), never in a
+detector's reads. Old
 query text is never run: `internal/legacyquery` (frozen) answers it with a snippet hint and still reads old calls,
 stored definitions and `ledger.LegacyTablesRecallParagraph` summaries. Every printed pointer is an om snippet from
 `om.FormatRead` (no comma, quote or `|`, so it survives every codec); tests run them through a real child with

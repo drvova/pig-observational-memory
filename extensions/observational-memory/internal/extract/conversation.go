@@ -33,6 +33,18 @@ var (
 		regexp.MustCompile(`(?i)\bplease\s+(?:use|avoid|keep|make|don'?t|do not|format|write)\b`),
 		regexp.MustCompile(`(?i)\b(?:style|format|language|naming)\s*[:=]\s*\S`),
 	}
+	// selfStatements are explicit first-person constructions about the user's own life: what
+	// they like, are into, usually do, have been doing lately, or work in. A sentence matching
+	// one is a record even with no specifics, so what the user said about themselves in plain
+	// words stays findable ("I've been using basil and mint in my cooking lately").
+	selfStatements = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bi\s+(?:really\s+|also\s+|just\s+|absolutely\s+)?(?:like|love|enjoy|hate|dislike|adore)\b`),
+		regexp.MustCompile(`(?i)\b(?:i'?m|i\s+am)\s+(?:really\s+|also\s+)?(?:into|a\s+(?:big\s+|huge\s+)?fan\s+of|interested\s+in|passionate\s+about|allergic\s+to)\b`),
+		regexp.MustCompile(`(?i)\bmy\s+favou?rite\b`),
+		regexp.MustCompile(`(?i)\bi\s+(?:usually|often|always|normally|regularly|typically)\s+\w`),
+		regexp.MustCompile(`(?i)\b(?:i'?ve|i\s+have)\s+been\s+\w+ing\b`),
+		regexp.MustCompile(`(?i)\b(?:i\s+work|i'?m\s+working|i\s+am\s+working)\s+(?:in|as|at|on|with|from)\b`),
+	}
 	// hypotheticalWording states a record under a condition (docs/memory-v2.md, "Status by
 	// explicit construction"); it is read before plan wording, so "if we migrate, we will need"
 	// is hypothetical.
@@ -166,6 +178,20 @@ func isPreference(sentence string) bool {
 	return false
 }
 
+// isSelfStatement reports an explicit first-person construction about the user
+// (selfStatements) that is not a question.
+func isSelfStatement(sentence string) bool {
+	if isQuestion(sentence) {
+		return false
+	}
+	for _, p := range selfStatements {
+		if p.MatchString(sentence) {
+			return true
+		}
+	}
+	return false
+}
+
 // correctionOf reads an explicit correction; ok is false for a sentence that is none (or a
 // question). A named phrase counts only when it carries specifics (ledger.PhraseSpecifics), so
 // a hedge ("not sure, but", "not only", "instead of waiting") names nothing; a marker with no
@@ -188,8 +214,8 @@ func correctionOf(sentence string) (target correctionTarget, ok bool) {
 	return correctionTarget{}, false
 }
 
-// user reads a user message: a correction, a preference, or a statement carrying specifics,
-// one record per sentence, with relative dates annotated and the subject named from the
+// user reads a user message: a correction, a preference, a statement carrying specifics, or a
+// first-person statement about the user (isSelfStatement, a fact), one record per sentence, with relative dates annotated and the subject named from the
 // ledger. Harness markup, questions-as-preferences, bare acknowledgements and echoes of
 // records already held are not records. The message opens a new exchange.
 func (x *extraction) user(i int) {
@@ -228,7 +254,7 @@ func (x *extraction) user(i int) {
 			kind, status = "correction", ledger.StatusRetracted
 		case isPreference(sentence):
 			kind = "preference"
-		case ledger.HasSpecifics(sentence):
+		case ledger.HasSpecifics(sentence), isSelfStatement(sentence):
 			kind, status = "fact", statusOf(sentence)
 		default:
 			continue

@@ -60,9 +60,16 @@ func filterOf[R any](rows []R, keep func(R) bool) []R {
 	return out
 }
 
-// listString is a list's table, then how many rows matched and the next page when it was cut.
-func listString(table string, matched, showing int, next string) string {
+// PartialNotice heads a list whose search matched nothing with every word (Partial).
+const PartialNotice = "no row matches every searched word; these rows match the most of them, most first"
+
+// listString is a list's table, then how many rows matched and the next page when it was cut,
+// after PartialNotice for a partial list.
+func listString(table string, matched, showing int, next string, partial bool) string {
 	s := table
+	if partial {
+		s = PartialNotice + "\n" + s
+	}
 	if showing < matched {
 		s += fmt.Sprintf("\nmatched %d, showing %d", matched, showing)
 		if next != "" {
@@ -80,6 +87,9 @@ type NoteList struct {
 	Matched, Showing int
 	// Next is the snippet for the next page, "" when every match is shown.
 	Next string
+	// Partial is true when no row matched every searched word, so the rows are those that
+	// match the most of them, most first.
+	Partial bool
 }
 
 // Len is the number of rows held.
@@ -104,7 +114,7 @@ func (l NoteList) Count(field string) map[string]int { return countOf(l.Rows, fi
 func (l NoteList) Group(field string) map[string]NoteList {
 	out := map[string]NoteList{}
 	for k, rows := range groupOf(l.Rows, field, Note.field) {
-		out[k] = NoteList{Rows: rows, Matched: len(rows), Showing: len(rows)}
+		out[k] = NoteList{Rows: rows, Matched: len(rows), Showing: len(rows), Partial: l.Partial}
 	}
 	return out
 }
@@ -112,11 +122,13 @@ func (l NoteList) Group(field string) map[string]NoteList {
 // Filter keeps the rows keep accepts.
 func (l NoteList) Filter(keep func(Note) bool) NoteList {
 	rows := filterOf(l.Rows, keep)
-	return NoteList{Rows: rows, Matched: len(rows), Showing: len(rows)}
+	return NoteList{Rows: rows, Matched: len(rows), Showing: len(rows), Partial: l.Partial}
 }
 
 // String is the table, then "matched N, showing M" and the next page when it was cut.
-func (l NoteList) String() string { return listString(l.Table(), l.Matched, l.Showing, l.Next) }
+func (l NoteList) String() string {
+	return listString(l.Table(), l.Matched, l.Showing, l.Next, l.Partial)
+}
 
 // ReflectionList is a page of standing reflections.
 type ReflectionList struct {
@@ -126,6 +138,9 @@ type ReflectionList struct {
 	Matched, Showing int
 	// Next is the snippet for the next page, "" when every match is shown.
 	Next string
+	// Partial is true when no row matched every searched word, so the rows are those that
+	// match the most of them, most first.
+	Partial bool
 }
 
 // Len is the number of rows held.
@@ -154,7 +169,7 @@ func (l ReflectionList) Count(field string) map[string]int {
 func (l ReflectionList) Group(field string) map[string]ReflectionList {
 	out := map[string]ReflectionList{}
 	for k, rows := range groupOf(l.Rows, field, Reflection.field) {
-		out[k] = ReflectionList{Rows: rows, Matched: len(rows), Showing: len(rows)}
+		out[k] = ReflectionList{Rows: rows, Matched: len(rows), Showing: len(rows), Partial: l.Partial}
 	}
 	return out
 }
@@ -162,12 +177,12 @@ func (l ReflectionList) Group(field string) map[string]ReflectionList {
 // Filter keeps the rows keep accepts.
 func (l ReflectionList) Filter(keep func(Reflection) bool) ReflectionList {
 	rows := filterOf(l.Rows, keep)
-	return ReflectionList{Rows: rows, Matched: len(rows), Showing: len(rows)}
+	return ReflectionList{Rows: rows, Matched: len(rows), Showing: len(rows), Partial: l.Partial}
 }
 
 // String is the table, then the counts and the next page when it was cut.
 func (l ReflectionList) String() string {
-	return listString(l.Table(), l.Matched, l.Showing, l.Next)
+	return listString(l.Table(), l.Matched, l.Showing, l.Next, l.Partial)
 }
 
 // EntryList is a page of history, newest first.
@@ -178,6 +193,9 @@ type EntryList struct {
 	Matched, Showing int
 	// Next is the snippet for the next page, "" when every match is shown.
 	Next string
+	// Partial is true when no row matched every searched word, so the rows are those that
+	// match the most of them, most first.
+	Partial bool
 	// Counts are, for a search with no match, each word's matches on the current branch.
 	Counts map[string]int
 }
@@ -204,7 +222,7 @@ func (l EntryList) Count(field string) map[string]int { return countOf(l.Rows, f
 func (l EntryList) Group(field string) map[string]EntryList {
 	out := map[string]EntryList{}
 	for k, rows := range groupOf(l.Rows, field, Entry.field) {
-		out[k] = EntryList{Rows: rows, Matched: len(rows), Showing: len(rows)}
+		out[k] = EntryList{Rows: rows, Matched: len(rows), Showing: len(rows), Partial: l.Partial}
 	}
 	return out
 }
@@ -212,13 +230,13 @@ func (l EntryList) Group(field string) map[string]EntryList {
 // Filter keeps the rows keep accepts.
 func (l EntryList) Filter(keep func(Entry) bool) EntryList {
 	rows := filterOf(l.Rows, keep)
-	return EntryList{Rows: rows, Matched: len(rows), Showing: len(rows)}
+	return EntryList{Rows: rows, Matched: len(rows), Showing: len(rows), Partial: l.Partial}
 }
 
 // String is the table, then the counts and the next page when it was cut, and each searched
 // word's matches when nothing matched.
 func (l EntryList) String() string {
-	s := listString(l.Table(), l.Matched, l.Showing, l.Next)
+	s := listString(l.Table(), l.Matched, l.Showing, l.Next, l.Partial)
 	if len(l.Rows) == 0 && len(l.Counts) > 0 {
 		var parts []string
 		for _, w := range slices.Sorted(maps.Keys(l.Counts)) {
@@ -273,7 +291,9 @@ func (l MemoryList) Filter(keep func(Memory) bool) MemoryList {
 }
 
 // String is the table, then the counts and the next page when it was cut.
-func (l MemoryList) String() string { return listString(l.Table(), l.Matched, l.Showing, l.Next) }
+func (l MemoryList) String() string {
+	return listString(l.Table(), l.Matched, l.Showing, l.Next, false)
+}
 
 // LayerList is a page of the layer listing, every model's rows labelled with their model.
 type LayerList struct {
@@ -321,7 +341,7 @@ func (l LayerList) Filter(keep func(LayerRow) bool) LayerList {
 }
 
 // String is the table, then the counts and the next page when it was cut.
-func (l LayerList) String() string { return listString(l.Table(), l.Matched, l.Showing, l.Next) }
+func (l LayerList) String() string { return listString(l.Table(), l.Matched, l.Showing, l.Next, false) }
 
 // RetiredList is a page of retired defined queries.
 type RetiredList struct {
@@ -371,4 +391,6 @@ func (l RetiredList) Filter(keep func(RetiredQuery) bool) RetiredList {
 }
 
 // String is the table, then the counts and the next page when it was cut.
-func (l RetiredList) String() string { return listString(l.Table(), l.Matched, l.Showing, l.Next) }
+func (l RetiredList) String() string {
+	return listString(l.Table(), l.Matched, l.Showing, l.Next, false)
+}

@@ -125,7 +125,10 @@ repeated compactions, which rendering from records avoids.
 - **Conversation facts.** User statements and assistant replies carrying specifics
   (`ledger.Specifics`); corrections by explicit markers ("actually", "correction", "not X but Y",
   "instead of"), linked with `supersedes`; preferences by explicit construction ("always", "never",
-  "prefer", "don't want"; questions excluded, after pi-vcc's `extractPreferences`); relative dates
+  "prefer", "don't want"; questions excluded, after pi-vcc's `extractPreferences`); first-person
+  statements about the user with no specifics ("I enjoy", "I'm into", "my favorite", "I usually", "I've
+  been <verb>ing", "I work in"; questions excluded) recorded as facts, so what the user said about
+  themselves in plain words stays searchable without ranking above other facts; relative dates
   annotated (`ledger.ResolveRelativeDates`); assistant replies only for the specifics the user did
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is

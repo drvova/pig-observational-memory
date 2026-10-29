@@ -34,6 +34,9 @@ type table struct {
 	idx      []int
 	// anchors are the rows' branch positions; nil for rows with none.
 	anchors *Anchors
+	// ranked makes the searches rank instead of filter (rankBySearch): a read sets it only
+	// after the same search matched nothing with every word required.
+	ranked bool
 }
 
 func newTable(name string, rs Rows, anchors *Anchors) *table {
@@ -123,7 +126,15 @@ func searchWords(o omwire.Options) []string {
 // over every column, equality and substring filters, the subject and status, the dates
 // (ByEvent compares a note's event date), the branch positions, then the sort.
 func (t *table) apply(ctx context.Context, o omwire.Options) error {
+	if t.ranked {
+		if err := t.rankBySearch(ctx, o.Search); err != nil {
+			return err
+		}
+	}
 	for _, s := range o.Search {
+		if t.ranked {
+			break
+		}
 		needles := strings.Fields(strings.ToLower(s))
 		if err := t.keep(ctx, func(i int) bool {
 			hay := strings.ToLower(strings.Join(t.rows[i], "\n"))
@@ -223,6 +234,40 @@ func (t *table) apply(ctx context.Context, o omwire.Options) error {
 		t.sortBy(key, o.SortDesc)
 	}
 	return nil
+}
+
+// rankBySearch keeps the rows that contain at least one of the searched words and orders them by
+// how many distinct searched words each contains, most first; rows with as many keep their order.
+func (t *table) rankBySearch(ctx context.Context, searches []string) error {
+	var words []string
+	for _, s := range searches {
+		for _, w := range strings.Fields(strings.ToLower(s)) {
+			if !slices.Contains(words, w) {
+				words = append(words, w)
+			}
+		}
+	}
+	score := func(row []string) int {
+		hay := strings.ToLower(strings.Join(row, "\n"))
+		n := 0
+		for _, w := range words {
+			if strings.Contains(hay, w) {
+				n++
+			}
+		}
+		return n
+	}
+	if err := t.keep(ctx, func(i int) bool { return score(t.rows[i]) > 0 }); err != nil {
+		return err
+	}
+	t.sortBy(func(row []string) string { return strconv.Itoa(score(row)) }, true)
+	return nil
+}
+
+// ranks reports whether a read whose search matched nothing tries rankBySearch: the memory
+// tool's reads do, a detector's never (its counts must mean what its search says).
+func (c *Call) ranks(o omwire.Options) bool {
+	return c.detector == nil && len(o.Search) > 0
 }
 
 // eventOr is a note's event date, else its entry time.
@@ -498,36 +543,47 @@ func splitIDs(s string) []string {
 // notes answers Notes, Files, Commits, Attempts and Dropped: on the branch, else (for every
 // read but Dropped) the off-path fallback when the branch has none.
 func (c *Call) notes(ctx context.Context, fn string, o omwire.Options, n int) (any, error) {
-	read := func(r Reader) (noteSet, error) {
+	read := func(r Reader, ranked bool) (noteSet, error) {
 		v, err := view(r, o)
 		if err != nil {
 			return noteSet{}, err
 		}
 		set := noteRows(r, fn, o, v)
+		set.t.ranked = ranked
 		if r.Off == nil {
 			set.t.anchors = NewAnchors(r.Entries, nil, AnchorNotes)
 		}
 		return set, filterSet(ctx, set.t, o)
 	}
 	r := c.reader()
-	set, err := read(r)
+	set, err := read(r, false)
 	if err != nil {
 		return nil, err
 	}
-	if len(set.t.rows) == 0 && fn != omwire.MDropped && len(c.SessionEntries) > 0 {
-		if off, err := read(r.Fallback()); err == nil && len(off.t.rows) > 0 {
+	tryOff := fn != omwire.MDropped && len(c.SessionEntries) > 0
+	if len(set.t.rows) == 0 && tryOff {
+		if off, err := read(r.Fallback(), false); err == nil && len(off.t.rows) > 0 {
 			set = off
+		}
+	}
+	if len(set.t.rows) == 0 && c.ranks(o) {
+		if part, err := read(r, true); err == nil && len(part.t.rows) > 0 {
+			set = part
+		} else if tryOff {
+			if off, err := read(r.Fallback(), true); err == nil && len(off.t.rows) > 0 {
+				set = off
+			}
 		}
 	}
 	matched := len(set.t.rows)
 	var next func() (omwire.Options, bool)
-	if set.t.anchors != nil && o.SortField == "" {
+	if set.t.anchors != nil && o.SortField == "" && !set.t.ranked {
 		next = func() (omwire.Options, bool) {
 			return nextFrom(set.t, func(i int) string { return set.notes[i].Anchor }, n, o)
 		}
 	}
 	shown, nextSnippet := bound(n, matched, next, fn, o)
-	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet}
+	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: set.t.ranked}
 	var hits []string
 	for _, i := range set.t.idx[:shown] {
 		out.Rows = append(out.Rows, set.notes[i])
@@ -582,15 +638,22 @@ func (c *Call) reflections(ctx context.Context, o omwire.Options, n int) (any, e
 	if err := t.apply(ctx, o); err != nil {
 		return nil, err
 	}
+	if len(t.rows) == 0 && c.ranks(o) {
+		part := newTable("reflections", rows, NewAnchors(r.Entries, nil, AnchorReflections))
+		part.ranked = true
+		if err := part.apply(ctx, o); err == nil && len(part.rows) > 0 {
+			t = part
+		}
+	}
 	matched := len(t.rows)
 	var next func() (omwire.Options, bool)
-	if o.SortField == "" {
+	if o.SortField == "" && !t.ranked {
 		next = func() (omwire.Options, bool) {
 			return nextFrom(t, func(i int) string { return values[i].Anchor }, n, o)
 		}
 	}
 	shown, nextSnippet := bound(n, matched, next, omwire.MReflections, o)
-	out := om.ReflectionList{Rows: []om.Reflection{}, Matched: matched, Showing: shown, Next: nextSnippet}
+	out := om.ReflectionList{Rows: []om.Reflection{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: t.ranked}
 	var hits []string
 	for _, i := range t.idx[:shown] {
 		out.Rows = append(out.Rows, values[i])
@@ -603,7 +666,7 @@ func (c *Call) reflections(ctx context.Context, o omwire.Options, n int) (any, e
 // history answers History: newest first on the branch, the current turn and memory plumbing
 // left out; else the off-path fallback; else, for a search, each word's matches on the branch.
 func (c *Call) history(ctx context.Context, o omwire.Options, n int) (any, error) {
-	read := func(r Reader) (*table, error) {
+	read := func(r Reader, ranked bool) (*table, error) {
 		rows := r.History()
 		// om.Entry names the text column text, as its Count, Group and Table do.
 		rows.Fields = []string{"id", "when", "role", "text"}
@@ -613,22 +676,32 @@ func (c *Call) history(ctx context.Context, o omwire.Options, n int) (any, error
 			anchors = NewAnchors(r.Entries, nil, AnchorHistory)
 		}
 		t := newTable("history", rows, anchors)
+		t.ranked = ranked
 		return t, t.apply(ctx, o)
 	}
 	r := c.reader()
-	t, err := read(r)
+	t, err := read(r, false)
 	if err != nil {
 		return nil, err
 	}
 	offPath := false
 	if len(t.rows) == 0 && len(c.SessionEntries) > 0 {
-		if off, err := read(r.Fallback()); err == nil && len(off.rows) > 0 {
+		if off, err := read(r.Fallback(), false); err == nil && len(off.rows) > 0 {
 			t, offPath = off, true
+		}
+	}
+	if len(t.rows) == 0 && c.ranks(o) {
+		if part, err := read(r, true); err == nil && len(part.rows) > 0 {
+			t = part
+		} else if len(c.SessionEntries) > 0 {
+			if off, err := read(r.Fallback(), true); err == nil && len(off.rows) > 0 {
+				t, offPath = off, true
+			}
 		}
 	}
 	matched := len(t.rows)
 	var next func() (omwire.Options, bool)
-	if !offPath && o.SortField == "" {
+	if !offPath && o.SortField == "" && !t.ranked {
 		next = func() (omwire.Options, bool) {
 			no := o
 			no.Through = t.rows[n][0]
@@ -636,7 +709,7 @@ func (c *Call) history(ctx context.Context, o omwire.Options, n int) (any, error
 		}
 	}
 	shown, nextSnippet := bound(n, matched, next, omwire.MHistory, o)
-	out := om.EntryList{Rows: []om.Entry{}, Matched: matched, Showing: shown, Next: nextSnippet}
+	out := om.EntryList{Rows: []om.Entry{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: t.ranked}
 	words := searchWords(o)
 	for _, row := range t.rows[:shown] {
 		text := ClipAround(row[3], words, om.HistoryClipChars)

@@ -127,6 +127,39 @@ func TestConversationFacts(t *testing.T) {
 	absent(t, r, "ok")
 }
 
+// A first-person statement about the user is a fact with no specifics; the same words as a
+// question, or a sentence about nobody in particular, are not records.
+func TestSelfStatements(t *testing.T) {
+	entries := []session.Entry{
+		user("u1", "I've been using basil and mint in my cooking lately. Do you have tips for growing them?"),
+		user("u2", "I enjoy listening to podcasts during my commute. Herbs are nice."),
+		user("u3", "I'm a big fan of history books. Do you like history books?"),
+		user("u4", "Skip the basics as I am working in the field."),
+		user("u5", "My favorite season is autumn. I usually hike on weekends."),
+		user("u6", "I've been planning to visit the coast. Have you been reading much?"),
+	}
+	r := run(entries)
+	for _, text := range []string{
+		"I've been using basil and mint in my cooking lately.",
+		"I enjoy listening to podcasts during my commute.",
+		"I'm a big fan of history books.",
+		"Skip the basics as I am working in the field.",
+		"My favorite season is autumn.",
+		"I usually hike on weekends.",
+	} {
+		if got := find(t, r, "fact", text); got.Status != "" {
+			t.Fatalf("%q status %q", text, got.Status)
+		}
+	}
+	if plan := find(t, r, "fact", "I've been planning to visit the coast."); plan.Status != ledger.StatusProposed {
+		t.Fatalf("plan status %q", plan.Status)
+	}
+	absent(t, r, "tips for growing")
+	absent(t, r, "Herbs are nice")
+	absent(t, r, "Do you like history")
+	absent(t, r, "reading much")
+}
+
 // A correction with no named phrase replaces the newest record on its subject, read from the
 // subjects already in the ledger; consecutive records on one subject from one exchange merge.
 func TestSubjectsMergeAndSubjectCorrections(t *testing.T) {

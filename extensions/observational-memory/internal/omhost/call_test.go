@@ -673,3 +673,52 @@ func TestPlaceholderArgumentsAreRefused(t *testing.T) {
 		t.Fatalf("a real word: %v", err)
 	}
 }
+
+// A search no row matches with every word ranks the rows by how many of its words they contain
+// (ties newest first in history), marked Partial, with PartialNotice first and no Through page;
+// a search every word of which matches stays exact.
+func TestSearchRanksWhenNothingMatchesEveryWord(t *testing.T) {
+	c := &omhost.Call{Entries: fixture(), Skip: []string{"memory"}}
+	h := must[om.EntryList](t, c, omwire.MHistory, omwire.Options{Search: []string{"sourdough rye zebra"}})
+	if !h.Partial || !slices.Equal(h.IDs(), []string{"u1", "t1", "a1"}) || h.Next != "" || !strings.HasPrefix(h.String(), om.PartialNotice+"\n") {
+		t.Fatalf("partial history %+v\n%s", h, h)
+	}
+	if f := h.Filter(func(om.Entry) bool { return true }); !f.Partial {
+		t.Fatal("Filter lost Partial")
+	}
+	if exact := must[om.EntryList](t, c, omwire.MHistory, omwire.Options{Search: []string{"sourdough rye"}}); exact.Partial || !slices.Equal(exact.IDs(), []string{"u1"}) || strings.Contains(exact.String(), om.PartialNotice) {
+		t.Fatalf("exact history %+v", exact)
+	}
+	if n := must[om.NoteList](t, c, omwire.MNotes, omwire.Options{Search: []string{"sourdough zebra"}}); !n.Partial || !slices.Equal(n.IDs(), []string{obsBake}) {
+		t.Fatalf("partial notes %+v", n)
+	}
+	if r := must[om.ReflectionList](t, c, omwire.MReflections, omwire.Options{Search: []string{"regular zebra"}}); !r.Partial || !slices.Equal(r.IDs(), []string{refBake}) {
+		t.Fatalf("partial reflections %+v", r)
+	}
+	// Two searches rank together, over every word of both.
+	if two := must[om.EntryList](t, c, omwire.MHistory, omwire.Options{Search: []string{"zebra", "sourdough rye"}}); !two.Partial || two.IDs()[0] != "u1" {
+		t.Fatalf("two searches %+v", two)
+	}
+	if none := must[om.EntryList](t, c, omwire.MHistory, omwire.Options{Search: []string{"zebra okapi"}}); none.Partial || none.Len() != 0 || none.Counts["zebra"] != 0 {
+		t.Fatalf("nothing matches %+v", none)
+	}
+	// A partial list too long to show pages by a bigger limit, never by Through.
+	l := must[om.EntryList](t, c, omwire.MHistory, omwire.Options{Search: []string{"sourdough rye zebra"}, Limit: limit(1)})
+	if !l.Partial || l.Showing != 1 || l.Matched != 3 || strings.Contains(l.Next, "Through") || !strings.Contains(l.Next, "Limit(3)") {
+		t.Fatalf("partial page %+v", l)
+	}
+}
+
+// A detector's reads never rank: its count must mean what its search says.
+func TestDetectorSearchNeverRanks(t *testing.T) {
+	covered := []ledger.Entry{tf.RawMessage("u1", "plan the deploy"), tf.RawMessage("a1", "will do")}
+	c := omhost.DetectorCall(&omhost.DetectorPass{Covered: covered})
+	raw, err := call(t, c, omwire.MHistory, omwire.Options{Search: []string{"deploy zebra"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h om.EntryList
+	if err := json.Unmarshal(raw, &h); err != nil || h.Partial || h.Len() != 0 {
+		t.Fatalf("detector history %+v %v", h, err)
+	}
+}
