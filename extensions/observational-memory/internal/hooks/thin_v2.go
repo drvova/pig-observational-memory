@@ -12,11 +12,12 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/thin"
 )
 
-// OnContext is the context event handler (PiG emits it before each provider request): under
-// memory v2 it thins the aged tool results of the request's context in place (thin.Compute,
-// docs/memory-v2.md, "Thinning aged tool results") and returns how many it shortened. v1,
-// passive mode, a branch it cannot read and a panic leave the messages untouched. It makes no
-// model request.
+// OnContext is the context event handler (PiG emits it before each provider request): it puts
+// a day header before each user message that starts a new day (thin.DayHeaders, docs/memory-v2.md,
+// "Day headers"), then thins the aged tool results of the request's context in place
+// (thin.Compute, "Thinning aged tool results") and returns how many it shortened. Passive mode
+// and a panic leave the messages untouched; a branch it cannot read or one with no compaction
+// gets headers only. It makes no model request.
 func OnContext(rt *runtime.Runtime, h host.Host, messages []host.ContextMessage) (thinned int) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -28,6 +29,7 @@ func OnContext(rt *runtime.Runtime, h host.Host, messages []host.ContextMessage)
 	if cfg := rt.Config(); cfg.Passive || len(messages) == 0 {
 		return 0
 	}
+	thin.DayHeaders(messages)
 	entries, err := h.GetBranch()
 	if err != nil {
 		return 0

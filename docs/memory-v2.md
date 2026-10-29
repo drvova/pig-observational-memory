@@ -311,6 +311,19 @@ once only if the stored definitions changed) and the prompt cache prefix breaks 
 The session file keeps every original for `om.Recall`. Smaller context means PiG compacts less often, so
 thinning lowers PiG's own request count.
 
+### Day headers (no request)
+
+The summary's records carry the time they were said, but raw messages reach the model without one, so
+"today" or "last week" in the retained tail, and the latest message itself, cannot be placed in time.
+In the same `context` event, before thinning, the extension puts one text block, `[Sent on Tuesday
+2023-05-30]`, first in each user message of the request whose day (in the local time zone records are
+dated in) differs from the previous user message's; the first user message of the request always gets
+one. The header reads the message's own timestamp alone, so a message has the same bytes in every
+later request and the prompt cache prefix is untouched; it is added once a day, not per message, and
+also before the first compaction. A message with no readable timestamp, or one already opening with a
+header, is left as it is. In the LongMemEval run of `docs/bench-results.md`, temporal questions whose
+evidence sat wholly in the retained tail scored 57% while every other type scored 62-100% there.
+
 ### Level 1: one request at compaction (on by default, `consolidate: false` turns it off)
 
 - **Model.** The session model; there is no worker model setting.

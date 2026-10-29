@@ -21,6 +21,12 @@ content hash, PiG's version, the actor instructions and the judge's system promp
 `run.json` and into every `result.json`, and the report flags a result whose settings differ from
 `run.json`.
 
+`--question-day-header` opens the question with the extension's day header for LongMemEval's
+question date (`[Sent on Tuesday 2023-05-30]`). The question is sent live, so PiG stamps it with
+today's date, and an extension that writes day headers (docs/memory-v2.md, "Day headers") would
+otherwise date it years after the haystack it asks about; the extension leaves a message that
+already opens with a header alone. It is recorded in `run.json`.
+
 ## What one question does
 
 1. **Directory and home.** Each question lives in `questions/<dir>`, where `<dir>` is an opaque name

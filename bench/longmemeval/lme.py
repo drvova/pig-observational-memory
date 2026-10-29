@@ -846,6 +846,11 @@ class Question:
         estimate = estimate_context(entries_before)
         location = evidence_location(entries_before, st.get("evidence_ids") or [])
         prompt = "Current Date: %s\nQuestion: %s" % (self.q["question_date"], self.q["question"])
+        if self.cfg.get("question_day_header"):
+            # The question is sent live, so PiG stamps it with today's date; the extension's day
+            # header would then contradict the question date. A message opening with a header is
+            # left alone, so the question carries the header of the day it is asked on.
+            prompt = "[Sent on %s]\n%s" % (parse_date(self.q["question_date"]).strftime("%A %Y-%m-%d"), prompt)
         run = "answer-%d" % (1 + sum(1 for f in st["failed_runs"] if f["run"].startswith("answer")))
         t0 = time.time()
         rpc = RPC(self.cfg["pig"], self.home, self.agent_dir, self.cwd,
@@ -1141,7 +1146,8 @@ def cmd_run(args):
            "thinking": args.thinking, "judge_thinking": args.judge_thinking, "chunk": args.chunk,
            "actor_instructions": ACTOR_INSTRUCTIONS, "judge_system": JUDGE_SYSTEM,
            "keep_homes": args.keep_homes, "compact_timeout": args.compact_timeout,
-           "answer_timeout": args.answer_timeout, "judge_timeout": args.judge_timeout}
+           "answer_timeout": args.answer_timeout, "judge_timeout": args.judge_timeout,
+           "question_day_header": args.question_day_header}
     run_path = os.path.join(out, "run.json")
     prev = read_json(run_path)
     if prev and not args.force_settings:
@@ -1462,6 +1468,8 @@ def main():
     r.add_argument("--compact-timeout", type=int, default=1200)
     r.add_argument("--answer-timeout", type=int, default=1200)
     r.add_argument("--judge-timeout", type=int, default=300)
+    r.add_argument("--question-day-header", action="store_true",
+                   help="open the question with the extension's day header for its question date (for an extension that writes day headers)")
     rp = sub.add_parser("report", help="rebuild report.md and summary.json")
     rp.add_argument("--out", required=True)
     args = ap.parse_args()
