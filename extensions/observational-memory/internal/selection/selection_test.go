@@ -652,3 +652,92 @@ func TestRenderNothingOmittedPrintsNoNotice(t *testing.T) {
 		}
 	}
 }
+
+// intentInput is a branch of 6 messages whose records are: m01 a standing plan, m02 a plan a
+// later record supersedes, m03 a failed attempt, m04 the record superseding m02, m05 a plan;
+// the intent quotes m00 (first) and m03 (latest).
+func intentInput(budget int) selection.Input {
+	entries := branch(6, func(i int, o *ledger.Observation) bool {
+		switch i {
+		case 1, 2, 5:
+			o.Content, o.Status = "Plan number "+fmt.Sprint(i), ledger.StatusProposed
+		case 3:
+			o.Kind, o.Outcome, o.Tool, o.Content = ledger.KindAttempt, ledger.OutcomeFailed, "bash", "go test failed"
+		case 4:
+			o.Supersedes = []string{recordID(2)}
+		}
+		return true
+	})
+	in := input(entries, budget)
+	in.Intent = []selection.IntentRequest{
+		{Which: "first", Request: selection.Request{EntryID: "m00", Text: "Port the   loader\nto Go"}},
+		{Which: "latest", Request: selection.Request{EntryID: "m03", Text: strings.Repeat("fix it ", 100)}},
+	}
+	return in
+}
+
+// The intent quotes the requests, the latest clipped to the history clip bound with its
+// source; next holds the unresolved attempt and the standing plans since the latest request,
+// newest first in ledger order, and they leave the notes tables; a superseded plan and one
+// before the latest request are not next steps. The section lines appear in the instructions.
+func TestRenderIntentAndNext(t *testing.T) {
+	r := selection.Render(intentInput(100_000))
+	for _, want := range []string{selection.IntentLine, selection.NextLine, "intent[2]{which,content,source}:", "first,Port the loader to Go,m00", "next[2]{", "notes[3]{"} {
+		if !strings.Contains(r.Text, want) {
+			t.Fatalf("missing %q:\n%s", want, r.Text)
+		}
+	}
+	latest := ""
+	for _, line := range strings.Split(r.Text, "\n") {
+		if strings.Contains(line, "  latest,") {
+			latest = line
+		}
+	}
+	if !strings.HasSuffix(latest, "…,m03") || len([]rune(latest)) > om.HistoryClipChars+len("  latest,,m03")+1 {
+		t.Fatalf("latest row %q", latest)
+	}
+	next := r.Text[strings.Index(r.Text, "next[2]"):strings.Index(r.Text, "notes[3]")]
+	for _, id := range []string{recordID(3), recordID(5)} {
+		if !strings.Contains(next, id) {
+			t.Fatalf("next lacks %s:\n%s", id, next)
+		}
+	}
+	for _, id := range []string{recordID(1), recordID(2), recordID(4)} {
+		if strings.Contains(next, id) {
+			t.Fatalf("next holds %s:\n%s", id, next)
+		}
+	}
+	if strings.Count(r.Text, recordID(5)) != 1 {
+		t.Fatalf("a next step is repeated:\n%s", r.Text)
+	}
+}
+
+// With no intent and no request there is no next section and the instructions stay fixed.
+func TestRenderNoIntentNoSections(t *testing.T) {
+	in := intentInput(100_000)
+	in.Intent = nil
+	r := selection.Render(in)
+	if !strings.HasPrefix(r.Text, selection.TablesInstructions) || strings.Contains(r.Text, "next[") || strings.Contains(r.Text, "intent[") {
+		t.Fatalf("summary:\n%s", r.Text)
+	}
+}
+
+// At every budget the summary with intent and next fits, shows a next step in one place at
+// most, and lists by a runnable query every record it neither shows nor drops.
+func TestRenderIntentFitsEveryBudgetAndListsTheRest(t *testing.T) {
+	full := selection.Render(intentInput(100_000))
+	for budget := 50; budget <= tokens.EstimateStringTokens(full.Text); budget += 37 {
+		in := intentInput(budget)
+		r := selection.Render(in)
+		if r.Text == "" {
+			continue
+		}
+		if tokens.EstimateStringTokens(r.Text) > budget {
+			t.Fatalf("budget %d exceeded", budget)
+		}
+		if strings.Count(r.Text, recordID(5)+",") > 1 || strings.Count(r.Text, recordID(3)+",") > 1 {
+			t.Fatalf("budget %d: a next step shown twice:\n%s", budget, r.Text)
+		}
+		everyOmittedIsListed(t, in, r, runQueries(t, in.Branch, in, r))
+	}
+}

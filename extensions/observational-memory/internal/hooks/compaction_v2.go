@@ -192,12 +192,14 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 		// selection keeps every line anchored, every omission a runnable query and the drops
 		// exactly what it shows. The model's format and codec do apply.
 		folded := ledger.FoldLedger(entries, "")
+		request := v2SplitTurnRequest(cut, event)
 		rendered = renderV2Records(selection.Input{
 			Reflections:     projection.Reflections,
 			Observations:    projection.Observations,
 			Folded:          folded,
 			Branch:          entries,
-			Request:         v2SplitTurnRequest(cut, event),
+			Request:         request,
+			Intent:          v2Intent(entries, cut, request),
 			Budget:          memoryBudget,
 			Format:          format,
 			Codec:           codec,
@@ -409,13 +411,7 @@ func v2SplitTurnRequest(cut []ledger.Entry, event BeforeCompactEvent) *selection
 	if !event.Preparation.IsSplitTurn || len(cut) == 0 {
 		return nil
 	}
-	userText := func(entry ledger.Entry) (string, bool) {
-		if entry.Type != "message" || entry.Message == nil || entry.Message["role"] != "user" {
-			return "", false
-		}
-		_, text, ok := serialize.HistoryText(entry)
-		return text, ok && strings.TrimSpace(text) != ""
-	}
+	userText := v2UserText
 	if n := len(event.Preparation.TurnPrefixMessages); n > 0 && n <= len(cut) {
 		for _, entry := range cut[len(cut)-n:] {
 			if text, ok := userText(entry); ok {
@@ -429,6 +425,46 @@ func v2SplitTurnRequest(cut []ledger.Entry, event BeforeCompactEvent) *selection
 		}
 	}
 	return nil
+}
+
+// v2UserText is a user message's text as history reads it; false for any other entry or an
+// empty one.
+func v2UserText(entry ledger.Entry) (string, bool) {
+	if entry.Type != "message" || entry.Message == nil || entry.Message["role"] != "user" {
+		return "", false
+	}
+	_, text, ok := serialize.HistoryText(entry)
+	return text, ok && strings.TrimSpace(text) != ""
+}
+
+// v2Intent is what the summary's intent section quotes (docs/memory-v2.md, "Selection"): the
+// branch's first user message and the cut range's last one, each left out when it is the split
+// turn's request (shown as the request) or the other one.
+func v2Intent(entries, cut []ledger.Entry, request *selection.Request) []selection.IntentRequest {
+	var out []selection.IntentRequest
+	shown := map[string]bool{}
+	if request != nil {
+		shown[request.EntryID] = true
+	}
+	add := func(which string, entry ledger.Entry, text string) {
+		if !shown[entry.ID] {
+			shown[entry.ID] = true
+			out = append(out, selection.IntentRequest{Which: which, Request: selection.Request{EntryID: entry.ID, Text: text}})
+		}
+	}
+	for _, entry := range entries {
+		if text, ok := v2UserText(entry); ok {
+			add("first", entry, text)
+			break
+		}
+	}
+	for i := len(cut) - 1; i >= 0; i-- {
+		if text, ok := v2UserText(cut[i]); ok {
+			add("latest", cut[i], text)
+			break
+		}
+	}
+	return out
 }
 
 // v2PreviousSummary is the summary the compaction replaces: the preparation's, else the

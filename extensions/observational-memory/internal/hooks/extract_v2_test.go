@@ -6,7 +6,6 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/selection"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
 )
 
@@ -168,7 +167,7 @@ func TestV2TurnEndRecordsFoldAtTheCut(t *testing.T) {
 	c := v2CompactionRun(t, rt, h, "xa3")
 
 	// The records, after the instructions (which name the outcomes).
-	records := strings.TrimPrefix(c.Summary, selection.TablesInstructions)
+	_, records, _ := strings.Cut(c.Summary, ledger.TablesRecallParagraph)
 	if !strings.Contains(records, "Fix the loader for config version 3.") || !strings.Contains(records, "failed: --- FAIL") || strings.Contains(records, "worked") || !strings.Contains(records, "loader.go edited") {
 		t.Fatalf("summary:\n%s", c.Summary)
 	}

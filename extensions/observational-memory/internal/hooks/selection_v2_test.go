@@ -118,3 +118,20 @@ func TestV2SummaryQueriesRunAfterTheCompactionAndAFork(t *testing.T) {
 		t.Fatalf("requests %v", counter.ByStage())
 	}
 }
+
+// The intent quotes the branch's first user message and the cut range's last, leaving out one
+// that is the split turn's request or the same entry twice.
+func TestV2Intent(t *testing.T) {
+	entries := []ledger.Entry{userMessage("u1", "Port the loader"), userMessage("u2", "then add tests"), userMessage("u3", "and ship it")}
+	cut := entries[:2]
+	got := v2Intent(entries, cut, nil)
+	if len(got) != 2 || got[0].Which != "first" || got[0].EntryID != "u1" || got[1].Which != "latest" || got[1].EntryID != "u2" || got[1].Text != "then add tests" {
+		t.Fatalf("intent %+v", got)
+	}
+	if got := v2Intent(entries, cut, &selection.Request{EntryID: "u2"}); len(got) != 1 || got[0].EntryID != "u1" {
+		t.Fatalf("the split turn's request quoted again: %+v", got)
+	}
+	if got := v2Intent(entries, entries[:1], nil); len(got) != 1 || got[0].Which != "first" {
+		t.Fatalf("one entry quoted twice: %+v", got)
+	}
+}

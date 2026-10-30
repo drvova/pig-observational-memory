@@ -15,6 +15,7 @@ import (
 // entry id the record was picked from.
 var (
 	RequestFields    = []string{"content", "source"}
+	IntentFields     = []string{"which", "content", "source"}
 	ReflectionFields = []string{"id", "dates", "content", "source"}
 	NoteFields       = []string{"id", "when", "kind", "status", "scope", "content", "superseded_by", "source"}
 	OmittedFields    = []string{"from", "to", "count", "spans", "first_id", "last_id", "query"}
@@ -81,6 +82,32 @@ const LinesInstructions = `These are condensed memories from earlier in this ses
 Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 ` + ledger.TablesRecallParagraph
+
+// requestLine is the instructions' line for the request; the intent and next sections'
+// lines (sectionLine) follow it only in a summary that shows those sections.
+const requestLine = "- request: the opening request of the turn this compaction cut through; the turn continues after this summary.\n"
+
+// IntentLine and NextLine describe the intent and next sections; NextLinesFormat is next's
+// line in the lines format.
+const (
+	IntentLine      = "- intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole.\n"
+	NextLine        = "- next: the next steps of the current work: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated in the notes tables.\n"
+	NextLinesFormat = "- next: the next steps of the current work, as notes lines: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated under notes.\n"
+)
+
+// sectionLine is the instructions' line a shown section adds, "" for a section with none.
+func (l *layout) sectionLine(group string) string {
+	switch group {
+	case groupIntent:
+		return IntentLine
+	case groupNext:
+		if l.tables {
+			return NextLine
+		}
+		return NextLinesFormat
+	}
+	return ""
+}
 
 // trailerSeparator puts the files and commits lines after the encoded tables, where
 // ledger.TablesSummaryBody stops reading.
@@ -154,6 +181,8 @@ func fieldsOf(group string) []string {
 	switch group {
 	case groupRequest:
 		return RequestFields
+	case groupIntent:
+		return IntentFields
 	case groupReflections:
 		return ReflectionFields
 	case groupOmitted:
@@ -168,6 +197,10 @@ func isList(group string) bool { return group == groupFiles || group == groupCom
 // headerCost is what opening group adds: a table's header, a heading, or a list line's label
 // with the separator before the lines.
 func (l *layout) headerCost(group string) int {
+	return l.sectionHeaderCost(group) + estimate(l.sectionLine(group))
+}
+
+func (l *layout) sectionHeaderCost(group string) int {
 	if isList(group) {
 		return estimate(trailerSeparator+group+": ") + 1
 	}
@@ -202,6 +235,9 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 	case roleRequest:
 		it.cells = []string{it.text, source}
 		it.line = "user: " + it.text + suffix(source)
+	case roleIntent:
+		it.cells = []string{it.which, it.text, source}
+		it.line = it.which + ": " + it.text + suffix(source)
 	case roleReflection:
 		dates := it.from
 		if it.to != "" && it.to != it.from {
@@ -356,6 +392,18 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		l.price(&it, nil, nil)
 		blocks = append(blocks, block{group: groupRequest, items: []*item{&it}})
 	}
+	var intent []*item
+	for _, from := range s.intent {
+		if text, ok := p.intentText[from.which]; ok {
+			it := *from
+			it.text = text
+			l.price(&it, nil, nil)
+			intent = append(intent, &it)
+		}
+	}
+	if len(intent) > 0 {
+		blocks = append(blocks, block{group: groupIntent, items: intent})
+	}
 	byGroup := map[string][]*item{}
 	newest := map[string]int{}
 	for _, it := range s.items {
@@ -365,12 +413,15 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		byGroup[it.group] = append(byGroup[it.group], it)
 		newest[it.group] = it.index
 	}
+	if items := byGroup[groupNext]; len(items) > 0 {
+		blocks = append(blocks, block{group: groupNext, items: items})
+	}
 	if items := byGroup[groupReflections]; len(items) > 0 {
 		blocks = append(blocks, block{group: groupReflections, items: items})
 	}
 	subjects := []string{}
 	for group := range byGroup {
-		if group != groupReflections && group != groupNotes && !isList(group) {
+		if group != groupReflections && group != groupNotes && group != groupNext && !isList(group) {
 			subjects = append(subjects, group)
 		}
 	}
@@ -400,6 +451,13 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		}
 	}
 	text := l.intro
+	var lines string
+	for _, b := range blocks {
+		lines += l.sectionLine(b.group)
+	}
+	if lines != "" {
+		text = strings.Replace(text, requestLine, requestLine+lines, 1)
+	}
 	if notice := omittedNotice(s.shown(p), o); l.notice && notice != "" {
 		text += "\n\n" + notice
 	}

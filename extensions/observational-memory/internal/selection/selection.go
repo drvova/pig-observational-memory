@@ -16,6 +16,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/extract"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/ledger"
+	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/serialize"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tables"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/tokens"
@@ -25,6 +26,13 @@ import (
 // falls inside): the summary shows it first, since the retained tail continues that turn.
 type Request struct {
 	EntryID, Text string
+}
+
+// IntentRequest is one of the user's requests the intent section quotes.
+type IntentRequest struct {
+	// Which is "first" (the session's opening request) or "latest" (the latest one removed).
+	Which string
+	Request
 }
 
 // Input is one summary to render.
@@ -40,6 +48,10 @@ type Input struct {
 	Branch []ledger.Entry
 	// Request is the split turn's opening request, nil when the cut is between turns.
 	Request *Request
+	// Intent is what the session is for, oldest first: its opening request (Which "first") and
+	// the latest request the compaction removes (Which "latest"), each left out when it is
+	// Request or the other one.
+	Intent []IntentRequest
 	// Budget is the summary budget in estimated tokens; at 0 or less nothing renders.
 	Budget int
 	// Format is ledger.FormatLines or ledger.FormatTables ("" and unknown values mean tables).
@@ -78,6 +90,7 @@ type role int
 
 const (
 	roleRequest role = iota
+	roleIntent
 	roleReflection
 	roleNote
 	roleFile
@@ -87,6 +100,8 @@ const (
 // The groups that are not a notes table.
 const (
 	groupRequest     = "request"
+	groupIntent      = "intent"
+	groupNext        = "next"
 	groupReflections = "reflections"
 	groupFiles       = "files"
 	groupCommits     = "commits"
@@ -103,6 +118,11 @@ type item struct {
 	// text carries the item's specifics for class 4.
 	text  string
 	group string
+	// which is an intent item's row name ("first" or "latest").
+	which string
+	// noteGroup is a next step's notes table, where it goes back when the next section has no
+	// room for it.
+	noteGroup string
 	// anchorID is the first source entry id; anchored says it is on the branch, at anchor.
 	anchorID string
 	anchor   int
@@ -131,7 +151,7 @@ func (it *item) id() string {
 	switch it.role {
 	case roleReflection:
 		return it.ref.ID
-	case roleRequest:
+	case roleRequest, roleIntent:
 		return ""
 	}
 	return it.obs.ID
@@ -196,6 +216,7 @@ type state struct {
 	l         *layout
 	items     []*item
 	request   *item
+	intent    []*item
 	positions map[string]int
 	// superseded are the active records some record of the ledger replaces, dropped
 	// superseders included, so a record whose replacement left at an earlier compaction never
@@ -204,6 +225,9 @@ type state struct {
 	byID       map[string]*item
 	// records resolves supersede links through every record of the ledger (extract.DropClosure).
 	records map[string]ledger.Observation
+	// canonical and supersededBy price an item again when it changes group.
+	canonical    map[string]ledger.Canonical
+	supersededBy map[string][]string
 	// partners are, by record id, the active records a possibly_updates or conflicts link joins
 	// it to, either way, in ledger order: taking one tries the others next.
 	partners map[string][]*item
@@ -270,6 +294,7 @@ func newState(in Input) *state {
 			it.status = statusOf(it.obs, retracted)
 		}
 	}
+	s.markNext()
 	s.link()
 	supersededBy := map[string][]string{}
 	for _, o := range all {
@@ -279,6 +304,7 @@ func newState(in Input) *state {
 			}
 		}
 	}
+	s.canonical, s.supersededBy = canonical, supersededBy
 	for _, it := range s.items {
 		s.l.price(it, canonical, supersededBy)
 	}
@@ -289,7 +315,51 @@ func newState(in Input) *state {
 		s.l.price(it, canonical, supersededBy)
 		s.request = it
 	}
+	for _, r := range in.Intent {
+		text := strings.Join(strings.Fields(r.Text), " ")
+		if text == "" {
+			continue
+		}
+		it := &item{role: roleIntent, which: r.Which, text: clipRunes([]rune(text), om.HistoryClipChars), group: groupIntent, anchorID: r.EntryID}
+		_, it.anchored = s.positions[r.EntryID]
+		s.l.price(it, canonical, supersededBy)
+		s.intent = append(s.intent, it)
+	}
 	return s
+}
+
+// markNext moves the next steps into the next section (docs/memory-v2.md, "Selection"): the
+// plans still standing (status proposed, not superseded) and the open or failed attempts no
+// later attempt resolved, said at or after the latest user request the summary quotes (the
+// split turn's or the intent's), so the section holds the current work, never every plan of
+// the session. With no such request on the branch there is no next section.
+func (s *state) markNext() {
+	start := -1
+	ids := []string{}
+	if s.in.Request != nil {
+		ids = append(ids, s.in.Request.EntryID)
+	}
+	for _, r := range s.in.Intent {
+		ids = append(ids, r.EntryID)
+	}
+	for _, id := range ids {
+		if at, ok := s.positions[id]; ok && at > start {
+			start = at
+		}
+	}
+	if start < 0 {
+		return
+	}
+	for _, it := range s.items {
+		if it.role != roleNote || !it.anchored || it.anchor < start || s.superseded[it.obs.ID] || it.status == ledger.StatusRetracted {
+			continue
+		}
+		attempt := it.obs.Kind == ledger.KindAttempt
+		open := attempt && (it.obs.Outcome == ledger.OutcomeOpen || it.obs.Outcome == ledger.OutcomeFailed)
+		if open || !attempt && it.status == ledger.StatusProposed {
+			it.noteGroup, it.group = it.group, groupNext
+		}
+	}
 }
 
 // statusOf is a record's status as the summary shows it (docs/memory-v2.md, "Selection"):
@@ -362,6 +432,8 @@ type selected struct {
 	carried strings.Builder
 	// requestText is the request as shown (clipped when it alone did not fit).
 	requestText string
+	// intentText is each intent row as shown, by which (clipped when it did not fit whole).
+	intentText map[string]string
 }
 
 // shown counts the records p shows (the request is none).
@@ -404,6 +476,9 @@ func (p *selected) unselect(s *state, it *item) {
 	if it.role == roleRequest {
 		p.requestText = ""
 	}
+	if it.role == roleIntent {
+		delete(p.intentText, it.which)
+	}
 	p.used -= it.cost
 	p.opened[it.group]--
 	if p.opened[it.group] == 0 {
@@ -414,7 +489,7 @@ func (p *selected) unselect(s *state, it *item) {
 
 // choose selects items under budget in the ordered classes.
 func (s *state) choose(budget int) *selected {
-	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}}
+	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}, intentText: map[string]string{}}
 	try := func(it *item) bool {
 		if p.on[it] || p.dropped[it.id()] {
 			return false
@@ -456,7 +531,7 @@ func (s *state) choose(budget int) *selected {
 	if s.request != nil {
 		if try(s.request) {
 			p.requestText = s.request.text
-		} else if text, ok := s.clippedRequest(budget); ok {
+		} else if text, ok := s.clipped(s.request, budget, p); ok {
 			clipped := *s.request
 			clipped.text = text
 			s.l.price(&clipped, nil, nil)
@@ -482,6 +557,19 @@ func (s *state) choose(budget int) *selected {
 		}
 	}
 	observations := []role{roleNote, roleFile, roleCommit}
+	// 1b. The next steps (markNext). One the next section has no room for (its header carries
+	// the section's instructions line) goes back to its notes table for good and is tried there
+	// at once, so the section never costs a next step a summary without it would show.
+	newestFirst(func(it *item) bool { return it.group == groupNext }, roleNote)
+	var fallen []*item
+	for _, it := range records {
+		if it.group == groupNext && !p.on[it] {
+			it.group = it.noteGroup
+			s.l.price(it, s.canonical, s.supersededBy)
+			fallen = append(fallen, it)
+		}
+	}
+	newestFirst(func(it *item) bool { return slices.Contains(fallen, it) }, roleNote)
 	// 2. Unsuperseded user corrections and preferences.
 	newestFirst(func(it *item) bool {
 		return ledger.UserPriority(it.obs) && !s.superseded[it.obs.ID] && it.status != ledger.StatusRetracted
@@ -490,6 +578,22 @@ func (s *state) choose(budget int) *selected {
 	newestFirst(func(it *item) bool {
 		return it.obs.Kind == ledger.KindAttempt && (it.obs.Outcome == ledger.OutcomeOpen || it.obs.Outcome == ledger.OutcomeFailed) && !s.superseded[it.obs.ID]
 	}, observations...)
+	// 3b. The intent: the latest request, then the session's opening one, each clipped to what
+	// fits when whole it does not. It renders at the top, but records the user corrected or
+	// prefers, the next steps and unresolved attempts take the room before it.
+	for i := len(s.intent) - 1; i >= 0; i-- {
+		it := s.intent[i]
+		if try(it) {
+			p.intentText[it.which] = it.text
+		} else if text, ok := s.clipped(it, budget, p); ok {
+			clipped := *it
+			clipped.text = text
+			s.l.price(&clipped, nil, nil)
+			if try(&clipped) {
+				p.intentText[it.which] = text
+			}
+		}
+	}
 	// 4. Records carrying specifics no selected line carries.
 	newestFirst(func(it *item) bool {
 		return it.status != ledger.StatusRetracted && len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
@@ -523,14 +627,19 @@ func (s *state) settleDrops(p *selected) {
 	}
 }
 
-// clippedRequest is the longest prefix of the request whose item fits budget alone.
-func (s *state) clippedRequest(budget int) (string, bool) {
-	runes := []rune(s.request.text)
+// clipped is the longest prefix of from's text whose item fits what p leaves of budget.
+func (s *state) clipped(from *item, budget int, p *selected) (string, bool) {
+	runes := []rune(from.text)
+	room := budget - p.used
 	fits := func(n int) bool {
-		it := *s.request
+		it := *from
 		it.text = clipRunes(runes, n)
 		s.l.price(&it, nil, nil)
-		return it.cost+s.l.headerCost(groupRequest) <= budget
+		cost := it.cost
+		if p.opened[it.group] == 0 {
+			cost += s.l.headerCost(it.group)
+		}
+		return cost <= room
 	}
 	lo, hi := 0, len(runes)
 	for lo < hi {

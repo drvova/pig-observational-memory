@@ -256,11 +256,25 @@ Records are taken in ordered classes, newest first within a class; a record that
 skipped and selection continues:
 
 1. the split turn's opening request;
+1b. the next steps: plans still standing (`proposed`, not superseded or retracted) and open or failed
+   attempts no later attempt resolved, anchored at or after the latest user request the summary
+   quotes (the split turn's or the intent's), shown in their own `next` section and not in the notes
+   tables; one the section has no room for goes back to its notes table and is tried there at once;
 2. unsuperseded user corrections and preferences;
 3. open and failed attempts;
+3b. the intent, the latest request first: the branch's first user message (`first`) and the cut
+   range's last one (`latest`), quoted in the user's words and clipped to `om.HistoryClipChars`
+   (the history cell bound), each clipped further to fit, its source reading it whole; one that is
+   the split turn's request is not quoted again. It renders at the top, under the request;
 4. records carrying specifics no already-selected line carries (`ledger.MissingSpecifics`);
 5. rendered reflections, which drop the records they cite;
 6. everything else.
+
+The intent and next sections answer what a resumed agent needs first, what the session is for and
+what is left to do (after Factory's anchored summaries, whose fixed sections hold the session intent
+and the next steps), built by code from the branch and the ledger, so no request writes them and they
+never paraphrase. The instructions describe a section only in a summary that shows it: the line is
+part of the section's header cost, so a summary without them costs what it did before.
 
 The order is lexicographic over facts the ledger holds (kind, supersedes, outcome, specifics,
 citations); there are no numeric weights. Class 2 holds records `ledger.UserPriority` grants: a user
