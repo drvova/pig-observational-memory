@@ -11,6 +11,8 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/engine"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
+	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/neutral"
 )
 
 // hook runs one harness event (om hook <harness> <event>), its payload on in (or, for Codex's
@@ -49,6 +51,9 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	if err != nil {
 		return fmt.Errorf("om hook %s: payload: %w", hs.Name, err)
 	}
+	if hs.Hooks.TranscriptFrom != nil {
+		p.TranscriptPath = hs.Hooks.TranscriptFrom(p.Cwd, p.SessionID)
+	}
 	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: hs.Hooks.Transcript, Cwd: p.Cwd}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
@@ -64,7 +69,16 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		if p.Source == "compact" || p.Source == "resume" {
 			summary, _ = h.LatestSummary()
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": name, "additionalContext": a.startContext(h, summary)}})
+		return writeContext(out, hs, name, a.startContext(h, summary))
+	case evPrompt:
+		if !hs.Hooks.SummaryOnPrompt {
+			return nil
+		}
+		summary, err := summaryToHand(h)
+		if err != nil || summary == "" {
+			return err
+		}
+		return writeContext(out, hs, name, a.startContext(h, summary))
 	case evTurnEnd:
 		hooks.OnTurnEnd(a.rt, h)
 		engine.SettleCurated(h)
@@ -73,6 +87,48 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		return err
 	}
 	return nil
+}
+
+// writeContext writes context for the model in the shape the harness reads.
+func writeContext(out io.Writer, hs Harness, name, context string) error {
+	if hs.Hooks.PlainContext {
+		return json.NewEncoder(out).Encode(map[string]any{"additionalContext": context})
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": name, "additionalContext": context}})
+}
+
+// summaryHanded marks the compaction whose summary a prompt hook has handed the model.
+const summaryHanded = "om.summary.handed"
+
+// summaryToHand is the latest compaction's summary when no prompt hook has handed it yet, and
+// records that it now has: for a harness whose session-start hook never says it compacted
+// (HookSpec.SummaryOnPrompt), the first prompt after a compaction carries the summary, once.
+func summaryToHand(h *neutral.Host) (string, error) {
+	branch, err := h.GetBranch()
+	if err != nil {
+		return "", err
+	}
+	i := ledger.FindLastCompactionIndex(branch)
+	if i < 0 {
+		return "", nil
+	}
+	compaction := branch[i].ID
+	for _, e := range branch[i+1:] {
+		if e.CustomType != summaryHanded {
+			continue
+		}
+		if data, ok := e.Data.(map[string]any); ok && data["compaction"] == compaction {
+			return "", nil
+		}
+	}
+	summary, _ := branch[i].Summary.(string)
+	if summary == "" {
+		return "", nil
+	}
+	if err := h.AppendEntry(summaryHanded, map[string]any{"compaction": compaction}); err != nil {
+		return "", err
+	}
+	return summary, nil
 }
 
 // hookPayload is what om reads from a hook's stdin, under the field names the harness families

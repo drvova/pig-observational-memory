@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/transcript"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,6 +68,26 @@ type HookSpec struct {
 	Transcript string
 	// Matcher is set on every hook group when the harness requires one.
 	Matcher *string
+	// TimeoutMS says the harness reads hook timeouts in milliseconds (Gemini CLI).
+	TimeoutMS bool
+	// TopLevel says the hooks file is keyed by event name itself, not under "hooks" (Factory
+	// Droid's hooks.json).
+	TopLevel bool
+	// Flat says each event lists commands directly, not matcher groups of them, with the timeout
+	// as timeoutSec (Copilot).
+	Flat bool
+	// PlainContext says context goes back as a top-level additionalContext, not under
+	// hookSpecificOutput (Copilot).
+	PlainContext bool
+	// TOML says the hooks are [[hooks]] tables in a TOML config (Kimi CLI), not Claude's JSON.
+	TOML bool
+	// TranscriptFrom finds the session's transcript from the payload's cwd and session id, and is
+	// read over any path the payload names (Kimi CLI names none; Copilot's documented session log
+	// is its events.jsonl).
+	TranscriptFrom func(cwd, sessionID string) string
+	// SummaryOnPrompt hands a compaction's summary to the model at the next prompt, for a harness
+	// whose session-start does not run again after it compacts (Gemini CLI).
+	SummaryOnPrompt bool
 }
 
 // The om events a hook family can carry.
@@ -117,7 +140,7 @@ func init() {
 	register(Harness{
 		Name: "cursor", Title: "Cursor",
 		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.cursor/mcp.json", "linux": "~/.cursor/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
-		Note: "Cursor's hooks are not wired yet: its transcript format is undocumented",
+		Note: "Cursor's hooks are not wired: its transcript keeps no entry ids, timestamps or tool results, and folds reasoning into the reply",
 	})
 	register(Harness{
 		Name: "devin", Title: "Devin Desktop (Windsurf)",
@@ -139,7 +162,10 @@ func init() {
 		MCP: &MCPSpec{Path: map[string]string{"darwin": "${COPILOT_HOME:-~/.copilot}/mcp-config.json", "linux": "${COPILOT_HOME:-~/.copilot}/mcp-config.json"}, Key: []string{"mcpServers"}, Entry: func(exe, h string) map[string]any {
 			return map[string]any{"type": "local", "command": exe, "args": []any{"mcp", "--harness", h}, "tools": []any{"*"}}
 		}},
-		Note: "Copilot's hooks are not wired yet: their transcript format is undocumented",
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${COPILOT_HOME:-~/.copilot}/settings.json", "linux": "${COPILOT_HOME:-~/.copilot}/settings.json"}, Transcript: "copilot", Flat: true, PlainContext: true,
+			TranscriptFrom: func(_, sessionID string) string { return transcript.CopilotEventsPath(sessionID) },
+			Events:         map[string]string{evSessionStart: "sessionStart", evTurnEnd: "agentStop", evPreCompact: "preCompact"}},
+		Note: "the CLI's hooks: om compacts at preCompact; Copilot's sessionStart never follows its compaction, so om's summary comes back on resume and through the tool",
 	})
 	register(Harness{
 		Name: "claude-desktop", Title: "Claude Desktop",
@@ -147,18 +173,21 @@ func init() {
 	})
 	register(Harness{
 		Name: "gemini-cli", Title: "Gemini CLI",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.gemini/settings.json", "linux": "~/.gemini/settings.json"}, Key: []string{"mcpServers"}},
-		Note: "its hooks are not wired yet: its transcript format is undocumented",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.gemini/settings.json", "linux": "~/.gemini/settings.json"}, Key: []string{"mcpServers"}},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.gemini/settings.json", "linux": "~/.gemini/settings.json"}, Transcript: "gemini", TimeoutMS: true, SummaryOnPrompt: true,
+			Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "BeforeAgent", evTurnEnd: "AfterAgent", evPreCompact: "PreCompress"}},
+		Note: "compaction: om compacts at PreCompress and hands its summary to the model at the next prompt",
 	})
 	register(Harness{
 		Name: "qwen-code", Title: "Qwen Code",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.qwen/settings.json", "linux": "~/.qwen/settings.json"}, Key: []string{"mcpServers"}},
-		Note: "its hooks are not wired yet: its transcript format is undocumented",
+		MCP:   &MCPSpec{Path: map[string]string{"darwin": "~/.qwen/settings.json", "linux": "~/.qwen/settings.json"}, Key: []string{"mcpServers"}},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.qwen/settings.json", "linux": "~/.qwen/settings.json"}, Events: claudeEventNames, Transcript: "qwen"},
+		Note:  "compaction: om's summary is handed back at the SessionStart after Qwen's (source compact)",
 	})
 	register(Harness{
 		Name: "kiro", Title: "Kiro",
 		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.kiro/settings/mcp.json", "linux": "~/.kiro/settings/mcp.json"}, Key: []string{"mcpServers"}},
-		Note: "its hooks are not wired yet: no transcript is documented",
+		Note: "its hooks carry no transcript path (sessions are SQLite, schema unpublished) and it has no compaction hook, so they are not wired",
 	})
 	register(Harness{
 		Name: "amazon-q", Title: "Amazon Q Developer CLI",
@@ -167,8 +196,9 @@ func init() {
 	})
 	register(Harness{
 		Name: "factory-droid", Title: "Factory Droid",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.factory/mcp.json", "linux": "~/.factory/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
-		Note: "its hooks are not wired yet: its transcript format is undocumented",
+		MCP:   &MCPSpec{Path: map[string]string{"darwin": "~/.factory/mcp.json", "linux": "~/.factory/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.factory/hooks.json", "linux": "~/.factory/hooks.json"}, Events: claudeEventNames, Transcript: "droid", TopLevel: true},
+		Note:  "compaction: om's summary is handed back at the SessionStart after Droid's (source compact)",
 	})
 	register(Harness{
 		Name: "warp", Title: "Warp",
@@ -181,8 +211,10 @@ func init() {
 	})
 	register(Harness{
 		Name: "kimi-cli", Title: "Kimi CLI",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.kimi/mcp.json", "linux": "~/.kimi/mcp.json"}, Key: []string{"mcpServers"}},
-		Note: "its hooks are not wired yet: its transcript format is undocumented",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.kimi/mcp.json", "linux": "~/.kimi/mcp.json"}, Key: []string{"mcpServers"}},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.kimi/config.toml", "linux": "~/.kimi/config.toml"}, Events: claudeEventNames, Transcript: "kimi", TOML: true,
+			TranscriptFrom: transcript.KimiWirePath},
+		Note: "Kimi's hooks cannot hand the model context: om records each turn and compacts with Kimi, and memory is read through the tool",
 	})
 	register(Harness{
 		Name: "amp", Title: "Amp",
@@ -365,7 +397,7 @@ func installMCPList(w writer, exe, harness string, spec *MCPSpec, cfg map[string
 func isOmHook(group any, harness string) bool {
 	g, _ := group.(map[string]any)
 	list, _ := g["hooks"].([]any)
-	for _, raw := range list {
+	for _, raw := range append([]any{g}, list...) {
 		h, _ := raw.(map[string]any)
 		if cmd, _ := h["command"].(string); strings.Contains(cmd, " hook "+harness+" ") {
 			return true
@@ -381,11 +413,17 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 	if path == "" {
 		return nil
 	}
+	if spec.TOML {
+		return installTOMLHooks(w, exe, harness, spec, path, remove)
+	}
 	settings, err := readJSONObject(path)
 	if err != nil {
 		return err
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
+	if spec.TopLevel {
+		hooks = settings
+	}
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
@@ -404,7 +442,17 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 			}
 		}
 		if !remove {
-			group := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": strconv.Quote(exe) + " hook " + harness + " " + name, "timeout": hookTimeouts[ev]}}}
+			timeout := hookTimeouts[ev]
+			if spec.TimeoutMS {
+				timeout *= 1000
+			}
+			command := map[string]any{"type": "command", "command": strconv.Quote(exe) + " hook " + harness + " " + name, "timeout": timeout}
+			group := map[string]any{"hooks": []any{command}}
+			if spec.Flat {
+				command["timeoutSec"] = command["timeout"]
+				delete(command, "timeout")
+				group = command
+			}
 			if spec.Matcher != nil {
 				group["matcher"] = *spec.Matcher
 			}
@@ -416,9 +464,11 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 			hooks[name] = kept
 		}
 	}
-	if len(hooks) == 0 {
+	switch {
+	case spec.TopLevel:
+	case len(hooks) == 0:
 		delete(settings, "hooks")
-	} else {
+	default:
 		settings["hooks"] = hooks
 	}
 	data, err := encodeJSON(settings)
@@ -426,6 +476,47 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 		return err
 	}
 	return w.write(path, data)
+}
+
+// installTOMLHooks writes om's hooks as [[hooks]] tables (event, command, timeout in seconds) at
+// the end of a TOML config, every line marked as om's, and takes out exactly those lines.
+func installTOMLHooks(w writer, exe, harness string, spec *HookSpec, path string, remove bool) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	var kept []string
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if !strings.HasSuffix(line, managedMark) && (line != "" || len(kept) > 0) {
+			kept = append(kept, line)
+		}
+	}
+	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
+	if remove {
+		if body == "" {
+			return w.write(path, nil)
+		}
+		return w.write(path, []byte(body+"\n"))
+	}
+	events := make([]string, 0, len(spec.Events))
+	for ev := range spec.Events {
+		events = append(events, ev)
+	}
+	sort.Strings(events)
+	var tables []string
+	for _, ev := range events {
+		name := spec.Events[ev]
+		tables = append(tables,
+			"[[hooks]] "+managedMark,
+			"event = "+strconv.Quote(name)+" "+managedMark,
+			"command = "+strconv.Quote(shellQuote(exe)+" hook "+harness+" "+name)+" "+managedMark,
+			"timeout = "+strconv.Itoa(hookTimeouts[ev])+" "+managedMark)
+	}
+	out := ""
+	if body != "" {
+		out = body + "\n\n"
+	}
+	return w.write(path, []byte(out+strings.Join(tables, "\n")+"\n"))
 }
 
 // claudeMCP registers the MCP server with Claude Code's own command, at user scope.

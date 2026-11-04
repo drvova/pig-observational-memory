@@ -4,7 +4,7 @@
 
 `om install <name>` wires om into 128 harnesses. Each entry takes only what the harness's own documentation or source confirms, linked in its last column; `om install --mcp-config <file>` covers any harness with a JSON MCP config not listed here, and [om](universal.md) has the protocol for any other.
 
-## Recording, compaction and the memory tool (5)
+## Recording, compaction and the memory tool (10)
 
 Hooks, a plugin or an extension hand om the conversation, and the memory tool reads it.
 
@@ -12,11 +12,16 @@ Hooks, a plugin or an extension hand om the conversation, and the memory tool re
 |---|---|---|---|
 | Claude Code | `claude-code` | `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` hooks | compaction: om's summary is handed back after Claude's own (SessionStart, source compact) |
 | Codex CLI | `codex` | its own config (`om install codex --dry-run` shows the files) | no compaction hook: memory is reached through the tool |
+| Factory Droid | `factory-droid` | `~/.factory/mcp.json` `mcpServers` | compaction: om's summary is handed back at the SessionStart after Droid's (source compact) |
+| Gemini CLI | `gemini-cli` | `~/.gemini/settings.json` `mcpServers` | compaction: om compacts at PreCompress and hands its summary to the model at the next prompt |
+| GitHub Copilot (CLI, VS Code) | `copilot` | `${COPILOT_HOME:-~/.copilot}/mcp-config.json` `mcpServers` | the CLI's hooks: om compacts at preCompact; Copilot's sessionStart never follows its compaction, so om's summary comes back on resume and through the tool |
 | Kilo Code | `kilo-code` | `${XDG_CONFIG_HOME:-~/.config}/kilo/kilo.json` `mcp` | OpenCode's plugin API: level 0 on session.idle; om's summary joins Kilo's compaction context (plugin not yet run inside Kilo) |
+| Kimi CLI | `kimi-cli` | `~/.kimi/mcp.json` `mcpServers` | Kimi's hooks cannot hand the model context: om records each turn and compacts with Kimi, and memory is read through the tool |
 | OpenCode | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/opencode.json` `mcp` | plugin: level 0 on session.idle; om's summary joins OpenCode's compaction context |
 | Pi | `pi` | its own config (`om install pi --dry-run` shows the files) | extension: om compacts on Pi's own cut and Pi stores it; the tool runs through om call |
+| Qwen Code | `qwen-code` | `~/.qwen/settings.json` `mcpServers` | compaction: om's summary is handed back at the SessionStart after Qwen's (source compact) |
 
-## The memory tool, installed by om (56)
+## The memory tool, installed by om (51)
 
 om writes its MCP server into the harness's config, beside what is there, and uninstall takes out exactly that. The tool serves the curated memory and kept definitions, shared across harnesses.
 
@@ -37,15 +42,12 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | CodeGPT | `codegpt` | `~/.codegpt/mcp_config.json` `mcpServers` | then Refresh Server Connections; [docs](https://docs.codegpt.co/docs/tutorial-features/mcp) |
 | Continue | `continue` | `~/.continue/config.yaml` `mcpServers` |  |
 | Crush | `crush` | its own config (`om install crush --dry-run` shows the files) | its session-start and turn-start hooks cannot hand the model context, so they are not wired |
-| Cursor | `cursor` | `~/.cursor/mcp.json` `mcpServers` | Cursor's hooks are not wired yet: its transcript format is undocumented |
+| Cursor | `cursor` | `~/.cursor/mcp.json` `mcpServers` | Cursor's hooks are not wired: its transcript keeps no entry ids, timestamps or tool results, and folds reasoning into the reply |
 | Devin Desktop (Windsurf) | `devin` | `${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json` `mcpServers` | its hooks carry no transcript path, so they are not wired |
 | ECA (Editor Code Assistant) | `eca` | `${XDG_CONFIG_HOME:-~/.config}/eca/config.json` `mcpServers` | a config with comments is refused: add it by hand there; [docs](https://eca.dev/config/tools/) |
 | eechat | `eechat` | `${XDG_CONFIG_HOME:-~/.config}/eechat/config/mcp.config.json` `mcpServers` | restart eechat after installing; [docs](https://raw.githubusercontent.com/Lucassssss/eechat/HEAD/electron/server/config/paths.js) |
-| Factory Droid | `factory-droid` | `~/.factory/mcp.json` `mcpServers` | its hooks are not wired yet: its transcript format is undocumented |
 | Firebender | `firebender` | `~/.firebender/firebender.json` `mcpServers` | [docs](https://docs.firebender.com/context/mcp/overview.md) |
 | fx (Vercel Labs) | `fx` | `~/.fx/mcp.json` `mcpServers` | a file still on the older "mcp" key needs om install --mcp-config ~/.fx/mcp.json --key mcp; [docs](https://fx.sh/docs/capabilities/mcp) |
-| Gemini CLI | `gemini-cli` | `~/.gemini/settings.json` `mcpServers` | its hooks are not wired yet: its transcript format is undocumented |
-| GitHub Copilot (CLI, VS Code) | `copilot` | `${COPILOT_HOME:-~/.copilot}/mcp-config.json` `mcpServers` | Copilot's hooks are not wired yet: their transcript format is undocumented |
 | Google Antigravity (IDE, CLI, app) | `antigravity` | `~/.gemini/config/mcp_config.json` `mcpServers` | [docs](https://antigravity.google/docs/mcp) |
 | Goose | `goose` | `${XDG_CONFIG_HOME:-~/.config}/goose/config.yaml` `extensions` | its hooks carry no transcript om reads (sessions are SQLite) and cannot hand the model context |
 | Grok Build (xAI) | `grok-build` | `${GROK_HOME:-~/.grok}/config.toml` `[mcp_servers.om]` | Grok also loads Claude Code's and Cursor's servers: install om for one of them, not several; [docs](https://docs.x.ai/build/features/mcp-servers) |
@@ -53,9 +55,8 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | IBM Bob (IDE and Shell) | `ibm-bob` | `~/.bob/settings/mcp.json` `mcpServers` | [docs](https://bob.ibm.com/docs/shell/configuration/mcp/mcp-bobshell) |
 | Jan | `jan` | `${XDG_DATA_HOME:-~/.local/share}/Jan/data/mcp_config.json` `mcpServers` | restart Jan after installing; a moved data folder (JAN_DATA_FOLDER) needs om install --mcp-config; [docs](https://raw.githubusercontent.com/janhq/jan/main/src-tauri/src/core/cli/mcp.rs) |
 | JetBrains Junie (IDE and CLI) | `junie` | `${JUNIE_HOME:-~/.junie}/mcp/mcp.json` `mcpServers` | [docs](https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html) |
-| Kimi CLI | `kimi-cli` | `~/.kimi/mcp.json` `mcpServers` | its hooks are not wired yet: its transcript format is undocumented |
 | Kimi Code CLI | `kimi-code` | `${KIMI_CODE_HOME:-~/.kimi-code}/mcp.json` `mcpServers` | [docs](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html) |
-| Kiro | `kiro` | `~/.kiro/settings/mcp.json` `mcpServers` | its hooks are not wired yet: no transcript is documented |
+| Kiro | `kiro` | `~/.kiro/settings/mcp.json` `mcpServers` | its hooks carry no transcript path (sessions are SQLite, schema unpublished) and it has no compaction hook, so they are not wired |
 | Mastra Code | `mastra-code` | `~/.mastracode/mcp.json` `mcpServers` | [docs](https://mastra.ai/docs/mastra-code/configuration) |
 | MCPCLIHost | `mcpclihost` | `~/.mcp.json` `mcpServers` | [docs](https://raw.githubusercontent.com/vincent-pli/mcp-cli-host/main/README.md) |
 | mcphost | `mcphost` | `~/.mcphost.yml` `mcpServers` | mcphost also reads ~/.mcphost.json and a working-directory config first; with one of those, add it there; [docs](https://raw.githubusercontent.com/mark3labs/mcphost/main/internal/config/config.go) |
@@ -69,7 +70,6 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | oterm | `oterm` | `${XDG_DATA_HOME:-~/.local/share}/oterm/config.json` `mcpServers` | restart oterm after installing; with OTERM_DATA_DIR set, use om install --mcp-config $OTERM_DATA_DIR/config.json; [docs](https://github.com/ggozad/oterm/blob/main/docs/mcp/index.md) |
 | Prime Agent | `prime-agent` | `${PRIME_AGENT_CODING_AGENT_DIR:-~/.prime/agent}/settings.json` `mcpServers` | [docs](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/HEAD/crates/pa-core/src/settings/storage.rs) |
 | Qoder CLI | `qoder-cli` | `~/.qoder/settings.json` `mcpServers` | restart Qoder CLI after installing; [docs](https://docs.qoder.com/cli/mcp-reference.md) |
-| Qwen Code | `qwen-code` | `~/.qwen/settings.json` `mcpServers` | its hooks are not wired yet: its transcript format is undocumented |
 | Raxol Code | `raxol-code` | `${RAXOL_MCP_CONFIG:-~/.raxol/mcp.json}` `mcpServers` | [docs](https://raw.githubusercontent.com/DROOdotFOO/raxol/HEAD/docs/features/CODING_AGENT.md) |
 | Tabnine (IDE and CLI) | `tabnine` | `~/.tabnine/agent/settings.json` `mcpServers` | [docs](https://docs.tabnine.com/main/getting-started/tabnine-agent/mcp-intro-and-setup/mcp-server-config.md) |
 | Theia IDE | `theia-ide` | `~/.theia-ide/settings.json` `ai-features.mcp.mcpServers` | AI features must be on; restart, or run MCP: Start MCP Server; [docs](https://raw.githubusercontent.com/eclipse-theia/theia/master/packages/ai-mcp/src/common/mcp-preferences.ts) |

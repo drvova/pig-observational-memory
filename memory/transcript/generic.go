@@ -52,6 +52,11 @@ func Generic(lines []map[string]any) []session.Entry {
 // Formats are the readers by harness name, as om's --harness flag names them.
 var Formats = map[string]Format{
 	"claude-code": ClaudeCode,
+	"droid":       Droid,
+	"copilot":     Copilot,
+	"gemini":      Gemini,
+	"qwen":        Qwen,
+	"kimi":        Kimi,
 	"codex":       Codex,
 	"pi":          Pi,
 	"generic":     Generic,
