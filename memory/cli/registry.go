@@ -20,12 +20,18 @@ type Harness struct {
 	Name, Title string
 	// MCP registers the memory tool's server; nil for a harness without an MCP client.
 	MCP *MCPSpec
+	// YAML registers it in a YAML config instead.
+	YAML *YAMLSpec
 	// Hooks registers om's lifecycle hooks; nil for a harness without hooks.
 	Hooks *HookSpec
 	// Custom installs (or removes) what data cannot say; it runs after MCP and Hooks.
 	Custom func(w writer, exe string, remove bool) error
 	// Note is shown by om harnesses: what the harness gets beyond its columns, or what it lacks.
 	Note string
+	// Manual is set for a harness whose MCP servers are added only in its own interface (or in a
+	// file om does not rewrite): om install prints these steps with the server's command and
+	// writes nothing.
+	Manual string
 }
 
 // MCPSpec is where a harness's MCP client reads stdio servers: a JSON config file and the
@@ -174,6 +180,34 @@ func init() {
 		Name: "amp", Title: "Amp",
 		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.config/amp/settings.json", "linux": "~/.config/amp/settings.json", "windows": "${USERPROFILE}/.config/amp/settings.json"}, Key: []string{"amp.mcpServers"}},
 		Note: "its hooks are TypeScript plugins, not wired yet",
+	})
+	register(Harness{
+		Name: "goose", Title: "Goose",
+		YAML: &YAMLSpec{Path: map[string]string{"darwin": "${XDG_CONFIG_HOME:-~/.config}/goose/config.yaml", "linux": "${XDG_CONFIG_HOME:-~/.config}/goose/config.yaml", "windows": "${APPDATA}/Block/goose/config/config.yaml"}, Key: "extensions",
+			Entry: func(exe, h string) map[string]any {
+				return map[string]any{"type": "stdio", "name": "om", "enabled": true, "cmd": exe, "args": []any{"mcp", "--harness", h}, "envs": map[string]any{}, "env_keys": []any{}, "timeout": 300}
+			}},
+		Note: "its hooks carry no transcript om reads (sessions are SQLite) and cannot hand the model context",
+	})
+	register(Harness{
+		Name: "continue", Title: "Continue",
+		YAML: &YAMLSpec{Path: map[string]string{"darwin": "~/.continue/config.yaml", "linux": "~/.continue/config.yaml", "windows": "${USERPROFILE}/.continue/config.yaml"}, Key: "mcpServers", List: true,
+			Entry: func(exe, h string) map[string]any {
+				return map[string]any{"command": exe, "args": []any{"mcp", "--harness", h}}
+			},
+			Skeleton: map[string]any{"name": "Local config", "version": "1.0.0", "schema": "v1"}},
+	})
+	register(Harness{
+		Name: "openhands", Title: "OpenHands",
+		Manual: "add it under Settings, MCP (OpenHands stores servers with encrypted credentials and says not to edit the file)",
+	})
+	register(Harness{
+		Name: "roo-code", Title: "Roo Code",
+		Manual: "open the MCP panel, Edit Global MCP, and add it under mcpServers (the global file's path is not documented)",
+	})
+	register(Harness{
+		Name: "crush", Title: "Crush", Custom: installCrush,
+		Note: "its session-start and turn-start hooks cannot hand the model context, so they are not wired",
 	})
 	register(Harness{
 		Name: "pi", Title: "Pi", Custom: installPi,
@@ -350,7 +384,9 @@ func listHarnesses(out io.Writer) error {
 		h := registry[n]
 		var parts []string
 		switch {
-		case h.MCP != nil || h.Name == "claude-code" || h.Name == "codex":
+		case h.Manual != "":
+			parts = append(parts, "memory tool (MCP, added by hand: om install prints the steps)")
+		case h.MCP != nil || h.YAML != nil || h.Name == "claude-code" || h.Name == "codex":
 			parts = append(parts, "memory tool (MCP)")
 		case h.Name == "pi":
 			parts = append(parts, "memory tool")

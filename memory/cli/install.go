@@ -39,8 +39,16 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 	if !ok {
 		return fmt.Errorf("om install: unknown harness %q (om harnesses lists them)", harnessName)
 	}
+	if h.Manual != "" {
+		return printManual(w, exe, h, remove)
+	}
 	if h.MCP != nil {
 		if err := installMCP(w, exe, h.Name, h.MCP, remove); err != nil {
+			return err
+		}
+	}
+	if h.YAML != nil {
+		if err := installYAML(w, exe, h.Name, h.YAML, remove); err != nil {
 			return err
 		}
 	}
@@ -53,6 +61,36 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 		return h.Custom(w, exe, remove)
 	}
 	return nil
+}
+
+// printManual prints how to add (or remove) om's MCP server in a harness that keeps its servers
+// in its own interface.
+func printManual(w writer, exe string, h Harness, remove bool) error {
+	if remove {
+		fmt.Fprintf(w.out, "%s: remove the MCP server named om (%s)\n", h.Title, h.Manual)
+		return nil
+	}
+	fmt.Fprintf(w.out, "%s keeps its MCP servers in its own settings: %s\n", h.Title, h.Manual)
+	fmt.Fprintf(w.out, "  name:      om\n  transport: stdio\n  command:   %s\n  args:      mcp --harness %s\n", exe, h.Name)
+	return nil
+}
+
+// installAny merges om's server into any JSON MCP config, for a harness not in the registry:
+// path is the file, key the "/"-separated object path its servers live under, name the
+// harness name the server reports.
+func installAny(path, key, name string, remove, dry bool, out io.Writer) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	if name == "" {
+		name = "generic"
+	}
+	spec := &MCPSpec{Path: map[string]string{"": path}, Key: strings.Split(key, "/")}
+	return installMCP(writer{dry: dry, out: out}, exe, name, spec, remove)
 }
 
 // writer writes config files, keeping a one-time backup of what was there.
@@ -205,6 +243,35 @@ func pluginInstaller(harness, dirTemplate string) func(w writer, exe string, rem
 		src = bytes.ReplaceAll(src, []byte("__OM_BIN__"), []byte(strconv.Quote(exe)))
 		return w.write(plugin, bytes.ReplaceAll(src, []byte("__OM_HARNESS__"), []byte(strconv.Quote(harness))))
 	}
+}
+
+// installCrush adds om's MCP server to Crush's crushrc ($XDG_CONFIG_HOME/crush/crushrc,
+// ~/.config/crush), a shell file of commands, as one line marked as om's.
+func installCrush(w writer, exe string, remove bool) error {
+	path := pathTemplate("${XDG_CONFIG_HOME:-~/.config}/crush/crushrc")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	var kept []string
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line != "" && !strings.HasSuffix(line, managedMark) {
+			kept = append(kept, line)
+		}
+	}
+	if !remove {
+		kept = append(kept, "mcp add om --command "+shellQuote(exe)+" --args mcp --args --harness --args crush "+managedMark)
+	}
+	out := strings.Join(kept, "\n")
+	if out != "" {
+		out += "\n"
+	}
+	return w.write(path, []byte(out))
+}
+
+// shellQuote is s single-quoted for a POSIX shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // installPi writes the om extension into Pi's global extensions directory

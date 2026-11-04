@@ -19,6 +19,7 @@ const usage = `om: observational memory for coding agents
 
   om harnesses                       the harnesses om installs into, and what each gets
   om install <harness> [--dry-run]   wire om into a harness (om harnesses lists them)
+  om install --mcp-config <file> [--key mcpServers] [--name h]   any harness with a JSON MCP config
   om uninstall <harness>             remove what install wrote
   om hook <harness> <event>          run one harness event (installed hooks call this)
   om mcp --harness <harness>         serve the memory tool over MCP (stdio)
@@ -122,8 +123,14 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	case "install", "uninstall":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		dry := fs.Bool("dry-run", false, "print what would change, change nothing")
+		mcpConfig := fs.String("mcp-config", "", "any harness: the JSON file its MCP servers live in")
+		key := fs.String("key", "mcpServers", "with --mcp-config: the /-separated object path of its servers")
+		name := fs.String("name", "", "with --mcp-config: the harness name the server reports")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *mcpConfig != "" {
+			return installAny(*mcpConfig, *key, *name, args[0] == "uninstall", *dry, stdout)
 		}
 		if fs.NArg() != 1 {
 			return fmt.Errorf("om %s <harness> (om harnesses lists them)", args[0])
