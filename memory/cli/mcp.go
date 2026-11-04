@@ -102,7 +102,9 @@ func (a *app) callTool(harnessName, dir string, params json.RawMessage) map[stri
 	}
 	s, ok := session(a.root, harnessName, dir)
 	if !ok {
-		return fail("om: no " + harnessName + " session is recorded for " + dir + " yet (the om hooks record it when the session starts or a prompt is sent); run om install " + harnessName)
+		// A harness with no hooks and no transcript om reads (an MCP client only): the tool still
+		// serves the curated memory, shared across harnesses, over an empty conversation.
+		s = scratchSession(harnessName, dir)
 	}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {

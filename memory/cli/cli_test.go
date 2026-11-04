@@ -19,7 +19,7 @@ func env(t *testing.T) (root, home string) {
 	root, home = t.TempDir(), t.TempDir()
 	t.Setenv(RootEnv, root)
 	t.Setenv("HOME", home)
-	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR", "CLAUDE_PROJECT_DIR"} {
+	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR", "CLAUDE_PROJECT_DIR", "CLINE_MCP_SETTINGS_PATH", "COPILOT_HOME", "APPDATA", "USERPROFILE"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("PATH", "")

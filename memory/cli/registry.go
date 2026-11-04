@@ -85,16 +85,105 @@ func init() {
 		Note: "no compaction hook: memory is reached through the tool",
 	})
 	register(Harness{
-		Name: "opencode", Title: "OpenCode", Custom: installOpenCode,
+		Name: "opencode", Title: "OpenCode", Custom: pluginInstaller("opencode", "${XDG_CONFIG_HOME:-~/.config}/opencode/plugin"),
 		MCP: &MCPSpec{Path: map[string]string{"": "${XDG_CONFIG_HOME:-~/.config}/opencode/opencode.json"}, Key: []string{"mcp"}, Entry: func(exe, h string) map[string]any {
 			return map[string]any{"type": "local", "command": []any{exe, "mcp", "--harness", h}, "enabled": true}
 		}},
 		Note: "plugin: level 0 on session.idle; om's summary joins OpenCode's compaction context",
 	})
+	// The harnesses below were checked against their own documentation (docs/universal.md,
+	// "Harness registry", lists the sources); each takes what its docs confirm.
+	register(Harness{
+		Name: "kilo-code", Title: "Kilo Code", Custom: pluginInstaller("kilo-code", "${XDG_CONFIG_HOME:-~/.config}/kilo/plugin"),
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${XDG_CONFIG_HOME:-~/.config}/kilo/kilo.json", "linux": "${XDG_CONFIG_HOME:-~/.config}/kilo/kilo.json"}, Key: []string{"mcp"}, Entry: func(exe, h string) map[string]any {
+			return map[string]any{"type": "local", "command": []any{exe, "mcp", "--harness", h}, "enabled": true}
+		}},
+		Note: "OpenCode's plugin API: level 0 on session.idle; om's summary joins Kilo's compaction context (plugin not yet run inside Kilo)",
+	})
+	register(Harness{
+		Name: "cursor", Title: "Cursor",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.cursor/mcp.json", "linux": "~/.cursor/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Note: "Cursor's hooks are not wired yet: its transcript format is undocumented",
+	})
+	register(Harness{
+		Name: "devin", Title: "Devin Desktop (Windsurf)",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json", "linux": "${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json", "windows": "${APPDATA}/devin/mcp_config.json"}, Key: []string{"mcpServers"}},
+		Note: "its hooks carry no transcript path, so they are not wired",
+	})
+	register(Harness{
+		Name: "cline", Title: "Cline",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${CLINE_MCP_SETTINGS_PATH:-~/.cline/data/settings/cline_mcp_settings.json}", "linux": "${CLINE_MCP_SETTINGS_PATH:-~/.cline/data/settings/cline_mcp_settings.json}"}, Key: []string{"mcpServers"}},
+	})
+	register(Harness{
+		Name: "zed", Title: "Zed",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.config/zed/settings.json", "linux": "~/.config/zed/settings.json"}, Key: []string{"context_servers"}, Entry: func(exe, h string) map[string]any {
+			return map[string]any{"command": exe, "args": []any{"mcp", "--harness", h}, "env": map[string]any{}}
+		}},
+	})
+	register(Harness{
+		Name: "copilot", Title: "GitHub Copilot (CLI, VS Code)",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${COPILOT_HOME:-~/.copilot}/mcp-config.json", "linux": "${COPILOT_HOME:-~/.copilot}/mcp-config.json"}, Key: []string{"mcpServers"}, Entry: func(exe, h string) map[string]any {
+			return map[string]any{"type": "local", "command": exe, "args": []any{"mcp", "--harness", h}, "tools": []any{"*"}}
+		}},
+		Note: "Copilot's hooks are not wired yet: their transcript format is undocumented",
+	})
+	register(Harness{
+		Name: "claude-desktop", Title: "Claude Desktop",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/Library/Application Support/Claude/claude_desktop_config.json", "linux": "${XDG_CONFIG_HOME:-~/.config}/Claude/claude_desktop_config.json", "windows": "${APPDATA}/Claude/claude_desktop_config.json"}, Key: []string{"mcpServers"}},
+	})
+	register(Harness{
+		Name: "gemini-cli", Title: "Gemini CLI",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.gemini/settings.json", "linux": "~/.gemini/settings.json"}, Key: []string{"mcpServers"}},
+		Note: "its hooks are not wired yet: its transcript format is undocumented",
+	})
+	register(Harness{
+		Name: "qwen-code", Title: "Qwen Code",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.qwen/settings.json", "linux": "~/.qwen/settings.json"}, Key: []string{"mcpServers"}},
+		Note: "its hooks are not wired yet: its transcript format is undocumented",
+	})
+	register(Harness{
+		Name: "kiro", Title: "Kiro",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.kiro/settings/mcp.json", "linux": "~/.kiro/settings/mcp.json"}, Key: []string{"mcpServers"}},
+		Note: "its hooks are not wired yet: no transcript is documented",
+	})
+	register(Harness{
+		Name: "amazon-q", Title: "Amazon Q Developer CLI",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.aws/amazonq/mcp.json", "linux": "~/.aws/amazonq/mcp.json"}, Key: []string{"mcpServers"}},
+		Note: "read by an agent only with useLegacyMcpJson: true (Q CLI is being replaced by Kiro)",
+	})
+	register(Harness{
+		Name: "factory-droid", Title: "Factory Droid",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.factory/mcp.json", "linux": "~/.factory/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Note: "its hooks are not wired yet: its transcript format is undocumented",
+	})
+	register(Harness{
+		Name: "warp", Title: "Warp",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.warp/.mcp.json", "linux": "~/.warp/.mcp.json", "windows": "${USERPROFILE}/.warp/.mcp.json"}, Key: []string{"mcpServers"}},
+	})
+	register(Harness{
+		Name: "augment", Title: "Augment (Auggie CLI)",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.augment/settings.json", "linux": "~/.augment/settings.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Note: "its hooks cannot hand the model context and carry no transcript",
+	})
+	register(Harness{
+		Name: "kimi-cli", Title: "Kimi CLI",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.kimi/mcp.json", "linux": "~/.kimi/mcp.json"}, Key: []string{"mcpServers"}},
+		Note: "its hooks are not wired yet: its transcript format is undocumented",
+	})
+	register(Harness{
+		Name: "amp", Title: "Amp",
+		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.config/amp/settings.json", "linux": "~/.config/amp/settings.json", "windows": "${USERPROFILE}/.config/amp/settings.json"}, Key: []string{"amp.mcpServers"}},
+		Note: "its hooks are TypeScript plugins, not wired yet",
+	})
 	register(Harness{
 		Name: "pi", Title: "Pi", Custom: installPi,
-		Note: "extension: om compacts on Pi's own cut and Pi stores it; memory tool via om call",
+		Note: "extension: om compacts on Pi's own cut and Pi stores it; the tool runs through om call",
 	})
+}
+
+// stdioEntry is the server entry for a client that wants the transport named.
+func stdioEntry(exe, h string) map[string]any {
+	return map[string]any{"type": "stdio", "command": exe, "args": []any{"mcp", "--harness", h}}
 }
 
 // pathTemplate expands a config path: a leading ~ is the home directory, ${VAR:-default} is
@@ -260,8 +349,11 @@ func listHarnesses(out io.Writer) error {
 	for _, n := range names {
 		h := registry[n]
 		var parts []string
-		if h.MCP != nil || h.Name == "claude-code" || h.Name == "codex" {
+		switch {
+		case h.MCP != nil || h.Name == "claude-code" || h.Name == "codex":
 			parts = append(parts, "memory tool (MCP)")
+		case h.Name == "pi":
+			parts = append(parts, "memory tool")
 		}
 		if h.Hooks != nil {
 			for _, ev := range []string{evTurnEnd, evPreCompact, evSessionStart} {
@@ -273,7 +365,7 @@ func listHarnesses(out io.Writer) error {
 		if h.Note != "" {
 			parts = append(parts, h.Note)
 		}
-		fmt.Fprintf(out, "%-16s %-22s %s\n", n, h.Title, strings.Join(parts, "; "))
+		fmt.Fprintf(out, "%-16s %-30s %s\n", n, h.Title, strings.Join(parts, "; "))
 	}
 	return nil
 }

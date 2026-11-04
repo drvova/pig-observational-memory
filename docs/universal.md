@@ -11,7 +11,8 @@ takes the summary back.
 
 ```sh
 go install github.com/drvova/pig-observational-memory/memory/cmd/om@latest   # or build: cd memory && go build ./cmd/om
-om install claude-code      # or codex, opencode, pi; --dry-run prints the changes first
+om harnesses               # every harness om installs into, and what each gets
+om install claude-code      # or any name om harnesses lists; --dry-run prints the changes first
 ```
 
 `om install` merges into the harness's own config and keeps a `.om-backup` of any file it changes;
@@ -36,6 +37,39 @@ Tested: the Claude Code, Codex, generic and Pi protocols end to end against the 
 (`memory/cli/cli_test.go`), the Claude Code reader against a real Claude Code transcript, and the
 installers' round trips. The OpenCode plugin and the Pi extension are checked by `node --check` and
 `tsc --strict` but have not run inside OpenCode or Pi.
+
+## Harness registry
+
+Every harness `om install` knows is an entry in `memory/cli/registry.go`: where its MCP client reads
+servers (a JSON file and the key its servers live under), which hook family it speaks and where those
+hooks live, and its transcript format. `om harnesses` lists them. An entry carries only what the harness's
+own documentation confirms; anything else is left out until it is confirmed.
+
+| Tier | Harnesses |
+|---|---|
+| Full: recording, compaction, memory tool | Claude Code, OpenCode, Pi, Kilo Code (OpenCode's plugin API; the plugin has not run inside Kilo yet) |
+| Recording and memory tool | Codex (no compaction hook) |
+| Memory tool | Cursor, Devin Desktop (formerly Windsurf), Cline, Zed, GitHub Copilot (CLI and VS Code, `~/.copilot/mcp-config.json`), Claude Desktop, Gemini CLI, Qwen Code, Kiro, Amazon Q Developer CLI (read only with `useLegacyMcpJson`), Factory Droid, Warp, Augment, Kimi CLI, Amp |
+| Not yet | Goose (YAML config), Continue (YAML list), OpenHands (MCP set in its UI only), Crush (`crushrc` shell config), Roo Code (global path undocumented) |
+
+A harness with the memory tool only has no session om can see, so the tool serves a per-directory
+session with no conversation: the curated memory (`om.Save`, `om.Saved`) and kept definitions, shared
+across every harness through `~/.om`.
+
+Hooks are the next step for most of the memory-tool tier: Cursor, Copilot, Gemini CLI, Qwen Code,
+Factory Droid, Kimi CLI and Kiro document hooks (several in Claude Code's own schema), but not the format
+of the transcript a hook points at, and a hook is only useful once om can read that transcript. Each
+becomes a full entry once its transcript format is verified, by a reader in `memory/transcript` and the
+hook spec in its registry entry.
+
+Sources, checked 2026-11-04: cursor.com/docs (mcp, hooks), docs.devin.ai (desktop customizations, cli
+hooks), docs.cline.bot (mcp, config), kilo.ai/docs, zed.dev/docs/ai/mcp, docs.github.com (copilot hooks
+reference, add MCP servers, CLI config directory), modelcontextprotocol.io (connect local servers),
+google-gemini/gemini-cli docs (mcp-server, hooks), QwenLM/qwen-code docs (mcp, hooks), kiro.dev/docs (mcp,
+hooks), aws/amazon-q-developer-cli docs (agent format, hooks), docs.factory.com (mcp, hooks), docs.warp.dev,
+docs.augmentcode.com (cli integrations, hooks), MoonshotAI/kimi-cli docs (mcp, hooks, data locations),
+ampcode.com/docs (mcp, settings, plugins), goose-docs.ai, docs.continue.dev, docs.openhands.dev,
+charmbracelet/crush docs, docs.roocode.com.
 
 ## How it works
 

@@ -67,12 +67,13 @@ pig install ./extensions/observational-memory --validate-only --json
 
 ## Other harnesses
 
-The same engine runs outside PiG as one binary, `om`, for Claude Code, Codex, OpenCode, Pi and any harness
-that can run a command at a turn's end:
+The same engine runs outside PiG as one binary, `om`, for 20 harnesses so far (Claude Code, Codex, OpenCode,
+Pi, Cursor, Copilot, Gemini CLI, Zed, Cline and more; `om harnesses` lists them) and any harness that can run a
+command at a turn's end:
 
 ```sh
 go install github.com/drvova/pig-observational-memory/memory/cmd/om@latest
-om install claude-code      # or codex, opencode, pi (--dry-run shows the changes; om uninstall reverses them)
+om install claude-code      # or any name om harnesses lists (--dry-run shows the changes; om uninstall reverses them)
 ```
 
 It records the conversation from the harness's own transcript, hands its summary back when the harness

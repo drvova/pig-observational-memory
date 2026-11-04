@@ -1,4 +1,4 @@
-// om: observational memory for OpenCode (written by `om install opencode`).
+// om: observational memory for OpenCode and its forks (written by `om install opencode`, `om install kilo-code`).
 //
 // On session.idle the plugin writes the session's messages to om's generic transcript format
 // and runs level 0 (`om hook generic turn-end`). When OpenCode compacts, it runs om's
@@ -11,6 +11,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 
 const OM = __OM_BIN__
+const HARNESS = __OM_HARNESS__
 const ROOT = process.env.OM_HOME || join(homedir(), ".om")
 
 function om(event, payload) {
@@ -50,11 +51,11 @@ function lines(messages) {
 export const OmPlugin = async ({ client, directory }) => {
   async function payload(sessionID) {
     const res = await client.session.messages({ path: { id: sessionID } })
-    const dir = join(ROOT, "transcripts", "opencode")
+    const dir = join(ROOT, "transcripts", HARNESS)
     mkdirSync(dir, { recursive: true })
     const path = join(dir, `${sessionID}.jsonl`)
     writeFileSync(path, lines(res.data ?? res).map((l) => JSON.stringify(l)).join("\n") + "\n")
-    return { harness: "opencode", session_id: sessionID, transcript_path: path, format: "generic", cwd: directory }
+    return { harness: HARNESS, session_id: sessionID, transcript_path: path, format: "generic", cwd: directory }
   }
   return {
     event: async ({ event }) => {

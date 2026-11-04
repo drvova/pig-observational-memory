@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -86,4 +88,12 @@ func newest(root string, keep func(path string) bool) (string, bool) {
 		files = append(files[:best], files[best+1:]...)
 	}
 	return "", false
+}
+
+// scratchSession is the session the memory tool reads for a harness whose conversation om
+// cannot see: no transcript, one per harness and directory, so what the tool writes (curated
+// memories, kept definitions) has a stable source.
+func scratchSession(harnessName, dir string) Session {
+	sum := sha256.Sum256([]byte(harnessName + "\x00" + filepath.Clean(dir)))
+	return Session{Harness: harnessName, ID: "mcp-" + hex.EncodeToString(sum[:6]), Format: "generic", Cwd: dir}
 }

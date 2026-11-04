@@ -131,7 +131,7 @@ func readJSONObject(path string) (map[string]any, error) {
 		return obj, nil
 	}
 	if err := json.Unmarshal(data, &obj); err != nil {
-		return nil, fmt.Errorf("%s is not a JSON object: %w", path, err)
+		return nil, fmt.Errorf("%s is not plain JSON (comments or trailing commas?): %w; om rewrites only plain JSON, so add its entry by hand (om install --dry-run shows where)", path, err)
 	}
 	return obj, nil
 }
@@ -190,18 +190,21 @@ func installCodex(w writer, exe string, remove bool) error {
 	return w.write(path, []byte(out))
 }
 
-// installOpenCode writes the om plugin into OpenCode's plugin directory
-// ($XDG_CONFIG_HOME/opencode, ~/.config/opencode); the registry adds its MCP server.
-func installOpenCode(w writer, exe string, remove bool) error {
-	plugin := pathTemplate("${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/om.js")
-	if remove {
-		return w.remove(plugin)
+// pluginInstaller writes the om plugin into an OpenCode-style plugin directory (OpenCode and its
+// forks share the plugin API); the registry adds the MCP server.
+func pluginInstaller(harness, dirTemplate string) func(w writer, exe string, remove bool) error {
+	return func(w writer, exe string, remove bool) error {
+		plugin := filepath.Join(pathTemplate(dirTemplate), "om.js")
+		if remove {
+			return w.remove(plugin)
+		}
+		src, err := assets.ReadFile("assets/opencode/om.js")
+		if err != nil {
+			return err
+		}
+		src = bytes.ReplaceAll(src, []byte("__OM_BIN__"), []byte(strconv.Quote(exe)))
+		return w.write(plugin, bytes.ReplaceAll(src, []byte("__OM_HARNESS__"), []byte(strconv.Quote(harness))))
 	}
-	src, err := assets.ReadFile("assets/opencode/om.js")
-	if err != nil {
-		return err
-	}
-	return w.write(plugin, bytes.ReplaceAll(src, []byte("__OM_BIN__"), []byte(strconv.Quote(exe))))
 }
 
 // installPi writes the om extension into Pi's global extensions directory
