@@ -45,14 +45,8 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	if ev == "" {
 		return fmt.Errorf("om hook %s: unknown event %q", hs.Name, name)
 	}
-	var p struct {
-		SessionID      string `json:"session_id"`
-		TranscriptPath string `json:"transcript_path"`
-		Cwd            string `json:"cwd"`
-		Source         string `json:"source"`
-		Trigger        string `json:"trigger"`
-	}
-	if err := json.NewDecoder(in).Decode(&p); err != nil {
+	p, err := decodeHookPayload(in)
+	if err != nil {
 		return fmt.Errorf("om hook %s: payload: %w", hs.Name, err)
 	}
 	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: hs.Hooks.Transcript, Cwd: p.Cwd}
@@ -79,6 +73,41 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		return err
 	}
 	return nil
+}
+
+// hookPayload is what om reads from a hook's stdin, under the field names the harness families
+// use: Claude Code's snake_case, the camelCase of Copilot's events, Cursor's conversation_id and
+// workspace_roots, OpenHands' working_dir.
+type hookPayload struct {
+	SessionID, TranscriptPath, Cwd, Source, Trigger string
+}
+
+func decodeHookPayload(in io.Reader) (hookPayload, error) {
+	var raw map[string]any
+	if err := json.NewDecoder(in).Decode(&raw); err != nil {
+		return hookPayload{}, err
+	}
+	first := func(keys ...string) string {
+		for _, k := range keys {
+			if s, ok := raw[k].(string); ok && s != "" {
+				return s
+			}
+		}
+		return ""
+	}
+	p := hookPayload{
+		SessionID:      first("session_id", "sessionId", "conversation_id", "conversationId"),
+		TranscriptPath: first("transcript_path", "transcriptPath"),
+		Cwd:            first("cwd", "working_dir"),
+		Source:         first("source"),
+		Trigger:        first("trigger"),
+	}
+	if p.Cwd == "" {
+		if roots, ok := raw["workspace_roots"].([]any); ok && len(roots) > 0 {
+			p.Cwd, _ = roots[0].(string)
+		}
+	}
+	return p, nil
 }
 
 // codexHook answers Codex's notify program (om hook codex notify '<json>'), called after each
