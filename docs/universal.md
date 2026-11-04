@@ -45,12 +45,9 @@ servers (a JSON file and the key its servers live under), which hook family it s
 hooks live, and its transcript format. `om harnesses` lists them. An entry carries only what the harness's
 own documentation confirms; anything else is left out until it is confirmed.
 
-| Tier | Harnesses |
-|---|---|
-| Full: recording, compaction, memory tool | Claude Code, OpenCode, Pi, Kilo Code (OpenCode's plugin API; the plugin has not run inside Kilo yet) |
-| Recording and memory tool | Codex (no compaction hook) |
-| Memory tool | Cursor, Devin Desktop (formerly Windsurf), Cline, Zed, GitHub Copilot (CLI and VS Code, `~/.copilot/mcp-config.json`), Claude Desktop, Gemini CLI, Qwen Code, Kiro, Amazon Q Developer CLI (read only with `useLegacyMcpJson`), Factory Droid, Warp, Augment, Kimi CLI, Amp |
-| Not yet | Goose (YAML config), Continue (YAML list), OpenHands (MCP set in its UI only), Crush (`crushrc` shell config), Roo Code (global path undocumented) |
+[Harnesses](harnesses.md) lists all of them, generated from the registry: the five that also get
+recording and compaction, the ones whose config `om install` writes, the ones where `om install` prints the
+steps to add it in the harness's own interface, and the clients researched and found out of reach.
 
 A harness with the memory tool only has no session om can see, so the tool serves a per-directory
 session with no conversation: the curated memory (`om.Save`, `om.Saved`) and kept definitions, shared

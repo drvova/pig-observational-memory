@@ -54,7 +54,7 @@ func (d harnessData) harness() (Harness, error) {
 	if d.Name == "" || d.Title == "" {
 		return Harness{}, fmt.Errorf("needs a name and a title")
 	}
-	h := Harness{Name: d.Name, Title: d.Title, Note: d.Note}
+	h := Harness{Name: d.Name, Title: d.Title, Note: d.Note, Source: d.Source}
 	switch d.Class {
 	case "manual":
 		if d.Manual == "" {
@@ -88,10 +88,7 @@ func (d harnessData) harness() (Harness, error) {
 	}
 	switch d.Format {
 	case "json":
-		if d.List {
-			return h, fmt.Errorf("a JSON server list is not supported yet")
-		}
-		h.MCP = &MCPSpec{Path: d.Path, Key: d.Key, Entry: entry}
+		h.MCP = &MCPSpec{Path: d.Path, Key: d.Key, Entry: entry, List: d.List}
 	case "yaml":
 		if len(d.Key) != 1 {
 			return h, fmt.Errorf("a YAML key is one top-level key")

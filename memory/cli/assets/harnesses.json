@@ -1,10 +1,301 @@
 [
  {
+  "name": "5ire",
+  "title": "5ire",
+  "class": "manual",
+  "manual": "Tools > New",
+  "source": "https://github.com/nanbingxyz/5ire"
+ },
+ {
+  "name": "adal",
+  "title": "AdaL CLI",
+  "class": "manual",
+  "manual": "in AdaL run /mcp add om --command <om> --args \"mcp,--harness,adal\"",
+  "source": "https://docs.sylph.ai/features/mcp-support-proposed"
+ },
+ {
+  "name": "agentkube",
+  "title": "Agentkube",
+  "class": "file",
+  "path": {
+   "darwin": "~/.agentkube/mcp.json",
+   "linux": "~/.agentkube/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ],
+   "transport": "stdio",
+   "env": {},
+   "enabled": true
+  },
+  "note": "press Refresh on its MCP page after installing",
+  "source": "https://docs.agentkube.com/agents/mcp.md"
+ },
+ {
+  "name": "agentone",
+  "title": "AgentOne",
+  "class": "manual",
+  "manual": "Extensions > Add Custom > Server Type STDIO (Local), with the command and its args in the Command field",
+  "source": "https://docs.agent-one.dev/llms-full.txt"
+ },
+ {
+  "name": "aiaw",
+  "title": "AIaW",
+  "class": "manual",
+  "manual": "Plugins > + to add an MCP plugin (desktop client), then enable it in the assistant's settings",
+  "source": "https://docs.aiaw.app/usage/mcp.html"
+ },
+ {
+  "name": "aiql-tuui",
+  "title": "AIQL TUUI",
+  "class": "manual",
+  "manual": "in its MCP settings, edit or import the config",
+  "source": "https://raw.githubusercontent.com/AI-QL/tuui/main/README.md"
+ },
+ {
+  "name": "amazon-q-ide",
+  "title": "Amazon Q Developer (IDE plugins)",
+  "class": "manual",
+  "manual": "the IDE plugins read Amazon Q CLI's ~/.aws/amazonq/mcp.json: run om install amazon-q",
+  "source": "https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/mcp-ide.html"
+ },
+ {
+  "name": "antigravity",
+  "title": "Google Antigravity (IDE, CLI, app)",
+  "class": "file",
+  "path": {
+   "darwin": "~/.gemini/config/mcp_config.json",
+   "linux": "~/.gemini/config/mcp_config.json",
+   "windows": "~/.gemini/config/mcp_config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://antigravity.google/docs/mcp"
+ },
+ {
+  "name": "anythingllm",
+  "title": "AnythingLLM Desktop",
+  "class": "file",
+  "path": {
+   "darwin": "~/Library/Application Support/anythingllm-desktop/storage/plugins/anythingllm_mcp_servers.json",
+   "linux": "${XDG_CONFIG_HOME:-~/.config}/anythingllm-desktop/storage/plugins/anythingllm_mcp_servers.json",
+   "windows": "${APPDATA}/anythingllm-desktop/storage/plugins/anythingllm_mcp_servers.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "press Refresh on the Agent Skills page after installing",
+  "source": "https://docs.anythingllm.com/mcp-compatibility/desktop"
+ },
+ {
+  "name": "apidog",
+  "title": "Apidog",
+  "class": "manual",
+  "manual": "in a project, New MCP Client, and paste the command (an MCP debugging client, per project)",
+  "source": "https://docs.apidog.com/en/mcp-client-1930835m0"
+ },
+ {
+  "name": "argo-localai",
+  "title": "Argo LocalAI",
+  "class": "manual",
+  "manual": "the MCP tools page > add a STDIO server",
+  "source": "https://raw.githubusercontent.com/xark-argo/argo/main/README.md"
+ },
+ {
+  "name": "astrbot",
+  "title": "AstrBot",
+  "class": "manual",
+  "manual": "WebUI Extensions > MCP Servers > +, paste the server JSON, Test Connection, Save (om must exist inside AstrBot's environment)",
+  "source": "https://docs.astrbot.app/en/use/mcp.html"
+ },
+ {
+  "name": "atomic-chat",
+  "title": "Atomic Chat",
+  "class": "manual",
+  "manual": "Settings > MCP Servers > Add",
+  "source": "https://atomic.chat/mcp-connectors"
+ },
+ {
+  "name": "autohand-code",
+  "title": "Autohand Code CLI",
+  "class": "file",
+  "path": {
+   "darwin": "${AUTOHAND_HOME:-~/.autohand}/config.json",
+   "linux": "${AUTOHAND_HOME:-~/.autohand}/config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcp",
+   "servers"
+  ],
+  "list": true,
+  "entry": {
+   "transport": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ],
+   "stdioFraming": "newline"
+  },
+  "note": "restart after installing; a config.toml or config.yaml instead of config.json needs /mcp add",
+  "source": "https://raw.githubusercontent.com/autohandai/code-cli/HEAD/docs/mcp.md"
+ },
+ {
+  "name": "avatar-shell",
+  "title": "Avatar Shell",
+  "class": "manual",
+  "manual": "System Settings > MCP servers",
+  "source": "https://github.com/mfukushim/avatar-shell"
+ },
+ {
+  "name": "axon",
+  "title": "Axon (formerly Claude Code Open)",
+  "class": "file",
+  "path": {
+   "darwin": "${AXON_CONFIG_DIR:-~/.axon}/settings.json",
+   "linux": "${AXON_CONFIG_DIR:-~/.axon}/settings.json",
+   "windows": "${USERPROFILE}/.axon/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://registry.npmjs.org/axon-code"
+ },
+ {
   "name": "better-chatbot",
   "title": "better-chatbot",
   "class": "manual",
   "manual": "MCP Configuration > Add Server, paste {\"command\": ..., \"args\": [...]} (a self-hosted instance)",
   "source": "https://github.com/cgoinglove/better-chatbot/blob/main/docs/tips-guides/mcp-server-setup-and-tool-testing.md"
+ },
+ {
+  "name": "boltai",
+  "title": "BoltAI",
+  "class": "file",
+  "path": {
+   "darwin": "~/.boltai/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "then Settings > Plugins > Reload Config",
+  "source": "https://boltai.com/docs/plugins/mcp-servers"
+ },
+ {
+  "name": "canvas-mcp-client",
+  "title": "Canvas MCP Client",
+  "class": "manual",
+  "manual": "in its web UI's MCP server manager, add a stdio server (it runs in the backend's environment)",
+  "source": "https://raw.githubusercontent.com/n00bvn/CanvasMCPClient/HEAD/README.md"
+ },
+ {
+  "name": "chatbox",
+  "title": "Chatbox",
+  "class": "manual",
+  "manual": "Settings > MCP > Add Server",
+  "source": "https://docs.chatboxai.app/en/guides/mcp"
+ },
+ {
+  "name": "chatmcp",
+  "title": "ChatMCP",
+  "class": "file",
+  "path": {
+   "darwin": "~/Library/Application Support/ChatMcp/mcp_server.json",
+   "linux": "${XDG_DATA_HOME:-~/.local/share}/ChatMcp/mcp_server.json",
+   "windows": "${APPDATA}/ChatMcp/mcp_server.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ],
+   "env": {}
+  },
+  "note": "restart ChatMCP after installing",
+  "source": "https://raw.githubusercontent.com/daodao97/chatmcp/HEAD/lib/utils/storage_manager.dart"
+ },
+ {
+  "name": "chatty",
+  "title": "ChaTTY",
+  "class": "manual",
+  "manual": "add a [[backend.mcp.servers]] table with enabled = true, provider = \"om\" and binary = { filename = <om>, args = [...] } to ~/.config/chatty/config.toml",
+  "source": "https://raw.githubusercontent.com/x00real/chatty/HEAD/.chatty.default.toml"
+ },
+ {
+  "name": "chatwise",
+  "title": "ChatWise",
+  "class": "manual",
+  "manual": "Settings > Tools > + (or Import JSON from Clipboard)",
+  "source": "https://docs.chatwise.app/tools.html"
+ },
+ {
+  "name": "cherry-studio",
+  "title": "Cherry Studio",
+  "class": "manual",
+  "manual": "Settings > MCP > MCP Servers > Add",
+  "source": "https://raw.githubusercontent.com/CherryHQ/cherry-studio-docs/HEAD/advanced-basic/extensions/mcp/README.md"
+ },
+ {
+  "name": "chorus",
+  "title": "Chorus",
+  "class": "manual",
+  "manual": "Settings > Connections > Add Local MCP",
+  "source": "https://docs.chorus.sh/core/tools.md"
  },
  {
   "name": "claudemind",
@@ -14,11 +305,234 @@
   "source": "https://claudemind.com/changelog"
  },
  {
+  "name": "codebuddy",
+  "title": "CodeBuddy Code (CLI)",
+  "class": "file",
+  "path": {
+   "darwin": "~/.codebuddy/.mcp.json",
+   "linux": "~/.codebuddy/.mcp.json",
+   "windows": "~/.codebuddy/.mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "if only the older ~/.codebuddy/mcp.json exists, use om install --mcp-config with it",
+  "source": "https://www.codebuddy.cn/docs/cli/mcp"
+ },
+ {
+  "name": "codegpt",
+  "title": "CodeGPT",
+  "class": "file",
+  "path": {
+   "darwin": "~/.codegpt/mcp_config.json",
+   "linux": "~/.codegpt/mcp_config.json",
+   "windows": "~/.codegpt/mcp_config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "then Refresh Server Connections",
+  "source": "https://docs.codegpt.co/docs/tutorial-features/mcp"
+ },
+ {
+  "name": "codex-desktop",
+  "title": "Codex Desktop",
+  "class": "manual",
+  "manual": "the Codex desktop app shares Codex CLI's ~/.codex/config.toml: run om install codex, then restart the app",
+  "source": "https://developers.openai.com/codex/mcp"
+ },
+ {
   "name": "deepchat",
   "title": "DeepChat",
   "class": "manual",
   "manual": "Settings > MCP > add a stdio server",
   "source": "https://raw.githubusercontent.com/thinkinaixyz/deepchat/main/README.md"
+ },
+ {
+  "name": "deepseek-harness",
+  "title": "DeepSeek Harness",
+  "class": "manual",
+  "manual": "append an insert item for @deepseek-ai/dsh-mcp-client with serverName om, transport stdio, command and args to ~/.dsh/cordis.patch.yml (docs/user/guide/mcp-memory.md), then restart the Host",
+  "source": "https://github.com/deepseek-ai/deepseek-harness"
+ },
+ {
+  "name": "devin-cli",
+  "title": "Devin CLI",
+  "class": "manual",
+  "manual": "Devin CLI reads Devin Desktop's ~/.config/devin/mcp_config.json: run om install devin",
+  "source": "https://cli.devin.ai/docs/extensibility/mcp/configuration.md"
+ },
+ {
+  "name": "docker-agent",
+  "title": "Docker Agent (cagent)",
+  "class": "manual",
+  "manual": "add toolsets: [{type: mcp, command: <om>, args: [mcp, --harness, docker-agent]}] to each agent's YAML",
+  "source": "https://raw.githubusercontent.com/docker/cagent/main/README.md"
+ },
+ {
+  "name": "eca",
+  "title": "ECA (Editor Code Assistant)",
+  "class": "file",
+  "path": {
+   "darwin": "${XDG_CONFIG_HOME:-~/.config}/eca/config.json",
+   "linux": "${XDG_CONFIG_HOME:-~/.config}/eca/config.json",
+   "windows": "${XDG_CONFIG_HOME:-~/.config}/eca/config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "a config with comments is refused: add it by hand there",
+  "source": "https://eca.dev/config/tools/"
+ },
+ {
+  "name": "eechat",
+  "title": "eechat",
+  "class": "file",
+  "path": {
+   "darwin": "~/Library/Application Support/eechat/config/mcp.config.json",
+   "linux": "${XDG_CONFIG_HOME:-~/.config}/eechat/config/mcp.config.json",
+   "windows": "${APPDATA}/eechat/config/mcp.config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "restart eechat after installing",
+  "source": "https://raw.githubusercontent.com/Lucassssss/eechat/HEAD/electron/server/config/paths.js"
+ },
+ {
+  "name": "emacs-mcp",
+  "title": "Emacs mcp.el",
+  "class": "manual",
+  "manual": "add (\"om\" . (:command \"<om>\" :args (\"mcp\" \"--harness\" \"emacs-mcp\"))) to mcp-hub-servers in your Emacs init",
+  "source": "https://github.com/lizqwerscott/mcp.el"
+ },
+ {
+  "name": "enconvo",
+  "title": "Enconvo",
+  "class": "manual",
+  "manual": "Settings > MCP Servers > Add server (STDIO), or run enconvo mcp add om --command <om> --args \"mcp --harness enconvo\"",
+  "source": "https://docs.enconvo.ai/features/mcp.md"
+ },
+ {
+  "name": "explyt",
+  "title": "Explyt",
+  "class": "manual",
+  "manual": "Settings > Tools > Explyt > MCP Servers: add it to ~/.explyt/mcp_servers.json, then Refresh Servers and Connect",
+  "source": "https://explyt.ai/docs/explyt-test/tools/mcp"
+ },
+ {
+  "name": "firebender",
+  "title": "Firebender",
+  "class": "file",
+  "path": {
+   "darwin": "~/.firebender/firebender.json",
+   "linux": "~/.firebender/firebender.json",
+   "windows": "~/.firebender/firebender.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://docs.firebender.com/context/mcp/overview.md"
+ },
+ {
+  "name": "flujo",
+  "title": "FLUJO",
+  "class": "manual",
+  "manual": "Connected Apps > add > local command",
+  "source": "https://raw.githubusercontent.com/mario-andreschak/flujo/main/README.md"
+ },
+ {
+  "name": "fx",
+  "title": "fx (Vercel Labs)",
+  "class": "file",
+  "path": {
+   "darwin": "~/.fx/mcp.json",
+   "linux": "~/.fx/mcp.json",
+   "windows": "~/.fx/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": [
+    "$OM",
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "a file still on the older \"mcp\" key needs om install --mcp-config ~/.fx/mcp.json --key mcp",
+  "source": "https://fx.sh/docs/capabilities/mcp"
+ },
+ {
+  "name": "gemini-code-assist",
+  "title": "Gemini Code Assist (VS Code)",
+  "class": "manual",
+  "manual": "agent mode in VS Code reads Gemini CLI's ~/.gemini/settings.json: run om install gemini-cli, then Developer: Reload Window",
+  "source": "https://docs.cloud.google.com/gemini/docs/codeassist/use-agentic-chat-pair-programmer"
+ },
+ {
+  "name": "genaiscript",
+  "title": "GenAIScript",
+  "class": "manual",
+  "manual": "declare it in a script's mcpServers, or pass --mcp-config <file> with an mcpServers file per run",
+  "source": "https://microsoft.github.io/genaiscript/reference/scripts/mcp-tools/"
+ },
+ {
+  "name": "github-copilot-jetbrains",
+  "title": "GitHub Copilot for JetBrains, Eclipse and Xcode",
+  "class": "manual",
+  "manual": "JetBrains: Copilot Chat (Agent mode) > tools icon > Add MCP Tools; Eclipse: Preferences > GitHub Copilot > MCP; Xcode: Copilot for Xcode Settings > MCP > Edit Config (under \"servers\")",
+  "source": "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp/extend-copilot-chat-with-mcp"
  },
  {
   "name": "gptme",
@@ -28,11 +542,109 @@
   "source": "https://gptme.org/docs/mcp.html"
  },
  {
+  "name": "grok-build",
+  "title": "Grok Build (xAI)",
+  "class": "file",
+  "path": {
+   "darwin": "${GROK_HOME:-~/.grok}/config.toml",
+   "linux": "${GROK_HOME:-~/.grok}/config.toml",
+   "windows": "~/.grok/config.toml"
+  },
+  "format": "toml",
+  "key": [
+   "mcp_servers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "Grok also loads Claude Code's and Cursor's servers: install om for one of them, not several",
+  "source": "https://docs.x.ai/build/features/mcp-servers"
+ },
+ {
+  "name": "hermes-agent",
+  "title": "Hermes Agent (Nous Research)",
+  "class": "file",
+  "path": {
+   "darwin": "${HERMES_HOME:-~/.hermes}/config.yaml",
+   "linux": "${HERMES_HOME:-~/.hermes}/config.yaml",
+   "windows": "${LOCALAPPDATA}/hermes/config.yaml"
+  },
+  "format": "yaml",
+  "key": [
+   "mcp_servers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "with an active profile, use om install --mcp-config on <root>/profiles/<name>/config.yaml",
+  "source": "https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp"
+ },
+ {
   "name": "hyperchat",
   "title": "HyperChat",
   "class": "manual",
   "manual": "on the MCP page, add a third-party MCP server",
   "source": "https://raw.githubusercontent.com/BigSweetPotatoStudio/HyperChat/main/README.md"
+ },
+ {
+  "name": "ibm-bob",
+  "title": "IBM Bob (IDE and Shell)",
+  "class": "file",
+  "path": {
+   "darwin": "~/.bob/settings/mcp.json",
+   "linux": "~/.bob/settings/mcp.json",
+   "windows": "~/.bob/settings/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://bob.ibm.com/docs/shell/configuration/mcp/mcp-bobshell"
+ },
+ {
+  "name": "jan",
+  "title": "Jan",
+  "class": "file",
+  "path": {
+   "darwin": "~/Library/Application Support/Jan/data/mcp_config.json",
+   "linux": "${XDG_DATA_HOME:-~/.local/share}/Jan/data/mcp_config.json",
+   "windows": "${APPDATA}/Jan/data/mcp_config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "active": true,
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ],
+   "env": {}
+  },
+  "note": "restart Jan after installing; a moved data folder (JAN_DATA_FOLDER) needs om install --mcp-config",
+  "source": "https://raw.githubusercontent.com/janhq/jan/main/src-tauri/src/core/cli/mcp.rs"
  },
  {
   "name": "jetbrains-ai-assistant",
@@ -65,6 +677,29 @@
   "source": "https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html"
  },
  {
+  "name": "kimi-code",
+  "title": "Kimi Code CLI",
+  "class": "file",
+  "path": {
+   "darwin": "${KIMI_CODE_HOME:-~/.kimi-code}/mcp.json",
+   "linux": "${KIMI_CODE_HOME:-~/.kimi-code}/mcp.json",
+   "windows": "~/.kimi-code/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html"
+ },
+ {
   "name": "langbot",
   "title": "LangBot",
   "class": "manual",
@@ -77,6 +712,13 @@
   "class": "manual",
   "manual": "Settings > MCP Servers > Add MCP Server > STDIO",
   "source": "https://docs.langflow.org/mcp-client"
+ },
+ {
+  "name": "lingma",
+  "title": "Tongyi Lingma (Qoder CN)",
+  "class": "manual",
+  "manual": "avatar > Personal settings > MCP Services > +",
+  "source": "https://help.aliyun.com/zh/lingma/user-guide/guide-for-using-mcp"
  },
  {
   "name": "lm-studio",
@@ -93,6 +735,28 @@
   "source": "https://lobehub.com/docs/usage/community/custom-mcp"
  },
  {
+  "name": "mastra-code",
+  "title": "Mastra Code",
+  "class": "file",
+  "path": {
+   "darwin": "~/.mastracode/mcp.json",
+   "linux": "~/.mastracode/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://mastra.ai/docs/mastra-code/configuration"
+ },
+ {
   "name": "mcp-bundler",
   "title": "MCP Bundler (macOS)",
   "class": "manual",
@@ -105,6 +769,61 @@
   "class": "manual",
   "manual": "add it under mcpServers in ~/.llm/config.json (a commented JSON file om does not rewrite; it needs systemPrompt and llm when new)",
   "source": "https://raw.githubusercontent.com/adhikasp/mcp-client-cli/master/src/mcp_client_cli/config.py"
+ },
+ {
+  "name": "mcp-peek",
+  "title": "MCP Peek",
+  "class": "manual",
+  "manual": "Add server > Transport stdio > Command and Arguments",
+  "source": "https://mcppeek.com/docs/connecting-servers/"
+ },
+ {
+  "name": "mcpclihost",
+  "title": "MCPCLIHost",
+  "class": "file",
+  "path": {
+   "darwin": "~/.mcp.json",
+   "linux": "~/.mcp.json",
+   "windows": "${USERPROFILE}/.mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://raw.githubusercontent.com/vincent-pli/mcp-cli-host/main/README.md"
+ },
+ {
+  "name": "mcphost",
+  "title": "mcphost",
+  "class": "file",
+  "path": {
+   "darwin": "~/.mcphost.yml",
+   "linux": "~/.mcphost.yml",
+   "windows": "${USERPROFILE}/.mcphost.yml"
+  },
+  "format": "yaml",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "local",
+   "command": [
+    "$OM",
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "mcphost also reads ~/.mcphost.json and a working-directory config first; with one of those, add it there",
+  "source": "https://raw.githubusercontent.com/mark3labs/mcphost/main/internal/config/config.go"
  },
  {
   "name": "mcphub-nvim",
@@ -161,6 +880,59 @@
   "source": "https://github.com/MCPJam/inspector"
  },
  {
+  "name": "mcplato",
+  "title": "MCPlato",
+  "class": "manual",
+  "manual": "MCPlato reads Claude Code's ~/.claude.json: run om install claude-code, then enable om in the workspace's AI Partner MCP Settings",
+  "source": "https://mcplato.com/llms-full.txt"
+ },
+ {
+  "name": "mcporter",
+  "title": "MCPorter",
+  "class": "file",
+  "path": {
+   "darwin": "${MCPORTER_CONFIG:-~/.mcporter/mcporter.json}",
+   "linux": "${MCPORTER_CONFIG:-~/.mcporter/mcporter.json}"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "with an absolute XDG_CONFIG_HOME, MCPorter reads $XDG_CONFIG_HOME/mcporter first: use om install --mcp-config there",
+  "source": "https://raw.githubusercontent.com/steipete/mcporter/main/docs/config.md"
+ },
+ {
+  "name": "mcpx",
+  "title": "mcpx",
+  "class": "file",
+  "path": {
+   "darwin": "${XDG_CONFIG_HOME:-~/.config}/mcpx/config.toml",
+   "linux": "${XDG_CONFIG_HOME:-~/.config}/mcpx/config.toml"
+  },
+  "format": "toml",
+  "key": [
+   "servers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "mcpx calls tools from the shell; it is not an agent",
+  "source": "https://raw.githubusercontent.com/lydakis/mcpx/main/README.md"
+ },
+ {
   "name": "memex",
   "title": "Workshop Desktop (formerly Memex)",
   "class": "manual",
@@ -175,6 +947,13 @@
   "source": "https://docs.msty.studio/toolbox/tools"
  },
  {
+  "name": "nimblebrain",
+  "title": "NimbleBrain",
+  "class": "manual",
+  "manual": "web UI: Workspace settings > connectors (per workspace)",
+  "source": "https://raw.githubusercontent.com/NimbleBrainInc/nimblebrain/HEAD/README.md"
+ },
+ {
   "name": "octomind",
   "title": "Octomind",
   "class": "own",
@@ -185,6 +964,62 @@
   "note": "a file of its own (mcp-*.toml loads last); bound to the developer:general role",
   "source": "https://raw.githubusercontent.com/muvon/octomind/main/doc/usage/07-mcp-tools.md",
   "content": "# om: observational memory (om install octomind)\n[[mcp.servers]]\nname = \"om\"\ntype = \"stdio\"\ncommand = \"$OM\"\nargs = [\"mcp\", \"--harness\", \"$HARNESS\"]\nauto_bind = [\"developer:general\"]\n"
+ },
+ {
+  "name": "oh-my-pi",
+  "title": "Oh My Pi",
+  "class": "file",
+  "path": {
+   "darwin": "~/.omp/agent/mcp.json",
+   "linux": "~/.omp/agent/mcp.json",
+   "windows": "~/.omp/agent/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "Oh My Pi also imports other harnesses' servers: install om for it alone; /mcp reload applies",
+  "source": "https://github.com/can1357/oh-my-pi"
+ },
+ {
+  "name": "ollamac-pro",
+  "title": "Ollamac Pro",
+  "class": "manual",
+  "manual": "Settings > MCP Servers > + > Local Server",
+  "source": "https://ollamac.com/docs/mcp/setup"
+ },
+ {
+  "name": "openclaw",
+  "title": "OpenClaw",
+  "class": "file",
+  "path": {
+   "darwin": "${OPENCLAW_CONFIG_PATH:-~/.openclaw/openclaw.json}",
+   "linux": "${OPENCLAW_CONFIG_PATH:-~/.openclaw/openclaw.json}"
+  },
+  "format": "json",
+  "key": [
+   "mcp",
+   "servers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "a JSON5 file with comments is refused, not rewritten: then run openclaw mcp add om --command <om> --arg mcp --arg --harness --arg openclaw",
+  "source": "https://docs.openclaw.ai/tools/mcp.md"
  },
  {
   "name": "oterm",
@@ -209,6 +1044,36 @@
   },
   "note": "restart oterm after installing; with OTERM_DATA_DIR set, use om install --mcp-config $OTERM_DATA_DIR/config.json",
   "source": "https://github.com/ggozad/oterm/blob/main/docs/mcp/index.md"
+ },
+ {
+  "name": "perplexity-mac",
+  "title": "Perplexity (macOS)",
+  "class": "manual",
+  "manual": "Settings > Connectors > install the PerplexityXPC helper > Add Connector, then turn it on under Sources",
+  "source": "https://9to5mac.com/2025/07/25/perplexity-for-mac-now-supports-mcp-and-you-should-check-it-out/"
+ },
+ {
+  "name": "prime-agent",
+  "title": "Prime Agent",
+  "class": "file",
+  "path": {
+   "darwin": "${PRIME_AGENT_CODING_AGENT_DIR:-~/.prime/agent}/settings.json",
+   "linux": "${PRIME_AGENT_CODING_AGENT_DIR:-~/.prime/agent}/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/HEAD/crates/pa-core/src/settings/storage.rs"
  },
  {
   "name": "qoder",
@@ -241,10 +1106,248 @@
   "source": "https://docs.qoder.com/cli/mcp-reference.md"
  },
  {
+  "name": "raxol-code",
+  "title": "Raxol Code",
+  "class": "file",
+  "path": {
+   "darwin": "${RAXOL_MCP_CONFIG:-~/.raxol/mcp.json}",
+   "linux": "${RAXOL_MCP_CONFIG:-~/.raxol/mcp.json}"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://raw.githubusercontent.com/DROOdotFOO/raxol/HEAD/docs/features/CODING_AGENT.md"
+ },
+ {
+  "name": "raycast",
+  "title": "Raycast AI",
+  "class": "manual",
+  "manual": "run the Install MCP Server command and fill in the stdio form",
+  "source": "https://manual.raycast.com/ai/model-context-protocol"
+ },
+ {
   "name": "recursechat",
   "title": "RecurseChat",
   "class": "manual",
   "manual": "Model page > New Model > New MCP Model",
   "source": "https://recurse.chat/docs/features/mcp/"
+ },
+ {
+  "name": "roxy",
+  "title": "Roxy",
+  "class": "manual",
+  "manual": "Settings > Add-ons > MCP Servers",
+  "source": "https://raw.githubusercontent.com/roxy-gg/roxy/HEAD/src/main/services/mcp.ts"
+ },
+ {
+  "name": "seekchat",
+  "title": "SeekChat",
+  "class": "manual",
+  "manual": "Settings > MCP > add a server, type stdio, as one command line (om's path must have no spaces)",
+  "source": "https://raw.githubusercontent.com/seekrays/seekchat/main/src/main/services/mcpService.js"
+ },
+ {
+  "name": "slack-mcp-client",
+  "title": "Slack MCP Client",
+  "class": "manual",
+  "manual": "add it under mcpServers in the bot's config.json (the file --config names)",
+  "source": "https://raw.githubusercontent.com/tuannvm/slack-mcp-client/main/README.md"
+ },
+ {
+  "name": "sourcegraph-cody",
+  "title": "Sourcegraph Cody",
+  "class": "manual",
+  "manual": "profile icon > MCP Settings, or add it under the \"cody.mcpServers\" key of VS Code's settings.json (needs the agentic-context-mcp-enabled flag on the instance)",
+  "source": "https://sourcegraph.com/docs/cody/capabilities/agentic-context-fetching"
+ },
+ {
+  "name": "swarmclaw",
+  "title": "SwarmClaw",
+  "class": "manual",
+  "manual": "MCP Servers panel > New MCP Server (stdio), then assign it to agents",
+  "source": "https://raw.githubusercontent.com/swarmclawai/swarmclaw/main/README.md"
+ },
+ {
+  "name": "tabnine",
+  "title": "Tabnine (IDE and CLI)",
+  "class": "file",
+  "path": {
+   "darwin": "~/.tabnine/agent/settings.json",
+   "linux": "~/.tabnine/agent/settings.json",
+   "windows": "~/.tabnine/agent/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://docs.tabnine.com/main/getting-started/tabnine-agent/mcp-intro-and-setup/mcp-server-config.md"
+ },
+ {
+  "name": "theia-ide",
+  "title": "Theia IDE",
+  "class": "file",
+  "path": {
+   "darwin": "~/.theia-ide/settings.json",
+   "linux": "~/.theia-ide/settings.json",
+   "windows": "~/.theia-ide/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "ai-features.mcp.mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ],
+   "autostart": true
+  },
+  "note": "AI features must be on; restart, or run MCP: Start MCP Server",
+  "source": "https://raw.githubusercontent.com/eclipse-theia/theia/master/packages/ai-mcp/src/common/mcp-preferences.ts"
+ },
+ {
+  "name": "tome",
+  "title": "Tome",
+  "class": "manual",
+  "manual": "MCP tab > add server, and paste the command",
+  "source": "https://raw.githubusercontent.com/runebookai/tome/main/README.md"
+ },
+ {
+  "name": "trae",
+  "title": "Trae",
+  "class": "manual",
+  "manual": "Settings > MCP > Add > Add Manually, and paste it under mcpServers",
+  "source": "https://docs.trae.ai/ide/model-context-protocol"
+ },
+ {
+  "name": "typingmind",
+  "title": "TypingMind",
+  "class": "manual",
+  "manual": "Settings > Advanced Settings > Model Context Protocol: run the npx @typingmind/mcp connector it shows, then Edit Servers",
+  "source": "https://docs.typingmind.com/model-context-protocol-(mcp)-in-typingmind/use-mcp-with-private-mcp-connector.md"
+ },
+ {
+  "name": "vercade",
+  "title": "Vercade",
+  "class": "manual",
+  "manual": "add it under mcpServers in the mcp.json the MCP_PATH variable names",
+  "source": "https://raw.githubusercontent.com/lintyourcode/vercade/main/README.md"
+ },
+ {
+  "name": "visual-studio",
+  "title": "Visual Studio (Copilot agent mode)",
+  "class": "file",
+  "path": {
+   "windows": "${USERPROFILE}/.mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "servers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://learn.microsoft.com/en-us/visualstudio/ide/mcp-servers"
+ },
+ {
+  "name": "vtcode",
+  "title": "VT Code",
+  "class": "manual",
+  "manual": "in vtcode.toml (vtcode --version shows where) set enabled = true under [mcp] and add a [[mcp.providers]] table with name = \"om\", enabled = true, command and args as below",
+  "source": "https://raw.githubusercontent.com/vinhnx/vtcode/main/docs/guides/mcp-integration.md"
+ },
+ {
+  "name": "witsy",
+  "title": "Witsy",
+  "class": "file",
+  "path": {
+   "darwin": "~/Library/Application Support/Witsy/settings.json",
+   "linux": "${XDG_CONFIG_HOME:-~/.config}/Witsy/settings.json",
+   "windows": "${APPDATA}/Witsy/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "close Witsy before installing (it rewrites the file); om's path must have no spaces",
+  "source": "https://github.com/Kochava-Studios/witsy"
+ },
+ {
+  "name": "y-cli",
+  "title": "y-cli",
+  "class": "manual",
+  "manual": "run y-cli mcp add, then list the server in a bot's mcp_servers",
+  "source": "https://pypi.org/project/y-cli/"
+ },
+ {
+  "name": "yume",
+  "title": "Yume",
+  "class": "manual",
+  "manual": "Yume runs Claude Code and uses its MCP servers: run om install claude-code",
+  "source": "https://raw.githubusercontent.com/aofp/yume/main/README.md"
+ },
+ {
+  "name": "zencoder",
+  "title": "Zencoder (VS Code)",
+  "class": "file",
+  "path": {
+   "darwin": "~/Library/Application Support/Code/User/settings.json",
+   "linux": "${XDG_CONFIG_HOME:-~/.config}/Code/User/settings.json",
+   "windows": "${APPDATA}/Code/User/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "zencoder.mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "VS Code's settings.json with comments is refused: then add it by hand; restart the IDE",
+  "source": "https://docs.zencoder.ai/features/mcp-deep-dive"
+ },
+ {
+  "name": "zin-mcp-client",
+  "title": "Zin MCP Client",
+  "class": "manual",
+  "manual": "add it under mcpServers in mcp-config.json beside the zin-mcp-client script, or pass --config <file>",
+  "source": "https://raw.githubusercontent.com/zinja-coder/zin-mcp-client/master/README.md"
  }
 ]

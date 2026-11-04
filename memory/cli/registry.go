@@ -36,6 +36,8 @@ type Harness struct {
 	// file om does not rewrite): om install prints these steps with the server's command and
 	// writes nothing.
 	Manual string
+	// Source is where its configuration is documented.
+	Source string
 }
 
 // MCPSpec is where a harness's MCP client reads stdio servers: a JSON config file and the
@@ -47,6 +49,8 @@ type MCPSpec struct {
 	Key []string
 	// Entry is om's server entry, nil for the common {"command","args"}.
 	Entry func(exe, harness string) map[string]any
+	// List says the servers are a list of entries each carrying its "name", not a map by name.
+	List bool
 }
 
 // HookSpec is a harness's hooks in Claude Code's schema, the family most harnesses copied:
@@ -281,6 +285,9 @@ func installMCP(w writer, exe, harness string, spec *MCPSpec, remove bool) error
 	if err != nil {
 		return err
 	}
+	if spec.List {
+		return installMCPList(w, exe, harness, spec, cfg, path, remove)
+	}
 	// Walk (creating) to the servers object.
 	parents := []map[string]any{cfg}
 	obj := cfg
@@ -307,6 +314,45 @@ func installMCP(w writer, exe, harness string, spec *MCPSpec, remove bool) error
 		if len(parents[i+1]) == 0 {
 			delete(parents[i], spec.Key[i])
 		}
+	}
+	data, err := encodeJSON(cfg)
+	if err != nil {
+		return err
+	}
+	return w.write(path, data)
+}
+
+// installMCPList is installMCP for servers kept as a list of named entries.
+func installMCPList(w writer, exe, harness string, spec *MCPSpec, cfg map[string]any, path string, remove bool) error {
+	obj := cfg
+	last := len(spec.Key) - 1
+	for _, k := range spec.Key[:last] {
+		next, _ := obj[k].(map[string]any)
+		if next == nil {
+			next = map[string]any{}
+		}
+		obj[k] = next
+		obj = next
+	}
+	list, _ := obj[spec.Key[last]].([]any)
+	kept := []any{}
+	for _, item := range list {
+		if m, _ := item.(map[string]any); m == nil || m["name"] != "om" {
+			kept = append(kept, item)
+		}
+	}
+	if !remove {
+		entry := map[string]any{"command": exe, "args": []any{"mcp", "--harness", harness}}
+		if spec.Entry != nil {
+			entry = spec.Entry(exe, harness)
+		}
+		entry["name"] = "om"
+		kept = append(kept, entry)
+	}
+	if len(kept) == 0 {
+		delete(obj, spec.Key[last])
+	} else {
+		obj[spec.Key[last]] = kept
 	}
 	data, err := encodeJSON(cfg)
 	if err != nil {

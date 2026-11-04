@@ -1,0 +1,7 @@
+## Researched, not supported
+
+Every client below was checked against its own documentation or source (2026-11-04).
+
+- **No local stdio MCP** (web, remote-only or cloud-run): GitHub Copilot coding agent and Claude Code and Cursor cloud agents (servers run on remote VMs), Memgraph Lab, Android Studio's Gemini, CarrotAI and DocsGPT (HTTP only), FlowDown (sandbox blocks stdio), Archestra (runs servers as Kubernetes pods), Tencent CloudBase AI DevKit, Kibitz (WebSocket bridge), MCP SuperAssistant (a proxy you run), NextChat (server builds), Ontheia (allows only npx, uvx, python or docker commands), Senpi (a hosted agent), Inspector (now Radius, no MCP of its own), mcpc and MCPOmni Connect (no server registry), Postman (ad hoc test requests), Copilot-MCP (an installer for VS Code's config: use `om install copilot`), Qodo Gen (retired 2026-11-01), and the web-only clients on the MCP clients lists (ChatGPT, Claude.ai, Le Chat, Replit Agent, Copilot Studio, v0 and others).
+- **Project-level only** (no user-wide config, so nothing to install globally; use `om install --mcp-config` on the project's file): console-chat-gpt, ContextKit, Dolphin-MCP, Fastchat MCP, Enola, MCP Chatbot, MCP Simple Slackbot, Nerve, Dexto, LibreChat (a deployment's librechat.yaml).
+- **Unconfirmed** (no documentation found): Ano, ChatFrame, Simple AI, Agent-cli, Deepgram Saga, Highlight AI, Navigator, NULLA, Ravenala, Simtheory, Claude Cowork (likely through Claude Desktop's config), Muse Code.

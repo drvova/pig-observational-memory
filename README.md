@@ -67,8 +67,8 @@ pig install ./extensions/observational-memory --validate-only --json
 
 ## Other harnesses
 
-The same engine runs outside PiG as one binary, `om`, for 20 harnesses so far (Claude Code, Codex, OpenCode,
-Pi, Cursor, Copilot, Gemini CLI, Zed, Cline and more; `om harnesses` lists them) and any harness that can run a
+The same engine runs outside PiG as one binary, `om`, for 128 harnesses (Claude Code, Codex, OpenCode, Pi,
+Cursor, Copilot, Gemini CLI, Zed, Cline, JetBrains, Jan and more; [Harnesses](docs/harnesses.md) lists them) and any harness that can run a
 command at a turn's end:
 
 ```sh
@@ -207,6 +207,7 @@ done
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
 | [om: other harnesses](docs/universal.md) | The `om` binary for Claude Code, Codex, OpenCode, Pi and any other harness |
+| [Harnesses](docs/harnesses.md) | Every harness `om install` supports, and how (generated) |
 | [Memory interface](docs/memory-interface.md) | Tables and codecs, the harness, the kernel and the layer |
 | [The code tool](docs/code-tool.md) | The `memory` tool: Go code over the `om` API in a child process |
 
