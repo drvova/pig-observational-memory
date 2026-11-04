@@ -35,17 +35,24 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 		exe = resolved
 	}
 	w := writer{dry: dry, out: out}
-	switch harnessName {
-	case "claude-code":
-		return installClaude(w, exe, remove)
-	case "codex":
-		return installCodex(w, exe, remove)
-	case "opencode":
-		return installOpenCode(w, exe, remove)
-	case "pi":
-		return installPi(w, exe, remove)
+	h, ok := registry[harnessName]
+	if !ok {
+		return fmt.Errorf("om install: unknown harness %q (om harnesses lists them)", harnessName)
 	}
-	return fmt.Errorf("om install: unknown harness %q (claude-code, codex, opencode, pi)", harnessName)
+	if h.MCP != nil {
+		if err := installMCP(w, exe, h.Name, h.MCP, remove); err != nil {
+			return err
+		}
+	}
+	if h.Hooks != nil {
+		if err := installHooks(w, exe, h.Name, h.Hooks, remove); err != nil {
+			return err
+		}
+	}
+	if h.Custom != nil {
+		return h.Custom(w, exe, remove)
+	}
+	return nil
 }
 
 // writer writes config files, keeping a one-time backup of what was there.
@@ -134,76 +141,6 @@ func encodeJSON(v any) ([]byte, error) {
 	return append(data, '\n'), err
 }
 
-// claudeEvents are the Claude Code hooks om answers, with each one's timeout in seconds: the
-// compaction reads the whole transcript.
-var claudeEvents = []struct {
-	name    string
-	timeout int
-}{{"SessionStart", 60}, {"UserPromptSubmit", 30}, {"Stop", 120}, {"PreCompact", 600}}
-
-// installClaude merges om's hooks into Claude Code's user settings (~/.claude/settings.json,
-// or $CLAUDE_CONFIG_DIR) beside any others, and registers the MCP server at user scope with
-// claude mcp add.
-func installClaude(w writer, exe string, remove bool) error {
-	path := filepath.Join(homeDir("CLAUDE_CONFIG_DIR", ".claude"), "settings.json")
-	settings, err := readJSONObject(path)
-	if err != nil {
-		return err
-	}
-	hooks, _ := settings["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = map[string]any{}
-	}
-	isOurs := func(group any) bool {
-		g, _ := group.(map[string]any)
-		list, _ := g["hooks"].([]any)
-		for _, raw := range list {
-			h, _ := raw.(map[string]any)
-			if cmd, _ := h["command"].(string); strings.Contains(cmd, " hook claude-code ") {
-				return true
-			}
-		}
-		return false
-	}
-	for _, ev := range claudeEvents {
-		groups, _ := hooks[ev.name].([]any)
-		kept := []any{}
-		for _, g := range groups {
-			if !isOurs(g) {
-				kept = append(kept, g)
-			}
-		}
-		if !remove {
-			kept = append(kept, map[string]any{"hooks": []any{map[string]any{
-				"type": "command", "command": strconv.Quote(exe) + " hook claude-code " + ev.name, "timeout": ev.timeout,
-			}}})
-		}
-		if len(kept) == 0 {
-			delete(hooks, ev.name)
-		} else {
-			hooks[ev.name] = kept
-		}
-	}
-	if len(hooks) == 0 {
-		delete(settings, "hooks")
-	} else {
-		settings["hooks"] = hooks
-	}
-	data, err := encodeJSON(settings)
-	if err != nil {
-		return err
-	}
-	if err := w.write(path, data); err != nil {
-		return err
-	}
-	if remove {
-		w.run("claude", "mcp", "remove", "--scope", "user", "om")
-		return nil
-	}
-	w.run("claude", "mcp", "add", "--scope", "user", "om", "--", exe, "mcp", "--harness", "claude-code")
-	return nil
-}
-
 // installCodex adds the MCP server and the notify program to Codex's config
 // ($CODEX_HOME/config.toml, ~/.codex), each line marked as om's. An existing notify is left as
 // it is: Codex runs one notify program, and om does not replace another.
@@ -253,37 +190,10 @@ func installCodex(w writer, exe string, remove bool) error {
 	return w.write(path, []byte(out))
 }
 
-// installOpenCode writes the om plugin into OpenCode's plugin directory and adds the MCP server
-// to its config ($XDG_CONFIG_HOME/opencode, ~/.config/opencode).
+// installOpenCode writes the om plugin into OpenCode's plugin directory
+// ($XDG_CONFIG_HOME/opencode, ~/.config/opencode); the registry adds its MCP server.
 func installOpenCode(w writer, exe string, remove bool) error {
-	dir := filepath.Join(homeDir("XDG_CONFIG_HOME", ".config"), "opencode")
-	plugin := filepath.Join(dir, "plugin", "om.js")
-	configPath := filepath.Join(dir, "opencode.json")
-	cfg, err := readJSONObject(configPath)
-	if err != nil {
-		return err
-	}
-	mcp, _ := cfg["mcp"].(map[string]any)
-	if mcp == nil {
-		mcp = map[string]any{}
-	}
-	if remove {
-		delete(mcp, "om")
-	} else {
-		mcp["om"] = map[string]any{"type": "local", "command": []any{exe, "mcp", "--harness", "opencode"}, "enabled": true}
-	}
-	if len(mcp) == 0 {
-		delete(cfg, "mcp")
-	} else {
-		cfg["mcp"] = mcp
-	}
-	data, err := encodeJSON(cfg)
-	if err != nil {
-		return err
-	}
-	if err := w.write(configPath, data); err != nil {
-		return err
-	}
+	plugin := pathTemplate("${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/om.js")
 	if remove {
 		return w.remove(plugin)
 	}

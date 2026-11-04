@@ -17,7 +17,8 @@ var Version = "dev"
 
 const usage = `om: observational memory for coding agents
 
-  om install <harness> [--dry-run]   wire om into a harness: claude-code, codex, opencode, pi
+  om harnesses                       the harnesses om installs into, and what each gets
+  om install <harness> [--dry-run]   wire om into a harness (om harnesses lists them)
   om uninstall <harness>             remove what install wrote
   om hook <harness> <event>          run one harness event (installed hooks call this)
   om mcp --harness <harness>         serve the memory tool over MCP (stdio)
@@ -69,6 +70,8 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			*dir = mcpDir()
 		}
 		return newApp(root, stderr).mcp(*harnessName, *dir, stdin, stdout)
+	case "harnesses":
+		return listHarnesses(stdout)
 	case "tool-spec":
 		return json.NewEncoder(stdout).Encode(map[string]any{"name": omtool.ToolName, "label": omtool.Label, "description": toolDescription(), "parameters": omtool.Parameters})
 	case "call":
@@ -123,7 +126,7 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return err
 		}
 		if fs.NArg() != 1 {
-			return fmt.Errorf("om %s <harness>: claude-code, codex, opencode, pi", args[0])
+			return fmt.Errorf("om %s <harness> (om harnesses lists them)", args[0])
 		}
 		return install(fs.Arg(0), args[0] == "uninstall", *dry, stdout)
 	}

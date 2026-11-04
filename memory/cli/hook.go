@@ -17,8 +17,6 @@ import (
 // notify, in args), writing to out what the harness reads back.
 func (a *app) hook(harnessName, event string, args []string, in io.Reader, out io.Writer) error {
 	switch harnessName {
-	case "claude-code":
-		return a.claudeHook(event, in, out)
 	case "codex":
 		return a.codexHook(event, args)
 	case "pi":
@@ -26,14 +24,27 @@ func (a *app) hook(harnessName, event string, args []string, in io.Reader, out i
 	case "generic":
 		return a.genericHook(event, in, out)
 	}
-	return fmt.Errorf("om hook: unknown harness %q (claude-code, codex, pi, generic)", harnessName)
+	if h, ok := registry[harnessName]; ok && h.Hooks != nil {
+		return a.familyHook(h, event, in, out)
+	}
+	return fmt.Errorf("om hook: harness %q has no hooks (om harnesses lists them; any harness can use om hook generic)", harnessName)
 }
 
-// claudeHook answers a Claude Code hook (docs/universal.md, "Claude Code"). Every event records
-// the session as current for the MCP server; SessionStart hands Claude the memory context
-// (after a compaction, the engine's summary beside Claude's own); Stop runs level 0;
-// PreCompact runs the engine's compaction of the whole conversation before Claude's.
-func (a *app) claudeHook(event string, in io.Reader, out io.Writer) error {
+// familyHook answers a hook of a harness that speaks Claude Code's hook schema
+// (docs/universal.md, "Hook families"). Every event records the session as current for the MCP
+// server; session-start hands the model the memory context (after a compaction, the engine's
+// summary beside the harness's own); turn-end runs level 0; pre-compact runs the engine's
+// compaction of the whole conversation before the harness's.
+func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) error {
+	ev := ""
+	for omEvent, harnessEvent := range hs.Hooks.Events {
+		if harnessEvent == name {
+			ev = omEvent
+		}
+	}
+	if ev == "" {
+		return fmt.Errorf("om hook %s: unknown event %q", hs.Name, name)
+	}
 	var p struct {
 		SessionID      string `json:"session_id"`
 		TranscriptPath string `json:"transcript_path"`
@@ -42,9 +53,9 @@ func (a *app) claudeHook(event string, in io.Reader, out io.Writer) error {
 		Trigger        string `json:"trigger"`
 	}
 	if err := json.NewDecoder(in).Decode(&p); err != nil {
-		return fmt.Errorf("om hook claude-code: payload: %w", err)
+		return fmt.Errorf("om hook %s: payload: %w", hs.Name, err)
 	}
-	s := Session{Harness: "claude-code", ID: p.SessionID, Transcript: p.TranscriptPath, Format: "claude-code", Cwd: p.Cwd}
+	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: hs.Hooks.Transcript, Cwd: p.Cwd}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
 		return err
@@ -52,25 +63,22 @@ func (a *app) claudeHook(event string, in io.Reader, out io.Writer) error {
 	if err := remember(a.root, s); err != nil {
 		return err
 	}
-	switch event {
-	case "SessionStart":
+	switch ev {
+	case evSessionStart:
 		engine.SessionStart(a.rt, a.manager, &a.pin, h)
 		summary := ""
 		if p.Source == "compact" || p.Source == "resume" {
 			summary, _ = h.LatestSummary()
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "SessionStart", "additionalContext": a.startContext(h, summary)}})
-	case "UserPromptSubmit", "SessionEnd":
-		return nil
-	case "Stop":
+		return json.NewEncoder(out).Encode(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": name, "additionalContext": a.startContext(h, summary)}})
+	case evTurnEnd:
 		hooks.OnTurnEnd(a.rt, h)
 		engine.SettleCurated(h)
-		return nil
-	case "PreCompact":
+	case evPreCompact:
 		_, err := h.Compaction(context.Background(), a.rt, p.Trigger)
 		return err
 	}
-	return fmt.Errorf("om hook claude-code: unknown event %q", event)
+	return nil
 }
 
 // codexHook answers Codex's notify program (om hook codex notify '<json>'), called after each
