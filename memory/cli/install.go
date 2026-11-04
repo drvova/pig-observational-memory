@@ -17,7 +17,7 @@ import (
 
 // assets are the adapters om writes for harnesses that load a plugin or an extension file.
 //
-//go:embed assets/opencode/om.js assets/pi/om.ts
+//go:embed assets/opencode/om.js assets/pi/om.ts assets/harnesses.json
 var assets embed.FS
 
 // managedMark marks every line om writes into a harness's TOML config, so uninstall removes
@@ -49,6 +49,11 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 	}
 	if h.YAML != nil {
 		if err := installYAML(w, exe, h.Name, h.YAML, remove); err != nil {
+			return err
+		}
+	}
+	if h.TOML != nil {
+		if err := installTOML(w, exe, h.Name, h.TOML, remove); err != nil {
 			return err
 		}
 	}

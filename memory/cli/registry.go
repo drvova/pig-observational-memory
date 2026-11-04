@@ -22,6 +22,8 @@ type Harness struct {
 	MCP *MCPSpec
 	// YAML registers it in a YAML config instead.
 	YAML *YAMLSpec
+	// TOML registers it as a TOML table instead.
+	TOML *TOMLSpec
 	// Hooks registers om's lifecycle hooks; nil for a harness without hooks.
 	Hooks *HookSpec
 	// Custom installs (or removes) what data cannot say; it runs after MCP and Hooks.
@@ -213,6 +215,14 @@ func init() {
 		Name: "pi", Title: "Pi", Custom: installPi,
 		Note: "extension: om compacts on Pi's own cut and Pi stores it; the tool runs through om call",
 	})
+	// The data harnesses join after the ones declared here, so a name in both is caught.
+	data, err := assets.ReadFile("assets/harnesses.json")
+	if err == nil {
+		err = loadData(data)
+	}
+	if err != nil {
+		panic(err)
+	}
 }
 
 // stdioEntry is the server entry for a client that wants the transport named.
@@ -386,7 +396,7 @@ func listHarnesses(out io.Writer) error {
 		switch {
 		case h.Manual != "":
 			parts = append(parts, "memory tool (MCP, added by hand: om install prints the steps)")
-		case h.MCP != nil || h.YAML != nil || h.Name == "claude-code" || h.Name == "codex":
+		case h.MCP != nil || h.YAML != nil || h.TOML != nil || h.Name == "claude-code" || h.Name == "codex":
 			parts = append(parts, "memory tool (MCP)")
 		case h.Name == "pi":
 			parts = append(parts, "memory tool")
