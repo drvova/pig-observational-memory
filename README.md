@@ -65,6 +65,20 @@ pig install ./extensions/observational-memory
 pig install ./extensions/observational-memory --validate-only --json
 ```
 
+## Other harnesses
+
+The same engine runs outside PiG as one binary, `om`, for Claude Code, Codex, OpenCode, Pi and any harness
+that can run a command at a turn's end:
+
+```sh
+go install github.com/drvova/pig-observational-memory/memory/cmd/om@latest
+om install claude-code      # or codex, opencode, pi (--dry-run shows the changes; om uninstall reverses them)
+```
+
+It records the conversation from the harness's own transcript, hands its summary back when the harness
+compacts, and serves the memory tool over MCP, with no model request. [om](docs/universal.md) has what each
+harness gets and the protocol for any other.
+
 ## How it works
 
 <img src="docs/assets/swing.svg" width="100%" alt="Spider-Ham web-swings through a pixel city at night while cyan memory windows release pixels that string onto a web, like observations being collected.">
@@ -191,6 +205,7 @@ done
 | [Configuration](docs/configuration.md) | Every setting, debugging and the removed settings |
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
+| [om: other harnesses](docs/universal.md) | The `om` binary for Claude Code, Codex, OpenCode, Pi and any other harness |
 | [Memory interface](docs/memory-interface.md) | Tables and codecs, the harness, the kernel and the layer |
 | [The code tool](docs/code-tool.md) | The `memory` tool: Go code over the `om` API in a child process |
 

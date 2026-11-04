@@ -116,11 +116,17 @@ func (h *Host) ConfigHome() string  { return h.Root }
 // HasUI is false: a hook has no interface to show anything in.
 func (h *Host) HasUI() bool { return false }
 
-// Notify writes the message to Log.
+// Notify writes the message to Log: an info message as it is (a status the user asked for), any
+// other level after "om <level>: ".
 func (h *Host) Notify(message, level string) {
-	if h.Log != nil {
-		fmt.Fprintf(h.Log, "om %s: %s\n", level, message)
+	if h.Log == nil {
+		return
 	}
+	if level == "info" {
+		fmt.Fprintln(h.Log, message)
+		return
+	}
+	fmt.Fprintf(h.Log, "om %s: %s\n", level, message)
 }
 
 // IsIdle is true: hooks run between the harness's turns.

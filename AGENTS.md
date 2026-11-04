@@ -22,7 +22,9 @@ keep loading. Check each module: `cd memory` (and `cd extensions/observational-m
 ./extensions/observational-memory --validate-only --json`. The code tool's `memory/om/docs_gen.go` and
 `memory/sandbox/symbols` are generated (`cd memory && go generate ./om ./sandbox`, run as tests with `-write`);
 their tests fail on a diff or an undocumented om export. Keep `main` packages out of the PiG adapter module (PiG
-refuses one there). Building the PiG checkout itself needs `GOFLAGS` unset (it is a Go workspace).
+refuses one there); the `om` binary for other harnesses is `memory/cmd/om` (`memory/cli`, `docs/universal.md`):
+it runs the engine over `memory/neutral` (the engine's entries in `~/.om` beside a transcript `memory/transcript` reads,
+never writing the harness's files) and makes no model request; `memory/engine` is the session setup both adapters share. Building the PiG checkout itself needs `GOFLAGS` unset (it is a Go workspace).
 
 ## README animations
 

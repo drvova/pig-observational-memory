@@ -27,19 +27,36 @@ func (h *Host) Compaction(ctx context.Context, rt *runtime.Runtime, reason strin
 	if err != nil {
 		return nil, err
 	}
+	return h.compact(ctx, rt, reason, marker, 0, true)
+}
+
+// CompactionAt is Compaction on the harness's own cut, for a harness that keeps recent entries
+// and stores the compaction itself (Pi): firstKept is the first entry it keeps and tokensBefore
+// its count of what it removes (0 estimates it). The result is returned, not stored, since the
+// harness writes it into its own session file, which the engine reads back.
+func (h *Host) CompactionAt(ctx context.Context, rt *runtime.Runtime, reason, firstKept string, tokensBefore int) (*hooks.CompactionResult, error) {
+	return h.compact(ctx, rt, reason, firstKept, tokensBefore, false)
+}
+
+func (h *Host) compact(ctx context.Context, rt *runtime.Runtime, reason, cut string, before int, store bool) (*hooks.CompactionResult, error) {
 	branch, err := h.read()
 	if err != nil {
 		return nil, err
 	}
-	event := hooks.BeforeCompactEvent{FirstKeptEntryID: marker, TokensBefore: tokensBefore(branch, marker), BranchEntries: branch, Reason: reason}
+	if before <= 0 {
+		before = tokensBefore(branch, cut)
+	}
+	event := hooks.BeforeCompactEvent{FirstKeptEntryID: cut, TokensBefore: before, BranchEntries: branch, Reason: reason}
 	outcome := hooks.HandleBeforeCompactRequest(ctx, rt, h, event)
 	if outcome.Compaction == nil {
 		return nil, fmt.Errorf("neutral: the engine declined the compaction")
 	}
 	c := outcome.Compaction
-	entry := map[string]any{"type": "compaction", "summary": c.Summary, "firstKeptEntryId": c.FirstKeptEntryID, "tokensBefore": c.TokensBefore, "details": c.Details}
-	if _, err := h.appendEntry(entry); err != nil {
-		return nil, err
+	if store {
+		entry := map[string]any{"type": "compaction", "summary": c.Summary, "firstKeptEntryId": c.FirstKeptEntryID, "tokensBefore": c.TokensBefore, "details": c.Details}
+		if _, err := h.appendEntry(entry); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
