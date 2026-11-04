@@ -26,6 +26,8 @@
 package codestore
 
 import (
+	"github.com/drvova/pig-observational-memory/memory/filelock"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -162,7 +164,7 @@ func (s Store) locked(fn func() error) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
-	return withLock(filepath.Join(s.Dir, lockFile), fn)
+	return filelock.WithLock(filepath.Join(s.Dir, lockFile), fn)
 }
 
 // Refused is a unit that was not kept, or that is stored but does not load, with the reason.

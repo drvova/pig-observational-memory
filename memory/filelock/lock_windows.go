@@ -1,6 +1,6 @@
 //go:build windows
 
-package codestore
+package filelock
 
 import (
 	"os"
@@ -17,10 +17,10 @@ var (
 // lockfileExclusiveLock is LOCKFILE_EXCLUSIVE_LOCK: wait for an exclusive lock.
 const lockfileExclusiveLock = 0x2
 
-// withLock runs fn holding an exclusive LockFileEx lock on the first byte of path, shared by
-// every process (and every handle in this one) that writes the store. Untested: CI only vets
+// WithLock runs fn holding an exclusive LockFileEx lock on the first byte of path, shared by
+// every process (and every handle in this one) that writes the file it guards. Untested: CI only vets
 // the Windows build.
-func withLock(path string, fn func() error) error {
+func WithLock(path string, fn func() error) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
