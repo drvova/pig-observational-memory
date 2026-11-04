@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
+	"github.com/drvova/pig-observational-memory/memory/curated"
 )
 
 // wireHost is a minimal PiG over a pipe: it reads the register frame, sends ready, and serves

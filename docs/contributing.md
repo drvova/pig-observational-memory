@@ -9,7 +9,7 @@ The extension is the Go module in `extensions/observational-memory`, run as a [P
 ## What a pull request contains
 
 * **One concern.** A bug fix, a feature or a docs change, not several. Keep unrelated cleanups out.
-* **A test that fails without the change.** Put it next to the code it covers, using the fakes in `internal/testfix` instead of a live model or host. A fix for a race needs a test that runs under the race detector.
+* **A test that fails without the change.** Put it next to the code it covers, using the fakes in `memory/testfix` instead of a live model or host. A fix for a race needs a test that runs under the race detector.
 * **Docs that match.** A change to settings, `/om:status` output, the `memory` tool or compaction behaviour updates [configuration.md](configuration.md), [how-it-works.md](how-it-works.md) or the README in the same pull request.
 * **A description of the behaviour change.** Say what a user or the agent sees before and after, and why. Link the issue it closes.
 

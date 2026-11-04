@@ -3,12 +3,12 @@
 Status: all ten steps of the order of work are built and pass CI's checks: the `memory` tool runs
 code, the defined tools are removed (nothing registers, runs, grades or (de)activates them;
 `om.Retired()` and `/om:status` list them, and their names stay in the skip list), the
-detectors a model defines are Go (`internal/hooks/detectors_v2.go`, `sandbox.RunDetector`,
+detectors a model defines are Go (`memory/hooks/detectors_v2.go`, `sandbox.RunDetector`,
 `omhost.DetectorCall`, `codepolicy.CheckDetector`): run in the background after each compaction,
 one detector child per run, killed at the next compaction, `session_start` or `session_shutdown`,
 and recorded as one `curated.ModelKindDetectorPass` event per pass; `query` detectors are retired),
 and the grammar is deleted: `internal/memquery` is gone, and only the frozen recognizer
-(`internal/legacyquery`) reads text written in the old language, running none of it.
+(`memory/legacyquery`) reads text written in the old language, running none of it.
 Outstanding: the manual gates' real PiG sessions (step 7's: code calls, a definition kept across a
 PiG restart, a cancelled loop, a compaction whose printed snippets run when pasted, request events
 staying at 0 between compactions; step 8's: a branch with old defined-tool calls that are skipped
@@ -126,7 +126,7 @@ that the description and schema contain no exported `om` name, and that no part 
 old-grammar form (`recall <`, `| search`, `history |`, `notes |`, "filter" stages; checked with the
 frozen recognizer's vocabulary). The tool-surface symbols (`ToolName`, `Label`, `Parameters`,
 `Description`, `PromptSnippet`, `PromptGuidelines`, `Details`, `DetailsFrom`, `FormatCallForTui`,
-`FormatRenderedResultForTui`) move out of `memquery` into `internal/omtool` (see "Order of work").
+`FormatRenderedResultForTui`) move out of `memquery` into `memory/omtool` (see "Order of work").
 The TUI renderers read the new `Details` (below), and `FormatCallForTui` shows the first lines of
 `code`. For entries written before the change (a `query` argument and no `code`, memquery's
 `Details` shape), both formatters fall back to the old rendering through `legacyquery`: the call
@@ -199,8 +199,8 @@ units. The manual varies with the store, never with the model. `man()` and
   a pointer printed by a summary already on the branch costs one extra call: the model runs the
   snippet as its own code. A write gets the removal notice and the manual section for the
   matching `om` write, with no snippet. The hint is generated safely by the one snippet formatter
-  (`internal/om`, see "The summary's snippets"): every id must match the generated id formats
-  (`internal/ids`, which `om` imports, plus the ` (off-path)` suffix) or the hint omits it, dates must be
+  (`memory/om`, see "The summary's snippets"): every id must match the generated id formats
+  (`memory/ids`, which `om` imports, plus the ` (off-path)` suffix) or the hint omits it, dates must be
   `YYYY-MM-DD`, limits integers in 1..200, and every word is rendered with `strconv.Quote`, never
   inside a raw string. The formatter's output is parsed back with `go/parser` and must contain only
   calls to the read functions and `Opt` methods with literal arguments, or no snippet is shown. A
@@ -271,7 +271,7 @@ The extension supervises two kinds of child process, both the extension's own bi
 
 PiG builds a generated runner that may hold several extensions (`runtimecell/go_packed.go`
 `renderGoRunner`), so `os.Executable()` is that runner, and the child re-executes it (decision 7).
-The child is recognized in an `init()` of the extension's own `internal/sandbox` package, which
+The child is recognized in an `init()` of the extension's own `memory/sandbox` package, which
 tests `os.Args[1]` against a marker (`__om_sandbox_child__`, with the mode `namespace` or `detector`
 as the next argument), runs the child's main and exits, so the runner's `main()`, which would look
 for extension sockets, never runs. The SDK has no `init()`.
@@ -566,14 +566,14 @@ is a function or a type, never a settable variable (see "The allow-list").
 
 ## The domain API
 
-`internal/om` is a leaf package (standard library, `internal/ids` for the id formats, which has no
-internal imports, and its own `internal/om/omwire`) holding the value types, the option and
+`memory/om` is a leaf package (standard library, `memory/ids` for the id formats, which has no
+internal imports, and its own `memory/om/omwire`) holding the value types, the option and
 list types and their pure methods, the doc table, and the stubs the child exports into yaegi as
 `interp.Exports{"om/om": ...}`.
 
 **The transport.** The stubs and the value methods that call back by id (`Note.Recall()`,
 `Reflection.Supporting()`, `Note.CitedBy()`) reach the protocol through
-`internal/om/omwire`, a sub-package holding the one call function: `omwire.Call(method, args)`,
+`memory/om/omwire`, a sub-package holding the one call function: `omwire.Call(method, args)`,
 and `omwire.Install(fn)`, which the sandbox's child main calls once before the first `Eval` (a
 second call panics). `om` itself exports no hook, setter, interface or variable for the transport.
 `omwire` is never extracted into a yaegi table, so interpreted code cannot name `Install`. The
@@ -582,7 +582,7 @@ types and their methods documented below), not from everything `yaegi extract` f
 asserts that it contains no `omwire` symbol, no variable, and no function or method whose name
 starts with `Set`/`Install` or that takes or returns a func or interface type other than `error`
 and the lists' `Filter` predicates. In the extension process nothing installs a transport, so a
-call there returns `ErrNoCall()`. The extension's answers to calls live in `internal/omhost` (see
+call there returns `ErrNoCall()`. The extension's answers to calls live in `memory/omhost` (see
 "Order of work"). Generic host types cannot be exported through yaegi, so each list type is
 concrete. Every name below compiles: no type and function share a name.
 
@@ -816,7 +816,7 @@ it. The child never receives a `session.Entry`, whose message map carries thinki
 
 `describe(x)` prints the type and one line per exported method or field: `Name(signature) // doc`.
 It runs in the child: signatures come from reflection on the interpreted value, docs from a table
-generated from the `om` sources (`go generate` writes `internal/om/docs_gen.go` with `doc.Synopsis`
+generated from the `om` sources (`go generate` writes `memory/om/docs_gen.go` with `doc.Synopsis`
 of each comment; a test regenerates it and fails on a diff, and fails when an exported function,
 type or method has no doc). The table is generated rather than parsed from embedded sources at run
 time because the child starts often (every session, cancel, crash and forget), and parsing on each
@@ -825,7 +825,7 @@ doc".
 
 ## Code policy
 
-`internal/codepolicy` checks code before it runs, every unit before it is kept, and every unit
+`memory/codepolicy` checks code before it runs, every unit before it is kept, and every unit
 again when it loads. It parses with `go/parser` in the extension, so nothing reaches the child that
 the policy refused.
 
@@ -973,7 +973,7 @@ a policy test refuses `strconv.ErrSyntax = nil` and `unicode.Categories["Lu"] = 
 (the selector assignment rule above). Detectors run in their own child each (see "Detectors"), so
 even a missed variable could not carry from one detector to another.
 
-The generated tables are regenerated by `go generate ./internal/sandbox` and checked by a test that
+The generated tables are regenerated by `cd memory && go generate ./sandbox` and checked by a test that
 regenerates them into a temporary directory and fails on a diff, like `docs_gen.go`.
 
 ### Kernel ownership
@@ -1068,11 +1068,11 @@ session, not a guarantee: concatenation or escapes get past it. The real limit o
 can do is the symbol table.
 
 Provenance needs the branch, so it runs only where a branch exists: on the keep path of
-`harness.Manager.RunMemory` (`internal/harness/tools.go`, for units) and, for detectors, where it
+`harness.Manager.RunMemory` (`memory/harness/tools.go`, for units) and, for detectors, where it
 runs for every level-1 definition today: `hooks/definitions_v2.go` calls
 `harness.CheckModelDefinition`, which calls `rules.CheckFromModel`. Never at load. The
 copied-segment helper moves out of `rules` (where `copiedSegment` is unexported) into a new leaf
-package `internal/provenance` (imports `ledger` and `serialize`, since `outputTexts` reads bash
+package `memory/provenance` (imports `ledger` and `serialize`, since `outputTexts` reads bash
 output through `serialize.BashExecutionText`), which `rules.CheckFromModel` and the keep path both
 call. `codepolicy` and `codestore` do not import it: `codestore.Keep` takes the check as
 an injected `func(src string) error`, so neither package depends on `rules` or `ledger`.
@@ -1211,7 +1211,7 @@ already runs the validator:
 - the detector name passes `kernel.Owns(KindDetector, name)` as today.
 
 Provenance needs the branch, so it is not part of the pure check: `harness.CheckModelDefinition`
-runs `rules.CheckFromModel` (through `internal/provenance`) at proposal time, as for other
+runs `rules.CheckFromModel` (through `memory/provenance`) at proposal time, as for other
 definitions (`hooks/definitions_v2.go`), and the load-time check does not repeat it.
 
 A proposed detector is then smoke-run once over the proposing compaction's own pass, in the
@@ -1385,10 +1385,10 @@ changed. Summaries that build wrote keep their tables paragraph as a frozen cons
 A snippet must also survive every codec as printed. The rows codec quotes a value containing `,`,
 `"` or `|` and escapes inner quotes (`tables/rows_encode.go`), and jsonl escapes `"`. So snippets
 use no comma, no double quote and no `|`: ids are Go raw strings (backticks) and options chain as
-methods. An id containing a backtick (none does: ids are generated, `internal/ids`) would fall back
+methods. An id containing a backtick (none does: ids are generated, `memory/ids`) would fall back
 to `strconv.Quote`, and a test asserts the id formats never contain one.
 
-The one snippet formatter and the fixed snippet strings live in `internal/om` (standard library,
+The one snippet formatter and the fixed snippet strings live in `memory/om` (standard library,
 `ids` and `om/omwire`, none of which imports another internal package), so every package that prints a snippet can import it without a cycle: `ledger`
 (`TablesRecallParagraph`), `serialize` (`BriefHeading` and the brief's pointer line), `curated`
 (`index.go`), `selection`, `consolidate`, `thin` and `declare`. `legacyquery`'s legacy-to-snippet
@@ -1472,7 +1472,7 @@ keeps the retired defined-tool names, so it does not churn as well.
   frozen recognizer, so `layer.Store.Check` refuses nothing it accepted before. Format, schema and
   rule texts do not contain grammar queries. Rules name detectors and remedies; a v2 rule naming
   `long-spec` loads and is listed, never applied.
-- **The frozen recognizer.** A new package `internal/legacyquery` holds a frozen copy of the lexer
+- **The frozen recognizer.** A new package `memory/legacyquery` holds a frozen copy of the lexer
   and parser and the vocabulary lists, with no interpreter. It validates stored definitions, reads
   old memory tool calls in session entries (level 0's notes, `dropped-then-queried`), translates a
   legacy read query into its snippet hint (text only, through the strict formatter), and supplies
@@ -1544,14 +1544,14 @@ The package layout, chosen so no step creates an import cycle:
 
 | Package | Holds | Imports |
 |---|---|---|
-| `internal/om` | value, option and list types, pure list methods, the generated doc table, the moved constants, the snippet formatter and the fixed snippet strings; the transport in its sub-package `internal/om/omwire` (never extracted into yaegi) | standard library, `ids` (no internal imports), `om/omwire` |
-| `internal/omhost` | the read engine moved out of `memquery`, the call context, curated writes through `curated.Call.Run`, the JSON answers to calls, the per-kind method tables | `om`, `ledger`, `serialize`, `session`, `curated`, `tables`, `recall` (paging and `cited_by`, as `memquery` uses it today; `recall` imports only `jsfmt`, `ledger`, `serialize` and `tokens`); never `harness`, `commands`, `hooks`, `agents` or a layer writer |
-| `internal/codepolicy` | the splitter, the code policy, unit extraction, free-identifier resolution, the pure detector check | `om`, `kernel`, `go/*`; never `rules`, `layer` or `provenance` |
-| `internal/provenance` | the copied-segment check, moved out of `rules` and exported | `ledger`, `serialize` |
-| `internal/sandbox` | the child's `init` and main, the generated allow-list symbols, the `om` stubs, the bounded protocol, the supervisor (start, replay, run, kill, crash isolation, reaping, per-run detector children), build-tagged platform files | `om`, `codepolicy`, yaegi; calls answered through an interface `omhost` satisfies |
-| `internal/codestore` | the per-project units store, its lock and bounds, the load-time check | `codepolicy`; provenance arrives as an injected `func(src string) error` on `Keep` |
-| `internal/legacyquery` | the frozen recognizer and the strict legacy-to-snippet hint | `tables`, `om` |
-| `internal/omtool` | the tool surface moved out of `memquery`: `ToolName`, `Label`, `Parameters`, `Description`, `PromptSnippet`, `PromptGuidelines`, the `Details` type and `DetailsFrom`, `FormatCallForTui` and `FormatRenderedResultForTui` (with the legacy fallback); used by the root `memory.go`, `harness`, `extract`, `rules/detect.go` and `kernel_test` | `om`, `legacyquery`; never exported into yaegi |
+| `memory/om` | value, option and list types, pure list methods, the generated doc table, the moved constants, the snippet formatter and the fixed snippet strings; the transport in its sub-package `memory/om/omwire` (never extracted into yaegi) | standard library, `ids` (no internal imports), `om/omwire` |
+| `memory/omhost` | the read engine moved out of `memquery`, the call context, curated writes through `curated.Call.Run`, the JSON answers to calls, the per-kind method tables | `om`, `ledger`, `serialize`, `session`, `curated`, `tables`, `recall` (paging and `cited_by`, as `memquery` uses it today; `recall` imports only `jsfmt`, `ledger`, `serialize` and `tokens`); never `harness`, `commands`, `hooks`, `agents` or a layer writer |
+| `memory/codepolicy` | the splitter, the code policy, unit extraction, free-identifier resolution, the pure detector check | `om`, `kernel`, `go/*`; never `rules`, `layer` or `provenance` |
+| `memory/provenance` | the copied-segment check, moved out of `rules` and exported | `ledger`, `serialize` |
+| `memory/sandbox` | the child's `init` and main, the generated allow-list symbols, the `om` stubs, the bounded protocol, the supervisor (start, replay, run, kill, crash isolation, reaping, per-run detector children), build-tagged platform files | `om`, `codepolicy`, yaegi; calls answered through an interface `omhost` satisfies |
+| `memory/codestore` | the per-project units store, its lock and bounds, the load-time check | `codepolicy`; provenance arrives as an injected `func(src string) error` on `Keep` |
+| `memory/legacyquery` | the frozen recognizer and the strict legacy-to-snippet hint | `tables`, `om` |
+| `memory/omtool` | the tool surface moved out of `memquery`: `ToolName`, `Label`, `Parameters`, `Description`, `PromptSnippet`, `PromptGuidelines`, the `Details` type and `DetailsFrom`, `FormatCallForTui` and `FormatRenderedResultForTui` (with the legacy fallback); used by the root `memory.go`, `harness`, `extract`, `rules/detect.go` and `kernel_test` | `om`, `legacyquery`; never exported into yaegi |
 
 The layer writer, `om.Layer()` and `om.Info()` reach `omhost` as closures on the call context, so
 `omhost` imports none of their packages. `harness` sets the layer writer and the listing (as
@@ -1580,7 +1580,7 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
    `om.LayerRow`). `memquery` keeps aliases (`type HarnessRow = om.LayerRow`, `const DefaultLimit =
    om.DefaultLimit` and the rest) until step 10, so `memquery.Run` calls the moved code and all of
    `memquery`'s tests compile and pass unchanged.
-2. **Frozen recognizer.** Add `internal/legacyquery`. Point `declare.ParseSummary`,
+2. **Frozen recognizer.** Add `memory/legacyquery`. Point `declare.ParseSummary`,
    `rules.ParseDetector`, the curated definition checks and `kernel_test` at it. Migration fixtures
    still load.
 3. **Code policy and kernel group.** Add `codepolicy` and the `code` kind with `kernel.OwnsCode`.
@@ -1606,7 +1606,7 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
    leaves the extension's RSS flat and returns `runtime` or `crashed`, `oom_score_adj` reads 1000 in
    the child on Linux, and the reap cases (`Pdeathsig` and EOF, idle and busy) under build tags.
    These tests run under `go test -race` like the rest: the child is the race-built test binary
-   re-executed (the test binary links `internal/sandbox`, so its `init()` catches the marker), and
+   re-executed (the test binary links `memory/sandbox`, so its `init()` catches the marker), and
    with no address-space cap there is no interaction with the race detector's shadow mappings; the
    out-of-memory test allocates in a loop until the child dies and asserts only that the extension
    survives. CI gains `GOOS=windows go vet ./...` and `GOOS=darwin go vet ./...`, so the
@@ -1619,7 +1619,7 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
    tables have a regenerate-and-diff test and the type walk (see "The allow-list"), and
    `kernel_test` gains its check against the sandbox's seeded symbol table.
 5. **Store.** `codestore` with its lock, bounds, the injected provenance check, the variable check,
-   the load-time check, `kept`, `forget`. Add `internal/provenance` and point
+   the load-time check, `kept`, `forget`. Add `memory/provenance` and point
    `rules.CheckFromModel` at it.
 6. **The `om` API.** The `om` types' docs and any remaining methods over the step-4 skeleton, `omhost` reads and writes (curated, layer, `Propose`, `Define`), the
    hit recorder, `describe`/`man` with the generated doc table, `commands.StatusFigures` and the
@@ -1628,7 +1628,7 @@ imports `harness`) passes `provenance`'s check to `codestore.Keep`; detectors ge
    session-model lines, which are unchanged.
 7. **Switch-over, in one step.** The tool's spec becomes `code`/`strings` with the fixed
    description, `PromptSnippet` and `PromptGuidelines`; the tool-surface symbols move from
-   `memquery` to `internal/omtool` and every importer (root `memory.go`, `harness`, `extract`,
+   `memquery` to `memory/omtool` and every importer (root `memory.go`, `harness`, `extract`,
    `rules/detect.go`, `kernel_test`) switches to it, with the TUI formatters' legacy fallback;
    `ledger.TablesSummaryBody` accepts the frozen legacy paragraph; `harness.applyDescription` is deleted; `RunMemory` runs calls on the namespace child
    and records `ModelKindCode` events (`engine: v2`) from `Details`; the profile counts code events
@@ -1806,7 +1806,7 @@ Project tests:
   legacy definitions and old memory tool calls load and list as before, nothing is refused that
   loaded before, and a subject `time` keeps its canonical path.
 - `kernel_test` checks the `code` group against `go/types.Universe`, the sandbox's seeded table and
-  the allow-list, and the retired query words against `internal/legacyquery`. A stored definition
+  the allow-list, and the retired query words against `memory/legacyquery`. A stored definition
   named `from` is still refused at load.
 
 ## Probe evidence

@@ -5,15 +5,15 @@ import (
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
+	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/harness"
+	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/omtool"
+	"github.com/drvova/pig-observational-memory/memory/runtime"
 )
 
 // memorySection names the system prompt section the index occupies.

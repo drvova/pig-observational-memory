@@ -145,37 +145,38 @@ If you used the TypeScript Pi extension [pi-observational-memory](https://github
 ## Development
 
 ```text
-extensions/observational-memory/   the extension, a standalone Go module
+go.work                            the workspace: the engine and its adapters
+memory/                            the harness-neutral memory engine, a Go module with no harness SDK
+├── hooks/                         turn-end extraction, compaction trigger and hook, level 1, thinning
+├── extract/                       level 0: records picked by code
+├── consolidate/                   level 1's prompt and its validation
+├── selection/, thin/              the summary renderer; thinning aged tool results and day headers
+├── ledger/                        memory model, projections
+├── agents/                        the single model request
+├── runtime/                       per-process state, session model resolution
+├── omtool/, om/, omhost/          the memory tool: its surface, the om API, the engine's answers
+├── sandbox/, codepolicy/, codestore/  the child process, the code policy, kept definitions
+├── legacyquery/                   the frozen recognizer of the removed query language (reads old text, runs nothing)
+├── commands/, recall/             /om:status, /om:view, om.Recall evidence
+├── curated/, harness/, rules/     long-lived memories, the per-model harness, rules
+├── kernel/, layer/, declare/      what no definition may touch; the model-built layer
+├── host/, hostinfo/               the interfaces a harness adapter implements, and what it injects
+├── config/, serialize/, …         settings, source serialization, token estimates, debug log
+└── testfix/                       fake host and entry builders for tests
+extensions/observational-memory/   the PiG adapter, its own Go module
 ├── extension.go, memory.go        PiG factory: events, commands, the memory tool
-└── internal/
-    ├── hooks/                     turn-end extraction, compaction trigger and hook, level 1, thinning
-    ├── extract/                   level 0: records picked by code
-    ├── consolidate/               level 1's prompt and its validation
-    ├── selection/, thin/          the summary renderer; thinning aged tool results
-    ├── ledger/                    memory model, projections
-    ├── agents/                    the single model request
-    ├── runtime/                   per-process state, session model resolution
-    ├── omtool/, om/, omhost/      the memory tool: its surface, the om API, the extension's answers
-    ├── sandbox/, codepolicy/, codestore/  the child process, the code policy, kept definitions
-    ├── legacyquery/               the frozen recognizer of the removed query language (reads old text, runs nothing)
-    ├── commands/, recall/         /om:status, /om:view, om.Recall evidence
-    ├── curated/, harness/, rules/ long-lived memories, the per-model harness, rules
-    ├── kernel/, layer/, declare/  what no definition may touch; the model-built layer
-    ├── host/                      host interfaces the packages run against
-    ├── sdkhost/                   adapts the PiG SDK's extension context to host
-    ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
-    └── testfix/                   fake host and entry builders for tests
+├── hostinfo.go                    hands the engine PiG's directories and token estimate
+└── internal/sdkhost/              adapts the PiG SDK's extension context to memory/host
 docs/                              concepts, internals, settings, design, PiG port notes, contributing
 docs/animation/                    Clayzo sources for the README animations
 ```
 
-From the module directory, run the same checks as CI:
+Run the same checks as CI in each module:
 
 ```bash
-cd extensions/observational-memory
-gofmt -l .          # must print nothing
-go vet ./...
-go test -race ./...
+for m in memory extensions/observational-memory; do
+  (cd "$m" && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...)
+done
 ```
 
 [Contributing](docs/contributing.md) says what a pull request needs.

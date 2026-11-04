@@ -545,7 +545,7 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
 - Remedies are code-only: keep-head replaces the require-kind re-ask; `split-chunk` goes.
 - `kernel-consolidate` opens the level-1 prompt, with a `consolidation` instructions seed the model may
   extend, never replace: the kernel text is kernel-owned, and the seed always stands after it.
-- Built (detectors, evidence and remedies; `internal/rules/v2.go`, `internal/hooks/harness_v2.go`).
+- Built (detectors, evidence and remedies; `memory/rules/v2.go`, `memory/hooks/harness_v2.go`).
   Every level-0 extraction (turn end and compaction) runs `rules.DetectV2` over the source entries it
   read, with its own records as the notes, before any remedy, and records the run for the session
   model (`curated.ModelKindDetect`) once the extraction is appended (a run whose extraction did not land,
@@ -582,8 +582,8 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
     the details for a non-native codec; the details record the shown record ids (`shown`), which the
     memory tool's shown/omitted evidence reads. A `summary/default` query does not select under v2:
     selection's classes are the kernel's (anchors, runnable omissions, drops over what it shows).
-- Built (definitions proposed in level 1, and settlement; `internal/rules/proposal_v2.go`,
-  `internal/hooks/definitions_v2.go`, `internal/consolidate/definitions.go`). The build and revision
+- Built (definitions proposed in level 1, and settlement; `memory/rules/proposal_v2.go`,
+  `memory/hooks/definitions_v2.go`, `memory/consolidate/definitions.go`). The build and revision
   passes are deleted, and the memory tool's `harness` and `propose` writes are refused
   (`harness.ErrDefinedInLevel1`; `harness forget` and `rollback` still apply, now as
   `om.LayerForget` and `om.LayerRollback(generation)`, and `define`, which registered a tool that is no
