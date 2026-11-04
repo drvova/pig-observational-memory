@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -54,6 +55,17 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 	}
 	if h.TOML != nil {
 		if err := installTOML(w, exe, h.Name, h.TOML, remove); err != nil {
+			return err
+		}
+	}
+	if h.Own != nil {
+		if path := pathFor(h.Own.Path); path == "" {
+			fmt.Fprintf(w.out, "%s: no config path on %s\n", h.Name, runtime.GOOS)
+		} else if remove {
+			if err := w.remove(path); err != nil {
+				return err
+			}
+		} else if err := w.write(path, []byte(h.Own.Content(exe, h.Name))); err != nil {
 			return err
 		}
 	}

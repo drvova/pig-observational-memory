@@ -1,1 +1,250 @@
-[]
+[
+ {
+  "name": "better-chatbot",
+  "title": "better-chatbot",
+  "class": "manual",
+  "manual": "MCP Configuration > Add Server, paste {\"command\": ..., \"args\": [...]} (a self-hosted instance)",
+  "source": "https://github.com/cgoinglove/better-chatbot/blob/main/docs/tips-guides/mcp-server-setup-and-tool-testing.md"
+ },
+ {
+  "name": "claudemind",
+  "title": "ClaudeMind (Clinde)",
+  "class": "manual",
+  "manual": "use its MCP server manager to add a server",
+  "source": "https://claudemind.com/changelog"
+ },
+ {
+  "name": "deepchat",
+  "title": "DeepChat",
+  "class": "manual",
+  "manual": "Settings > MCP > add a stdio server",
+  "source": "https://raw.githubusercontent.com/thinkinaixyz/deepchat/main/README.md"
+ },
+ {
+  "name": "gptme",
+  "title": "gptme",
+  "class": "manual",
+  "manual": "in ~/.config/gptme/config.toml set enabled = true under [mcp] and add a [[mcp.servers]] table with name = \"om\", enabled = true, command and args as below",
+  "source": "https://gptme.org/docs/mcp.html"
+ },
+ {
+  "name": "hyperchat",
+  "title": "HyperChat",
+  "class": "manual",
+  "manual": "on the MCP page, add a third-party MCP server",
+  "source": "https://raw.githubusercontent.com/BigSweetPotatoStudio/HyperChat/main/README.md"
+ },
+ {
+  "name": "jetbrains-ai-assistant",
+  "title": "JetBrains AI Assistant",
+  "class": "manual",
+  "manual": "Settings | Tools | AI Assistant | Model Context Protocol (MCP) > Add, level Global",
+  "source": "https://www.jetbrains.com/help/ai-assistant/configure-an-mcp-server.html"
+ },
+ {
+  "name": "junie",
+  "title": "JetBrains Junie (IDE and CLI)",
+  "class": "file",
+  "path": {
+   "darwin": "${JUNIE_HOME:-~/.junie}/mcp/mcp.json",
+   "linux": "${JUNIE_HOME:-~/.junie}/mcp/mcp.json",
+   "windows": "${USERPROFILE}/.junie/mcp/mcp.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "source": "https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html"
+ },
+ {
+  "name": "langbot",
+  "title": "LangBot",
+  "class": "manual",
+  "manual": "WebUI: Plugin Management > MCP Management > Add > Local (stdio), then bind it in the pipeline (its stdio servers run in its sandbox, where om's path must resolve)",
+  "source": "https://github.com/langbot-app/LangBot/wiki/en-usage-mcp-readme"
+ },
+ {
+  "name": "langflow",
+  "title": "Langflow",
+  "class": "manual",
+  "manual": "Settings > MCP Servers > Add MCP Server > STDIO",
+  "source": "https://docs.langflow.org/mcp-client"
+ },
+ {
+  "name": "lm-studio",
+  "title": "LM Studio",
+  "class": "manual",
+  "manual": "Program tab (right sidebar) > Install > Edit mcp.json, and add it under mcpServers",
+  "source": "https://lmstudio.ai/docs/app/mcp"
+ },
+ {
+  "name": "lobehub",
+  "title": "LobeHub (desktop)",
+  "class": "manual",
+  "manual": "Settings > Skills > Skill Store > Custom > Add custom skill (STDIO), then enable it in each agent's Skills (desktop app only)",
+  "source": "https://lobehub.com/docs/usage/community/custom-mcp"
+ },
+ {
+  "name": "mcp-bundler",
+  "title": "MCP Bundler (macOS)",
+  "class": "manual",
+  "manual": "main view > Add new STDIO MCP server",
+  "source": "https://mcp-bundler.com/"
+ },
+ {
+  "name": "mcp-client-cli",
+  "title": "mcp-client-cli",
+  "class": "manual",
+  "manual": "add it under mcpServers in ~/.llm/config.json (a commented JSON file om does not rewrite; it needs systemPrompt and llm when new)",
+  "source": "https://raw.githubusercontent.com/adhikasp/mcp-client-cli/master/src/mcp_client_cli/config.py"
+ },
+ {
+  "name": "mcphub-nvim",
+  "title": "MCPHub.nvim",
+  "class": "file",
+  "path": {
+   "darwin": "~/.config/mcphub/servers.json",
+   "linux": "~/.config/mcphub/servers.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "the default path; a setup({config=...}) elsewhere needs om install --mcp-config",
+  "source": "https://github.com/ravitemer/mcphub.nvim/blob/main/doc/configuration.md"
+ },
+ {
+  "name": "mcpico",
+  "title": "McPico",
+  "class": "file",
+  "path": {
+   "darwin": "~/.config/mcpico/config.json",
+   "linux": "~/.config/mcpico/config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcp_servers"
+  ],
+  "entry": {
+   "type": "stdio",
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ],
+   "enabled": true
+  },
+  "source": "https://raw.githubusercontent.com/cryptax/mcpico/main/doc/config.md"
+ },
+ {
+  "name": "mcpjam",
+  "title": "MCPJam Inspector",
+  "class": "manual",
+  "manual": "Servers tab > Add server > STDIO (desktop or npx build)",
+  "source": "https://github.com/MCPJam/inspector"
+ },
+ {
+  "name": "memex",
+  "title": "Workshop Desktop (formerly Memex)",
+  "class": "manual",
+  "manual": "Settings > MCP Servers > Add Custom Server",
+  "source": "https://docs.workshop.ai/workshop-desktop/mcp-servers.md"
+ },
+ {
+  "name": "msty-studio",
+  "title": "Msty Studio",
+  "class": "manual",
+  "manual": "Toolbox > Tools > Add New Tool > STDIO",
+  "source": "https://docs.msty.studio/toolbox/tools"
+ },
+ {
+  "name": "octomind",
+  "title": "Octomind",
+  "class": "own",
+  "path": {
+   "darwin": "${OCTOMIND_DATA_DIR:-~/.local/share/octomind}/config/mcp-om.toml",
+   "linux": "${OCTOMIND_DATA_DIR:-~/.local/share/octomind}/config/mcp-om.toml"
+  },
+  "note": "a file of its own (mcp-*.toml loads last); bound to the developer:general role",
+  "source": "https://raw.githubusercontent.com/muvon/octomind/main/doc/usage/07-mcp-tools.md",
+  "content": "# om: observational memory (om install octomind)\n[[mcp.servers]]\nname = \"om\"\ntype = \"stdio\"\ncommand = \"$OM\"\nargs = [\"mcp\", \"--harness\", \"$HARNESS\"]\nauto_bind = [\"developer:general\"]\n"
+ },
+ {
+  "name": "oterm",
+  "title": "oterm",
+  "class": "file",
+  "path": {
+   "darwin": "${XDG_DATA_HOME:-~/Library/Application Support}/oterm/config.json",
+   "linux": "${XDG_DATA_HOME:-~/.local/share}/oterm/config.json",
+   "windows": "${APPDATA}/oterm/config.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "restart oterm after installing; with OTERM_DATA_DIR set, use om install --mcp-config $OTERM_DATA_DIR/config.json",
+  "source": "https://github.com/ggozad/oterm/blob/main/docs/mcp/index.md"
+ },
+ {
+  "name": "qoder",
+  "title": "Qoder IDE",
+  "class": "manual",
+  "manual": "user icon > Qoder IDE Settings > MCP > My Servers > + Add",
+  "source": "https://docs.qoder.com/user-guide/chat/model-context-protocol.md"
+ },
+ {
+  "name": "qoder-cli",
+  "title": "Qoder CLI",
+  "class": "file",
+  "path": {
+   "darwin": "~/.qoder/settings.json",
+   "linux": "~/.qoder/settings.json"
+  },
+  "format": "json",
+  "key": [
+   "mcpServers"
+  ],
+  "entry": {
+   "command": "$OM",
+   "args": [
+    "mcp",
+    "--harness",
+    "$HARNESS"
+   ]
+  },
+  "note": "restart Qoder CLI after installing",
+  "source": "https://docs.qoder.com/cli/mcp-reference.md"
+ },
+ {
+  "name": "recursechat",
+  "title": "RecurseChat",
+  "class": "manual",
+  "manual": "Model page > New Model > New MCP Model",
+  "source": "https://recurse.chat/docs/features/mcp/"
+ }
+]

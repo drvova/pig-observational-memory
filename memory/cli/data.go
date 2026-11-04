@@ -14,7 +14,7 @@ import (
 type harnessData struct {
 	Name   string            `json:"name"`
 	Title  string            `json:"title"`
-	Class  string            `json:"class"` // file | manual
+	Class  string            `json:"class"` // file | own | manual
 	Path   map[string]string `json:"path"`
 	Format string            `json:"format"` // json | yaml | toml
 	Key    []string          `json:"key"`
@@ -23,8 +23,11 @@ type harnessData struct {
 	// string.
 	Entry  map[string]any `json:"entry"`
 	Manual string         `json:"manual"`
-	Note   string         `json:"note"`
-	Source string         `json:"source"`
+	// Content is the whole file of an "own" harness (one that loads every file of a pattern
+	// from a directory), with $OM and $HARNESS.
+	Content string `json:"content"`
+	Note    string `json:"note"`
+	Source  string `json:"source"`
 }
 
 // loadData registers every harness of the data file; a malformed entry is an error (the tests
@@ -58,6 +61,15 @@ func (d harnessData) harness() (Harness, error) {
 			return h, fmt.Errorf("a manual harness needs its steps")
 		}
 		h.Manual = d.Manual
+		return h, nil
+	case "own":
+		if len(d.Path) == 0 || d.Content == "" {
+			return h, fmt.Errorf("an own-file harness needs a path and its content")
+		}
+		content := d.Content
+		h.Own = &OwnSpec{Path: d.Path, Content: func(exe, harness string) string {
+			return strings.NewReplacer("$OM", exe, "$HARNESS", harness).Replace(content)
+		}}
 		return h, nil
 	case "file":
 	default:

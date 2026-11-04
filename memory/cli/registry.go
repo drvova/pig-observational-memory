@@ -24,6 +24,8 @@ type Harness struct {
 	YAML *YAMLSpec
 	// TOML registers it as a TOML table instead.
 	TOML *TOMLSpec
+	// Own writes a file of om's own, for a harness that loads every file of a pattern.
+	Own *OwnSpec
 	// Hooks registers om's lifecycle hooks; nil for a harness without hooks.
 	Hooks *HookSpec
 	// Custom installs (or removes) what data cannot say; it runs after MCP and Hooks.
@@ -225,6 +227,13 @@ func init() {
 	}
 }
 
+// OwnSpec is a file om owns whole: install writes it, uninstall removes it, and nothing of the
+// user's is ever edited.
+type OwnSpec struct {
+	Path    map[string]string
+	Content func(exe, harness string) string
+}
+
 // stdioEntry is the server entry for a client that wants the transport named.
 func stdioEntry(exe, h string) map[string]any {
 	return map[string]any{"type": "stdio", "command": exe, "args": []any{"mcp", "--harness", h}}
@@ -396,7 +405,7 @@ func listHarnesses(out io.Writer) error {
 		switch {
 		case h.Manual != "":
 			parts = append(parts, "memory tool (MCP, added by hand: om install prints the steps)")
-		case h.MCP != nil || h.YAML != nil || h.TOML != nil || h.Name == "claude-code" || h.Name == "codex":
+		case h.MCP != nil || h.YAML != nil || h.TOML != nil || h.Own != nil || h.Name == "claude-code" || h.Name == "codex":
 			parts = append(parts, "memory tool (MCP)")
 		case h.Name == "pi":
 			parts = append(parts, "memory tool")

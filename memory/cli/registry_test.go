@@ -76,12 +76,14 @@ func TestJSONCRefused(t *testing.T) {
 // Every registered name installs through om install (dry run), and every path expands.
 func TestRegistryDryRun(t *testing.T) {
 	env(t)
-	for name := range registry {
+	for name, h := range registry {
 		var out strings.Builder
 		if err := install(name, false, true, &out); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if strings.Contains(out.String(), "$") || strings.Contains(out.String(), "~") {
+		// A manual harness's steps may name a path for the user to open; only paths om writes
+		// must be expanded.
+		if h.Manual == "" && (strings.Contains(out.String(), "$") || strings.Contains(out.String(), "~")) {
 			t.Fatalf("%s: unexpanded path:\n%s", name, out.String())
 		}
 	}

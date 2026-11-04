@@ -34,6 +34,8 @@ func TestDataHarnesses(t *testing.T) {
 				path = pathFor(h.YAML.Path)
 			case h.TOML != nil:
 				path = pathFor(h.TOML.Path)
+			case h.Own != nil:
+				path = pathFor(h.Own.Path)
 			}
 			if path == "" {
 				t.Skip("no path on this OS")
@@ -55,7 +57,7 @@ func TestDataHarnesses(t *testing.T) {
 			if err := install(name, true, false, &out); err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := os.ReadFile(path); strings.Contains(string(got), "om") && strings.Contains(string(got), "--harness") {
+			if got, _ := os.ReadFile(path); strings.Contains(string(got), "--harness") {
 				t.Fatalf("after uninstall:\n%s", got)
 			}
 			_ = filepath.Dir(path)
