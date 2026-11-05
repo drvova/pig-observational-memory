@@ -65,6 +65,21 @@ pig install ./extensions/observational-memory
 pig install ./extensions/observational-memory --validate-only --json
 ```
 
+## Other harnesses
+
+The same engine runs outside PiG as one binary, `om`, for 198 harnesses (Claude Code, Codex, OpenCode, Pi,
+Oh My Pi, Cursor, Copilot, Gemini CLI, Zed, Cline, JetBrains, Jan and more; [Harnesses](docs/harnesses.md) lists them) and any harness that can run a
+command at a turn's end:
+
+```sh
+go install github.com/drvova/pig-observational-memory/memory/cmd/om@latest
+om install claude-code      # or any name om harnesses lists (--dry-run shows the changes; om uninstall reverses them)
+```
+
+It records the conversation from the harness's own transcript, hands its summary back when the harness
+compacts, and serves the memory tool over MCP, with no model request. [om](docs/universal.md) has what each
+harness gets and the protocol for any other.
+
 ## How it works
 
 <img src="docs/assets/swing.svg" width="100%" alt="Spider-Ham web-swings through a pixel city at night while cyan memory windows release pixels that string onto a web, like observations being collected.">
@@ -145,37 +160,38 @@ If you used the TypeScript Pi extension [pi-observational-memory](https://github
 ## Development
 
 ```text
-extensions/observational-memory/   the extension, a standalone Go module
+go.work                            the workspace: the engine and its adapters
+memory/                            the harness-neutral memory engine, a Go module with no harness SDK
+├── hooks/                         turn-end extraction, compaction trigger and hook, level 1, thinning
+├── extract/                       level 0: records picked by code
+├── consolidate/                   level 1's prompt and its validation
+├── selection/, thin/              the summary renderer; thinning aged tool results and day headers
+├── ledger/                        memory model, projections
+├── agents/                        the single model request
+├── runtime/                       per-process state, session model resolution
+├── omtool/, om/, omhost/          the memory tool: its surface, the om API, the engine's answers
+├── sandbox/, codepolicy/, codestore/  the child process, the code policy, kept definitions
+├── legacyquery/                   the frozen recognizer of the removed query language (reads old text, runs nothing)
+├── commands/, recall/             /om:status, /om:view, om.Recall evidence
+├── curated/, harness/, rules/     long-lived memories, the per-model harness, rules
+├── kernel/, layer/, declare/      what no definition may touch; the model-built layer
+├── host/, hostinfo/               the interfaces a harness adapter implements, and what it injects
+├── config/, serialize/, …         settings, source serialization, token estimates, debug log
+└── testfix/                       fake host and entry builders for tests
+extensions/observational-memory/   the PiG adapter, its own Go module
 ├── extension.go, memory.go        PiG factory: events, commands, the memory tool
-└── internal/
-    ├── hooks/                     turn-end extraction, compaction trigger and hook, level 1, thinning
-    ├── extract/                   level 0: records picked by code
-    ├── consolidate/               level 1's prompt and its validation
-    ├── selection/, thin/          the summary renderer; thinning aged tool results
-    ├── ledger/                    memory model, projections
-    ├── agents/                    the single model request
-    ├── runtime/                   per-process state, session model resolution
-    ├── omtool/, om/, omhost/      the memory tool: its surface, the om API, the extension's answers
-    ├── sandbox/, codepolicy/, codestore/  the child process, the code policy, kept definitions
-    ├── legacyquery/               the frozen recognizer of the removed query language (reads old text, runs nothing)
-    ├── commands/, recall/         /om:status, /om:view, om.Recall evidence
-    ├── curated/, harness/, rules/ long-lived memories, the per-model harness, rules
-    ├── kernel/, layer/, declare/  what no definition may touch; the model-built layer
-    ├── host/                      host interfaces the packages run against
-    ├── sdkhost/                   adapts the PiG SDK's extension context to host
-    ├── config/, serialize/, …     settings, source serialization, token estimates, debug log
-    └── testfix/                   fake host and entry builders for tests
+├── hostinfo.go                    hands the engine PiG's directories and token estimate
+└── internal/sdkhost/              adapts the PiG SDK's extension context to memory/host
 docs/                              concepts, internals, settings, design, PiG port notes, contributing
 docs/animation/                    Clayzo sources for the README animations
 ```
 
-From the module directory, run the same checks as CI:
+Run the same checks as CI in each module:
 
 ```bash
-cd extensions/observational-memory
-gofmt -l .          # must print nothing
-go vet ./...
-go test -race ./...
+for m in memory extensions/observational-memory; do
+  (cd "$m" && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...)
+done
 ```
 
 [Contributing](docs/contributing.md) says what a pull request needs.
@@ -190,6 +206,8 @@ go test -race ./...
 | [Configuration](docs/configuration.md) | Every setting, debugging and the removed settings |
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
+| [om: other harnesses](docs/universal.md) | The `om` binary for Claude Code, Codex, OpenCode, Pi and any other harness |
+| [Harnesses](docs/harnesses.md) | Every harness `om install` supports, and how (generated) |
 | [Memory interface](docs/memory-interface.md) | Tables and codecs, the harness, the kernel and the layer |
 | [The code tool](docs/code-tool.md) | The `memory` tool: Go code over the `om` API in a child process |
 

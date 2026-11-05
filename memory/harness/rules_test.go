@@ -1,0 +1,44 @@
+package harness_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/harness"
+	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/rules"
+	"github.com/drvova/pig-observational-memory/memory/tables"
+	tf "github.com/drvova/pig-observational-memory/memory/testfix"
+)
+
+// A switch-codec rule makes the codec switch section 6 would make, for the summary; a long-spec
+// rule loads and is never applied (long-spec is retired with the query language).
+func TestProfileAppliesSwitchRules(t *testing.T) {
+	h, store, _ := session(t)
+	cfg := config.Defaults
+	if p := profileFor(h, cfg, h.Model); p.Codec != tables.Rows.Name() {
+		t.Fatalf("default profile %+v", p)
+	}
+	for _, remedy := range []string{rules.RemedySwitchCodec, rules.RemedyLongSpec} {
+		if _, err := rules.Add(store, rules.Rule{Detector: rules.DetectDecodeFailure, Remedy: remedy, Models: []string{"p/m"}, Engine: curated.EngineV2}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := profileFor(h, cfg, h.Model)
+	if p.Codec != tables.JSONLines.Name() || len(p.Switches) != 1 || !strings.Contains(p.Switches[0].Reason, "rule ") {
+		t.Fatalf("profile %+v", p)
+	}
+	if other := profileFor(h, cfg, tf.Model("p", "other")); other.Codec != tables.Rows.Name() {
+		t.Fatalf("another model's profile %+v", other)
+	}
+}
+
+// profileFor is model's profile in h's store, the default profile when there is no ledger.
+func profileFor(h host.Host, cfg config.Config, model host.Model) harness.Profile {
+	if l, ok := harness.For(h, cfg, model); ok {
+		return l.Profile()
+	}
+	return harness.Default(harness.ModelKey(model))
+}

@@ -12,7 +12,7 @@ The ledger is the source of truth. Compaction entries contain what the agent see
 
 ### Observations (notes)
 
-An observation is a timestamped, source-backed record from the conversation: an id (12 lowercase hex characters), single-line content, a timestamp, a relevance (`low`, `medium`, `high`, `critical`), the source entry ids it was picked from, and its token count. Records also carry, when known, a kind (`fact`, `preference`, `correction`, `attempt`, `file`, `commit`, `note`, ...), a subject and scope, an origin (`code` for level 0, `model` for level 1, `host` for a stored PiG summary; empty for records the earlier engine's workers wrote), an outcome, a status (`proposed`, `hypothetical`, `retracted`), an event date, and links to other records (`supersedes`, `replaces`, `possiblyUpdates`, `conflicts`). The fields are in `internal/ledger/types.go`.
+An observation is a timestamped, source-backed record from the conversation: an id (12 lowercase hex characters), single-line content, a timestamp, a relevance (`low`, `medium`, `high`, `critical`), the source entry ids it was picked from, and its token count. Records also carry, when known, a kind (`fact`, `preference`, `correction`, `attempt`, `file`, `commit`, `note`, ...), a subject and scope, an origin (`code` for level 0, `model` for level 1, `host` for a stored PiG summary; empty for records the earlier engine's workers wrote), an outcome, a status (`proposed`, `hypothetical`, `retracted`), an event date, and links to other records (`supersedes`, `replaces`, `possiblyUpdates`, `conflicts`). The fields are in `memory/ledger/types.go`.
 
 Records are appended in `om.observations.recorded` ledger entries. Level-0 content is picked from the conversation verbatim, never reworded.
 

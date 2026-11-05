@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/harness"
+	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
 // The agent_settled and session_start check promotes a staged memory on evidence with no model

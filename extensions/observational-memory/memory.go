@@ -5,36 +5,28 @@ import (
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/curated"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/harness"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/host"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/om"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/omtool"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
+	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/engine"
+	"github.com/drvova/pig-observational-memory/memory/harness"
+	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/omtool"
+	"github.com/drvova/pig-observational-memory/memory/runtime"
 )
 
 // memorySection names the system prompt section the index occupies.
 const memorySection = "curated-memory"
 
-// toolNoteLine is the extension's one system-prompt line asking the session model to say, before a
-// tool call, what it is doing and why: level 0 keeps the text before an assistant message's first
-// tool call verbatim on that call's record (docs/memory-v2.md, "The model's own words"). The
-// model writes those words to the user, so the line names no memory, compaction or resuming,
-// which the model would otherwise repeat to the user before every call. It costs no request.
-const toolNoteLine = "Before each tool call, say in one short sentence what you are doing and why."
+// The engine's shared setup (memory/engine), under the names this adapter's tests use.
+const toolNoteLine = engine.ToolNoteLine
 
-// memorySectionText is the extension's system-prompt section: toolNoteLine (a fixed line, so
-// the prompt prefix stays stable), followed by the curated index when curated memory is on and
-// the index is not empty. The section is always set.
-func memorySectionText(index string, curatedOn bool) string {
-	if !curatedOn || index == "" {
-		return toolNoteLine
-	}
-	return toolNoteLine + "\n\n" + index
-}
+var (
+	memorySectionText = engine.SectionText
+	curatedCall       = engine.CuratedCall
+	settleCurated     = engine.SettleCurated
+	migrateLayerV2    = engine.MigrateLayer
+	statusInfo        = engine.StatusInfo
+)
 
 // memoryPin is the index the current conversation was given. PiG keeps the
 // extension process across /new, /resume, /fork and /reload, so the pin is
@@ -43,38 +35,6 @@ var memoryPin curated.Pin
 
 // projectRoot is the directory a project-scoped memory is filed under (harness.ProjectRoot).
 func projectRoot(cwd string) string { return harness.ProjectRoot(cwd) }
-
-// curatedCall is the store, project and session a memory query acts on, and
-// whether curated memory is on.
-func curatedCall(h host.Host) (curated.Call, config.Config, bool) {
-	// Project settings only from a trusted project, as PiG reads them.
-	cfg := config.Load(h.Cwd(), config.DefaultPaths(), config.TrustFrom(h.ProjectTrusted()), nil)
-	store, on := harness.StoreOf(h, cfg)
-	if !on {
-		return curated.Call{}, cfg, false
-	}
-	return curated.Call{Store: store, Project: projectRoot(h.Cwd()), Source: h.SessionID()}, cfg, true
-}
-
-// settleCurated runs the curated evidence check (harness.SettleCurated) at session_start and
-// agent_settled: code only, no request. With curated memory off it does nothing.
-func settleCurated(h host.Host) {
-	call, _, on := curatedCall(h)
-	if !on {
-		return
-	}
-	_, _ = harness.SettleCurated(h, call)
-}
-
-// migrateLayerV2 migrates the written v1 worker instructions to memory v2 at session_start
-// (harness.MigrateLayerV2): code only, no request. Without a store it does nothing.
-func migrateLayerV2(h host.Host) {
-	call, cfg, on := curatedCall(h)
-	if !on {
-		return
-	}
-	harness.MigrateLayerV2(h, call.Store, harness.ModelKey(h.SessionModel()), harness.WorkerModelKey(h, cfg))
-}
 
 // memoryToolSpec is the memory tool (docs/code-tool.md, "The tool"): fixed text, the same for
 // every model and every store state, registered once; the harness's manager runs each call on
@@ -100,19 +60,6 @@ func memoryToolSpec(manager *harness.Manager) host.ToolSpec {
 	}
 }
 
-// statusInfo is the closure a code tool call answers om.Info with (docs/code-tool.md, "Order of
-// work"): commands.Info over the call's host, so om.Info and /om:status print one set of shared
-// figures. An unreadable branch is reported in the figures rather than failing the call.
-func statusInfo(rt *runtime.Runtime, h host.Host) func() om.StatusInfo {
-	return func() om.StatusInfo {
-		info, err := commands.Info(rt, h)
-		if err != nil {
-			return om.StatusInfo{Lines: []string{"Status unavailable: " + err.Error()}}
-		}
-		return info
-	}
-}
-
 // registerMemory wires the memory tool (docs/code-tool.md), the one tool the
 // extension registers, and the curated memory index section of the system
 // prompt. The tools the agent defined with the removed query language are
@@ -121,14 +68,7 @@ func statusInfo(rt *runtime.Runtime, h host.Host) func() om.StatusInfo {
 // names), the tools level-0 extraction leaves out of what it reads
 // (harness.MemoryToolNames).
 func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
-	manager := harness.NewManager(func(h host.ToolHost) (curated.Call, bool) {
-		call, _, on := curatedCall(h)
-		return call, on
-	})
-	manager.Info = func(h host.ToolHost) func() om.StatusInfo { return statusInfo(rt, h) }
-	manager.IndexShown = memoryPin.Shown
-	rt.SetSkipTools(manager.SkipNames)
-	rt.SetCodeStatus(manager.CodeStatusLines)
+	manager := engine.NewManager(rt, &memoryPin)
 
 	ext.OnEvent(sdk.EventBeforeAgentStart, func(ctx sdk.Context, data map[string]any) (any, error) {
 		h := sdkhost.New(ctx)
@@ -137,13 +77,7 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 		if sections == nil {
 			return nil, nil
 		}
-		call, cfg, on := curatedCall(h)
-		index := ""
-		if on {
-			index, _, _ = memoryPin.Get(func() (string, []string) {
-				return curated.IndexFor(call.Store, call.Project, cfg.CuratedMemoryIndexTokens)
-			})
-		}
+		index, on := engine.Index(h, &memoryPin)
 		// A section, not a returned systemPrompt: a returned prompt is forced
 		// for the whole run and drops the sections other extensions set.
 		sections.Set(memorySection, memorySectionText(index, on))
@@ -153,16 +87,9 @@ func registerMemory(ext *sdk.Extension, rt *runtime.Runtime) {
 	// summary, take a freshly ranked index. A session start also reads the
 	// retired defined queries' names into the skip list.
 	ext.OnEvent(sdk.EventSessionStart, func(ctx sdk.Context, _ map[string]any) (any, error) {
-		memoryPin.Reset()
-		// The namespace resets: only kept definitions reach the next conversation. A detector
-		// pass still running from the last compaction is killed: its run in flight is an
-		// error for that detector (unfinished at session end).
-		manager.Namespace().Reset()
-		rt.StopDetectorPass(runtime.DetectorStopSessionEnd)
-		h := sdkhost.New(ctx)
-		manager.NoteRetired(h)
-		migrateLayerV2(h)
-		settleCurated(h)
+		// The namespace resets: only kept definitions reach the next conversation; a detector
+		// pass still running from the last compaction is stopped (engine.SessionStart).
+		engine.SessionStart(rt, manager, &memoryPin, sdkhost.New(ctx))
 		return nil, nil
 	})
 	// The evidence for staged memories, and the user corrections that flag saved ones, are

@@ -125,7 +125,10 @@ repeated compactions, which rendering from records avoids.
 - **Conversation facts.** User statements and assistant replies carrying specifics
   (`ledger.Specifics`); corrections by explicit markers ("actually", "correction", "not X but Y",
   "instead of"), linked with `supersedes`; preferences by explicit construction ("always", "never",
-  "prefer", "don't want"; questions excluded, after pi-vcc's `extractPreferences`); relative dates
+  "prefer", "don't want"; questions excluded, after pi-vcc's `extractPreferences`); first-person
+  statements about the user with no specifics ("I enjoy", "I'm into", "my favorite", "I usually", "I've
+  been <verb>ing", "I work in"; questions excluded) recorded as facts, so what the user said about
+  themselves in plain words stays searchable without ranking above other facts; relative dates
   annotated (`ledger.ResolveRelativeDates`); assistant replies only for the specifics the user did
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is
@@ -253,11 +256,25 @@ Records are taken in ordered classes, newest first within a class; a record that
 skipped and selection continues:
 
 1. the split turn's opening request;
+1b. the next steps: plans still standing (`proposed`, not superseded or retracted) and open or failed
+   attempts no later attempt resolved, anchored at or after the latest user request the summary
+   quotes (the split turn's or the intent's), shown in their own `next` section and not in the notes
+   tables; one the section has no room for goes back to its notes table and is tried there at once;
 2. unsuperseded user corrections and preferences;
 3. open and failed attempts;
+3b. the intent, the latest request first: the branch's first user message (`first`) and the cut
+   range's last one (`latest`), quoted in the user's words and clipped to `om.HistoryClipChars`
+   (the history cell bound), each clipped further to fit, its source reading it whole; one that is
+   the split turn's request is not quoted again. It renders at the top, under the request;
 4. records carrying specifics no already-selected line carries (`ledger.MissingSpecifics`);
 5. rendered reflections, which drop the records they cite;
 6. everything else.
+
+The intent and next sections answer what a resumed agent needs first, what the session is for and
+what is left to do (after Factory's anchored summaries, whose fixed sections hold the session intent
+and the next steps), built by code from the branch and the ledger, so no request writes them and they
+never paraphrase. The instructions describe a section only in a summary that shows it: the line is
+part of the section's header cost, so a summary without them costs what it did before.
 
 The order is lexicographic over facts the ledger holds (kind, supersedes, outcome, specifics,
 citations); there are no numeric weights. Class 2 holds records `ledger.UserPriority` grants: a user
@@ -283,6 +300,14 @@ in "Branches"); a capped list ends with `+N more` and the query for the rest. Wh
 fit, the oldest fold into one line with a span count and its own query. A test parses and runs every
 query the renderer prints, including after a fork.
 
+A summary that leaves records out says so in one line between its instructions and its tables, in both
+formats: how many records it shows, how many it leaves out and in how many omitted spans (and whether a
+list ends with `+N more`), then fixed text that something missing from the summary may still be in memory,
+so an omitted row's snippet or ``om.History(om.Search(`<words>`))`` runs before the model says it was
+not mentioned. The numbers are the choice's (`Result.Omitted`, `Result.Spans`); the line costs its
+estimate inside the summary budget, and a summary that leaves nothing out prints none.
+`ledger.TablesSummaryBody` skips it (`ledger.OmittedNoticeStart`), so the tables still decode.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every
@@ -299,6 +324,19 @@ the process, so the bytes are stable between requests (after a restart they are 
 once only if the stored definitions changed) and the prompt cache prefix breaks only where a compaction already broke it.
 The session file keeps every original for `om.Recall`. Smaller context means PiG compacts less often, so
 thinning lowers PiG's own request count.
+
+### Day headers (no request)
+
+The summary's records carry the time they were said, but raw messages reach the model without one, so
+"today" or "last week" in the retained tail, and the latest message itself, cannot be placed in time.
+In the same `context` event, before thinning, the extension puts one text block, `[Sent on Tuesday
+2023-05-30]`, first in each user message of the request whose day (in the local time zone records are
+dated in) differs from the previous user message's; the first user message of the request always gets
+one. The header reads the message's own timestamp alone, so a message has the same bytes in every
+later request and the prompt cache prefix is untouched; it is added once a day, not per message, and
+also before the first compaction. A message with no readable timestamp, or one already opening with a
+header, is left as it is. In the LongMemEval run of `docs/bench-results.md`, temporal questions whose
+evidence sat wholly in the retained tail scored 57% while every other type scored 62-100% there.
 
 ### Level 1: one request at compaction (on by default, `consolidate: false` turns it off)
 
@@ -507,7 +545,7 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
 - Remedies are code-only: keep-head replaces the require-kind re-ask; `split-chunk` goes.
 - `kernel-consolidate` opens the level-1 prompt, with a `consolidation` instructions seed the model may
   extend, never replace: the kernel text is kernel-owned, and the seed always stands after it.
-- Built (detectors, evidence and remedies; `internal/rules/v2.go`, `internal/hooks/harness_v2.go`).
+- Built (detectors, evidence and remedies; `memory/rules/v2.go`, `memory/hooks/harness_v2.go`).
   Every level-0 extraction (turn end and compaction) runs `rules.DetectV2` over the source entries it
   read, with its own records as the notes, before any remedy, and records the run for the session
   model (`curated.ModelKindDetect`) once the extraction is appended (a run whose extraction did not land,
@@ -544,8 +582,8 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
     the details for a non-native codec; the details record the shown record ids (`shown`), which the
     memory tool's shown/omitted evidence reads. A `summary/default` query does not select under v2:
     selection's classes are the kernel's (anchors, runnable omissions, drops over what it shows).
-- Built (definitions proposed in level 1, and settlement; `internal/rules/proposal_v2.go`,
-  `internal/hooks/definitions_v2.go`, `internal/consolidate/definitions.go`). The build and revision
+- Built (definitions proposed in level 1, and settlement; `memory/rules/proposal_v2.go`,
+  `memory/hooks/definitions_v2.go`, `memory/consolidate/definitions.go`). The build and revision
   passes are deleted, and the memory tool's `harness` and `propose` writes are refused
   (`harness.ErrDefinedInLevel1`; `harness forget` and `rollback` still apply, now as
   `om.LayerForget` and `om.LayerRollback(generation)`, and `define`, which registered a tool that is no

@@ -9,11 +9,11 @@ import (
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 	"github.com/MichaelKinsy/PiG/extensions/sdk/json"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/commands"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/session"
+	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/hooks"
+	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/session"
 )
 
 // Name is the extension identity PiG expects: the factory directory's name.

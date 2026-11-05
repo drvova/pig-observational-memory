@@ -28,19 +28,19 @@ Given the repository root, PiG finds the extension under `extensions/`. The firs
 | Package | Role |
 | --- | --- |
 | `extension.go`, `memory.go` | PiG factory: events, commands, tool wiring, the curated-memory system prompt section |
-| `internal/hooks` | turn-end extraction, the compaction trigger and hook, level 1, thinning, the harness passes |
-| `internal/extract` | level 0: records picked from the conversation by code |
-| `internal/consolidate` | level 1's prompt and the code that validates its output |
-| `internal/selection`, `internal/thin` | the summary rendered from the ledger; thinning aged tool results |
-| `internal/ledger` | record types, fold, extraction progress, projections, recall sources |
-| `internal/agents` | the single model request (`agents.Request`) and the level-1 prompt composition |
-| `internal/runtime` | per-process state and session model resolution |
-| `internal/commands`, `internal/recall` | `/om:status`, `/om:view`, and the source evidence `om.Recall` returns |
-| `internal/omtool`, `internal/om`, `internal/omhost`, `internal/codepolicy`, `internal/sandbox`, `internal/codestore`, `internal/provenance`, `internal/legacyquery` | the `memory` tool, which runs Go code ([code-tool.md](code-tool.md)): its fixed surface, the `om` API, the extension's answers to `om` calls, the code policy, the namespace child, kept definitions, and the frozen recognizer of the removed query language |
-| `internal/curated`, `internal/harness`, `internal/rules`, `internal/kernel`, `internal/layer`, `internal/declare` | curated memory, the per-model harness, rules, the kernel and the model-built layer |
-| `internal/config`, `internal/serialize`, `internal/session`, `internal/tokens`, `internal/tables`, `internal/ids`, `internal/jsfmt`, `internal/debuglog`, `internal/clipboard` | settings, source serialization and session files, token estimates, codecs, ids, formatting, debug log, clipboard |
-| `internal/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call its static helpers) |
-| `internal/testfix` | entry builders and fake host for tests |
+| `memory/hooks` | turn-end extraction, the compaction trigger and hook, level 1, thinning, the harness passes |
+| `memory/extract` | level 0: records picked from the conversation by code |
+| `memory/consolidate` | level 1's prompt and the code that validates its output |
+| `memory/selection`, `memory/thin` | the summary rendered from the ledger; thinning aged tool results |
+| `memory/ledger` | record types, fold, extraction progress, projections, recall sources |
+| `memory/agents` | the single model request (`agents.Request`) and the level-1 prompt composition |
+| `memory/runtime` | per-process state and session model resolution |
+| `memory/commands`, `memory/recall` | `/om:status`, `/om:view`, and the source evidence `om.Recall` returns |
+| `memory/omtool`, `memory/om`, `memory/omhost`, `memory/codepolicy`, `memory/sandbox`, `memory/codestore`, `memory/provenance`, `memory/legacyquery` | the `memory` tool, which runs Go code ([code-tool.md](code-tool.md)): its fixed surface, the `om` API, the extension's answers to `om` calls, the code policy, the namespace child, kept definitions, and the frozen recognizer of the removed query language |
+| `memory/curated`, `memory/harness`, `memory/rules`, `memory/kernel`, `memory/layer`, `memory/declare` | curated memory, the per-model harness, rules, the kernel and the model-built layer |
+| `memory/config`, `memory/serialize`, `memory/session`, `memory/tokens`, `memory/tables`, `memory/ids`, `memory/jsfmt`, `memory/debuglog`, `memory/clipboard` | settings, source serialization and session files, token estimates, codecs, ids, formatting, debug log, clipboard |
+| `memory/host`, `internal/sdkhost` | the host abstraction and its SDK adapter; only `sdkhost` uses the SDK's extension context (`config`, `debuglog` and `tokens` call its static helpers) |
+| `memory/testfix` | entry builders and fake host for tests |
 
 [contributing.md](contributing.md) lists the checks a change must pass.
 

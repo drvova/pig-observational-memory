@@ -1,0 +1,8 @@
+go 1.26
+
+// The memory engine (memory/) and its harness adapters. PiG hashes every member module into
+// an extension's build identity, so a change in memory/ rebuilds the PiG extension.
+use (
+	./extensions/observational-memory
+	./memory
+)

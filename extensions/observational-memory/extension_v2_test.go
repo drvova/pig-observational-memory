@@ -8,10 +8,10 @@ import (
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 	"github.com/MichaelKinsy/PiG/extensions/sdk/json"
 
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/config"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/hooks"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/runtime"
-	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/testfix"
+	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/hooks"
+	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
 // The hook decodes PiG's whole preparation for memory v2.

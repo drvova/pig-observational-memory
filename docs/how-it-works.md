@@ -65,7 +65,7 @@ type ObservationsRecordedData struct {
 }
 ```
 
-Each record carries an id, its content, timestamp, relevance, `sourceEntryIds` and token count, and optionally its kind, subject, scope, origin (`code`, `model`, `host`; empty for records the earlier engine's workers wrote), outcome, tool and target, status, event date, and its links (`supersedes`, `replaces`, `possiblyUpdates`, `conflicts`). See `internal/ledger/types.go`.
+Each record carries an id, its content, timestamp, relevance, `sourceEntryIds` and token count, and optionally its kind, subject, scope, origin (`code`, `model`, `host`; empty for records the earlier engine's workers wrote), outcome, tool and target, status, event date, and its links (`supersedes`, `replaces`, `possiblyUpdates`, `conflicts`). See `memory/ledger/types.go`.
 
 ### Reflections recorded
 

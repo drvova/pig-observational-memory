@@ -1,0 +1,4 @@
+{"sessionId":"mixed-session","projectHash":"test-project-hash","startTime":"2026-01-01T00:00:00.000Z","lastUpdated":"2026-01-01T00:00:00.000Z"}
+{"$set":{"messages":[{"id":"m1","type":"user","timestamp":"2026-01-01T00:01:00.000Z","content":"First user prompt"},{"id":"m2","type":"gemini","timestamp":"2026-01-01T00:02:00.000Z","content":"Initial model response","toolCalls":[{"id":"tc-1","name":"read_file","args":{},"result":"raw-output","status":"success","timestamp":"2026-01-01T00:02:00.000Z"}]}]}}
+{"id":"m3","type":"user","timestamp":"2026-01-01T00:03:00.000Z","content":"Second user prompt"}
+{"$patch":{"updates":[{"id":"m2","content":[{"text":"Updated model response"}],"toolCalls":[{"id":"tc-1","result":[{"text":"masked-output"}]}]}]}}

@@ -1,5 +1,35 @@
 # LongMemEval results
 
+## Memory v2 through real PiG sessions (GPT-6-Luna)
+
+Two full 500-question `longmemeval_s` runs of memory v2 with the memory code tool, driven through real PiG sessions by [`bench/longmemeval`](../bench/longmemeval/README.md). Each question's haystack is replayed into a PiG session file in time order with its original dates. PiG and the extension compact at PiG's own threshold. The answering model is GPT-6-Luna in PiG with `--tools memory`, so the memory tool is its only tool. Luna also judges, with LongMemEval's verbatim per-type prompts.
+
+| Question type | v2 baseline | v2 + "say what was left out" |
+|---|---|---|
+| knowledge-update | 69.2% (54/78) | **79.5%** (62/78) |
+| multi-session | 28.6% (38/133) | **42.1%** (56/133) |
+| single-session-assistant | 75.0% (42/56) | **82.1%** (46/56) |
+| single-session-preference | **43.3%** (13/30) | 33.3% (10/30) |
+| single-session-user | 67.1% (47/70) | **72.9%** (51/70) |
+| temporal-reasoning | 52.6% (70/133) | **59.4%** (79/133) |
+| **Mean of the 6 types** | 55.98% | **61.55%** |
+| Plain accuracy | 52.8% (264/500) | **60.8%** (304/500) |
+| Abstention | 27/30 | 26/30 |
+| Answers that used the memory tool | 142/500 | 316/500 |
+
+- **The baseline** is the extension at `87e0bda`. **The fix** (`325aba5`) prints one computed line before the summary's tables when records were left out: how many, where they are listed, and to search before saying something was not mentioned. It also changes the tool guideline from "do not read memory preemptively" to search before denying.
+- **What the baseline showed.** Most misses had the fact in the ledger but left out of the summary, and Luna answered "I don't see that" without searching. With the fix Luna searched on more than twice as many questions: 81 answers became correct and 41 became wrong. Answers took about 11 s instead of 8 s.
+- **Where it got worse.** Preference questions (no tool calls in either run, so the change comes from the summary text) and one abstention.
+- **Bench conditions.**
+  - The context window is 64,000 tokens with a 16,000-token output cap for the session model, set for the bench in `models.json`. At Luna's real 272k window PiG would never compact a haystack this size.
+  - PiG's default reserve and keep-recent.
+  - Medium thinking.
+  - The extension makes exactly one request per compaction and none while answering.
+  - Every condition is in each run's `report.md`.
+- **Not comparable to the v1 numbers below.** Those replayed sessions through v1's workers in process and answered from the summary only, with a 16,000-token summary. Here everything runs through PiG, and the answering model may use the memory tool. The judge is the answering model in both.
+
+## Memory v1
+
 > **History:** these results measured memory v1 (the background observer, reflector and dropper); v1 and the benchmark harness that produced them were removed, so the commands below no longer exist.
 
 A full run of [LongMemEval](https://github.com/xiaowu0162/LongMemEval)'s `longmemeval_s` set: 500 questions over 25,112 conversation sessions, set up the way Mastra's observational memory benchmark is. The sessions are replayed in time order through this extension's own observer, reflector and dropper, and each question is answered from the rendered memory. Each answer is graded with LongMemEval's official per-type judge prompts.

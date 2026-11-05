@@ -1,7 +1,7 @@
 node_modules/
 *.log
 .DS_Store
-pi
+/pi
 distiled_spec.md
 observational_memory_article.md
 pi-observational-memory
