@@ -7,7 +7,7 @@
 ;;;;   summary <budget> <the summary text as a JSON string>
 ;;;;   stats <budget> <what the summary shows and leaves out, as JSON>
 
-(in-package "OM")
+(in-package "OM.ENGINE")
 
 (defun coverage-index (entries index)
   "ExtractionProgressIndex: the furthest entry an om.observations.recorded or om.extracted

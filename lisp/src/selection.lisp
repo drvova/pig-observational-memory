@@ -3,7 +3,7 @@
 ;;;; (om/snippet.go FormatRead). Not ported: reflections (only level 1 and v1 write them; one in
 ;;;; the input signals an error), the lines format and the other codecs.
 
-(in-package "OM")
+(in-package "OM.ENGINE")
 
 (defparameter +default-limit+ 20)
 (defparameter +max-limit+ 200)

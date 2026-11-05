@@ -4,7 +4,7 @@
 ;;;; :false, null :null. An absent key reads as nil, which the ports treat as Go treats a nil
 ;;;; interface, as they do :null.
 
-(in-package "OM")
+(in-package "OM.BASE")
 
 (define-condition json-error (error) ((message :initarg :message :reader json-error-message))
   (:report (lambda (c s) (format s "json: ~A" (json-error-message c)))))

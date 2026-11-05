@@ -8,7 +8,7 @@
 ;;;; that would need them signal an error on a non-empty subject rather than guess. Level 1's
 ;;;; replacements (replace.go) are not ported either: they come only from consolidated batches.
 
-(in-package "OM")
+(in-package "OM.KERNEL")
 
 (defstruct obs
   (id "" :type string)

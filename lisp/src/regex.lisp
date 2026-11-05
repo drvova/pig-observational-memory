@@ -9,7 +9,7 @@
 ;;;; Positions are character indexes, Go's are byte offsets; every caller here slices with the
 ;;;; indexes it got from the same string, so the results are the same strings.
 
-(in-package "OM")
+(in-package "OM.BASE")
 
 (defstruct (regex (:constructor %make-regex))
   source matcher (groups 0 :type fixnum) names first anchored)

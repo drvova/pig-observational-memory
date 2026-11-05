@@ -3,7 +3,7 @@
 ;;;; character, which gives the same results because every byte test the engine makes is on an
 ;;;; ASCII byte (docs/lisp-spike.md, "Strings").
 
-(in-package "OM")
+(in-package "OM.BASE")
 
 (deftype index () '(integer 0 #.array-dimension-limit))
 

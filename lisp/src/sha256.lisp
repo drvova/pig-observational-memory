@@ -1,7 +1,7 @@
 ;;;; SHA-256 (FIPS 180-4), which SBCL's contribs lack (sb-md5 only): ids.HashID is the first 12
 ;;;; hex characters of the digest of a record's UTF-8 text.
 
-(in-package "OM")
+(in-package "OM.BASE")
 
 (defparameter +sha256-k+
   (coerce '(#x428a2f98 #x71374491 #xb5c0fbcf #xe9b5dba5 #x3956c25b #x59f111f1 #x923f82a4 #xab1c5ed5

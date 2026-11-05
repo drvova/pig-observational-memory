@@ -1,6 +1,6 @@
 ;;;; session.Entry: one branch entry, with the members the ledger reads and the decoded object.
 
-(in-package "OM")
+(in-package "OM.KERNEL")
 
 (defstruct entry
   (type "" :type string)

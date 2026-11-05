@@ -2,7 +2,7 @@
 ;;;; file reader (one JSON object per line, or one document over several lines), Claude Code's
 ;;;; format (claudecode.go) and the engine's own generic format (generic.go).
 
-(in-package "OM")
+(in-package "OM.READERS")
 
 (defun read-file-string (path)
   "The file's text, invalid UTF-8 read as U+FFFD; nil when it is missing."

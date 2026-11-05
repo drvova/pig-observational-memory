@@ -3,7 +3,7 @@
 ;;;; parse the code tool's details and the frozen legacy query language: a memory tool call with a
 ;;;; result signals an error rather than being skipped (docs/lisp-spike.md, "Scope").
 
-(in-package "OM")
+(in-package "OM.ENGINE")
 
 (defparameter +code-relevance+ "medium")
 (defparameter +memory-tool+ "memory")

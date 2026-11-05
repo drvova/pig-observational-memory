@@ -3,7 +3,7 @@
 ;;;; "2006-01-02 15:04" rendering. A time is a Unix time in milliseconds; the zone is UTC (the
 ;;;; parity harness pins serialize.Location to UTC, as the Go tests do).
 
-(in-package "OM")
+(in-package "OM.BASE")
 
 (defun days-from-civil (y m d)
   "Days since 1970-01-01 of the proleptic Gregorian date y-m-d (m may run past 12 or below 1)."
