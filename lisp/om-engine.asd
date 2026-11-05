@@ -18,4 +18,15 @@
                              (:file "ledger")
                              (:file "extract")
                              (:file "selection")
-                             (:file "pipeline")))))
+                             (:file "pipeline")))
+               ;; om.server: the image's socket, sessions and events (docs/lisp-port-image-client.md).
+               (:module "server"
+                :pathname "src/server/"
+                :serial t
+                :components ((:file "package")
+                             (:file "jsonrpc")
+                             (:file "locks")
+                             (:file "sessions")
+                             (:file "engine")
+                             (:file "server")
+                             (:file "methods")))))

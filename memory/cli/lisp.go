@@ -1,0 +1,316 @@
+package cli
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/engine"
+)
+
+// The Lisp engine's client mode (docs/lisp-port-image-client.md): with OM_ENGINE=lisp, om
+// forwards hook events, MCP messages and om call to the user's SBCL image over a unix socket,
+// starting the image when the socket is absent or refuses. Without the variable nothing here
+// runs and om is the Go engine, as before.
+const (
+	// EngineEnv selects the engine: "lisp" is the image; anything else is the Go engine.
+	EngineEnv = "OM_ENGINE"
+	// LispImageEnv is the image's executable (else the lispImage setting).
+	LispImageEnv = "OM_LISP_IMAGE"
+	// LispSocketEnv moves the socket (default <root>/engine.sock).
+	LispSocketEnv = "OM_ENGINE_SOCKET"
+	// LispIdleEnv is how many seconds the image stays up with no client (else the
+	// lispIdleSeconds setting, else 900; 0 never exits).
+	LispIdleEnv = "OM_ENGINE_IDLE_SECONDS"
+	// LispFallbackEnv set to 0 makes a method the image has not ported an error instead of a
+	// run of the Go engine.
+	LispFallbackEnv = "OM_LISP_FALLBACK"
+)
+
+// codeNotPorted is the image's error for a method whose engine work is not ported yet.
+const codeNotPorted = -32004
+
+// lispStartTimeout is how long om waits for an image it started to listen.
+var lispStartTimeout = 10 * time.Second
+
+// lispPassEnv are the client's environment variables the image reads per request (its own
+// environment is the first client's, not this hook's).
+var lispPassEnv = []string{config.PassiveEnv}
+
+// lispError is an error answer from the image.
+type lispError struct {
+	Code    int
+	Message string
+}
+
+func (e *lispError) Error() string { return e.Message }
+
+func isNotPorted(err error) bool {
+	var le *lispError
+	return errors.As(err, &le) && le.Code == codeNotPorted
+}
+
+// lispClient is one connection to the image, opened on first use and kept for the process
+// (the MCP server sends every message over one connection).
+type lispClient struct {
+	root, socket, image string
+	idle                int
+	fallback            bool
+	conn                net.Conn
+	r                   *bufio.Reader
+	id                  int
+}
+
+// newLispClient is the client of the image for root, or nil when om is not in Lisp mode.
+func newLispClient(root string) *lispClient {
+	if os.Getenv(EngineEnv) != "lisp" {
+		return nil
+	}
+	c := &lispClient{root: root, socket: os.Getenv(LispSocketEnv), image: os.Getenv(LispImageEnv), idle: -1, fallback: os.Getenv(LispFallbackEnv) != "0"}
+	if c.socket == "" {
+		c.socket = filepath.Join(root, "engine.sock")
+	}
+	if n, err := strconv.Atoi(os.Getenv(LispIdleEnv)); err == nil && n >= 0 {
+		c.idle = n
+	}
+	if raw, err := os.ReadFile(filepath.Join(root, "settings.json")); err == nil {
+		var s map[string]map[string]any
+		if json.Unmarshal(raw, &s) == nil {
+			nested := s[config.SettingsKey]
+			if p, _ := nested["lispImage"].(string); c.image == "" && filepath.IsAbs(p) {
+				c.image = p
+			}
+			if n, ok := nested["lispIdleSeconds"].(float64); ok && c.idle < 0 && n >= 0 {
+				c.idle = int(n)
+			}
+		}
+	}
+	if c.idle < 0 {
+		c.idle = 900
+	}
+	return c
+}
+
+func (c *lispClient) close() {
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn, c.r = nil, nil
+	}
+}
+
+func (c *lispClient) dial() error {
+	conn, err := net.DialTimeout("unix", c.socket, 2*time.Second)
+	if err != nil {
+		return err
+	}
+	c.conn, c.r = conn, bufio.NewReaderSize(conn, 64*1024)
+	return nil
+}
+
+// start runs the image detached (its output appended to <root>/engine.log) and waits for it to
+// listen. Another client may have started one at the same time: the loser exits on the image
+// lock, and the socket the winner listens on is what this waits for.
+func (c *lispClient) start() error {
+	if c.image == "" {
+		return fmt.Errorf("om: OM_ENGINE=lisp and no engine image listens on %s; set %s (or lispImage in %s)", c.socket, LispImageEnv, filepath.Join(c.root, "settings.json"))
+	}
+	if err := os.MkdirAll(c.root, 0o700); err != nil {
+		return err
+	}
+	log, err := os.OpenFile(filepath.Join(c.root, "engine.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	cmd := exec.Command(c.image, "--root", c.root, "--socket", c.socket, "--idle-seconds", strconv.Itoa(c.idle))
+	cmd.Stdout, cmd.Stderr = log, log
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("om: starting the engine image %s: %w", c.image, err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	deadline := time.Now().Add(lispStartTimeout)
+	for time.Now().Before(deadline) {
+		if c.dial() == nil {
+			return nil
+		}
+		select {
+		case err := <-exited:
+			// Exit 3 is the image lock: another image is starting; keep waiting for its socket.
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+				return fmt.Errorf("om: the engine image exited before it listened (%v); see %s", err, filepath.Join(c.root, "engine.log"))
+			}
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("om: the engine image did not listen on %s within %s", c.socket, lispStartTimeout)
+}
+
+// roundTrip sends one request and reads its answer on the open connection.
+func (c *lispClient) roundTrip(method string, params any, result any) (transport error, err error) {
+	c.id++
+	line, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": c.id, "method": method, "params": params})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.conn.Write(append(line, '\n')); err != nil {
+		return err, nil
+	}
+	reply, err := c.r.ReadBytes('\n')
+	if err != nil {
+		return err, nil
+	}
+	var resp struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  *rpcError       `json:"error"`
+	}
+	if err := json.Unmarshal(reply, &resp); err != nil {
+		return fmt.Errorf("bad answer %q: %w", strings.TrimSpace(string(reply)), err), nil
+	}
+	if resp.ID != c.id {
+		return fmt.Errorf("answer to request %d, want %d", resp.ID, c.id), nil
+	}
+	if resp.Error != nil {
+		return nil, &lispError{Code: resp.Error.Code, Message: resp.Error.Message}
+	}
+	if result == nil || len(resp.Result) == 0 {
+		return nil, nil
+	}
+	return nil, json.Unmarshal(resp.Result, result)
+}
+
+// call runs method on the image: it connects (starting the image when the socket is absent or
+// refuses), and when the connection fails it starts the image again and retries once.
+func (c *lispClient) call(method string, params any, result any) error {
+	for attempt := 0; ; attempt++ {
+		if c.conn == nil {
+			if err := c.dial(); err != nil {
+				if err := c.start(); err != nil {
+					return err
+				}
+			}
+		}
+		transport, err := c.roundTrip(method, params, result)
+		if transport == nil {
+			return err
+		}
+		c.close()
+		if attempt > 0 {
+			return fmt.Errorf("om: the engine image on %s: %w", c.socket, transport)
+		}
+	}
+}
+
+// lispResult is what the image answers an event with: the text to print (a context or a
+// summary, without the final newline), a compaction for before-compact, and the Go steps the
+// image has not ported that the client still runs after it (engine.SettleCurated).
+type lispResult struct {
+	Text       string         `json:"text"`
+	Compaction map[string]any `json:"compaction"`
+	Remaining  []string       `json:"remaining"`
+}
+
+// sessionParams are the session fields every event carries, plus the client's environment the
+// image reads (lispPassEnv).
+func (a *app) sessionParams(s Session, extra map[string]any) map[string]any {
+	envs := map[string]any{}
+	for _, k := range lispPassEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			envs[k] = v
+		}
+	}
+	p := map[string]any{"root": a.root, "harness": s.Harness, "session_id": s.ID, "transcript_path": s.Transcript, "format": s.Format, "cwd": s.Cwd, "env": envs}
+	for k, v := range extra {
+		p[k] = v
+	}
+	return p
+}
+
+// viaLisp runs one event on the image. handled is false when om is not in Lisp mode, or when
+// the image has not ported the event and falling back is on: the caller then runs the Go
+// engine, as without the image.
+func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispResult, handled bool, err error) {
+	if a.lisp == nil {
+		return res, false, nil
+	}
+	if s.ID == "" {
+		return res, true, errors.New("om: no session id")
+	}
+	if err := remember(a.root, s); err != nil {
+		return res, true, err
+	}
+	err = a.lisp.call(event, a.sessionParams(s, extra), &res)
+	if isNotPorted(err) && a.lisp.fallback {
+		return res, false, nil
+	}
+	if err != nil {
+		return res, true, err
+	}
+	return res, true, a.runRemaining(s, res.Remaining)
+}
+
+// runRemaining runs the Go steps the image named as not ported, under the session's engine
+// lock, as the Go engine runs them after its own work.
+func (a *app) runRemaining(s Session, steps []string) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	h, err := s.Host(a.root, a.log)
+	if err != nil {
+		return err
+	}
+	release, err := lockEngine(h)
+	if err != nil {
+		return err
+	}
+	defer release()
+	for _, step := range steps {
+		switch step {
+		case "settle-curated":
+			engine.SettleCurated(h)
+		default:
+			return fmt.Errorf("om: the engine image asks for an unknown step %q", step)
+		}
+	}
+	return nil
+}
+
+// mcpViaLisp forwards one MCP message to the image: ok false means om answers it itself (not
+// in Lisp mode, or not ported with falling back on).
+func (a *app) mcpViaLisp(harnessName, dir string, raw []byte) (answer json.RawMessage, ok bool, err error) {
+	if a.lisp == nil {
+		return nil, false, nil
+	}
+	var res struct {
+		Message json.RawMessage `json:"message"`
+	}
+	err = a.lisp.call("mcp", map[string]any{"root": a.root, "harness": harnessName, "cwd": dir, "message": json.RawMessage(raw)}, &res)
+	if isNotPorted(err) && a.lisp.fallback {
+		return nil, false, nil
+	}
+	return res.Message, true, err
+}
+
+// callViaLisp forwards om call's arguments to the image: {"text", "isError"}.
+func (a *app) callViaLisp(harnessName, dir string, arguments map[string]any) (res map[string]any, ok bool, err error) {
+	if a.lisp == nil {
+		return nil, false, nil
+	}
+	err = a.lisp.call("call", map[string]any{"root": a.root, "harness": harnessName, "cwd": dir, "arguments": arguments}, &res)
+	if isNotPorted(err) && a.lisp.fallback {
+		return nil, false, nil
+	}
+	return res, true, err
+}
