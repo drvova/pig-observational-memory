@@ -71,10 +71,59 @@ have not run inside OpenCode or Pi.
 
 ## Harness registry
 
-Every harness `om install` knows is an entry in `memory/cli/registry.go`: where its MCP client reads
-servers (a JSON file and the key its servers live under), which hook family it speaks and where those
-hooks live, and its transcript format. `om harnesses` lists them. An entry carries only what the harness's
-own documentation confirms; anything else is left out until it is confirmed.
+Every harness `om install` knows is an entry in `memory/cli/assets/harnesses.json`: where its MCP client
+reads servers (a JSON, YAML or TOML file and the key its servers live under), which hook family it speaks
+and where those hooks live, its transcript format, and the install steps a config file cannot say. `om
+harnesses` lists them. An entry carries only what the harness's own documentation confirms; anything else
+is left out until it is confirmed. The file is the whole registry, and `memory/cli` only interprets it, so
+another engine can read the same file; its JSON Schema is `contracts/schemas/registry.schema.json`, and a
+test validates the file against it.
+
+### The registry's vocabulary
+
+An entry has a `name`, a `title`, a `note` and a `source`, and a `class` saying how the memory tool's MCP
+server is registered:
+
+- **`file`:** om edits the config at `path` (by GOOS, `darwin`, `linux`, `windows`, or `""` for any) in
+  `format` `json`, `yaml` or `toml`, putting `entry` under the object path `key` (`list` for a list of
+  entries each carrying its `id`, `name` by default; `skeleton` for the top-level keys a new YAML file needs).
+- **`own`:** om writes `content` as a whole file of its own at `path`.
+- **`manual`:** om prints the `manual` steps and the server's command.
+- **`none`:** an install step registers it, or the harness has no MCP client.
+
+A config path is a template: a leading `~` is the home directory and `${VAR:-default}` is `$VAR` when set,
+else the default. In `entry`, `content` and install steps, `$OM` is om's path, `$OM_SH` that path quoted
+for a POSIX shell, `$OM_SH_ESCAPED` `$OM_SH` escaped for a double-quoted string, and `$HARNESS` the entry's
+name.
+
+`hooks` is the hook spec: `path`, `events` (om's `session-start`, `prompt`, `turn-end` and `pre-compact` to
+the harness's event names), `transcript` (a `memory/transcript` format), and the flags for how the family
+writes and reads its hooks (`flat`, `topLevel`, `toml`, `key`, `timeoutMS`, `timeoutKey`, `noTimeout`,
+`noType`, `matcher`, `version`, `enable`, `env`, `noStdin`, and for context `plainContext`, `contextField`,
+`textContext`, `noContext`, `summaryOnStart`, `summaryOnPrompt`, `summaryAtPreCompact`,
+`sessionFromCurrent`; the schema describes each). Three fields say what Go functions used to:
+
+- **`transcriptFrom`** finds the transcript from the payload's cwd and session: a list of candidates, the
+  first that yields a path wins. A candidate is a `path` template, only on `os` when set, where `${cwd}`
+  and `${session}` are the payload's, `${md5(cwd)}` is its hex MD5, `${slug(cwd)}` is the cwd with every
+  byte that is not an ASCII letter or digit as `-`, and `${VAR}` without a default is the environment's;
+  an empty payload value or unset variable skips the candidate, and payload values are never expanded
+  again. Or it is a named `resolver`: `kiro-session` (a glob over Kiro's workspace buckets) and `crush-db`
+  (the nearest `.crush` directory up to the repository root).
+- **`sessionFrom`** finds the session id: a list of candidates, each a payload `field` (`a.b` for a nested
+  one) that is a non-empty string not in `not`, with `prefix` before it, or the named `resolver`
+  `amazon-q-conversation` (the directory's row in Amazon Q's SQLite database).
+- **`record`** is how om records the turn a payload carries: `fields` maps payload fields to `user` or
+  `assistant` (users first), or the named `mapper` `amp-messages` reads Amp's message lists.
+
+`install` are steps run after the MCP server and the hooks, in order, and undone in reverse:
+`run-command` (`command`, and `remove` on uninstall), `plugin-asset` (the embedded `asset` written into
+`dir` under its own name, with om's path and the harness name), `text-file` (`path`, `content`,
+`executable`), `json-file` (`path`, `value`, written as om writes JSON configs), `managed-line` (one `line`
+marked as om's in the file of commands at `path`), `print` (`text`, and `removeText` on uninstall, with
+`$DIR` for `dir`) and `codex-config` (Codex's MCP table and notify program in the TOML at `path`). Adding
+a harness is one entry; only a new resolver, mapper or step kind needs code, and the schema lists the
+names the code knows.
 
 [Harnesses](harnesses.md) lists all of them, generated from the registry: the harnesses that also get
 recording and compaction, the ones whose config `om install` writes, the ones where `om install` prints the
