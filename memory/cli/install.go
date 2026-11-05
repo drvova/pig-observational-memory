@@ -357,3 +357,54 @@ func installClineHook(w writer, exe string, remove bool) error {
 	}
 	return w.writeMode(path, []byte("#!/bin/sh\n# om: observational memory (written by om install cline)\nexec "+shellQuote(exe)+" hook cline TaskComplete\n"), 0o755)
 }
+
+// installGoosePlugin writes om as a Goose plugin (~/.agents/plugins/om): its plugin.json and the
+// Stop hook in hooks/hooks.json, the only way Goose loads hooks.
+func installGoosePlugin(w writer, exe string, remove bool) error {
+	dir := pathTemplate("~/.agents/plugins/om")
+	manifest, hooksFile := filepath.Join(dir, "plugin.json"), filepath.Join(dir, "hooks", "hooks.json")
+	if remove {
+		if err := w.remove(hooksFile); err != nil {
+			return err
+		}
+		return w.remove(manifest)
+	}
+	if err := w.write(manifest, []byte("{\"name\": \"om\", \"version\": \"1.0.0\", \"description\": \"observational memory\"}\n")); err != nil {
+		return err
+	}
+	hooks := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellQuote(exe) + " hook goose Stop", "timeout": hookTimeouts[evTurnEnd]}}}}}}
+	data, err := encodeJSON(hooks)
+	if err != nil {
+		return err
+	}
+	return w.write(hooksFile, data)
+}
+
+// printAmazonQHooks prints the stop hook to add to an Amazon Q CLI agent file: hooks live in
+// each agent's JSON (~/.aws/amazonq/cli-agents/<name>.json), and which agent is yours is yours.
+func printAmazonQHooks(w writer, exe string, remove bool) error {
+	if remove {
+		fmt.Fprintf(w.out, "Amazon Q Developer CLI: remove om's stop hook from your agent file in %s\n", pathTemplate("~/.aws/amazonq/cli-agents"))
+		return nil
+	}
+	fmt.Fprintf(w.out, "Amazon Q Developer CLI: add to your agent file in %s, under \"hooks\":\n  \"stop\": [{\"command\": %q, \"timeout_ms\": %d}]\n", pathTemplate("~/.aws/amazonq/cli-agents"), shellQuote(exe)+" hook amazon-q stop", hookTimeouts[evTurnEnd]*1000)
+	return nil
+}
+
+// installKiroHooks writes om's Kiro hooks, a file of om's own in its global hooks directory
+// (~/.kiro/hooks/om.json, Kiro's v1 hook format).
+func installKiroHooks(w writer, exe string, remove bool) error {
+	path := pathTemplate("~/.kiro/hooks/om.json")
+	if remove {
+		return w.remove(path)
+	}
+	var hooks []any
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop"} {
+		hooks = append(hooks, map[string]any{"name": "om " + ev, "trigger": ev, "action": map[string]any{"type": "command", "command": shellQuote(exe) + " hook kiro " + ev}, "timeout": 60})
+	}
+	data, err := encodeJSON(map[string]any{"version": "v1", "hooks": hooks})
+	if err != nil {
+		return err
+	}
+	return w.write(path, data)
+}

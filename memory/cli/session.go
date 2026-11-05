@@ -57,15 +57,19 @@ func (s Session) Host(root string, log io.Writer) (*neutral.Host, error) {
 	if s.ID == "" {
 		return nil, errors.New("om: no session id")
 	}
-	format, ok := transcript.Formats[s.Format]
-	if !ok {
+	var source neutral.Transcript
+	if kind, ok := transcript.DBFormats[s.Format]; ok {
+		source = transcript.DB{Path: s.Transcript, Session: s.ID, Kind: kind}
+	} else if format, ok := transcript.Formats[s.Format]; ok {
+		source = transcript.File{Path: s.Transcript, Format: format}
+	} else {
 		return nil, fmt.Errorf("om: unknown transcript format %q", s.Format)
 	}
 	return &neutral.Host{
 		Session:    s.ID,
 		Dir:        s.Cwd,
 		Root:       root,
-		Transcript: transcript.File{Path: s.Transcript, Format: format},
+		Transcript: source,
 		Store:      neutral.StoreFor(root, s.Harness, s.ID),
 		Log:        log,
 	}, nil

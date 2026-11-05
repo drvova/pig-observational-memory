@@ -92,6 +92,19 @@ type HookSpec struct {
 	// NoTimeout leaves it out where the harness has none (Windsurf).
 	TimeoutKey string
 	NoTimeout  bool
+	// NoStdin says the harness passes everything in the environment, so om does not read stdin
+	// (which it may leave open: Nanocoder).
+	NoStdin bool
+	// Key is the object path the events live under ("hooks" when empty; Nanocoder's
+	// nanocoder.hooks).
+	Key []string
+	// SummaryAtPreCompact prints the engine's summary as plain text at the pre-compaction hook,
+	// for a harness that appends that hook's output to its own compaction instructions
+	// (CodeBuddy).
+	SummaryAtPreCompact bool
+	// NoType leaves out the command's "type" field, for a harness whose flat entries have none
+	// (Crush).
+	NoType bool
 	// Version is written as the hooks file's top-level "version" when set (Cursor).
 	Version int
 	// ContextField names the top-level field context goes back in, for PlainContext
@@ -229,13 +242,25 @@ func init() {
 	})
 	register(Harness{
 		Name: "kiro", Title: "Kiro",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.kiro/settings/mcp.json", "linux": "~/.kiro/settings/mcp.json"}, Key: []string{"mcpServers"}},
-		Note: "its hooks carry no transcript path (sessions are SQLite, schema unpublished) and it has no compaction hook, so they are not wired",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "~/.kiro/settings/mcp.json", "linux": "~/.kiro/settings/mcp.json"}, Key: []string{"mcpServers"}},
+		Custom: installKiroHooks,
+		Hooks: &HookSpec{Transcript: "generic", TextContext: true, Record: recordFields(map[string]string{"prompt": "user"}),
+			Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"}},
+		Note:   "hooks in ~/.kiro/hooks/om.json: its payloads carry the prompt but not the reply and name no transcript om reads, so om records each request itself; no compaction hook, so memory is the tool's",
+		Source: "https://kiro.dev/docs/hooks.md",
 	})
 	register(Harness{
 		Name: "amazon-q", Title: "Amazon Q Developer CLI",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.aws/amazonq/mcp.json", "linux": "~/.aws/amazonq/mcp.json"}, Key: []string{"mcpServers"}},
-		Note: "read by an agent only with useLegacyMcpJson: true (Q CLI is being replaced by Kiro)",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "~/.aws/amazonq/mcp.json", "linux": "~/.aws/amazonq/mcp.json"}, Key: []string{"mcpServers"}},
+		Custom: printAmazonQHooks,
+		Hooks: &HookSpec{Transcript: "amazon-q", TranscriptFrom: transcript.AmazonQDBPath, NoContext: true,
+			SessionFrom: func(raw map[string]any) string {
+				cwd, _ := raw["cwd"].(string)
+				return transcript.AmazonQConversation(cwd)
+			},
+			Events: map[string]string{evTurnEnd: "stop"}},
+		Note:   "read by an agent only with useLegacyMcpJson: true; its stop hook goes in your agent file (om install prints it) and om reads the directory's conversation row (sqlite3 command or python3); Q CLI is being replaced by Kiro",
+		Source: "https://github.com/aws/amazon-q-developer-cli/blob/main/docs/hooks.md",
 	})
 	register(Harness{
 		Name: "factory-droid", Title: "Factory Droid",
@@ -276,7 +301,10 @@ func init() {
 			Entry: func(exe, h string) map[string]any {
 				return map[string]any{"type": "stdio", "name": "om", "enabled": true, "cmd": exe, "args": []any{"mcp", "--harness", h}, "envs": map[string]any{}, "env_keys": []any{}, "timeout": 300}
 			}},
-		Note: "its hooks carry no transcript om reads (sessions are SQLite) and cannot hand the model context",
+		Custom: installGoosePlugin,
+		Hooks:  &HookSpec{Transcript: "goose", TranscriptFrom: transcript.GooseDBPath, NoContext: true, Events: map[string]string{evTurnEnd: "Stop"}},
+		Note:   "a plugin's Stop hook: om reads its SQLite sessions (with the sqlite3 command or python3; Linux path confirmed); no compaction hook and no hook output reaches the model, so memory is the tool's",
+		Source: "https://github.com/block/goose/blob/main/documentation/docs/guides/context-engineering/hooks.md",
 	})
 	register(Harness{
 		Name: "continue", Title: "Continue",
@@ -296,7 +324,10 @@ func init() {
 	})
 	register(Harness{
 		Name: "crush", Title: "Crush", Custom: installCrush,
-		Note: "its session-start and turn-start hooks cannot hand the model context, so they are not wired",
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${CRUSH_GLOBAL_CONFIG:-~/.config/crush}/crush.json", "linux": "${CRUSH_GLOBAL_CONFIG:-~/.config/crush}/crush.json"}, Transcript: "crush", TranscriptFrom: transcript.CrushDBPath,
+			Flat: true, TimeoutKey: "timeout", NoType: true, NoContext: true, Events: map[string]string{evTurnEnd: "TurnEnd", evPreCompact: "PreCompact"}},
+		Note:   "TurnEnd and PreCompact hooks over its SQLite sessions (read with the sqlite3 command or python3); its turn hooks cannot hand the model context, so the summary is the tool's; crush run fires no hooks",
+		Source: "https://github.com/charmbracelet/crush/blob/main/docs/hooks/README.md",
 	})
 	register(Harness{
 		Name: "qoder-cli", Title: "Qoder CLI",
@@ -328,6 +359,36 @@ func init() {
 			Transcript: "cortex", TranscriptFrom: transcript.CortexHistoryPath, SummaryOnPrompt: true},
 		Note:   "Claude-shaped hooks over its <session>.history.jsonl; its SessionStart after a compaction drops context, so om's summary comes back with the next prompt; user MCP servers need the account administrator's allowance",
 		Source: "https://docs.snowflake.com/en/user-guide/cortex-code/extensibility",
+	})
+	register(Harness{
+		Name: "codebuddy", Title: "CodeBuddy Code (CLI)",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.codebuddy/.mcp.json", "linux": "~/.codebuddy/.mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.codebuddy/settings.json", "linux": "~/.codebuddy/settings.json"}, Events: claudeEventNames, Transcript: "generic", SummaryAtPreCompact: true,
+			Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"})},
+		Note:   "Claude Code-compatible hooks; its transcript's fields are unconfirmed, so om records each prompt and reply itself; at PreCompact om's summary joins CodeBuddy's compaction instructions",
+		Source: "https://www.codebuddy.cn/docs/cli/hooks",
+	})
+	register(Harness{
+		Name: "junie", Title: "JetBrains Junie (IDE and CLI)",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${JUNIE_HOME:-~/.junie}/mcp/mcp.json", "linux": "${JUNIE_HOME:-~/.junie}/mcp/mcp.json"}, Key: []string{"mcpServers"}, Entry: plainEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${JUNIE_HOME:-~/.junie}/config.json", "linux": "${JUNIE_HOME:-~/.junie}/config.json"}, Transcript: "generic", SessionFromCurrent: true,
+			Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"}),
+			Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"}},
+		Note:   "Junie CLI hooks (Early Access): om records each prompt and task reply itself (Stop fires for tasks, not chat, and names no session: om takes the one the prompt hook recorded); no compaction hook",
+		Source: "https://junie.jetbrains.com/docs/junie-cli-hooks.html",
+	})
+	register(Harness{
+		Name: "nanocoder", Title: "Nanocoder",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${NANOCODER_CONFIG_DIR:-~/Library/Preferences/nanocoder}/.mcp.json", "linux": "${NANOCODER_CONFIG_DIR:-~/.config/nanocoder}/.mcp.json"}, Key: []string{"mcpServers"}, Entry: func(exe, h string) map[string]any {
+			return map[string]any{"transport": "stdio", "command": exe, "args": []any{"mcp", "--harness", h}}
+		}},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${NANOCODER_CONFIG_DIR:-~/Library/Preferences/nanocoder}/agents.config.json", "linux": "${NANOCODER_CONFIG_DIR:-~/.config/nanocoder}/agents.config.json"}, Key: []string{"nanocoder", "hooks"},
+			Transcript: "generic", Flat: true, TimeoutKey: "timeout", TimeoutMS: true, NoType: true, TextContext: true, SummaryOnPrompt: true, NoStdin: true,
+			EnvFields: map[string]string{"session_id": "NANOCODER_SESSION_ID", "cwd": "NANOCODER_CWD", "prompt": "NANOCODER_PROMPT"},
+			Record:    recordFields(map[string]string{"prompt": "user"}),
+			Events:    map[string]string{evSessionStart: "session-start", evPrompt: "user-prompt-submit", evPreCompact: "pre-compact"}},
+		Note:   "hooks pass the prompt in the environment and there is no turn-end hook or readable transcript, so om records each request itself (level 0 runs at the next prompt and at pre-compact); the summary comes back with the next prompt; MCP tools reach the model only with the full /tune profile",
+		Source: "https://github.com/Nano-Collective/nanocoder/blob/main/docs/features/hooks.md",
 	})
 	register(Harness{
 		Name: "trae", Title: "Trae", Manual: "Settings > MCP > Add > Add Manually, and paste it under mcpServers",
@@ -564,7 +625,21 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 	if err != nil {
 		return err
 	}
-	hooks, _ := settings["hooks"].(map[string]any)
+	key := spec.Key
+	if len(key) == 0 {
+		key = []string{"hooks"}
+	}
+	parent := settings
+	for _, k := range key[:len(key)-1] {
+		next, _ := parent[k].(map[string]any)
+		if next == nil {
+			next = map[string]any{}
+		}
+		parent[k] = next
+		parent = next
+	}
+	last := key[len(key)-1]
+	hooks, _ := parent[last].(map[string]any)
 	if spec.TopLevel {
 		hooks = settings
 	}
@@ -601,6 +676,9 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 				if key != "timeout" {
 					delete(command, "timeout")
 				}
+				if spec.NoType {
+					delete(command, "type")
+				}
 				if spec.NoTimeout {
 					delete(command, key)
 					delete(command, "type")
@@ -621,12 +699,15 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 	switch {
 	case spec.TopLevel:
 	case len(hooks) == 0:
-		delete(settings, "hooks")
+		delete(parent, last)
+		if len(key) > 1 && len(parent) == 0 {
+			delete(settings, key[0])
+		}
 		if spec.Version != 0 && len(settings) == 1 && settings["version"] != nil {
 			delete(settings, "version")
 		}
 	default:
-		settings["hooks"] = hooks
+		parent[last] = hooks
 		if spec.Version != 0 && settings["version"] == nil {
 			settings["version"] = spec.Version
 		}

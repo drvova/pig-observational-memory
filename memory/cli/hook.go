@@ -49,6 +49,9 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	if ev == "" {
 		return fmt.Errorf("om hook %s: unknown event %q", hs.Name, name)
 	}
+	if hs.Hooks.NoStdin {
+		in = strings.NewReader("")
+	}
 	p, err := decodeHookPayload(in, hs.Hooks.EnvFields)
 	if err != nil {
 		return fmt.Errorf("om hook %s: payload: %w", hs.Name, err)
@@ -94,6 +97,10 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		}
 		return writeContext(out, hs, name, a.startContext(h, summary))
 	case evPrompt:
+		if _, turnEnd := hs.Hooks.Events[evTurnEnd]; !turnEnd {
+			hooks.OnTurnEnd(a.rt, h)
+			engine.SettleCurated(h)
+		}
 		if !hs.Hooks.SummaryOnPrompt {
 			return nil
 		}
@@ -106,7 +113,11 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		hooks.OnTurnEnd(a.rt, h)
 		engine.SettleCurated(h)
 	case evPreCompact:
-		_, err := h.Compaction(context.Background(), a.rt, p.Trigger)
+		c, err := h.Compaction(context.Background(), a.rt, p.Trigger)
+		if err != nil || !hs.Hooks.SummaryAtPreCompact || c == nil {
+			return err
+		}
+		_, err = io.WriteString(out, c.Summary+"\n")
 		return err
 	}
 	return nil

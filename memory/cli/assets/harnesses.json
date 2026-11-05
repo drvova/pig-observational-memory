@@ -434,31 +434,6 @@
   "source": "https://raw.githubusercontent.com/mpfaffenberger/code_puppy/main/code_puppy/config.py https://raw.githubusercontent.com/mpfaffenberger/code_puppy/main/code_puppy/command_line/mcp/mcp_servers_store.py"
  },
  {
-  "name": "codebuddy",
-  "title": "CodeBuddy Code (CLI)",
-  "class": "file",
-  "path": {
-   "darwin": "~/.codebuddy/.mcp.json",
-   "linux": "~/.codebuddy/.mcp.json",
-   "windows": "~/.codebuddy/.mcp.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "type": "stdio",
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "if only the older ~/.codebuddy/mcp.json exists, use om install --mcp-config with it",
-  "source": "https://www.codebuddy.cn/docs/cli/mcp"
- },
- {
   "name": "codebuff",
   "title": "Codebuff (and Freebuff)",
   "class": "file",
@@ -1036,29 +1011,6 @@
   "source": "https://www.jetbrains.com/help/air/mcp-servers.html.md"
  },
  {
-  "name": "junie",
-  "title": "JetBrains Junie (IDE and CLI)",
-  "class": "file",
-  "path": {
-   "darwin": "${JUNIE_HOME:-~/.junie}/mcp/mcp.json",
-   "linux": "${JUNIE_HOME:-~/.junie}/mcp/mcp.json",
-   "windows": "${USERPROFILE}/.junie/mcp/mcp.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "source": "https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html"
- },
- {
   "name": "kimi-code",
   "title": "Kimi Code CLI",
   "class": "file",
@@ -1581,31 +1533,6 @@
   },
   "note": "restart the nanobot gateway; not obot's nanobot (project nanobot.yaml)",
   "source": "https://raw.githubusercontent.com/HKUDS/nanobot/main/docs/guides/configure-mcp-tools.md"
- },
- {
-  "name": "nanocoder",
-  "title": "Nanocoder",
-  "class": "file",
-  "path": {
-   "darwin": "~/Library/Preferences/nanocoder/.mcp.json",
-   "linux": "${XDG_CONFIG_HOME:-~/.config}/nanocoder/.mcp.json",
-   "windows": "${APPDATA}/nanocoder/.mcp.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "transport": "stdio",
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "NANOCODER_CONFIG_DIR overrides the directory; project .mcp.json wins on name clash; MCP tools hidden unless /tune tool profile resolves to full",
-  "source": "https://raw.githubusercontent.com/Nano-Collective/nanocoder/main/docs/configuration/mcp-configuration.md https://raw.githubusercontent.com/Nano-Collective/nanocoder/main/source/config/paths.ts"
  },
  {
   "name": "nimblebrain",

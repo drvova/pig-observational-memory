@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/drvova/pig-observational-memory/memory/transcript"
 
 	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
@@ -426,5 +430,155 @@ func TestCortexAndIFlowHooks(t *testing.T) {
 	om(t, "", "hook", "iflow-cli", "Stop")
 	if data, err := os.ReadFile(filepath.Join(root, "sessions", "iflow-cli", "session-1.jsonl")); err != nil || !strings.Contains(string(data), "b-17") {
 		t.Fatalf("iflow: no level-0 record: %v", err)
+	}
+}
+
+// sqliteDB builds a database with Python's sqlite3 module (the tests' container has no sqlite3
+// command) and points om's SQLite reader at python3 alone.
+func sqliteDB(t *testing.T, path string, statements ...string) {
+	t.Helper()
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		for _, p := range []string{"/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"} {
+			if _, e := os.Stat(p); e == nil {
+				py, err = p, nil
+			}
+		}
+	}
+	if err != nil {
+		t.Skip("python3 is needed to build the SQLite fixture")
+	}
+	old := transcript.SQLiteCommands
+	transcript.SQLiteCommands = []string{py}
+	t.Cleanup(func() { transcript.SQLiteCommands = old })
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	script := "import sqlite3, sys, json\nc = sqlite3.connect(sys.argv[1])\nfor s in json.loads(sys.argv[2]):\n    c.execute(s)\nc.commit()\n"
+	stmts, _ := json.Marshal(statements)
+	if out, err := exec.Command(py, "-I", "-c", script, path, string(stmts)).CombinedOutput(); err != nil {
+		t.Fatalf("fixture: %v: %s", err, out)
+	}
+}
+
+func sqlString(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+// Crush, Goose and Amazon Q Developer CLI keep sessions in SQLite: om reads each one's rows (in
+// the schema from its source) at the turn-end hook, through python3 when there is no sqlite3.
+func TestSQLiteHooks(t *testing.T) {
+	root, home := env(t)
+	t.Setenv("GOOSE_PATH_ROOT", "")
+	t.Setenv("XDG_DATA_HOME", "")
+	proj := filepath.Join(home, "proj")
+
+	stmts := []string{"CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, parts TEXT DEFAULT '[]', created_at INTEGER, is_summary_message INTEGER DEFAULT 0)"}
+	for i := range 40 {
+		user, _ := json.Marshal([]any{map[string]any{"type": "text", "data": map[string]any{"text": fmt.Sprintf("Queue q-%d drains into bucket b-%d.", i, i)}}})
+		call, _ := json.Marshal([]any{map[string]any{"type": "tool_call", "data": map[string]any{"id": fmt.Sprintf("c%d", i), "name": "bash", "input": `{"command":"ls"}`}}})
+		result, _ := json.Marshal([]any{map[string]any{"type": "tool_result", "data": map[string]any{"tool_call_id": fmt.Sprintf("c%d", i), "name": "bash", "content": "a.go", "is_error": false}}})
+		for j, row := range []struct{ role, parts string }{{"user", string(user)}, {"assistant", string(call)}, {"tool", string(result)}} {
+			stmts = append(stmts, fmt.Sprintf("INSERT INTO messages VALUES ('m%d-%d', 's1', '%s', %s, %d, 0)", i, j, row.role, sqlString(row.parts), 1762300000+i*10+j))
+		}
+	}
+	stmts = append(stmts, "INSERT INTO messages VALUES ('sum', 's1', 'assistant', '[{\"type\":\"text\",\"data\":{\"text\":\"SUMMARY ROW\"}}]', 1762400000, 1)")
+	sqliteDB(t, filepath.Join(proj, ".crush", "crush.db"), stmts...)
+	b, _ := json.Marshal(map[string]any{"event": "TurnEnd", "hook_event_name": "TurnEnd", "session_id": "s1", "cwd": proj})
+	om(t, string(b), "hook", "crush", "TurnEnd")
+	data, err := os.ReadFile(filepath.Join(root, "sessions", "crush", "s1.jsonl"))
+	if err != nil || !strings.Contains(string(data), "b-17") || strings.Contains(string(data), "SUMMARY ROW") {
+		t.Fatalf("crush: %v", err)
+	}
+
+	stmts = []string{"CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, session_id TEXT, role TEXT, content_json TEXT, created_timestamp INTEGER, metadata_json TEXT)"}
+	for i := range 40 {
+		content, _ := json.Marshal([]any{map[string]any{"type": "text", "text": fmt.Sprintf("Host h-%d runs on rack r-%d.", i, i)}})
+		stmts = append(stmts, fmt.Sprintf("INSERT INTO messages (message_id, session_id, role, content_json, created_timestamp, metadata_json) VALUES ('msg_%d', 'g1', 'user', %s, %d, '{\"userVisible\":true,\"agentVisible\":true}')", i, sqlString(string(content)), 1762300000+i))
+	}
+	sqliteDB(t, filepath.Join(home, ".local", "share", "goose", "sessions", "sessions.db"), stmts...)
+	b, _ = json.Marshal(map[string]any{"event": "Stop", "session_id": "g1", "working_dir": proj})
+	om(t, string(b), "hook", "goose", "Stop")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "goose", "g1.jsonl")); (err != nil || !strings.Contains(string(data), "r-17")) && runtime.GOOS == "linux" {
+		t.Fatalf("goose: %v", err)
+	}
+
+	var history []any
+	for i := range 30 {
+		history = append(history, map[string]any{
+			"user":      map[string]any{"content": map[string]any{"Prompt": map[string]any{"prompt": fmt.Sprintf("Service svc-%d listens on port %d.", i, 8000+i)}}, "timestamp": "2026-05-01T10:00:00Z"},
+			"assistant": map[string]any{"Response": map[string]any{"message_id": fmt.Sprintf("am%d", i), "content": "noted"}},
+		})
+	}
+	state, _ := json.Marshal(map[string]any{"conversation_id": "conv-1", "history": history})
+	dbPath := transcript.AmazonQDBPath("", "")
+	sqliteDB(t, dbPath, "CREATE TABLE conversations (key TEXT PRIMARY KEY, value TEXT)", fmt.Sprintf("INSERT INTO conversations VALUES (%s, %s)", sqlString(proj), sqlString(string(state))))
+	b, _ = json.Marshal(map[string]any{"hook_event_name": "stop", "cwd": proj})
+	om(t, string(b), "hook", "amazon-q", "stop")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "amazon-q", "conv-1.jsonl")); err != nil || !strings.Contains(string(data), "svc-17") {
+		t.Fatalf("amazon-q: %v", err)
+	}
+
+	om(t, "", "install", "goose")
+	om(t, "", "install", "crush")
+	if b, err := os.ReadFile(filepath.Join(home, ".agents", "plugins", "om", "hooks", "hooks.json")); err != nil || !strings.Contains(string(b), "hook goose Stop") {
+		t.Fatalf("goose plugin: %v", err)
+	}
+	var crushCfg map[string]map[string][]map[string]any
+	cb, _ := os.ReadFile(filepath.Join(home, ".config", "crush", "crush.json"))
+	json.Unmarshal(cb, &crushCfg)
+	if e := crushCfg["hooks"]["TurnEnd"]; len(e) != 1 || e[0]["type"] != nil || e[0]["timeout"] != float64(120) {
+		t.Fatalf("crush hooks %s", cb)
+	}
+	om(t, "", "uninstall", "goose")
+	om(t, "", "uninstall", "crush")
+	if _, err := os.Stat(filepath.Join(home, ".agents", "plugins", "om", "plugin.json")); !os.IsNotExist(err) {
+		t.Fatal("goose plugin left")
+	}
+}
+
+// Nanocoder passes its prompt in the environment and has no turn-end hook: om records prompts,
+// runs level 0 at the next prompt, and writes its hooks under nanocoder.hooks. Kiro's prompt
+// hook records the request; its hooks are a file of om's own. CodeBuddy prints om's summary at
+// PreCompact for its own compaction.
+func TestPromptOnlyHarnesses(t *testing.T) {
+	root, home := env(t)
+	t.Setenv("NANOCODER_CONFIG_DIR", "")
+	for i := range 30 {
+		t.Setenv("NANOCODER_SESSION_ID", "ab12cd34")
+		t.Setenv("NANOCODER_CWD", "/p")
+		t.Setenv("NANOCODER_PROMPT", fmt.Sprintf("Queue q-%d drains into bucket b-%d.", i, i))
+		om(t, "", "hook", "nanocoder", "user-prompt-submit")
+
+		b, _ := json.Marshal(map[string]any{"hook_event_name": "UserPromptSubmit", "cwd": "/p", "session_id": "k1", "prompt": fmt.Sprintf("Host h-%d runs on rack r-%d.", i, i)})
+		om(t, string(b), "hook", "kiro", "UserPromptSubmit")
+		om(t, `{"hook_event_name":"Stop","cwd":"/p","session_id":"k1"}`, "hook", "kiro", "Stop")
+
+		b, _ = json.Marshal(map[string]any{"session_id": "cb1", "cwd": "/p", "prompt": fmt.Sprintf("Service svc-%d listens on port %d and caches in /var/cache/svc%d.", i, 8000+i, i)})
+		om(t, string(b), "hook", "codebuddy", "UserPromptSubmit")
+		om(t, `{"session_id":"cb1","cwd":"/p","last_assistant_message":"noted"}`, "hook", "codebuddy", "Stop")
+	}
+	for harness, want := range map[string]string{"nanocoder/ab12cd34": "b-17", "kiro/k1": "r-17", "codebuddy/cb1": "svc-17"} {
+		if data, err := os.ReadFile(filepath.Join(root, "sessions", harness+".jsonl")); err != nil || !strings.Contains(string(data), want) {
+			t.Fatalf("%s: no level-0 record of %s: %v", harness, want, err)
+		}
+	}
+	if out := om(t, `{"session_id":"cb1","cwd":"/p","trigger":"auto"}`, "hook", "codebuddy", "PreCompact"); !strings.Contains(out, "svc-") || strings.HasPrefix(out, "{") {
+		t.Fatalf("codebuddy pre-compact %q", out)
+	}
+
+	cfg := filepath.Join(home, ".config", "nanocoder", "agents.config.json")
+	writeLines(t, cfg, []string{`{"nanocoder":{"providers":[]}}`})
+	om(t, "", "install", "nanocoder")
+	om(t, "", "install", "kiro")
+	var nc map[string]map[string]map[string][]map[string]any
+	data, _ := os.ReadFile(cfg)
+	json.Unmarshal(data, &nc)
+	if e := nc["nanocoder"]["hooks"]["user-prompt-submit"]; len(e) != 1 || e[0]["timeout"] != float64(30000) || e[0]["type"] != nil {
+		t.Fatalf("nanocoder hooks %s", data)
+	}
+	if b, err := os.ReadFile(filepath.Join(home, ".kiro", "hooks", "om.json")); err != nil || !strings.Contains(string(b), `"trigger": "UserPromptSubmit"`) {
+		t.Fatalf("kiro hooks %s %v", b, err)
+	}
+	om(t, "", "uninstall", "nanocoder")
+	om(t, "", "uninstall", "kiro")
+	if data, _ := os.ReadFile(cfg); !strings.Contains(string(data), "providers") || strings.Contains(string(data), "hooks") {
+		t.Fatalf("nanocoder after uninstall %s", data)
 	}
 }

@@ -27,8 +27,9 @@ with exactly what it gets.
 | How om reads the conversation | Harnesses |
 |---|---|
 | A hook (or notify program) at each turn's end, over the transcript the harness writes; most also compact at a pre-compaction hook and hand the summary back | Claude Code, OpenClaude, Codex, Open Interpreter, Gemini CLI, Qwen Code, Qoder CLI, iFlow CLI, Kimi CLI, Factory Droid, Copilot CLI, Cursor, Cortex Code, Deep Agents Code, Kode, Auggie, Cline |
+| The same, over the harness's SQLite sessions, read with the `sqlite3` command or `python3` (no driver is linked) | Crush, Goose (a plugin's hook), Amazon Q Developer CLI (its row per directory; the hook goes in your agent file, which `om install` prints) |
 | A plugin or extension inside the harness | Pi, Oh My Pi, Gentle Shell (Pi's extension: om compacts on Pi's own cut and Pi stores it), OpenCode, Kilo Code (plugin: the summary joins their compaction context), Neovate Code |
-| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin) |
+| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin), CodeBuddy Code, Junie; Kiro and Nanocoder pass only the prompt, so om records the requests |
 | The memory tool alone (MCP), shared through `~/.om` | every other harness |
 | `om hook generic turn-end` / `compact` | any other harness that can run a command |
 
@@ -65,15 +66,12 @@ Hooks are wired only where om can read the conversation: a transcript whose form
 `memory/transcript` takes from the harness's own source or published types, or hooks that carry the turn's
 text. These stay on the memory tool:
 
-- **Crush and Goose:** they keep sessions in SQLite. Reading them needs an SQLite driver in the engine
-  module, which PiG also builds, so it is not added yet.
-- **Nanocoder:** no turn-end hook, and its session file is rewritten with no message ids.
 - **Continue CLI:** its hook system ships unused.
-- **CodeBuddy Code:** its transcript's field names are not confirmed.
-- **Kiro, Amazon Q Developer CLI and Junie:** their hooks name no transcript and carry no turn text (Amazon
-  Q's store is one SQLite row per directory).
-- **Mistral Vibe:** its session store is private and versioned, not a transcript.
+- **Mistral Vibe:** its hook carries no text, and its session store is private and versioned, not a transcript.
+- **Rovo Dev CLI:** its hook format is undocumented and its code is obfuscated.
 - **Zed:** no hooks.
+- **Every client with no hooks or plugins** (most desktop chat apps and editor plugins): their memory is
+  the tool's.
 
 The readers for Cursor and Windsurf work from lossy sources. Cursor's transcript keeps no tool results, and
 Windsurf hands over a Markdown summary of each response. So level 0 records the requests and replies.
