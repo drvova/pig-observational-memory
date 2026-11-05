@@ -101,13 +101,20 @@ func CrushDBPath(cwd, _ string) string {
 // content_json, metadata_json): text, thinking, toolRequest {id, toolCall {status, value {name,
 // arguments}}} and, in a user message, toolResponse {id, toolResult {status, value}}, whose value
 // is {content, isError} or, in the legacy shape, the bare content list. A compaction rewrites the rows but keeps the originals (agent-invisible) and adds
-// a summary (compactionSummary), which is left out.
+// a summary (compactionSummary), which is left out, as is the turn context Goose injects as a
+// user message the user never sees (userVisible false).
 func GooseRows(rows []map[string]any) []session.Entry {
 	var out []session.Entry
 	for _, r := range rows {
 		id, role := str(r["message_id"]), str(r["role"])
 		meta, _ := jsonColumn(r["metadata_json"]).(map[string]any)
 		if summary, _ := meta["compactionSummary"].(bool); summary || id == "" {
+			continue
+		}
+		// Goose injects turn context (the time, the working directory) as a user message the user
+		// never sees (userVisible false); it is not something they said. Messages hidden from the
+		// agent instead (agentVisible false) are what a compaction keeps, and stay.
+		if visible, ok := meta["userVisible"].(bool); ok && !visible && role == "user" {
 			continue
 		}
 		ts := unixSeconds(r["created_timestamp"])

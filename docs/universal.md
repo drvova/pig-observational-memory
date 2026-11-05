@@ -49,6 +49,8 @@ The readers are tested on transcripts the harnesses themselves wrote (`memory/tr
   CLI, Pi and Oh My Pi.
 - Cursor (agent CLI and IDE), Copilot CLI, Factory Droid, Cortex Code, Kiro (both session layouts) and
   Cline.
+- Open Interpreter, and the SQLite sessions of Crush and Goose (dumps of real databases, loaded and read
+  as om reads them).
 
 Each reads with unique ids, no empty messages, no tool result without an earlier call, and no injected
 context read as the user's words. The other readers are tested on samples built from each harness's
@@ -60,7 +62,8 @@ The real files caught these gaps, now fixed:
   a user message.
 - **Factory Droid:** context it injects as user messages (`visibility: llm_only`) and interface-only
   notices.
-- **Goose:** its legacy tool-result shape.
+- **Goose:** its legacy tool-result shape, and the turn context it injects as a user message the user
+  never sees.
 
 No harness here has run against om: running the harnesses themselves on this machine needs the user's
 approval. The OpenCode plugin and the Pi extension are checked by `node --check` and `tsc --strict` but

@@ -2,7 +2,9 @@ package transcript
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,6 +133,7 @@ func TestHarnessWrittenSamples(t *testing.T) {
 		{"claude-code-preserved.jsonl", ClaudeCode}, {"codex-rollout.jsonl", Codex}, {"gemini-jsonl.jsonl", Gemini},
 		{"qwen-chat.jsonl", Qwen}, {"kimi-legacy-wire.jsonl", Kimi}, {"pi-tool-calls.jsonl", Pi},
 		{"qoder-cli.jsonl", Qoder}, {"cline-cli.messages.json", Cline},
+		{"open-interpreter-rollout.jsonl", Codex}, {"codex-compacted.jsonl", Codex}, {"pi-compactions.jsonl", Pi},
 	}
 	for _, c := range cases {
 		es, err := File{Path: filepath.Join("testdata", "real", c.file), Format: c.format}.Entries()
@@ -154,5 +157,37 @@ func TestHarnessWrittenSamples(t *testing.T) {
 			}
 		}
 		t.Logf("%-30s %v", c.file, r)
+	}
+}
+
+// The SQLite harnesses' samples are dumps of real databases: each is loaded into a database
+// (with Python's sqlite3 module) and read the way om reads it, through SQLiteCommands.
+func TestHarnessWrittenDatabases(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is needed to load the SQL dumps")
+	}
+	for _, c := range []struct{ dump, format, session string }{
+		{"crush-db.sql", "crush", "05966aef-d75c-4975-9531-9c4be1c9a43b"},
+		{"goose-db.sql", "goose", "20261002_1"},
+	} {
+		db := filepath.Join(t.TempDir(), "s.db")
+		load := "import sqlite3, sys\nc = sqlite3.connect(sys.argv[1])\nc.executescript(open(sys.argv[2]).read())\nc.commit()\n"
+		if out, err := exec.Command(py, "-I", "-c", load, db, filepath.Join("testdata", "real", c.dump)).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", c.dump, err, out)
+		}
+		es, err := DB{Path: db, Session: c.session, Kind: DBFormats[c.format]}.Entries()
+		if err != nil {
+			t.Fatalf("%s: %v", c.dump, err)
+		}
+		r := checkEntries(t, c.dump, es)
+		if r["user"] != 2 || r["toolResult"] != 5 {
+			t.Errorf("%s: %v", c.dump, r)
+		}
+		for _, e := range es {
+			if b, _ := e.Message["content"].([]any)[0].(map[string]any); e.Message["role"] == "user" && strings.HasPrefix(fmt.Sprint(b["text"]), "<turn-context>") {
+				t.Errorf("%s: %s reads Goose's injected turn context as the user's", c.dump, e.ID)
+			}
+		}
 	}
 }
