@@ -1,0 +1,14 @@
+{"name": "baseline-true", "runs": 50, "median_ms": 0.93, "p95_ms": 1.16, "min_ms": 0.71, "max_ms": 2.3, "rss_kb_median": 11164, "rss_kb_max": 11164, "nonzero_exits": 0}
+{"name": "go-hello", "runs": 50, "median_ms": 1.12, "p95_ms": 1.33, "min_ms": 0.86, "max_ms": 1.38, "rss_kb_median": 11204, "rss_kb_max": 11204, "nonzero_exits": 0}
+{"name": "sbcl-hello-none", "runs": 50, "median_ms": 3.56, "p95_ms": 5.7, "min_ms": 3.0, "max_ms": 10.94, "rss_kb_median": 17008, "rss_kb_max": 17144, "nonzero_exits": 0}
+{"name": "sbcl-hello--7", "runs": 50, "median_ms": 53.83, "p95_ms": 62.48, "min_ms": 48.3, "max_ms": 68.66, "rss_kb_median": 44244, "rss_kb_max": 44296, "nonzero_exits": 0}
+{"name": "sbcl-hello-1", "runs": 50, "median_ms": 67.6, "p95_ms": 80.83, "min_ms": 62.15, "max_ms": 84.77, "rss_kb_median": 44320, "rss_kb_max": 44468, "nonzero_exits": 0}
+{"name": "sbcl-hello-9", "runs": 50, "median_ms": 74.0, "p95_ms": 90.58, "min_ms": 62.14, "max_ms": 101.66, "rss_kb_median": 46880, "rss_kb_max": 46940, "nonzero_exits": 0}
+{"name": "sbcl-hello-22", "runs": 50, "median_ms": 99.32, "p95_ms": 128.9, "min_ms": 87.05, "max_ms": 134.43, "rss_kb_median": 52628, "rss_kb_max": 52724, "nonzero_exits": 0}
+{"name": "go-jsonhook", "runs": 30, "median_ms": 104.58, "p95_ms": 120.15, "min_ms": 94.72, "max_ms": 121.67, "rss_kb_median": 11156, "rss_kb_max": 11156, "nonzero_exits": 0}
+{"name": "sbcl-hook-none", "runs": 30, "median_ms": 155.88, "p95_ms": 177.4, "min_ms": 147.43, "max_ms": 221.98, "rss_kb_median": 76628, "rss_kb_max": 76760, "nonzero_exits": 0}
+{"name": "sbcl-hook-1", "runs": 30, "median_ms": 222.79, "p95_ms": 255.26, "min_ms": 204.97, "max_ms": 268.34, "rss_kb_median": 102854, "rss_kb_max": 103036, "nonzero_exits": 0}
+{"name": "sbcl-hook-9", "runs": 30, "median_ms": 232.22, "p95_ms": 270.16, "min_ms": 207.54, "max_ms": 278.15, "rss_kb_median": 105408, "rss_kb_max": 105464, "nonzero_exits": 0}
+{"name": "om-stop-cold", "runs": 30, "median_ms": 10443.16, "p95_ms": 11346.09, "min_ms": 9962.03, "max_ms": 11578.91, "rss_kb_median": 90240, "rss_kb_max": 98936, "nonzero_exits": 0}
+{"name": "om-stop-warm", "runs": 30, "median_ms": 408.01, "p95_ms": 669.85, "min_ms": 360.81, "max_ms": 776.63, "rss_kb_median": 78880, "rss_kb_max": 89880, "nonzero_exits": 0}
+{"name": "sbcl-hook-keep-none", "runs": 30, "median_ms": 326.23, "p95_ms": 378.57, "min_ms": 276.55, "max_ms": 403.05, "rss_kb_median": 145760, "rss_kb_max": 145784, "nonzero_exits": 0}

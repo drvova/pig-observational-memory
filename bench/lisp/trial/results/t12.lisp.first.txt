@@ -1,0 +1,7 @@
+(let* ((p (om:notes :search "billing service port 8080" :limit 200))
+       (n (find-if (lambda (x)
+                     (and (search "billing service" (om:note-content x) :test #'char-equal)
+                          (search "8080" (om:note-content x))
+                          (om:note-superseded-by x)))
+                   (om:rows p))))
+  (when n (format t "~{~a~^ ~}" (om:note-superseded-by n))))

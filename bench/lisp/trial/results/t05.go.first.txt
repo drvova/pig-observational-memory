@@ -1,0 +1,1 @@
+fmt.Println(om.Notes(om.Kind("correction"), om.Search("Elasticsearch"), om.SortBy("when", true), om.Limit(1)).Rows[0].Content)

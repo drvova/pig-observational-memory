@@ -1,0 +1,7 @@
+a := om.Attempts(om.Failed(), om.Limit(1))
+if len(a.Rows) > 0 {
+	t, err := a.Rows[0].Recall()
+	if err == nil {
+		fmt.Println(t)
+	}
+}

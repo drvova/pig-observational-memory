@@ -1,0 +1,7 @@
+a := om.Attempts(om.Failed(), om.Limit(200))
+if len(a.Rows) == 0 {
+    fmt.Print("")
+} else {
+    sort.Slice(a.Rows, func(i, j int) bool { return a.Rows[i].When < a.Rows[j].When })
+    fmt.Print(strings.SplitN(a.Rows[0].When, "T", 2)[0])
+}

@@ -1,0 +1,195 @@
+── The memory tool ──
+Runs Go code (yaegi, in a child process) over this session's memory: definitions and
+statements in any order, no package clause or imports. The result is what the code printed, the
+value of its last expression, and a line per definition kept or refused. Long text goes in the
+strings argument, read with om.Str(`<string name>`). Empty code prints this manual.
+
+── Seeded functions ──
+  describe(x any) string: the type of x and its fields and methods, with docs
+  man() string: this manual
+  kept(name ...string) string: the kept definitions, 20 a page (its last line is the call for
+      the next page), with load errors and quarantined ones; kept(`<definition>`) is one
+      definition's source
+  forget(name string) string: forgets a kept definition (om.ForgetMemory forgets a memory)
+  Each returns "error: <function>: <message>" when it fails. A call returning (T, error) shows T
+  alone when the error is nil, else "error: <message>". Only the last expression's value is
+  shown: print the others with fmt.Println; a discarded value that is an error is still shown.
+
+── Reads ──
+  om.Notes(opts ...Opt) NoteList: lists the active folded records: the branch's, else the off-path fallback's.
+  om.Reflections(opts ...Opt) ReflectionList: lists the standing reflections.
+  om.History(opts ...Opt) EntryList: lists user, assistant and tool text, newest first, without the current turn.
+  om.Recall(id string, opts ...Opt) (Text, error): reads a record's sources, else an entry (paged), else a saved memory by name.
+  om.NoteByID(id string) (Note, error): reads one record, dropped or replaced ones included.
+  om.ReflectionByID(id string) (Reflection, error): reads one reflection.
+  om.Files(opts ...Opt) NoteList: lists the file records: the newest state per path.
+  om.Commits(opts ...Opt) NoteList: lists the commit records.
+  om.Attempts(opts ...Opt) NoteList: lists the attempt records; Failed, Worked and Open select by outcome.
+  om.Dropped(opts ...Opt) NoteList: lists the records dropped by rule.
+  om.Subjects() map[string]int: counts the active records of each canonical subject.
+  om.Saved(opts ...Opt) MemoryList: lists the curated memories, ranked as the index ranks them.
+  om.Info() StatusInfo: the /om:status figures, each model's labelled with its model.
+  om.Layer(opts ...Opt) LayerList: lists every model's layer definitions, rules included.
+  om.Retired(opts ...Opt) RetiredList: lists the retired defined queries with their equivalent snippets.
+  om.Str(name string) string: a named string from this call's strings.
+  om.ErrNoCall() error: the error of an om call made with no memory tool call in flight (at replay).
+
+── Options (each is also an Opt method, so they chain: om.From(`<first id>`).Through(`<last id>`).Limit(50)) ──
+  type om.Opt: one or more options of a read.
+  om.Search(words string) Opt: keeps rows matching every literal word, case-insensitive, over every column; when no row matches every word, Notes, Reflections and History rank the rows by how many of the words each contains instead, and mark the list Partial.
+  om.From(id string) Opt: keeps rows at or after this entry id (an anchor or a record id).
+  om.Through(id string) Opt: keeps rows at or before this entry id.
+  om.Since(date string) Opt: keeps rows on or after this date (YYYY-MM-DD, entry time).
+  om.Until(date string) Opt: keeps rows on or before this date (YYYY-MM-DD, entry time).
+  om.ByEvent() Opt: makes Since and Until compare a record's event date when it has one.
+  om.AsOf() Opt: reads notes and reflections as they stood at the Until or Through bound.
+  om.Where(field, value string) Opt: keeps rows whose field equals value (case-insensitive).
+  om.Contains(field, value string) Opt: keeps rows whose field contains value.
+  om.Kind(k string) Opt: keeps records of this kind: Where("kind", k).
+  om.Subject(s string) Opt: keeps records whose canonical or raw subject equals s.
+  om.WithStatus(s string) Opt: keeps records with this status: proposed, hypothetical or retracted.
+  om.SortBy(field string, desc bool) Opt: orders rows by field, descending when desc is true.
+  om.Limit(n int) Opt: shows at most n rows: 1 to 200, 20 when not given.
+  om.Offset(n int) Opt: the character offset of the page Recall shows.
+  om.Failed() Opt: keeps attempts that failed.
+  om.Worked() Opt: keeps attempts that worked.
+  om.Open() Opt: keeps attempts with no outcome yet.
+
+── Writes ──
+  om.Save(name, typ, description string, opts ...SaveOpt) (string, error): saves a curated memory, staged unless Quoting gives the user's confirming words.
+  type om.SaveOpt: an option of Save.
+  om.Body(text string) SaveOpt: sets the memory's body.
+  om.Scope(scope string) SaveOpt: sets where the memory applies: "global" or "project".
+  om.Quoting(text string) SaveOpt: gives the user's words that confirm the memory, which saves it live.
+  om.Edit(name string, opts ...EditOpt) (string, error): changes a curated memory; it never pins one.
+  type om.EditOpt: an option of Edit.
+  om.SetType(typ string) EditOpt: changes the memory's type.
+  om.SetDescription(text string) EditOpt: changes the memory's description.
+  om.SetBody(text string) EditOpt: changes the memory's body.
+  om.ForgetMemory(name string) (string, error): retires a curated memory.
+  om.Feedback(name, outcome, quote string) (string, error): records that a memory helped or harmed, quoting the conversation.
+  om.LayerForget(kind, name string) (string, error): forgets one definition from the session model's layer; never a rule.
+  om.LayerRollback(gen int) (string, error): makes the session model's layer what it was at generation gen (0 is before its first change, every seed standing); never a rule.
+  om.Propose(kind, name, text string) error: always refuses: definitions are proposed only at a compaction.
+  om.Define(name string) error: always refuses: a kept Go function replaces a defined tool.
+
+── Values (describe(x) lists a value's fields and methods with their docs) ──
+  type om.Note, om.Reflection, om.Entry, om.Memory, om.Text, om.LayerRow, om.StatusInfo, om.ModelStatus, om.RetiredQuery: the records, texts and rows the reads return, plain data the code may change freely
+  type om.NoteList, om.ReflectionList, om.EntryList, om.MemoryList, om.LayerList, om.RetiredList: a page of rows, with Rows, Matched, Showing and Next (the next page's snippet), and Len, IDs, Table, Count(field), Group(field), Filter(keep) and String, which run on the rows held and cost no call
+
+── Snippets ──
+Summaries, the index and paged results print snippets that run as code here, such as
+om.Recall(`<id>`) and om.Notes(om.From(`<first id>`).Through(`<last id>`)). Plain Until and Through filter the current memory;
+AsOf() reads the memory as it stood. The old query language is removed and never runs: a query
+gets this notice and, for a read, its snippet.
+
+── Bounds ──
+One result (output, last value and kept lines): 10000 characters, then "[cut: N more
+characters]"; the call's input (code and strings): 10000. Rows per list: 20, at most 200 (Limit). A
+history row: 400 characters around the first searched word; Recall pages 10000. One kept
+definition: 10000 characters; 200 per project (forget one first). One om call's arguments: 10000.
+
+── Persistence ──
+Top-level functions, methods, types and constants are kept once they compile: stored per
+project, re-checked on every load, replayed into every new namespace (also beside a statement
+that panics). A failed compile keeps nothing and restores the earlier definition. Never kept:
+statements, variables, a definition referring to a variable (pass it as a parameter or make it
+a constant), one quoting six words of tool output. Variables last this conversation; a new
+session, a cancel or a crash restarts the namespace from the kept definitions. A forgotten
+function is a stub that panics "was forgotten" until the next restart; forgetting a method, type
+or constant restarts the namespace when the call returns.
+Refused, with the reason: go statements, a top-level defer, func init and main, rebinding a
+predeclared, package or seeded name, assigning through a package, other imports, and a type
+redefined with another source (forget it first).
+
+── Language level ──
+About Go 1.20 with generics. Missing: range over an int or a func, the builtins min, max and
+clear (define them as functions), the iter package, slices.Sort and slices.Sorted (use sort.Slice
+or sort.Strings), APIs after Go 1.22 (strings.Lines); generic inference has gaps
+(Map[int, string](...) works where Map(...) fails). Packages: fmt, strings, strconv, sort, slices,
+maps, math, unicode, unicode/utf8, bytes, errors, regexp, cmp, text/tabwriter, time (without
+its sleeping, timer and zone-loading functions). Loops run about 200 times slower than Go and
+each om call is a round trip: let om reads filter and count.
+
+── Limits not set, and reach ──
+No time limit: an endless loop or a blocking receive runs until the call is cancelled (the
+user's abort, the session's end), and a headless run can hang, as with bash. A deep recursion
+briefly needs about 1.5 GB. On Linux the child is the out-of-memory killer's first pick; on macOS
+and Windows it is not. A crash kills only the child. The symbol table is the wall: the child has
+no environment, inherited descriptor or path, but is no OS sandbox and runs as your user. Other
+extensions' inits run in it. The tool never makes a model request.
+
+── Kept definitions ──
+no definitions are kept
+
+om.Note // Note is one level-0 or level-1 record.
+  ID string // ID is the record id.
+  When string // When is the time the record was taken.
+  Kind string // Kind is the record's kind (fact, decision, file, commit, attempt, correction, ...).
+  Subject string // Subject is the canonical subject; RawSubject is the subject as the record wrote it, and SubjectScope what RawSubject adds to the canonical one.
+  RawSubject string
+  SubjectScope string
+  Scope string // Scope is the scope as stored.
+  Relevance string // Relevance is how much the record matters (high, medium, low).
+  Content string // Content is the record's text, relative dates resolved against its date.
+  Status string // Status is proposed, hypothetical or retracted; "" when stated as fact.
+  EventDate string // EventDate is the date the record is about, "" when it names none.
+  Origin string // Origin is who appended it: code (level 0), model (level 1) or host.
+  Outcome string // Outcome is an attempt's outcome: failed, worked, or "" while open.
+  Tool string // Tool and Target are the tool and the path or object an attempt or file record names.
+  Target string
+  Source string // Source is the record's first source entry id; SourceRole and SourceTime are that entry's role and time, "" when it is not on the branch.
+  SourceRole string
+  SourceTime string
+  SupersededBy []string // SupersededBy are the records that supersede this one; Supersedes the ones it supersedes.
+  Supersedes []string
+  PossiblyUpdates []string // PossiblyUpdates are records this one may update, not yet settled.
+  Conflicts []string // Conflicts are records this one conflicts with.
+  Replaces []string // Replaces are the records a level-1 record replaced.
+  SourceEntryIDs []string // SourceEntryIDs are the entries the record was taken from.
+  Fields map[string]string // Fields are the record's other fields by name (a schema's, read as schema_<name> when one collides with a level-0 column).
+  Anchor string // Anchor is the entry id the record's summary line ends with.
+  OffPath bool // OffPath is true for a record read from the off-path fallback.
+  Dropped bool // Dropped is true for a record dropped by rule (only from NoteByID and Dropped).
+  Standing string // Standing is the record standing for this one when it was replaced.
+  CitedBy() om.ReflectionList // CitedBy lists the standing reflections that cite the record.
+  Line() string // Line is the record as one summary line, ending with its anchor.
+  Recall() (om.Text, error) // Recall reads the record's sources: om.Recall(n.ID).
+
+om.NoteList // NoteList is a page of records.
+  Rows []om.Note // Rows are the rows held.
+  Matched int // Matched is how many rows matched, Showing how many are held.
+  Showing int // Matched is how many rows matched, Showing how many are held.
+  Next string // Next is the snippet for the next page, "" when every match is shown.
+  Partial bool // Partial is true when no row matched every searched word, so the rows are those that match the most of them, most first.
+  Count(string) map[string]int // Count counts the rows by the value of a field.
+  Filter(func(om.Note) bool) om.NoteList // Filter keeps the rows keep accepts.
+  Group(string) map[string]om.NoteList // Group splits the rows by the value of a field.
+  IDs() []string // IDs are the rows' record ids, in order.
+  Len() int // Len is the number of rows held.
+  String() string // String is the table, then "matched N, showing M" and the next page when it was cut.
+  Table() string // Table is the rows in the rows codec, the same for every model.
+
+om.Entry // Entry is one user, assistant or tool message of the conversation, as history shows it.
+  ID string // ID is the entry id.
+  When string // When is the entry's time.
+  Role string // Role is user, assistant or tool.
+  Text string // Text is what history reads of the entry, without thinking.
+  Clipped bool // Clipped is true when Text is a window around the first searched word.
+  OffPath bool // OffPath is true for an entry that is not on the current branch.
+  Recall() (om.Text, error) // Recall reads the whole entry, paged.
+
+om.EntryList // EntryList is a page of history, newest first.
+  Rows []om.Entry // Rows are the rows held.
+  Matched int // Matched is how many rows matched, Showing how many are held.
+  Showing int // Matched is how many rows matched, Showing how many are held.
+  Next string // Next is the snippet for the next page, "" when every match is shown.
+  Partial bool // Partial is true when no row matched every searched word, so the rows are those that match the most of them, most first.
+  Counts map[string]int // Counts are, for a search with no match, each word's matches on the current branch.
+  Count(string) map[string]int // Count counts the rows by the value of a field.
+  Filter(func(om.Entry) bool) om.EntryList // Filter keeps the rows keep accepts.
+  Group(string) map[string]om.EntryList // Group splits the rows by the value of a field.
+  IDs() []string // IDs are the rows' entry ids, in order.
+  Len() int // Len is the number of rows held.
+  String() string // String is the table, then the counts and the next page when it was cut, and each searched word's matches when nothing matched.
+  Table() string // Table is the rows in the rows codec.

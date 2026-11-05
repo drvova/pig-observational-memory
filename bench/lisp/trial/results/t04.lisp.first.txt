@@ -1,0 +1,2 @@
+(let ((rows (om:rows (om:notes :kind "correction" :search "billing" :sort-by "when" :desc t :limit 1))))
+  (when rows (format t "~a" (om:note-id (first rows)))))

@@ -1,0 +1,630 @@
+[
+ {
+  "task": "t01",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Limit(200)).Matched)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "22",
+   "chars": 44
+  }
+ },
+ {
+  "task": "t01",
+  "lang": "lisp",
+  "first": {
+   "code": "(om:len (om:notes :limit 200))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "22",
+   "chars": 30
+  }
+ },
+ {
+  "task": "t02",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Kind(\"preference\")).Len())",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "2",
+   "chars": 50
+  }
+ },
+ {
+  "task": "t02",
+  "lang": "lisp",
+  "first": {
+   "code": "(princ (om:matched (om:notes :kind \"preference\" :limit 200)))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "2",
+   "chars": 61
+  }
+ },
+ {
+  "task": "t03",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Print(om.Attempts(om.Failed()).Len())",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "3",
+   "chars": 41
+  }
+ },
+ {
+  "task": "t03",
+  "lang": "lisp",
+  "first": {
+   "code": "(format t \"~d\" (om:matched (om:attempts :failed t)))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "3",
+   "chars": 52
+  }
+ },
+ {
+  "task": "t04",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Kind(\"correction\").Search(\"billing\").Limit(1)).Rows[0].ID)",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "980bdeaaa2e2",
+   "chars": 82
+  },
+  "retry": {
+   "code": "fmt.Println(om.Notes(om.Kind(\"correction\").Search(\"billing\").SortBy(\"when\", true).Limit(1)).Rows[0].ID)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "5f498e17400f",
+   "chars": 103
+  }
+ },
+ {
+  "task": "t04",
+  "lang": "lisp",
+  "first": {
+   "code": "(let ((rows (om:rows (om:notes :kind \"correction\" :search \"billing\" :sort-by \"when\" :desc t :limit 1))))\n  (when rows (format t \"~a\" (om:note-id (first rows)))))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "5f498e17400f",
+   "chars": 161
+  }
+ },
+ {
+  "task": "t05",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Kind(\"correction\"), om.Search(\"Elasticsearch\"), om.SortBy(\"when\", true), om.Limit(1)).Rows[0].Content)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "Correction: search uses Elasticsearch 7, not 8.",
+   "chars": 126
+  }
+ },
+ {
+  "task": "t05",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((page (om:notes :kind \"correction\" :search \"Elasticsearch\" :sort-by \"when\" :desc t :limit 1))\n       (rows (om:rows page)))\n  (when rows (princ (om:note-content (first rows)))))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": true,
+   "out": "Correction: search uses Elasticsearch 7, not 8.\nCorrection: search uses Elasticsearch 7, not 8.",
+   "chars": 184
+  },
+  "retry": {
+   "code": "(let* ((page (om:notes :kind \"correction\" :search \"Elasticsearch\" :sort-by \"when\" :desc t :limit 1))\n       (rows (om:rows page)))\n  (when rows (write-string (om:note-content (first rows))))\n  nil)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "Correction: search uses Elasticsearch 7, not 8.",
+   "chars": 197
+  }
+ },
+ {
+  "task": "t06",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Since(\"2026-05-03\")).Matched)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "10",
+   "chars": 53
+  }
+ },
+ {
+  "task": "t06",
+  "lang": "lisp",
+  "first": {
+   "code": "(om:len (om:notes :since \"2026-05-03\" :limit 200))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "10",
+   "chars": 50
+  }
+ },
+ {
+  "task": "t07",
+  "lang": "go",
+  "first": {
+   "code": "for _, id := range om.Files().IDs() {\n\tfmt.Println(id)\n}",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "34c822fabc46\n16f5c3b22460",
+   "chars": 56
+  }
+ },
+ {
+  "task": "t07",
+  "lang": "lisp",
+  "first": {
+   "code": " (mapc #'write-line (om:ids (om:files))) \n\n(mapc #'write-line (om:ids (om:files)))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "34c822fabc46\n16f5c3b22460\n34c822fabc46\n16f5c3b22460\n(\"34c822fabc46\" \"16f5c3b22460\")",
+   "chars": 82
+  },
+  "retry": {
+   "code": "(om:ids (om:files))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "(\"34c822fabc46\" \"16f5c3b22460\")",
+   "chars": 19
+  }
+ },
+ {
+  "task": "t08",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(strings.Fields(om.Commits().Rows[0].Content)[1])",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "4f2a9c1",
+   "chars": 60
+  }
+ },
+ {
+  "task": "t08",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((content (om:note-content (first (om:rows (om:commits)))))\n       (start1 (position-if-not (lambda (c) (find c '(#\\Space #\\Tab #\\Newline #\\Return))) content))\n       (end1 (position-if (lambda (c) (find c '(#\\Space #\\Tab #\\Newline #\\Return))) content :start start1))\n       (start2 (position-if-not (lambda (c) (find c '(#\\Space #\\Tab #\\Newline #\\Return))) content :start end1))\n       (end2 (position-if (lambda (c) (find c '(#\\Space #\\Tab #\\Newline #\\Return))) content :start start2)))\n  (write-string (subseq content start2 end2)))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": true,
+   "out": "4f2a9c1\n4f2a9c1",
+   "chars": 541
+  },
+  "retry": {
+   "code": "(first (om:rows (om:commits)))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "#S(NOTE\n   :ID cf74b162caa1\n   :WHEN 2026-05-02 10:20\n   :KIND commit\n   :SUBJECT\n   :CONTENT commit 4f2a9c1 billing: round invoice totals\n   :STATUS\n   :EVENT-DATE\n   :ORIGIN code\n   :OUTCOME\n   :TOOL\n   :TARGET 4f2a9c1\n   :SOURCE m18\n   :SOURCE-ROLE assistant\n   :ANCHOR m18\n   :RELEVANCE medium\n   :SUPERSEDED-BY NIL\n   :SUPERSEDES NIL)",
+   "chars": 30
+  }
+ },
+ {
+  "task": "t09",
+  "lang": "go",
+  "first": {
+   "code": "n := om.Notes(om.Limit(200))\ncounts := n.Count(\"kind\")\nkinds := make([]string, 0, len(counts))\nfor k := range counts {\n\tkinds = append(kinds, k)\n}\nsort.Strings(kinds)\nfor _, k := range kinds {\n\tfmt.Printf(\"%s=%d\\n\", k, counts[k])\n}",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "attempt=9\ncommit=1\ncorrection=3\nfact=5\nfile=2\npreference=2",
+   "chars": 231
+  }
+ },
+ {
+  "task": "t09",
+  "lang": "lisp",
+  "first": {
+   "code": "(let ((counts (make-hash-table :test 'equal))\n      (page (om:notes :limit 200)))\n  (loop\n    (dolist (row (om:rows page))\n      (incf (gethash (om:field row \"kind\") counts 0)))\n    (let ((next (om:next-page page)))\n      (unless next (return))\n      (setf page (eval next))))\n  (dolist (entry (sort (loop for kind being the hash-keys of counts\n                             using (hash-value count)\n                             collect (cons kind count))\n                       #'string< :key #'car))\n    (format t \"~a=~d~%\" (car entry) (cdr entry))))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "attempt=9\ncommit=1\ncorrection=3\nfact=5\nfile=2\npreference=2",
+   "chars": 551
+  }
+ },
+ {
+  "task": "t10",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.History(om.Since(\"2026-05-03\").Until(\"2026-05-03\")).Count(\"role\")[\"user\"])",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "3",
+   "chars": 89
+  }
+ },
+ {
+  "task": "t10",
+  "lang": "lisp",
+  "first": {
+   "code": "(let ((p (om:history :since \"2026-05-03\" :until \"2026-05-03\" :limit 200)))\n  (format t \"~D\" (om:len (om:filter-rows p (lambda (e) (string= (om:entry-role e) \"user\"))))))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "3",
+   "chars": 169
+  }
+ },
+ {
+  "task": "t11",
+  "lang": "go",
+  "first": {
+   "code": "for _, n := range om.Notes(om.SortBy(\"when\", false).Limit(200)).Rows {\n\tif len(n.SupersededBy) > 0 {\n\t\tfmt.Println(n.ID)\n\t}\n}",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "f7b0abae1649\n4e9d55c02be6\n2ab76f149da6\n001928040a68",
+   "chars": 125
+  }
+ },
+ {
+  "task": "t11",
+  "lang": "lisp",
+  "first": {
+   "code": "(dolist (n (om:rows (om:notes :limit 200)))\n  (when (om:note-superseded-by n)\n    (format t \"~a~%\" (om:note-id n))))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "f7b0abae1649\n4e9d55c02be6\n2ab76f149da6\n001928040a68",
+   "chars": 116
+  }
+ },
+ {
+  "task": "t12",
+  "lang": "go",
+  "first": {
+   "code": "for _, n := range om.Notes(om.Search(\"billing service port 8080\"), om.Limit(200)).Rows {\n\tif len(n.SupersededBy) > 0 {\n\t\tfmt.Println(n.SupersededBy[0])\n\t\tbreak\n\t}\n}",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "980bdeaaa2e2",
+   "chars": 164
+  }
+ },
+ {
+  "task": "t12",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((p (om:notes :search \"billing service port 8080\" :limit 200))\n       (n (find-if (lambda (x)\n                     (and (search \"billing service\" (om:note-content x) :test #'char-equal)\n                          (search \"8080\" (om:note-content x))\n                          (om:note-superseded-by x)))\n                   (om:rows p))))\n  (when n (format t \"~{~a~^ ~}\" (om:note-superseded-by n))))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "980bdeaaa2e2",
+   "chars": 402
+  }
+ },
+ {
+  "task": "t13",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Attempts(om.Worked(), om.Where(\"tool\", \"bash\")).Len())",
+   "fenced": false,
+   "class": "runtime",
+   "correct": false,
+   "correct_alt": false,
+   "out": "Error: line 1: panic: om.Attempts: unknown field \"tool\" in notes: the fields are id, when, kind, subject, scope, relevance, content, superseded_by, raw_subject, subject_scope, status, event_date, source, source_role, source_time\n\n\u2500\u2500 Reads \u2500\u2500\n  om.Notes(opts ...Opt) NoteList: lists the active folded records: the branch's, else the off-path fallback's.\n  om.Reflections(opts ...Opt) ReflectionList: lists the standing reflections.\n  om.History(opts ...Opt) EntryList: lists user, assistant and tool text, newest first, without the current turn.\n  om.Recall(id string, opts ...Opt) (Text, error): reads a record's sources, else an entry (paged), else a saved memory by name.\n  om.NoteByID(id string) (Note, error): reads one record, dropped or replaced ones included.\n  om.ReflectionByID(id string) (Reflection, error): reads one reflection.\n  om.Files(opts ...Opt) NoteList: lists the file records: the newest state per path.\n  om.Commits(opts ...Opt) NoteList: lists the commit records.\n  om.Attempts(opts ...Opt) NoteList: lists the attempt records; Failed, Worked and Open select by outcome.\n  om.Dropped(opts ...Opt) NoteList: lists the records dropped by rule.\n  om.Subjects() map[string]int: counts the active records of each canonical subject.\n  om.Saved(opts ...Opt) MemoryList: lists the curated memories, ranked as the index ranks them.\n  om.Info() StatusInfo: the /om:status figures, each model's labelled with its model.\n  om.Layer(opts ...Opt) LayerList: lists every model's layer definitions, rules included.\n  om.Retired(opts ...Opt) RetiredList: lists the retired defined queries with their equivalent snippets.\n  om.Str(name string) string: a named string from this call's strings.\n  om.ErrNoCall() error: the error of an om call made with no memory tool call in flight (at replay).",
+   "chars": 69
+  },
+  "retry": {
+   "code": "fmt.Println(om.Attempts(om.Worked()).Filter(func(n om.Note) bool { return n.Tool == \"bash\" }).Len())",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "4",
+   "chars": 100
+  }
+ },
+ {
+  "task": "t13",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((page (om:attempts :worked t))\n       (count (length\n               (om:rows\n                (om:filter-rows page\n                                (lambda (row)\n                                  (string= (om:field row \"tool\") \"bash\"))))))\n  (format t \"~a\" count))",
+   "fenced": false,
+   "class": "paren",
+   "correct": false,
+   "correct_alt": false,
+   "out": "error: end of file on #<dynamic-extent STRING-INPUT-STREAM (unavailable) from \"(let* ((...\">",
+   "chars": 269
+  },
+  "retry": {
+   "code": "(let* ((page (om:attempts :worked t))\n       (count (length\n               (om:rows\n                (om:filter-rows page\n                                (lambda (row)\n                                  (string= (om:field row \"tool\") \"bash\")))))))\n  (format t \"~a\" count))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "4",
+   "chars": 270
+  }
+ },
+ {
+  "task": "t14",
+  "lang": "go",
+  "first": {
+   "code": "a := om.Attempts(om.Failed(), om.Limit(200))\nif len(a.Rows) == 0 {\n    fmt.Print(\"\")\n} else {\n    sort.Slice(a.Rows, func(i, j int) bool { return a.Rows[i].When < a.Rows[j].When })\n    fmt.Print(strings.SplitN(a.Rows[0].When, \"T\", 2)[0])\n}",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "2026-05-01 09:11",
+   "chars": 239
+  },
+  "retry": {
+   "code": "a := om.Attempts(om.Failed(), om.Limit(200))\nif len(a.Rows) == 0 {\n\tfmt.Print(\"\")\n} else {\n\tsort.Slice(a.Rows, func(i, j int) bool { return a.Rows[i].When < a.Rows[j].When })\n\tfmt.Print(strings.SplitN(a.Rows[0].When, \" \", 2)[0])\n}",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "2026-05-01",
+   "chars": 230
+  }
+ },
+ {
+  "task": "t14",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((rows (om:rows (om:attempts :failed t :sort-by \"when\" :limit 200)))\n       (date (subseq (om:note-when (first rows)) 0 10)))\n  (princ date))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": true,
+   "out": "2026-05-01\n2026-05-01",
+   "chars": 147
+  },
+  "retry": {
+   "code": "(let* ((rows (om:rows (om:attempts :failed t :limit 200)))\n       (first-attempt (reduce (lambda (a b)\n                                (if (string< (om:note-when a) (om:note-when b)) a b))\n                              rows)))\n  (princ (subseq (om:note-when first-attempt) 0 10)))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": true,
+   "out": "2026-05-01\n2026-05-01",
+   "chars": 280
+  }
+ },
+ {
+  "task": "t15",
+  "lang": "go",
+  "first": {
+   "code": "for _, n := range om.Notes(om.Search(\"preference\").Limit(200)).Rows {\n\tfmt.Println(n.Content)\n}",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "I prefer tabs over spaces in Go code.\nI prefer short commit messages under 50 characters.",
+   "chars": 95
+  }
+ },
+ {
+  "task": "t15",
+  "lang": "lisp",
+  "first": {
+   "code": "(dolist (note (om:rows (om:notes :kind \"preference\" :sort-by \"when\")))\n  (write-line (om:note-content note)))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "I prefer tabs over spaces in Go code.\nI prefer short commit messages under 50 characters.",
+   "chars": 109
+  }
+ },
+ {
+  "task": "t16",
+  "lang": "go",
+  "first": {
+   "code": "days := map[string]bool{}\nfor _, n := range om.Notes(om.Limit(200)).Rows {\n\tif len(n.When) >= 10 {\n\t\tdays[n.When[:10]] = true\n\t}\n}\nfmt.Println(len(days))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "5",
+   "chars": 153
+  }
+ },
+ {
+  "task": "t16",
+  "lang": "lisp",
+  "first": {
+   "code": "(format t \"~d\" (length (remove-duplicates (mapcar (lambda (n) (subseq (om:note-when n) 0 10)) (om:rows (om:notes :limit 200))) :test #'string=)))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "5",
+   "chars": 145
+  }
+ },
+ {
+  "task": "t17",
+  "lang": "go",
+  "first": {
+   "code": "a := om.Attempts(om.Failed(), om.Limit(1))\nif len(a.Rows) > 0 {\n\tfmt.Println(a.Rows[0].Content)\n}",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "Running the billing tests. [bash \"go test ./services/billing/...\" failed: --- FAIL: TestInvoiceTotals (0.01s)]",
+   "chars": 97
+  },
+  "retry": {
+   "code": "a := om.Attempts(om.Failed(), om.Limit(1))\nif len(a.Rows) > 0 {\n\tt, err := a.Rows[0].Recall()\n\tif err == nil {\n\t\tfmt.Println(t)\n\t}\n}",
+   "fenced": false,
+   "class": "compile",
+   "correct": false,
+   "correct_alt": false,
+   "out": "Error: line 4: undefined: err",
+   "chars": 132
+  }
+ },
+ {
+  "task": "t17",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((page (om:attempts :failed t :sort-by \"when\" :desc t :limit 1))\n       (attempt (first (om:rows page))))\n  (when attempt (princ (om:note-content attempt))))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": true,
+   "out": "Running search tests. [bash \"go test ./services/search/...\" failed: --- FAIL: TestHealthz (0.00s)]\nRunning search tests. [bash \"go test ./services/search/...\" failed: --- FAIL: TestHealthz (0.00s)]",
+   "chars": 163
+  },
+  "retry": {
+   "code": "(let* ((page (om:attempts :failed t :sort-by \"when\" :desc t :limit 1))\n       (attempt (first (om:rows page))))\n  (when attempt (write-string (om:note-content attempt)))\n  nil)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "Running search tests. [bash \"go test ./services/search/...\" failed: --- FAIL: TestHealthz (0.00s)]",
+   "chars": 176
+  }
+ },
+ {
+  "task": "t18",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Search(\"port\")).Filter(func(n om.Note) bool {\n\treturn strings.Contains(strings.ToLower(n.Content), \"port\")\n}).Len())",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "3",
+   "chars": 140
+  }
+ },
+ {
+  "task": "t18",
+  "lang": "lisp",
+  "first": {
+   "code": "(let ((page (om:notes :limit 200))\n      (count 0))\n  (loop\n    (dolist (note (om:rows page))\n      (let* ((text (om:note-content note))\n             (start 0))\n        (loop for pos = (search \"port\" text :start2 start :test #'char-equal)\n              while pos\n              for end = (+ pos 4)\n              do (when (and (or (zerop pos)\n                                (not (alphanumericp (char text (1- pos)))))\n                            (or (= end (length text))\n                                (not (alphanumericp (char text end)))))\n                   (incf count))\n                 (setf start end))))\n    (unless (om:next-page page) (return))\n    (setf page (eval (om:next-page page))))\n  (format t \"~D\" count))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "3",
+   "chars": 723
+  }
+ },
+ {
+  "task": "t19",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.History(om.Search(\"rounding fix\"), om.Limit(200)).Filter(func(e om.Entry) bool { return e.Role == \"user\" }).IDs())",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "[m17]",
+   "chars": 129
+  },
+  "retry": {
+   "code": "fmt.Println(om.History(om.Search(\"commit rounding\"), om.Limit(200)).Filter(func(e om.Entry) bool { return e.Role == \"user\" }))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": false,
+   "out": "history[1]{id,when,role,text}:\n  m17,\"2026-05-02 10:20\",user,Commit the rounding fix.",
+   "chars": 126
+  }
+ },
+ {
+  "task": "t19",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((p (om:history :search \"commit rounding fix\" :limit 200))\n       (e (find-if (lambda (e)\n                     (and (string= (om:entry-role e) \"user\")\n                          (search \"rounding\" (om:entry-text e) :test #'char-equal)\n                          (search \"commit\" (om:entry-text e) :test #'char-equal)))\n                   (om:rows p))))\n  (when e (princ (om:entry-id e))))",
+   "fenced": false,
+   "class": "wrong",
+   "correct": false,
+   "correct_alt": true,
+   "out": "m17\nm17",
+   "chars": 392
+  },
+  "retry": {
+   "code": "(let* ((p (om:history :search \"commit rounding fix\" :limit 200))\n       (e (find-if (lambda (e)\n                     (and (string= (om:entry-role e) \"user\")\n                          (search \"rounding\" (om:entry-text e) :test #'char-equal)\n                          (search \"commit\" (om:entry-text e) :test #'char-equal)))\n                   (om:rows p))))\n  (when e (princ (om:entry-id e)))\n  nil)",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "m17",
+   "chars": 398
+  }
+ },
+ {
+  "task": "t20",
+  "lang": "go",
+  "first": {
+   "code": "fmt.Println(om.Notes(om.Since(\"2026-05-02\").Until(\"2026-05-04\").Limit(200)).Filter(func(n om.Note) bool { return n.Kind != \"attempt\" }).Len())",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "8",
+   "chars": 142
+  }
+ },
+ {
+  "task": "t20",
+  "lang": "lisp",
+  "first": {
+   "code": "(let* ((p (om:notes :since \"2026-05-02\" :until \"2026-05-04\" :limit 200))\n       (q (om:filter-rows p (lambda (r) (not (string= (om:field r \"kind\") \"attempt\"))))))\n  (format t \"~d\" (om:len q)))",
+   "fenced": false,
+   "class": "ok",
+   "correct": true,
+   "correct_alt": true,
+   "out": "8",
+   "chars": 192
+  }
+ }
+]

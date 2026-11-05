@@ -1,0 +1,4 @@
+a := om.Attempts(om.Failed(), om.Limit(1))
+if len(a.Rows) > 0 {
+	fmt.Println(a.Rows[0].Content)
+}

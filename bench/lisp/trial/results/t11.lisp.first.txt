@@ -1,0 +1,3 @@
+(dolist (n (om:rows (om:notes :limit 200)))
+  (when (om:note-superseded-by n)
+    (format t "~a~%" (om:note-id n))))

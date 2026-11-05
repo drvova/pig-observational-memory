@@ -1,0 +1,1 @@
+fmt.Println(om.Notes(om.Since("2026-05-02").Until("2026-05-04").Limit(200)).Filter(func(n om.Note) bool { return n.Kind != "attempt" }).Len())

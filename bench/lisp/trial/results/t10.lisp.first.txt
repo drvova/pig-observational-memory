@@ -1,0 +1,2 @@
+(let ((p (om:history :since "2026-05-03" :until "2026-05-03" :limit 200)))
+  (format t "~D" (om:len (om:filter-rows p (lambda (e) (string= (om:entry-role e) "user"))))))

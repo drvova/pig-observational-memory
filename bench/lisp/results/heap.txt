@@ -1,0 +1,28 @@
+default dynamic-space-size MB: 1024
+with --dynamic-space-size 64MB: 64
+--- hook --keep, default heap:
+6770 lines 171418 values
+heap in use with 6770 lines held: 74.2 MB
+--- hook --keep, --dynamic-space-size 64MB:
+exit 1
+Heap exhausted during garbage collection: 48 bytes available, 64 requested.
+        Immobile Object Counts
+ Gen layout fdefn symbol   code  Boxed   Cons    Raw   Code  SmMix  Mixed  LgRaw LgCode  LgMix Waste%       Alloc        Trig   Dirty GCs Mem-age
+  2      0      0      0      0      5      7    813      0     11    167      0      0      0    6.5    30725936     2000000    1003   0  1.0372
+  3      0      0      0      0      0      0      0      0      0      0      0      0      0    0.0           0     2000000       0   0  0.0000
+  4      0      0      0      0      0      0      0      0      0      0      0      0      0    0.0           0     2000000       0   0  0.0000
+  5      0      0      0      0      0      0      0      0      0      0      0      0      0    0.0           0     2000000       0   0  0.0000
+  6    738  16067  26697  17784    358    145     42      3     16      9      0      0     58    2.4    20180912     2000000       1   0  0.0000
+  7      0      0      0      0      4      2    274      0      1    133      0      0      0    1.1    13412096     2000000     414   0  0.0000
+Tot    738  16067  26697  17784    367    154   1129      3     28    309      0      0     58    4.2    64318944 [95.8% of 67108864 max]
+GC control variables:
+   *GC-INHIBIT* = true
+   *GC-PENDING* = true
+   *STOP-FOR-GC-PENDING* = false
+fatal error encountered in SBCL pid 10207 tid 10207:
+Heap exhausted, game over.
+
+   0: fp=0x7f3978a7fbd0 pc=0x52c12475 (LABELS SB-IM
+--- heap exhaustion with stdin left open:
+runtime options "--dynamic-space-size 64MB ": exit 1 after 187 ms
+runtime options "--dynamic-space-size 64MB --disable-ldb": exit 1 after 163 ms

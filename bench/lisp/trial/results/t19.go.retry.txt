@@ -1,0 +1,2 @@
+fmt.Println(om.History(om.Search("commit rounding"), om.Limit(200)).Filter(func(e om.Entry) bool { return e.Role == "user" }))
+

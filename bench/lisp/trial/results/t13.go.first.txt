@@ -1,0 +1,1 @@
+fmt.Println(om.Attempts(om.Worked(), om.Where("tool", "bash")).Len())
