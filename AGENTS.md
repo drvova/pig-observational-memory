@@ -28,7 +28,7 @@ their tests fail on a diff or an undocumented om export. The language-neutral co
 refuses one there); the `om` binary for other harnesses is `memory/cmd/om` (`memory/cli`, `docs/universal.md`):
 it runs the engine over `memory/neutral` (the engine's entries in `~/.om` beside a transcript `memory/transcript` reads,
 never writing the harness's files) and makes no model request; its harness registry is data only (`memory/cli/assets/harnesses.json`, schema `contracts/schemas/registry.schema.json`, vocabulary in `docs/universal.md`; a harness is one entry, code only for a new named resolver, mapper or install kind, and `docs/harnesses.md` is generated from it with `go test ./cli -run HarnessDoc -args -write`); `memory/engine` is the session setup both adapters share. Building the PiG checkout itself needs `GOFLAGS` unset (it is a Go workspace).
-`lisp/` is the SBCL spike of the read-and-record path (`docs/lisp-spike.md`), outside CI: `sbcl --non-interactive
+`lisp/` is the SBCL memory core being ported from the Go engine, one image per user with each model's memory live in it (`docs/lisp-core.md` is the design and the port plan; `docs/lisp-spike.md` the first slice), outside CI: `sbcl --non-interactive
 --load lisp/run-tests.lisp`, and `cd memory && OM_LISP_PARITY=1 go test ./selection -run TestLispParity` diffs it
 against Go byte for byte (skipped without the variable or `sbcl`).
 
