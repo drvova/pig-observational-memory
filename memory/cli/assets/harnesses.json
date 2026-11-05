@@ -561,31 +561,6 @@
   "source": "https://raw.githubusercontent.com/CopilotC-Nvim/CopilotChat.nvim/main/README.md"
  },
  {
-  "name": "cortex-code",
-  "title": "Cortex Code CLI (Snowflake CoCo)",
-  "class": "file",
-  "path": {
-   "darwin": "~/.snowflake/cortex/mcp.json",
-   "linux": "~/.snowflake/cortex/mcp.json",
-   "windows": "~/.snowflake/cortex/mcp.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "type": "stdio",
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "SNOWFLAKE_HOME replaces ~/.snowflake; user servers load only if the account administrator allows user MCP servers; `cortex mcp add` writes the same file",
-  "source": "https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-mcp https://docs.snowflake.com/en/user-guide/cortex-code/settings"
- },
- {
   "name": "craft-agents",
   "title": "Craft Agents",
   "class": "manual",
@@ -1019,30 +994,6 @@
   "source": "https://bob.ibm.com/docs/shell/configuration/mcp/mcp-bobshell"
  },
  {
-  "name": "iflow-cli",
-  "title": "iFlow CLI",
-  "class": "file",
-  "path": {
-   "darwin": "~/.iflow/settings.json",
-   "linux": "~/.iflow/settings.json",
-   "windows": "~/.iflow/settings.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "Gemini CLI fork; same doc's platform section also names ~/.iflow/mcp/config.json, but the mcpServers reference and `iflow mcp add --scope user` use settings.json; native Windows limited",
-  "source": "https://raw.githubusercontent.com/iflow-ai/iflow-cli/main/docs_en/examples/mcp.md"
- },
- {
   "name": "jan",
   "title": "Jan",
   "class": "file",
@@ -1200,14 +1151,6 @@
   "class": "manual",
   "manual": "Settings > MCP Servers > Add MCP Server > STDIO",
   "source": "https://docs.langflow.org/mcp-client"
- },
- {
-  "name": "letta-code",
-  "title": "Letta Code",
-  "class": "manual",
-  "manual": "Letta Code app: connect an MCP server to the agent (/mcp)",
-  "note": "local MCP servers are stored per agent id (agents[].mcpServers in ~/.letta/settings.json via settingsManager.setMcpServers), so no global entry; cloud servers live on Letta Cloud",
-  "source": "https://raw.githubusercontent.com/letta-ai/letta-code/main/src/skills/builtin/using-mcp-tools/SKILL.md https://raw.githubusercontent.com/letta-ai/letta-code/main/src/settings-manager.ts"
  },
  {
   "name": "lingma",
@@ -1665,30 +1608,6 @@
   "source": "https://raw.githubusercontent.com/Nano-Collective/nanocoder/main/docs/configuration/mcp-configuration.md https://raw.githubusercontent.com/Nano-Collective/nanocoder/main/source/config/paths.ts"
  },
  {
-  "name": "neovate-code",
-  "title": "Neovate Code",
-  "class": "file",
-  "path": {
-   "darwin": "~/.neovate/config.json",
-   "linux": "~/.neovate/config.json",
-   "windows": "~/.neovate/config.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "global config merged under project .neovate/config.json; hooks are JS plugin hooks, not shell commands",
-  "source": "https://raw.githubusercontent.com/neovateai/neovate-code/master/src/config.ts https://raw.githubusercontent.com/neovateai/neovate-code/master/examples/mcp/.neovate/config.json"
- },
- {
   "name": "nimblebrain",
   "title": "NimbleBrain",
   "class": "manual",
@@ -1784,30 +1703,6 @@
   },
   "note": "user scope of `ollmcp mcp add --scope user`; always loaded as the base layer",
   "source": "https://raw.githubusercontent.com/jonigl/mcp-client-for-ollama/main/README.md https://raw.githubusercontent.com/jonigl/mcp-client-for-ollama/main/mcp_client_for_ollama/utils/constants.py"
- },
- {
-  "name": "open-interpreter",
-  "title": "Open Interpreter (terminal agent)",
-  "class": "file",
-  "path": {
-   "darwin": "~/.openinterpreter/config.toml",
-   "linux": "~/.openinterpreter/config.toml",
-   "windows": "~/.openinterpreter/config.toml"
-  },
-  "format": "toml",
-  "key": [
-   "mcp_servers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "current Open Interpreter is a Codex-derived terminal agent; `interpreter mcp add <name> -- <cmd>` writes the same table; older Python open-interpreter had no MCP",
-  "source": "https://raw.githubusercontent.com/openinterpreter/open-interpreter/main/docs/mcp.md"
  },
  {
   "name": "openclaw",
@@ -1978,29 +1873,6 @@
   "class": "manual",
   "manual": "user icon > Qoder IDE Settings > MCP > My Servers > + Add",
   "source": "https://docs.qoder.com/user-guide/chat/model-context-protocol.md"
- },
- {
-  "name": "qoder-cli",
-  "title": "Qoder CLI",
-  "class": "file",
-  "path": {
-   "darwin": "~/.qoder/settings.json",
-   "linux": "~/.qoder/settings.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "restart Qoder CLI after installing",
-  "source": "https://docs.qoder.com/cli/mcp-reference.md"
  },
  {
   "name": "qwenpaw",
@@ -2216,13 +2088,6 @@
   "class": "manual",
   "manual": "MCP tab > add server, and paste the command",
   "source": "https://raw.githubusercontent.com/runebookai/tome/main/README.md"
- },
- {
-  "name": "trae",
-  "title": "Trae",
-  "class": "manual",
-  "manual": "Settings > MCP > Add > Add Manually, and paste it under mcpServers",
-  "source": "https://docs.trae.ai/ide/model-context-protocol"
  },
  {
   "name": "twinny",

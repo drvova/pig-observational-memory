@@ -21,18 +21,16 @@ om install claude-code      # or any name om harnesses lists; --dry-run prints t
 
 ## What each harness gets
 
-| Harness | Records the conversation | Compaction | Memory tool | Installed into |
-|---|---|---|---|---|
-| Claude Code | `Stop` hook | `PreCompact` runs the engine's compaction of the whole conversation; `SessionStart` (`source: compact`) hands the summary back beside Claude's own | MCP server `om` | `~/.claude/settings.json` hooks; `claude mcp add --scope user om` |
-| Codex | `notify` program after each turn | none (Codex exposes no compaction hook): recorded memory is reached through the tool | MCP server `om` | `~/.codex/config.toml` (`notify`, `[mcp_servers.om]`, each line marked `# om:managed`) |
-| OpenCode | plugin, on `session.idle` | plugin, on `experimental.session.compacting`: the engine's summary joins the context OpenCode's summary is written from | MCP server `om` | `~/.config/opencode/plugin/om.js`, `opencode.json` `mcp.om` |
-| Pi, Oh My Pi, Gentle Shell | extension, on `turn_end` | extension, on `session_before_compact`: the engine compacts on Pi's own cut and Pi stores the result, as in PiG | `memory` tool run through `om call` | `~/.pi/agent/extensions/om.ts`; `~/.omp/agent/extensions/om.ts`; `~/.gentle-shell/agent/extensions/om.ts`, each under its own harness name |
-| Gemini CLI, Qwen Code, Factory Droid | `AfterAgent` / `Stop` hook | `PreCompress` / `PreCompact` runs the engine's compaction; Qwen's and Droid's `SessionStart` (`source: compact`) hand the summary back, Gemini's next `BeforeAgent` does, once | MCP server `om` | the harness's settings (`~/.gemini/settings.json`, `~/.qwen/settings.json`, `~/.factory/hooks.json`) |
-| Kimi CLI | `Stop` hook (om finds the session's `wire.jsonl` from its cwd and id) | `PreCompact` runs the engine's compaction; Kimi's hooks cannot hand the model context, so the summary is reached through the tool | MCP server `om` | `~/.kimi/config.toml` `[[hooks]]`, each line marked `# om:managed` |
-| OpenClaude, Deep Agents Code | `Stop` hook | `PreCompact` runs the engine's compaction; `SessionStart` (`source: compact`) hands the summary back | MCP server `om` | `~/.openclaude/settings.json`, `~/.deepagents/hooks.json` |
-| Kode | `Stop` hook (om reads Kode's Claude-format log in `~/.kode/projects/`, not the payload's text rendering) | `PreCompact` runs the engine's compaction; Kode runs SessionStart hooks only from plugins, so the summary is reached through the tool | MCP server `om` | `~/.kode/settings.json` |
-| Copilot CLI | `agentStop` hook (om reads `session-state/<id>/events.jsonl`) | `preCompact` runs the engine's compaction; `sessionStart` never follows Copilot's compaction, so the summary comes back on resume and through the tool | MCP server `om` | `~/.copilot/settings.json` `hooks`, `mcp-config.json` |
-| Any other | `om hook generic turn-end` | `om hook generic compact` prints the summary | `om mcp --harness <name>` or `om call` | your harness's own hook config |
+How om reaches each harness's conversation is one of four ways; [Harnesses](harnesses.md) lists every harness
+with exactly what it gets.
+
+| How om reads the conversation | Harnesses |
+|---|---|
+| A hook (or notify program) at each turn's end, over the transcript the harness writes; most also compact at a pre-compaction hook and hand the summary back | Claude Code, OpenClaude, Codex, Open Interpreter, Gemini CLI, Qwen Code, Qoder CLI, iFlow CLI, Kimi CLI, Factory Droid, Copilot CLI, Cursor, Cortex Code, Deep Agents Code, Kode, Auggie, Cline |
+| A plugin or extension inside the harness | Pi, Oh My Pi, Gentle Shell (Pi's extension: om compacts on Pi's own cut and Pi stores it), OpenCode, Kilo Code (plugin: the summary joins their compaction context), Neovate Code |
+| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin) |
+| The memory tool alone (MCP), shared through `~/.om` | every other harness |
+| `om hook generic turn-end` / `compact` | any other harness that can run a command |
 
 `om install pig` runs `pig install` for this repository: PiG runs the engine as its own extension, not
 through `om`.
@@ -43,7 +41,7 @@ summary with its intent and next sections, ranked search, curated memory, kept d
 
 Tested: every hook protocol end to end against the `om` binary (`memory/cli/cli_test.go`,
 `hookfamilies_test.go`), the Claude Code reader against a real Claude Code transcript, and the
-installers' round trips. The Gemini, Qwen, Kimi, Droid, Copilot and Deep Agents readers are tested on samples built
+installers' round trips. The readers after Claude Code, Codex and Pi are tested on samples built
 from each harness's own source or published types (`memory/transcript/hookformats_test.go`), not on
 files those harnesses wrote. The OpenCode plugin and the Pi extension are checked by `node --check` and
 `tsc --strict` but have not run inside OpenCode or Pi.
@@ -63,13 +61,22 @@ A harness with the memory tool only has no session om can see, so the tool serve
 session with no conversation: the curated memory (`om.Save`, `om.Saved`) and kept definitions, shared
 across every harness through `~/.om`.
 
-Hooks are wired only where om can read the transcript a hook points at, by a reader in
-`memory/transcript` taken from the harness's own source or published types. Cursor's transcript keeps no
-entry ids, timestamps or tool results and folds reasoning into the reply, and Kiro's hooks name no
-transcript (its sessions are SQLite with no published schema) and it has no compaction hook, so both stay
-on the memory tool. So do Letta Code (its hook payloads name no session or transcript), iFlow CLI (its
-transcript is undocumented and it has no compaction hook), Open Interpreter (a Codex fork whose rollout
-format is not yet checked in the fork) and Cortex Code (its hook docs could not be read).
+Hooks are wired only where om can read the conversation: a transcript whose format a reader in
+`memory/transcript` takes from the harness's own source or published types, or hooks that carry the turn's
+text. These stay on the memory tool:
+
+- **Crush and Goose:** they keep sessions in SQLite. Reading them needs an SQLite driver in the engine
+  module, which PiG also builds, so it is not added yet.
+- **Nanocoder:** no turn-end hook, and its session file is rewritten with no message ids.
+- **Continue CLI:** its hook system ships unused.
+- **CodeBuddy Code:** its transcript's field names are not confirmed.
+- **Kiro, Amazon Q Developer CLI and Junie:** their hooks name no transcript and carry no turn text (Amazon
+  Q's store is one SQLite row per directory).
+- **Mistral Vibe:** its session store is private and versioned, not a transcript.
+- **Zed:** no hooks.
+
+The readers for Cursor and Windsurf work from lossy sources. Cursor's transcript keeps no tool results, and
+Windsurf hands over a Markdown summary of each response. So level 0 records the requests and replies.
 
 Sources, checked 2026-11-04: cursor.com/docs (mcp, hooks), docs.devin.ai (desktop customizations, cli
 hooks), docs.cline.bot (mcp, config), kilo.ai/docs, zed.dev/docs/ai/mcp, docs.github.com (copilot hooks
@@ -120,6 +127,6 @@ echo '{"harness":"mine","session_id":"s1","transcript_path":"/path/t.jsonl","for
 echo '{"harness":"mine","session_id":"s1","transcript_path":"/path/t.jsonl","format":"generic","cwd":"/repo"}' | om hook generic session-start   # prints the context to give the model
 ```
 
-`format` is `generic`, `claude-code`, `codex`, `pi`, `gemini`, `qwen`, `kimi`, `droid`, `copilot` or `deepagents`. The memory tool is `om mcp --harness mine` for an MCP
+`format` is `generic`, `claude-code`, `codex`, `pi`, `gemini`, `qwen`, `kimi`, `droid`, `copilot`, `deepagents`, `cursor`, `qoder`, `cline`, `neovate`, `iflow`, `cortex` or `auggie`. The memory tool is `om mcp --harness mine` for an MCP
 client, or one call at a time with `om call --harness mine --dir /repo` (the tool's arguments as JSON on
 stdin); `om tool-spec` prints its name, description and JSON schema for registering it natively.

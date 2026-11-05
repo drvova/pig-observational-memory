@@ -195,3 +195,140 @@ func TestDeepAgents(t *testing.T) {
 		t.Fatalf("kode path %s", got)
 	}
 }
+
+// Cursor: user and assistant lines by position; metadata and turn_ended are not entries.
+func TestCursor(t *testing.T) {
+	p := write(t,
+		`{"type":"metadata","metadata":{"overview":"x"}}`,
+		`{"role":"user","message":{"content":[{"type":"text","text":"List files"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"Listing."},{"type":"tool_use","name":"Shell","input":{"command":"ls"}}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"Two files: a.go, b.go."}]}}`,
+		`{"type":"turn_ended","status":"success"}`,
+	)
+	es, err := File{Path: p, Format: Cursor}.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := roles(es); got != "cu000002:user cu000003:assistant cu000004:assistant" {
+		t.Fatalf("entries %s", got)
+	}
+	if call := es[1].Message["content"].([]any)[1].(map[string]any); call["id"] != "cu000003.1" || call["name"] != "Shell" {
+		t.Fatalf("call %v", call)
+	}
+}
+
+// Cline: one JSON document (here pretty-printed) whose messages keep their ids; a user
+// message's tool_result is the toolResult of its call.
+func TestCline(t *testing.T) {
+	p := write(t, `{
+  "version": 1, "sessionId": "s1", "agent": "lead",
+  "messages": [
+    {"id": "X1", "role": "user", "content": [{"type": "text", "text": "read a"}], "ts": 1762300000000},
+    {"id": "X2", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a"}}], "ts": 1762300001000},
+    {"id": "X3", "role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "hello", "is_error": false}]},
+    {"id": "X4", "role": "assistant", "content": [{"type": "text", "text": "It says hello."}]}
+  ]
+}`)
+	es, err := File{Path: p, Format: Cline}.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := roles(es); got != "X1:user X2:assistant X3:toolResult X4:assistant" {
+		t.Fatalf("entries %s", got)
+	}
+	if es[2].Message["toolName"] != "read_file" || !strings.HasPrefix(es[0].Timestamp, "2025-") {
+		t.Fatalf("result %v ts %s", es[2].Message, es[0].Timestamp)
+	}
+}
+
+// Neovate Code: file order across a compaction's new chain root; the summary itself is left
+// out; a tool line's tool-result is the toolResult of its call.
+func TestNeovate(t *testing.T) {
+	p := write(t,
+		`{"type":"config","key":"model","value":"x"}`,
+		`{"type":"message","uuid":"u1","parentUuid":null,"timestamp":"2026-11-05T00:00:00Z","sessionId":"s1","role":"user","content":"list files"}`,
+		`{"type":"message","uuid":"u2","parentUuid":"u1","timestamp":"2026-11-05T00:00:01Z","sessionId":"s1","role":"assistant","content":[{"type":"reasoning","text":"ls"},{"type":"tool_use","id":"t1","name":"bash","input":{"command":"ls"}}],"text":""}`,
+		`{"type":"message","uuid":"u3","parentUuid":"u2","timestamp":"2026-11-05T00:00:02Z","sessionId":"s1","role":"tool","content":[{"type":"tool-result","toolCallId":"t1","toolName":"bash","input":{},"result":{"llmContent":"a.go","isError":true}}]}`,
+		`{"type":"message","uuid":"c1","parentUuid":null,"timestamp":"2026-11-05T00:01:00Z","sessionId":"s1","role":"user","uiContent":"Chat history compacted successfully.","content":[{"type":"text","text":"<context_summary>...</context_summary>"}]}`,
+		`{"type":"message","uuid":"u4","parentUuid":"c1","timestamp":"2026-11-05T00:01:01Z","sessionId":"s1","role":"user","content":[{"type":"text","text":"next"}]}`,
+	)
+	es, _ := File{Path: p, Format: Neovate}.Entries()
+	if got := roles(es); got != "u1:user u2:assistant u3:toolResult u4:user" {
+		t.Fatalf("entries %s", got)
+	}
+	if es[2].Message["isError"] != true || es[2].Message["toolCallId"] != "t1" {
+		t.Fatalf("result %v", es[2].Message)
+	}
+}
+
+// Qoder: a Claude-shaped file is read as Claude Code's, one with Qwen's parts as Qwen Code's.
+func TestQoder(t *testing.T) {
+	cc := write(t, `{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-11-05T00:00:00Z","message":{"role":"user","content":"hi"}}`)
+	if es, _ := (File{Path: cc, Format: Qoder}).Entries(); roles(es) != "u1:user" {
+		t.Fatalf("claude-shaped %s", roles(es))
+	}
+	qw := write(t, `{"uuid":"q1","parentUuid":null,"sessionId":"s","timestamp":"2026-11-05T00:00:00Z","type":"user","message":{"role":"user","parts":[{"text":"hi"}]}}`)
+	if es, _ := (File{Path: qw, Format: Qoder}).Entries(); roles(es) != "q1:user" {
+		t.Fatalf("qwen-shaped %s", roles(es))
+	}
+}
+
+// iFlow: the compression summary starts a new chain, yet earlier records are still read; the
+// summary and its caveat are not entries; a thinking block's text comes from "text".
+func TestIFlow(t *testing.T) {
+	p := write(t,
+		`{"uuid":"a1","parentUuid":null,"sessionId":"s","timestamp":"2026-11-05T10:00:00.000Z","type":"user","isSidechain":false,"message":{"role":"user","content":"fix bug"}}`,
+		`{"uuid":"a2","parentUuid":"a1","sessionId":"s","timestamp":"2026-11-05T10:00:01.000Z","type":"assistant","message":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"thinking","text":"look","thinking":{"subject":"s","description":"d"}},{"type":"tool_use","id":"call_1","name":"read_file","input":{"path":"a.go"}}]}}`,
+		`{"uuid":"a3","parentUuid":"a2","sessionId":"s","timestamp":"2026-11-05T10:00:02.000Z","type":"user","message":{"role":"user","content":[{"tool_use_id":"call_1","type":"tool_result","content":"package a"}]},"toolUseResult":{"toolName":"read_file","status":"success"}}`,
+		`{"uuid":"a9","parentUuid":null,"sessionId":"s","timestamp":"2026-11-05T10:05:00.000Z","type":"user","message":{"role":"user","content":"<summary>"},"isCompactSummary":true}`,
+		`{"uuid":"a10","parentUuid":"a9","sessionId":"s","timestamp":"2026-11-05T10:05:00.100Z","type":"user","isMeta":true,"message":{"role":"user","content":"caveat"}}`,
+		`{"uuid":"a11","parentUuid":"a10","sessionId":"s","timestamp":"2026-11-05T10:06:00.000Z","type":"user","message":{"role":"user","content":"next"}}`,
+	)
+	es, _ := File{Path: p, Format: IFlow}.Entries()
+	if got := roles(es); got != "a1:user a2:assistant a3:toolResult a11:user" {
+		t.Fatalf("entries %s", got)
+	}
+	if th := es[1].Message["content"].([]any)[0].(map[string]any); th["thinking"] != "look" {
+		t.Fatalf("thinking %v", th)
+	}
+}
+
+// Cortex Code: merged lines, the last copy of an id standing at its first place, and a user
+// message's tool_result as the toolResult; flat lines grouped by message.
+func TestCortex(t *testing.T) {
+	p := write(t,
+		`{"role":"user","id":"msg_1","content":[{"type":"text","text":"fix bug","is_user_prompt":true}],"user_sent_time":"2026-11-05T10:00:00Z"}`,
+		`{"role":"assistant","id":"msg_2","content":[{"type":"text","text":"draft"}]}`,
+		`{"role":"user","id":"msg_3","content":[{"type":"tool_result","tool_result":{"tool_use_id":"tu_1","name":"bash","content":[{"type":"text","text":"a.go"}],"status":"error"}}]}`,
+		`{"role":"assistant","id":"msg_2","content":[{"type":"thinking","thinking":{"text":"t"}},{"type":"tool_use","tool_use":{"tool_use_id":"tu_1","name":"bash","input":{"command":"ls"}}}]}`,
+	)
+	es, _ := File{Path: p, Format: Cortex}.Entries()
+	if got := roles(es); got != "msg_1:user msg_2:assistant msg_3:toolResult" {
+		t.Fatalf("entries %s", got)
+	}
+	if len(es[1].Message["content"].([]any)) != 2 || es[2].Message["isError"] != true || es[2].Message["toolName"] != "bash" {
+		t.Fatalf("assistant %v result %v", es[1].Message, es[2].Message)
+	}
+	flat := write(t,
+		`{"role":"assistant","source_role":"assistant","id":"m1:0","message_id":"m1","content":[{"type":"text","text":"a"}],"content_block_index":0}`,
+		`{"role":"assistant","source_role":"assistant","id":"m1:1","message_id":"m1","content":[{"type":"text","text":"b"}],"content_block_index":1}`,
+	)
+	if es, _ := (File{Path: flat, Format: Cortex}).Entries(); len(es) != 1 || len(es[0].Message["content"].([]any)) != 2 {
+		t.Fatalf("flat %v", es)
+	}
+}
+
+// Auggie: an exchange is the request, its tool results and the reply with its tool calls.
+func TestAuggie(t *testing.T) {
+	p := write(t, `{"sessionId":"c1","chatHistory":[`+
+		`{"exchange":{"request_id":"r1","request_message":"fix bug","response_text":"Looking","request_nodes":[],"response_nodes":[{"id":1,"type":5,"content":"","tool_use":{"tool_use_id":"tu1","tool_name":"launch-process","input_json":"{\"command\":\"ls\"}"}}]},"completed":true,"isHistorySummary":false},`+
+		`{"exchange":{"request_id":"r2","request_message":"","response_text":"Two files.","request_nodes":[{"id":2,"type":1,"tool_result_node":{"tool_use_id":"tu1","content":"a.go b.go","is_error":false}}],"response_nodes":[]},"completed":true},`+
+		`{"exchange":{"request_id":"r3","request_message":"summary","response_text":"s"},"isHistorySummary":true}]}`)
+	es, _ := File{Path: p, Format: Auggie}.Entries()
+	if got := roles(es); got != "r1:user r1:a:assistant r2#0:toolResult r2:a:assistant" {
+		t.Fatalf("entries %s", got)
+	}
+	if call := es[1].Message["content"].([]any)[1].(map[string]any); call["arguments"].(map[string]any)["command"] != "ls" {
+		t.Fatalf("call %v", call)
+	}
+}

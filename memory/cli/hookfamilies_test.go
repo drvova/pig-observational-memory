@@ -259,3 +259,172 @@ func TestKodeHooks(t *testing.T) {
 		t.Fatal("no compaction stored")
 	}
 }
+
+// Trae, Letta Code and Windsurf hand their hooks the turn's text: om records it in its own
+// transcript, so level 0 sees every turn. Letta's Stop names no session; om takes the one its
+// prompt hook recorded for the directory.
+func TestRecordedTurns(t *testing.T) {
+	root, home := env(t)
+	proj := filepath.Join(home, "proj")
+	run := func(harness, event string, payload map[string]any) string {
+		b, _ := json.Marshal(payload)
+		return om(t, string(b), "hook", harness, event)
+	}
+	for i := range 30 {
+		run("trae", "UserPromptSubmit", map[string]any{"session_id": "t1", "cwd": proj, "prompt": fmt.Sprintf("Service svc-%d listens on port %d.", i, 8000+i)})
+		run("trae", "Stop", map[string]any{"session_id": "t1", "cwd": proj, "last_assistant_message": fmt.Sprintf("Noted svc-%d.", i)})
+
+		run("letta-code", "UserPromptSubmit", map[string]any{"event_type": "UserPromptSubmit", "working_directory": proj, "prompt": "x", "agent_id": "agent-1", "conversation_id": "default"})
+		run("letta-code", "Stop", map[string]any{"event_type": "Stop", "working_directory": proj, "user_message": fmt.Sprintf("Queue q-%d drains into bucket b-%d.", i, i), "assistant_message": "ok"})
+
+		run("devin", "pre_user_prompt", map[string]any{"trajectory_id": "w1", "agent_action_name": "pre_user_prompt", "tool_info": map[string]any{"user_prompt": fmt.Sprintf("Host h-%d runs on rack r-%d.", i, i)}})
+		run("devin", "post_cascade_response", map[string]any{"trajectory_id": "w1", "agent_action_name": "post_cascade_response", "tool_info": map[string]any{"response": "### Planner Response\nnoted"}})
+	}
+	for harness, want := range map[string]string{"trae/t1": "svc-17", "letta-code/default:agent-1": "b-17", "devin/w1": "r-17"} {
+		data, err := os.ReadFile(filepath.Join(root, "sessions", harness+".jsonl"))
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Fatalf("%s: no level-0 record of %s: %v", harness, want, err)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "transcripts", "trae", "t1.jsonl")); strings.Count(string(data), "\n") != 60 || !strings.Contains(string(data), `"id":"t000060"`) {
+		t.Fatalf("trae transcript:\n%s", data)
+	}
+	if out := run("devin", "post_cascade_response", map[string]any{"trajectory_id": "w1", "tool_info": map[string]any{}}); out != "" {
+		t.Fatalf("windsurf output %q", out)
+	}
+	run("letta-code", "PreCompact", map[string]any{"event_type": "PreCompact", "working_directory": proj, "agent_id": "agent-1", "conversation_id": "default"})
+	if out := run("letta-code", "UserPromptSubmit", map[string]any{"event_type": "UserPromptSubmit", "working_directory": proj, "prompt": "y", "agent_id": "agent-1", "conversation_id": "default"}); !strings.Contains(out, "before the compaction") || strings.HasPrefix(out, "{") {
+		t.Fatalf("letta summary %q", out)
+	}
+}
+
+// Cursor's hooks.json: version 1, flat commands with timeout in seconds; uninstall leaves the
+// user's own hooks.
+func TestCursorHooksInstall(t *testing.T) {
+	_, home := env(t)
+	cfg := filepath.Join(home, ".cursor", "hooks.json")
+	writeLines(t, cfg, []string{`{"version":1,"hooks":{"stop":[{"command":"./mine.sh"}]}}`})
+	om(t, "", "install", "cursor")
+	var c struct {
+		Version int                         `json:"version"`
+		Hooks   map[string][]map[string]any `json:"hooks"`
+	}
+	data, _ := os.ReadFile(cfg)
+	json.Unmarshal(data, &c)
+	if c.Version != 1 || len(c.Hooks["stop"]) != 2 || c.Hooks["preCompact"][0]["timeout"] != float64(600) {
+		t.Fatalf("installed %s", data)
+	}
+	om(t, "", "uninstall", "cursor")
+	data, _ = os.ReadFile(cfg)
+	c.Hooks = nil
+	json.Unmarshal(data, &c)
+	if len(c.Hooks) != 1 || len(c.Hooks["stop"]) != 1 {
+		t.Fatalf("after uninstall %s", data)
+	}
+}
+
+// Open Interpreter is a Codex fork: Claude-style hooks over its rollout.
+func TestOpenInterpreterHooks(t *testing.T) {
+	root, home := env(t)
+	rollout := filepath.Join(home, ".openinterpreter", "sessions", "2026", "11", "05", "rollout-x-th9.jsonl")
+	lines := []string{`{"timestamp":"2026-11-05T10:00:00Z","type":"session_meta","payload":{"id":"th9","cwd":"/p"}}`}
+	for i := range 40 {
+		lines = append(lines, fmt.Sprintf(`{"timestamp":"2026-11-05T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Queue q-%d drains into bucket b-%d every %d minutes."}]}}`, i, i, i+5))
+	}
+	writeLines(t, rollout, lines)
+	b, _ := json.Marshal(map[string]any{"session_id": "th9", "transcript_path": rollout, "cwd": "/p", "hook_event_name": "Stop"})
+	om(t, string(b), "hook", "open-interpreter", "Stop")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "open-interpreter", "th9.jsonl")); err != nil || !strings.Contains(string(data), "b-17") {
+		t.Fatalf("no level-0 batch: %v", err)
+	}
+}
+
+// Amp's plugin pipes each turn's messages; om records them, tool calls and results included.
+// Cline's TaskComplete names its session in sessionContext; om reads that session's messages
+// file. Both installs write their own files: Amp's plugin and Cline's executable hook.
+func TestAmpAndClineHooks(t *testing.T) {
+	root, home := env(t)
+	for _, k := range []string{"CLINE_DIR", "CLINE_DATA_DIR"} {
+		t.Setenv(k, "")
+	}
+	for i := range 30 {
+		b, _ := json.Marshal(map[string]any{"session_id": "T-1", "cwd": "/p", "messages": []any{
+			map[string]any{"role": "user", "id": fmt.Sprintf("u%d", i), "content": []any{map[string]any{"type": "text", "text": fmt.Sprintf("Queue q-%d drains into bucket b-%d.", i, i)}}},
+			map[string]any{"role": "assistant", "id": fmt.Sprintf("a%d", i), "content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprintf("c%d", i), "name": "Bash", "input": map[string]any{"cmd": "ls"}}}},
+			map[string]any{"role": "user", "id": fmt.Sprintf("r%d", i), "content": []any{map[string]any{"type": "tool_result", "toolUseID": fmt.Sprintf("c%d", i), "output": "a.go", "status": "done"}}},
+		}})
+		om(t, string(b), "hook", "amp", "agent.end")
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "amp", "T-1.jsonl")); err != nil || !strings.Contains(string(data), "b-17") {
+		t.Fatalf("amp: no level-0 record: %v", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "transcripts", "amp", "T-1.jsonl")); !strings.Contains(string(data), `"toolCallId":"c3"`) {
+		t.Fatalf("amp transcript:\n%s", data)
+	}
+
+	var msgs []any
+	for i := range 30 {
+		msgs = append(msgs, map[string]any{"id": fmt.Sprintf("m%d", i), "role": "user", "content": []any{map[string]any{"type": "text", "text": fmt.Sprintf("Host h-%d runs on rack r-%d.", i, i)}}, "ts": 1762300000000})
+	}
+	doc, _ := json.MarshalIndent(map[string]any{"version": 1, "sessionId": "s9", "messages": msgs}, "", "  ")
+	writeLines(t, filepath.Join(home, ".cline", "data", "sessions", "s9", "s9.messages.json"), []string{string(doc)})
+	b, _ := json.Marshal(map[string]any{"hookName": "agent_end", "taskId": "conv_1", "sessionContext": map[string]any{"rootSessionId": "s9"}, "workspaceRoots": []any{"/p"}})
+	om(t, string(b), "hook", "cline", "TaskComplete")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "cline", "s9.jsonl")); err != nil || !strings.Contains(string(data), "r-17") {
+		t.Fatalf("cline: no level-0 record: %v", err)
+	}
+
+	om(t, "", "install", "amp")
+	om(t, "", "install", "cline")
+	om(t, "", "install", "neovate-code")
+	hook := filepath.Join(home, ".cline", "hooks", "TaskComplete")
+	if st, err := os.Stat(hook); err != nil || st.Mode()&0o111 == 0 {
+		t.Fatalf("cline hook %v %v", st, err)
+	}
+	for _, p := range []string{hook, filepath.Join(home, ".config", "amp", "plugins", "om.ts"), filepath.Join(home, ".neovate", "plugins", "om.js")} {
+		if b, err := os.ReadFile(p); err != nil || strings.Contains(string(b), "__OM_") {
+			t.Fatalf("%s: %v", p, err)
+		}
+	}
+	for _, h := range []string{"amp", "cline", "neovate-code"} {
+		om(t, "", "uninstall", h)
+	}
+	if _, err := os.Stat(hook); !os.IsNotExist(err) {
+		t.Fatal("cline hook left")
+	}
+}
+
+// Cortex Code: om reads <session>.history.jsonl beside the .json the payload names, compacts at
+// PreCompact, and hands the summary with the next prompt. iFlow passes fields in the
+// environment too.
+func TestCortexAndIFlowHooks(t *testing.T) {
+	root, home := env(t)
+	t.Setenv("SNOWFLAKE_HOME", "")
+	conv := filepath.Join(home, ".snowflake", "cortex", "conversations")
+	var lines []string
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf(`{"role":"user","id":"u%d","content":[{"type":"text","text":"Service svc-%d listens on port %d and caches in /var/cache/svc%d.","is_user_prompt":true}],"user_sent_time":"2026-05-01T10:00:00Z"}`, i, i, 8000+i, i),
+			fmt.Sprintf(`{"role":"assistant","id":"a%d","content":[{"type":"text","text":"Noted: svc-%d on port %d."}]}`, i, i, 8000+i))
+	}
+	writeLines(t, filepath.Join(conv, "c1.history.jsonl"), lines)
+	b, _ := json.Marshal(map[string]any{"session_id": "c1", "transcript_path": filepath.Join(conv, "c1.json"), "cwd": "/p", "hook_event_name": "Stop"})
+	om(t, string(b), "hook", "cortex-code", "Stop")
+	om(t, string(b), "hook", "cortex-code", "PreCompact")
+	if ctx := hookContext(t, om(t, string(b), "hook", "cortex-code", "UserPromptSubmit")); !strings.Contains(ctx, "8042") {
+		t.Fatalf("cortex summary %q", ctx)
+	}
+
+	tr := filepath.Join(home, ".iflow", "projects", "-p", "session-1.jsonl")
+	lines = nil
+	for i := range 30 {
+		lines = append(lines, fmt.Sprintf(`{"uuid":"u%d","parentUuid":null,"sessionId":"session-1","timestamp":"2026-05-01T10:00:00.000Z","type":"user","message":{"role":"user","content":"Queue q-%d drains into bucket b-%d."}}`, i, i, i))
+	}
+	writeLines(t, tr, lines)
+	t.Setenv("IFLOW_SESSION_ID", "session-1")
+	t.Setenv("IFLOW_TRANSCRIPT_PATH", tr)
+	t.Setenv("IFLOW_CWD", "/p")
+	om(t, "", "hook", "iflow-cli", "Stop")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "iflow-cli", "session-1.jsonl")); err != nil || !strings.Contains(string(data), "b-17") {
+		t.Fatalf("iflow: no level-0 record: %v", err)
+	}
+}

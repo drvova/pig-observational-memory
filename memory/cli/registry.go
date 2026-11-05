@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/drvova/pig-observational-memory/memory/transcript"
@@ -87,6 +88,34 @@ type HookSpec struct {
 	// read over any path the payload names (Kimi CLI names none; Copilot's documented session log
 	// is its events.jsonl).
 	TranscriptFrom func(cwd, sessionID string) string
+	// TimeoutKey is a flat command's timeout field ("timeoutSec" by default; Cursor's "timeout");
+	// NoTimeout leaves it out where the harness has none (Windsurf).
+	TimeoutKey string
+	NoTimeout  bool
+	// Version is written as the hooks file's top-level "version" when set (Cursor).
+	Version int
+	// ContextField names the top-level field context goes back in, for PlainContext
+	// ("additionalContext" by default; Cursor's "additional_context"). TextContext writes it as
+	// plain stdout instead (Letta Code).
+	ContextField string
+	TextContext  bool
+	// NoContext says no hook output reaches the model, so om writes none (Windsurf).
+	NoContext bool
+	// SummaryOnStart hands the latest summary at every session start, for a harness whose
+	// session start names no source (Cursor).
+	SummaryOnStart bool
+	// SessionFromCurrent takes a payload with no session id as the session the harness's last
+	// hook recorded for its directory (Letta Code's Stop).
+	SessionFromCurrent bool
+	// EnvFields names environment variables the harness passes payload fields in (field ->
+	// variable), read when stdin lacks the field (iFlow CLI).
+	EnvFields map[string]string
+	// SessionFrom finds the session id in a payload that carries it under its own field.
+	SessionFrom func(raw map[string]any) string
+	// Record turns a hook payload into the generic transcript lines of the turn it carries, for
+	// a harness that keeps no transcript om reads but hands its hooks the turn's text: om keeps
+	// that transcript itself (~/.om/transcripts) and reads it in the generic format.
+	Record func(raw map[string]any) []map[string]any
 	// SummaryOnPrompt hands a compaction's summary to the model at the next prompt, for a harness
 	// whose session-start does not run again after it compacts (Gemini CLI).
 	SummaryOnPrompt bool
@@ -141,17 +170,29 @@ func init() {
 	})
 	register(Harness{
 		Name: "cursor", Title: "Cursor",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.cursor/mcp.json", "linux": "~/.cursor/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
-		Note: "Cursor's hooks are not wired: its transcript keeps no entry ids, timestamps or tool results, and folds reasoning into the reply",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.cursor/mcp.json", "linux": "~/.cursor/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.cursor/hooks.json", "linux": "~/.cursor/hooks.json"}, Transcript: "cursor", Flat: true, TimeoutKey: "timeout", Version: 1,
+			PlainContext: true, ContextField: "additional_context", SummaryOnStart: true,
+			Events: map[string]string{evSessionStart: "sessionStart", evTurnEnd: "stop", evPreCompact: "preCompact"}},
+		Note:   "IDE and agent CLI hooks; its transcript is lossy (no tool results, ids or timestamps), so level 0 records the requests and replies; the summary comes back at the next session start and through the tool",
+		Source: "https://cursor.com/docs/hooks.md",
 	})
 	register(Harness{
 		Name: "devin", Title: "Devin Desktop (Windsurf)",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json", "linux": "${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json", "windows": "${APPDATA}/devin/mcp_config.json"}, Key: []string{"mcpServers"}},
-		Note: "its hooks carry no transcript path, so they are not wired",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json", "linux": "${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json", "windows": "${APPDATA}/devin/mcp_config.json"}, Key: []string{"mcpServers"}},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.codeium/windsurf/hooks.json", "linux": "~/.codeium/windsurf/hooks.json", "windows": "${USERPROFILE}/.codeium/windsurf/hooks.json"}, Transcript: "generic",
+			Flat: true, NoTimeout: true, NoContext: true, SessionFrom: rawString("trajectory_id"),
+			Record: recordFields(map[string]string{"tool_info.user_prompt": "user", "tool_info.response": "assistant"}),
+			Events: map[string]string{evPrompt: "pre_user_prompt", evTurnEnd: "post_cascade_response"}},
+		Note:   "Cascade hooks: om records each prompt and Cascade's response summary itself (no transcript it reads); no compaction hook and no hook output reaches the model, so memory is the tool's",
+		Source: "https://docs.devin.ai/zh/desktop/cascade/hooks.md",
 	})
 	register(Harness{
 		Name: "cline", Title: "Cline",
-		MCP: &MCPSpec{Path: map[string]string{"darwin": "${CLINE_MCP_SETTINGS_PATH:-~/.cline/data/settings/cline_mcp_settings.json}", "linux": "${CLINE_MCP_SETTINGS_PATH:-~/.cline/data/settings/cline_mcp_settings.json}"}, Key: []string{"mcpServers"}},
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "${CLINE_MCP_SETTINGS_PATH:-~/.cline/data/settings/cline_mcp_settings.json}", "linux": "${CLINE_MCP_SETTINGS_PATH:-~/.cline/data/settings/cline_mcp_settings.json}"}, Key: []string{"mcpServers"}},
+		Custom: installClineHook,
+		Hooks: &HookSpec{Transcript: "cline", NoContext: true, SessionFrom: rawString("sessionContext.rootSessionId"), TranscriptFrom: transcript.ClineMessagesPath,
+			Events: map[string]string{evTurnEnd: "TaskComplete"}},
 	})
 	register(Harness{
 		Name: "zed", Title: "Zed",
@@ -208,8 +249,11 @@ func init() {
 	})
 	register(Harness{
 		Name: "augment", Title: "Augment (Auggie CLI)",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.augment/settings.json", "linux": "~/.augment/settings.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
-		Note: "its hooks cannot hand the model context and carry no transcript",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.augment/settings.json", "linux": "~/.augment/settings.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.augment/settings.json", "linux": "~/.augment/settings.json"}, Transcript: "auggie", TimeoutMS: true, PlainContext: true,
+			TranscriptFrom: transcript.AuggieSessionPath, Events: map[string]string{evSessionStart: "SessionStart", evTurnEnd: "Stop"}},
+		Note:   "om reads the session file Auggie keeps for the conversation (~/.augment/sessions); no compaction hook, so memory is the tool's and the session-start context",
+		Source: "https://docs.augmentcode.com/cli/hooks",
 	})
 	register(Harness{
 		Name: "kimi-cli", Title: "Kimi CLI",
@@ -220,8 +264,11 @@ func init() {
 	})
 	register(Harness{
 		Name: "amp", Title: "Amp",
-		MCP:  &MCPSpec{Path: map[string]string{"darwin": "~/.config/amp/settings.json", "linux": "~/.config/amp/settings.json", "windows": "${USERPROFILE}/.config/amp/settings.json"}, Key: []string{"amp.mcpServers"}},
-		Note: "its hooks are TypeScript plugins, not wired yet",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "~/.config/amp/settings.json", "linux": "~/.config/amp/settings.json", "windows": "${USERPROFILE}/.config/amp/settings.json"}, Key: []string{"amp.mcpServers"}},
+		Custom: assetInstaller("amp", "${XDG_CONFIG_HOME:-~/.config}/amp/plugins", "assets/amp/om.ts"),
+		Hooks:  &HookSpec{Transcript: "generic", NoContext: true, Record: ampRecord, Events: map[string]string{evTurnEnd: "agent.end"}},
+		Note:   "plugin: Amp keeps threads on its servers, so om records each turn's messages from agent.end itself; no compaction event, so memory is the tool's (plugin not yet run inside Amp)",
+		Source: "https://ampcode.com/docs/plugin-api",
 	})
 	register(Harness{
 		Name: "goose", Title: "Goose",
@@ -250,6 +297,61 @@ func init() {
 	register(Harness{
 		Name: "crush", Title: "Crush", Custom: installCrush,
 		Note: "its session-start and turn-start hooks cannot hand the model context, so they are not wired",
+	})
+	register(Harness{
+		Name: "qoder-cli", Title: "Qoder CLI",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "${QODER_CONFIG_DIR:-~/.qoder}/settings.json", "linux": "${QODER_CONFIG_DIR:-~/.qoder}/settings.json"}, Key: []string{"mcpServers"}},
+		Hooks:  &HookSpec{Path: map[string]string{"darwin": "${QODER_CONFIG_DIR:-~/.qoder}/settings.json", "linux": "${QODER_CONFIG_DIR:-~/.qoder}/settings.json"}, Events: claudeEventNames, Transcript: "qoder"},
+		Note:   "Claude Code-compatible hooks over its Claude-shaped transcript (Qwen Code lineage); restart Qoder CLI after installing",
+		Source: "https://docs.qoder.com/cli/hooks",
+	})
+	register(Harness{
+		Name: "neovate-code", Title: "Neovate Code",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "~/.neovate/config.json", "linux": "~/.neovate/config.json"}, Key: []string{"mcpServers"}, Entry: plainEntry},
+		Custom: assetInstaller("neovate-code", "~/.neovate/plugins", "assets/neovate/om.js"),
+		Note:   "plugin: its stop hook hands om each turn over Neovate's own session log (level 0); no compaction hook, so memory is the tool's (plugin not yet run inside Neovate)",
+		Source: "https://github.com/neovateai/neovate-code/blob/master/src/plugin.ts",
+	})
+	register(Harness{
+		Name: "iflow-cli", Title: "iFlow CLI",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${IFLOW_HOME:-~/.iflow}/settings.json", "linux": "${IFLOW_HOME:-~/.iflow}/settings.json"}, Key: []string{"mcpServers"}},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${IFLOW_HOME:-~/.iflow}/settings.json", "linux": "${IFLOW_HOME:-~/.iflow}/settings.json"}, Transcript: "iflow",
+			EnvFields: map[string]string{"session_id": "IFLOW_SESSION_ID", "transcript_path": "IFLOW_TRANSCRIPT_PATH", "cwd": "IFLOW_CWD"},
+			Events:    map[string]string{evSessionStart: "SessionStart", evTurnEnd: "Stop"}},
+		Note:   "Claude-style hooks over its Claude-style transcript; no compaction hook, so memory is the tool's; iFlow checks hook commands against an allowlist (if om is refused, allow it there)",
+		Source: "https://github.com/iflow-ai/iflow-cli/blob/main/docs_en/examples/hooks.md",
+	})
+	register(Harness{
+		Name: "cortex-code", Title: "Cortex Code CLI (Snowflake CoCo)",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "${SNOWFLAKE_HOME:-~/.snowflake}/cortex/mcp.json", "linux": "${SNOWFLAKE_HOME:-~/.snowflake}/cortex/mcp.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${SNOWFLAKE_HOME:-~/.snowflake}/cortex/hooks.json", "linux": "${SNOWFLAKE_HOME:-~/.snowflake}/cortex/hooks.json"}, Events: claudeEventNames,
+			Transcript: "cortex", TranscriptFrom: transcript.CortexHistoryPath, SummaryOnPrompt: true},
+		Note:   "Claude-shaped hooks over its <session>.history.jsonl; its SessionStart after a compaction drops context, so om's summary comes back with the next prompt; user MCP servers need the account administrator's allowance",
+		Source: "https://docs.snowflake.com/en/user-guide/cortex-code/extensibility",
+	})
+	register(Harness{
+		Name: "trae", Title: "Trae", Manual: "Settings > MCP > Add > Add Manually, and paste it under mcpServers",
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.trae/hooks.json", "linux": "~/.trae/hooks.json", "windows": "${USERPROFILE}/.trae/hooks.json"}, Transcript: "generic",
+			Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"}),
+			Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"}},
+		Note:   "Claude-style hooks: om records each prompt and reply itself (no transcript it reads); no compaction hook, so memory is the tool's and the session-start context",
+		Source: "https://docs.trae.ai/ide/hook-configuration-reference",
+	})
+	register(Harness{
+		Name: "letta-code", Title: "Letta Code", Manual: "Letta Code app: connect an MCP server to the agent (/mcp)",
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "~/.letta/settings.json", "linux": "~/.letta/settings.json"}, Transcript: "generic", TimeoutMS: true,
+			TextContext: true, SummaryOnPrompt: true, SessionFromCurrent: true, SessionFrom: lettaSession,
+			Record: recordFields(map[string]string{"user_message": "user", "assistant_message": "assistant"}),
+			Events: claudeEventNames},
+		Note:   "om records each turn from Stop (which names no session: om takes the one the prompt hook recorded for the directory) and compacts at PreCompact; the summary comes back with the next prompt",
+		Source: "https://github.com/letta-ai/letta-code/blob/main/src/hooks/types.ts",
+	})
+	register(Harness{
+		Name: "open-interpreter", Title: "Open Interpreter (terminal agent)",
+		TOML:   &TOMLSpec{Path: map[string]string{"darwin": "${INTERPRETER_HOME:-~/.openinterpreter}/config.toml", "linux": "${INTERPRETER_HOME:-~/.openinterpreter}/config.toml"}, Table: "mcp_servers", Entry: plainEntry},
+		Hooks:  &HookSpec{Path: map[string]string{"darwin": "${INTERPRETER_HOME:-~/.openinterpreter}/hooks.json", "linux": "${INTERPRETER_HOME:-~/.openinterpreter}/hooks.json"}, Events: claudeEventNames, Transcript: "codex"},
+		Note:   "a Codex fork: its rollout and Claude-style hooks; approve om's hooks once in /hooks (new hooks are untrusted); the summary comes back at the SessionStart after its compaction (source compact)",
+		Source: "https://github.com/openinterpreter/open-interpreter/blob/main/docs/hooks.md",
 	})
 	register(Harness{
 		Name: "openclaude", Title: "OpenClaude",
@@ -491,8 +593,18 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 			command := map[string]any{"type": "command", "command": strconv.Quote(exe) + " hook " + harness + " " + name, "timeout": timeout}
 			group := map[string]any{"hooks": []any{command}}
 			if spec.Flat {
-				command["timeoutSec"] = command["timeout"]
-				delete(command, "timeout")
+				key := spec.TimeoutKey
+				if key == "" {
+					key = "timeoutSec"
+				}
+				command[key] = timeout
+				if key != "timeout" {
+					delete(command, "timeout")
+				}
+				if spec.NoTimeout {
+					delete(command, key)
+					delete(command, "type")
+				}
 				group = command
 			}
 			if spec.Matcher != nil {
@@ -510,8 +622,14 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 	case spec.TopLevel:
 	case len(hooks) == 0:
 		delete(settings, "hooks")
+		if spec.Version != 0 && len(settings) == 1 && settings["version"] != nil {
+			delete(settings, "version")
+		}
 	default:
 		settings["hooks"] = hooks
+		if spec.Version != 0 && settings["version"] == nil {
+			settings["version"] = spec.Version
+		}
 	}
 	data, err := encodeJSON(settings)
 	if err != nil {
@@ -602,4 +720,101 @@ func listHarnesses(out io.Writer) error {
 		fmt.Fprintf(out, "%-16s %-30s %s\n", n, h.Title, strings.Join(parts, "; "))
 	}
 	return nil
+}
+
+// plainEntry is the common server entry, {"command", "args"}.
+func plainEntry(exe, harness string) map[string]any {
+	return map[string]any{"command": exe, "args": []any{"mcp", "--harness", harness}}
+}
+
+// rawString reads a payload field, "a.b" naming a nested one.
+func rawString(field string) func(raw map[string]any) string {
+	return func(raw map[string]any) string {
+		var v any = raw
+		for _, k := range strings.Split(field, ".") {
+			m, _ := v.(map[string]any)
+			v = m[k]
+		}
+		s, _ := v.(string)
+		return s
+	}
+}
+
+// recordFields records a turn from payload fields: each field present (rawString's syntax)
+// becomes a generic line of its role, users first.
+func recordFields(fields map[string]string) func(raw map[string]any) []map[string]any {
+	names := make([]string, 0, len(fields))
+	for f := range fields {
+		names = append(names, f)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if fields[names[i]] != fields[names[j]] {
+			return fields[names[i]] == "user"
+		}
+		return names[i] < names[j]
+	})
+	return func(raw map[string]any) []map[string]any {
+		var out []map[string]any
+		for _, f := range names {
+			if text := strings.TrimSpace(rawString(f)(raw)); text != "" {
+				out = append(out, map[string]any{"role": fields[f], "text": text})
+			}
+		}
+		return out
+	}
+}
+
+// lettaSession is Letta Code's conversation key: conversation:<id>, or default:<agent> for an
+// agent's default conversation (src/backend/local/local-conversation-key.ts).
+func lettaSession(raw map[string]any) string {
+	conv, _ := raw["conversation_id"].(string)
+	agent, _ := raw["agent_id"].(string)
+	switch {
+	case conv != "" && conv != "default":
+		return "conversation:" + conv
+	case agent != "":
+		return "default:" + agent
+	}
+	return ""
+}
+
+// ampRecord records an Amp turn from its agent.end messages: user text, assistant text with its
+// tool calls, and each tool result (Amp's plugin message shape: content blocks text, thinking,
+// tool_use {id, name, input} and tool_result {toolUseID, output, status}).
+func ampRecord(raw map[string]any) []map[string]any {
+	msgs, _ := raw["messages"].([]any)
+	var out []map[string]any
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		role, _ := msg["role"].(string)
+		blocks, _ := msg["content"].([]any)
+		var texts []string
+		var tools []any
+		for _, b := range blocks {
+			block, _ := b.(map[string]any)
+			switch block["type"] {
+			case "text":
+				if t, _ := block["text"].(string); t != "" {
+					texts = append(texts, t)
+				}
+			case "tool_use":
+				tools = append(tools, map[string]any{"id": block["id"], "name": block["name"], "arguments": block["input"]})
+			case "tool_result":
+				outText, ok := block["output"].(string)
+				if !ok && block["output"] != nil {
+					b, _ := json.Marshal(block["output"])
+					outText = string(b)
+				}
+				out = append(out, map[string]any{"role": "tool", "toolCallId": block["toolUseID"], "text": outText, "isError": block["status"] == "error"})
+			}
+		}
+		text := strings.Join(texts, "\n")
+		switch {
+		case role == "user" && text != "":
+			out = append(out, map[string]any{"role": "user", "text": text})
+		case role == "assistant" && (text != "" || len(tools) > 0):
+			out = append(out, map[string]any{"role": "assistant", "text": text, "tools": tools})
+		}
+	}
+	return out
 }

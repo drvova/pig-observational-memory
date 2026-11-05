@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/engine"
+	"github.com/drvova/pig-observational-memory/memory/filelock"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/neutral"
@@ -47,12 +49,33 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	if ev == "" {
 		return fmt.Errorf("om hook %s: unknown event %q", hs.Name, name)
 	}
-	p, err := decodeHookPayload(in)
+	p, err := decodeHookPayload(in, hs.Hooks.EnvFields)
 	if err != nil {
 		return fmt.Errorf("om hook %s: payload: %w", hs.Name, err)
 	}
+	if hs.Hooks.SessionFrom != nil {
+		if id := hs.Hooks.SessionFrom(p.Raw); id != "" {
+			p.SessionID = id
+		}
+	}
+	if p.Cwd == "" {
+		p.Cwd, _ = os.Getwd()
+	}
+	if p.SessionID == "" && hs.Hooks.SessionFromCurrent {
+		if cur, ok := current(a.root, hs.Name, p.Cwd); ok {
+			p.SessionID = cur.ID
+		}
+	}
 	if hs.Hooks.TranscriptFrom != nil {
 		p.TranscriptPath = hs.Hooks.TranscriptFrom(p.Cwd, p.SessionID)
+	}
+	if hs.Hooks.Record != nil {
+		if p.SessionID == "" {
+			return fmt.Errorf("om hook %s: the payload names no session", hs.Name)
+		}
+		if p.TranscriptPath, err = recordTurn(a.root, hs, p); err != nil {
+			return err
+		}
 	}
 	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: hs.Hooks.Transcript, Cwd: p.Cwd}
 	h, err := s.Host(a.root, a.log)
@@ -66,7 +89,7 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	case evSessionStart:
 		engine.SessionStart(a.rt, a.manager, &a.pin, h)
 		summary := ""
-		if p.Source == "compact" || p.Source == "resume" {
+		if p.Source == "compact" || p.Source == "resume" || hs.Hooks.SummaryOnStart {
 			summary, _ = h.LatestSummary()
 		}
 		return writeContext(out, hs, name, a.startContext(h, summary))
@@ -91,8 +114,18 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 
 // writeContext writes context for the model in the shape the harness reads.
 func writeContext(out io.Writer, hs Harness, name, context string) error {
-	if hs.Hooks.PlainContext {
-		return json.NewEncoder(out).Encode(map[string]any{"additionalContext": context})
+	switch {
+	case hs.Hooks.NoContext:
+		return nil
+	case hs.Hooks.TextContext:
+		_, err := io.WriteString(out, context+"\n")
+		return err
+	case hs.Hooks.PlainContext:
+		field := hs.Hooks.ContextField
+		if field == "" {
+			field = "additionalContext"
+		}
+		return json.NewEncoder(out).Encode(map[string]any{field: context})
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": name, "additionalContext": context}})
 }
@@ -136,12 +169,29 @@ func summaryToHand(h *neutral.Host) (string, error) {
 // workspace_roots, OpenHands' working_dir.
 type hookPayload struct {
 	SessionID, TranscriptPath, Cwd, Source, Trigger string
+	// Raw is the whole payload, for a harness whose turn om records itself (HookSpec.Record).
+	Raw map[string]any
 }
 
-func decodeHookPayload(in io.Reader) (hookPayload, error) {
-	var raw map[string]any
-	if err := json.NewDecoder(in).Decode(&raw); err != nil {
+// decodeHookPayload reads a hook's stdin JSON (empty stdin is an empty payload); env names
+// the environment variables a harness passes fields in instead (HookSpec.EnvFields).
+func decodeHookPayload(in io.Reader, env map[string]string) (hookPayload, error) {
+	raw := map[string]any{}
+	data, err := io.ReadAll(in)
+	if err != nil {
 		return hookPayload{}, err
+	}
+	if len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return hookPayload{}, err
+		}
+	}
+	for field, name := range env {
+		if v := os.Getenv(name); v != "" {
+			if s, _ := raw[field].(string); s == "" {
+				raw[field] = v
+			}
+		}
 	}
 	first := func(keys ...string) string {
 		for _, k := range keys {
@@ -154,16 +204,68 @@ func decodeHookPayload(in io.Reader) (hookPayload, error) {
 	p := hookPayload{
 		SessionID:      first("session_id", "sessionId", "conversation_id", "conversationId"),
 		TranscriptPath: first("transcript_path", "transcriptPath"),
-		Cwd:            first("cwd", "working_dir"),
+		Cwd:            first("cwd", "working_dir", "working_directory"),
 		Source:         first("source"),
 		Trigger:        first("trigger"),
+		Raw:            raw,
 	}
-	if p.Cwd == "" {
-		if roots, ok := raw["workspace_roots"].([]any); ok && len(roots) > 0 {
+	for _, k := range []string{"workspace_roots", "workspaceRoots"} {
+		if roots, ok := raw[k].([]any); ok && len(roots) > 0 && p.Cwd == "" {
 			p.Cwd, _ = roots[0].(string)
 		}
 	}
 	return p, nil
+}
+
+// recordTurn appends the turn a hook payload carries (HookSpec.Record) to om's own transcript
+// of the session, ~/.om/transcripts/<harness>/<session>.jsonl in the generic format, each line
+// given the next id; it returns that transcript's path.
+func recordTurn(root string, hs Harness, p hookPayload) (string, error) {
+	path := filepath.Join(root, "transcripts", hs.Name, safeName(p.SessionID)+".jsonl")
+	lines := hs.Hooks.Record(p.Raw)
+	if len(lines) == 0 {
+		return path, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	return path, filelock.WithLock(path+".lock", func() error {
+		n := 0
+		if data, err := os.ReadFile(path); err == nil {
+			n = strings.Count(string(data), "\n")
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for _, l := range lines {
+			n++
+			l["id"] = fmt.Sprintf("t%06d", n)
+			if _, ok := l["timestamp"]; !ok {
+				l["timestamp"] = now
+			}
+			b, err := json.Marshal(l)
+			if err != nil {
+				return err
+			}
+			if _, err := f.Write(append(b, '\n')); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// safeName is s usable as one path segment.
+func safeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == 0 {
+			return '_'
+		}
+		return r
+	}, strings.TrimPrefix(s, "."))
 }
 
 // codexHook answers Codex's notify program (om hook codex notify '<json>'), called after each

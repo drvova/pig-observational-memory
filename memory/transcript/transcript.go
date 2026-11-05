@@ -6,6 +6,7 @@ package transcript
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -48,13 +49,31 @@ func readLines(path string) ([]map[string]any, error) {
 	var out []map[string]any
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024*1024)
+	firstFailed, seen := false, false
 	for scanner.Scan() {
+		if !seen && len(bytes.TrimSpace(scanner.Bytes())) > 0 {
+			seen = true
+			var probe map[string]any
+			firstFailed = json.Unmarshal(scanner.Bytes(), &probe) != nil
+		}
 		var m map[string]any
 		if json.Unmarshal(scanner.Bytes(), &m) == nil && m != nil {
 			out = append(out, m)
 		}
 	}
-	return out, scanner.Err()
+	if err := scanner.Err(); err != nil || !firstFailed {
+		return out, err
+	}
+	// A file that is one JSON document over several lines (Cline's messages.json) is one line.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if json.Unmarshal(data, &m) == nil && m != nil {
+		return []map[string]any{m}, nil
+	}
+	return out, nil
 }
 
 // message builds a Pi message entry.

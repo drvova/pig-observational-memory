@@ -18,7 +18,7 @@ import (
 
 // assets are the adapters om writes for harnesses that load a plugin or an extension file.
 //
-//go:embed assets/opencode/om.js assets/pi/om.ts assets/harnesses.json
+//go:embed assets/opencode/om.js assets/pi/om.ts assets/neovate/om.js assets/amp/om.ts assets/harnesses.json
 var assets embed.FS
 
 // managedMark marks every line om writes into a harness's TOML config, so uninstall removes
@@ -41,7 +41,9 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 		return fmt.Errorf("om install: unknown harness %q (om harnesses lists them)", harnessName)
 	}
 	if h.Manual != "" {
-		return printManual(w, exe, h, remove)
+		if err := printManual(w, exe, h, remove); err != nil || h.Hooks == nil {
+			return err
+		}
 	}
 	if h.MCP != nil {
 		if err := installMCP(w, exe, h.Name, h.MCP, remove); err != nil {
@@ -117,6 +119,11 @@ type writer struct {
 }
 
 func (w writer) write(path string, data []byte) error {
+	return w.writeMode(path, data, 0o644)
+}
+
+// writeMode is write with the file's permission bits (an executable hook).
+func (w writer) writeMode(path string, data []byte, mode os.FileMode) error {
 	old, err := os.ReadFile(path)
 	if err == nil && bytes.Equal(old, data) {
 		fmt.Fprintf(w.out, "unchanged %s\n", path)
@@ -136,7 +143,10 @@ func (w writer) write(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 func (w writer) remove(path string) error {
@@ -248,12 +258,18 @@ func installCodex(w writer, exe string, remove bool) error {
 // pluginInstaller writes the om plugin into an OpenCode-style plugin directory (OpenCode and its
 // forks share the plugin API); the registry adds the MCP server.
 func pluginInstaller(harness, dirTemplate string) func(w writer, exe string, remove bool) error {
+	return assetInstaller(harness, dirTemplate, "assets/opencode/om.js")
+}
+
+// assetInstaller writes the plugin asset (with om's path and the harness name) into the
+// harness's plugin directory under the asset's own file name.
+func assetInstaller(harness, dirTemplate, asset string) func(w writer, exe string, remove bool) error {
 	return func(w writer, exe string, remove bool) error {
-		plugin := filepath.Join(pathTemplate(dirTemplate), "om.js")
+		plugin := filepath.Join(pathTemplate(dirTemplate), filepath.Base(asset))
 		if remove {
 			return w.remove(plugin)
 		}
-		src, err := assets.ReadFile("assets/opencode/om.js")
+		src, err := assets.ReadFile(asset)
 		if err != nil {
 			return err
 		}
@@ -330,4 +346,14 @@ func installPiG(w writer, exe string, remove bool) error {
 		w.run("pig", "install", pigSource)
 	}
 	return nil
+}
+
+// installClineHook writes Cline's TaskComplete hook, an executable file in its hooks directory
+// (${CLINE_DIR:-~/.cline}/hooks) that hands the payload to om.
+func installClineHook(w writer, exe string, remove bool) error {
+	path := filepath.Join(pathTemplate("${CLINE_DIR:-~/.cline}/hooks"), "TaskComplete")
+	if remove {
+		return w.remove(path)
+	}
+	return w.writeMode(path, []byte("#!/bin/sh\n# om: observational memory (written by om install cline)\nexec "+shellQuote(exe)+" hook cline TaskComplete\n"), 0o755)
 }
