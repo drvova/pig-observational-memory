@@ -18,4 +18,18 @@
                              (:file "ledger")
                              (:file "extract")
                              (:file "selection")
-                             (:file "pipeline")))))
+                             (:file "pipeline")))
+               ;; W4, tool and layer (docs/lisp-port-tool-layer.md)
+               (:module "w4"
+                :pathname "src"
+                :serial t
+                :components ((:file "tool/package")
+                             (:file "tool/files")
+                             (:file "tool/curated")
+                             (:file "layer/reader")
+                             (:file "layer/runner")
+                             (:file "layer/settle")
+                             (:file "layer/store")
+                             (:file "layer/adaptable")
+                             (:file "tool/reads")
+                             (:file "layer/lock")))))

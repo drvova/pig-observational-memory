@@ -24,7 +24,7 @@
   got)
 
 (let ((here (make-pathname :name nil :type nil :defaults *load-truename*)))
-  (dolist (file '("regex" "json" "ledger" "extract" "selection"))
+  (dolist (file '("regex" "json" "ledger" "extract" "selection" "tool-layer"))
     (load (merge-pathnames (format nil "tests/~A.lisp" file) here))))
 
 (let ((errors 0))
