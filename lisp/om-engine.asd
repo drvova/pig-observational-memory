@@ -18,4 +18,10 @@
                              (:file "ledger")
                              (:file "extract")
                              (:file "selection")
-                             (:file "pipeline")))))
+                             (:file "pipeline")
+                             ;; W2: the transcript readers and the neutral store.
+                             (:file "readers/common")
+                             (:file "readers/formats")
+                             (:file "readers/sqlite")
+                             (:file "readers/paths")
+                             (:file "store/neutral")))))

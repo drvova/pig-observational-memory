@@ -27,6 +27,11 @@
   (dolist (file '("regex" "json" "ledger" "extract" "selection"))
     (load (merge-pathnames (format nil "tests/~A.lisp" file) here))))
 
+;; W2: the transcript readers and the neutral store.
+(let ((here (make-pathname :name nil :type nil :defaults *load-truename*)))
+  (dolist (file '("readers" "store"))
+    (load (merge-pathnames (format nil "tests/~A.lisp" file) here))))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))
