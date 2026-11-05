@@ -36,7 +36,13 @@ var known = map[string]bool{
 	"examples": true, "format": true,
 }
 
-// Load reads every *.schema.json file in dir and checks that each uses only supported keywords.
+// validatedElsewhere are schema files in the same directory whose owner validates them with its
+// own, fuller validator: the harness registry's (memory/cli's schema_test.go), which uses
+// keywords this subset does not support.
+var validatedElsewhere = map[string]bool{"registry.schema.json": true}
+
+// Load reads every *.schema.json file in dir (but those validatedElsewhere) and checks that each
+// uses only supported keywords.
 func Load(dir string) (*Set, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.schema.json"))
 	if err != nil {
@@ -44,6 +50,9 @@ func Load(dir string) (*Set, error) {
 	}
 	s := &Set{docs: map[string]map[string]any{}, patterns: map[string]*regexp.Regexp{}}
 	for _, f := range files {
+		if validatedElsewhere[filepath.Base(f)] {
+			continue
+		}
 		data, err := os.ReadFile(f)
 		if err != nil {
 			return nil, err
