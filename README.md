@@ -4,18 +4,19 @@
 
 # pig-observational-memory
 
-**Observational memory for [PiG](https://github.com/MichaelKinsy/PiG): long agent sessions that keep the thread across compactions.**
+**Observational memory for [PiG](https://github.com/MichaelKinsy/PiG) and 196 other coding agents: long agent sessions that keep the thread across compactions.**
 
 *Does whatever a spider can, and remembers all of it.*
 
-A PiG extension that gives the agent a lasting memory of the session. It records what happens while you work, by code, and makes compaction a quick render instead of a slow rewrite.
+A PiG extension that gives the agent a lasting memory of the session. It records what happens while you work, by code, and makes compaction a quick render instead of a slow rewrite. The same engine ships as one binary, [`om`](#other-harnesses), for Claude Code, Codex, Cursor, Gemini CLI, Copilot, OpenCode, Pi and the rest.
 
 [![CI](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/drvova/pig-observational-memory/actions/workflows/ci.yml)
 [![PiG extension](https://img.shields.io/badge/PiG-extension-E62429?style=flat-square)](https://github.com/MichaelKinsy/PiG)
+[![Harnesses](https://img.shields.io/badge/harnesses-197-2EA043?style=flat-square)](docs/harnesses.md)
 [![Go 1.26+](https://img.shields.io/badge/go-1.26%2B-087BAF?style=flat-square&logo=go&logoColor=white)](extensions/observational-memory/go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0B2033?style=flat-square)](LICENSE)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Commands](#commands) · [Configuration](#configuration) · [Docs](#documentation)
+[Quick start](#quick-start) · [Other harnesses](#other-harnesses) · [How it works](#how-it-works) · [Commands](#commands) · [Configuration](#configuration) · [Docs](#documentation)
 
 </div>
 
@@ -67,18 +68,47 @@ pig install ./extensions/observational-memory --validate-only --json
 
 ## Other harnesses
 
-The same engine runs outside PiG as one binary, `om`, for 198 harnesses (Claude Code, Codex, OpenCode, Pi,
-Oh My Pi, Cursor, Copilot, Gemini CLI, Zed, Cline, JetBrains, Jan and more; [Harnesses](docs/harnesses.md) lists them) and any harness that can run a
-command at a turn's end:
+The memory engine is a harness-neutral Go module (`memory/`), and PiG is one adapter on it. The other is
+`om`, a single binary that brings the same memory to any coding agent:
 
 ```sh
 go install github.com/drvova/pig-observational-memory/memory/cmd/om@latest
-om install claude-code      # or any name om harnesses lists (--dry-run shows the changes; om uninstall reverses them)
+om harnesses                # every harness om knows, and what each gets
+om install claude-code      # or any name from that list
+om install codex --dry-run  # print the changes without writing them
+om uninstall codex          # take out exactly what install wrote
 ```
 
-It records the conversation from the harness's own transcript, hands its summary back when the harness
-compacts, and serves the memory tool over MCP, with no model request. [om](docs/universal.md) has what each
-harness gets and the protocol for any other.
+`om install` merges into the harness's own config, beside what is there, and keeps a `.om-backup` of any
+file it changes. The store lives under `~/.om` (`$OM_HOME`), so curated memory and kept definitions are
+shared across harnesses. What a harness gets depends on what it exposes:
+
+| Tier | What om does | Harnesses |
+| --- | --- | --- |
+| **Recording and compaction** (43) | Hooks, a plugin or an extension hand om each turn. It records it (level 0), compacts when the harness compacts, and hands the summary back where the harness allows | Claude Code, OpenClaude, Codex, Open Interpreter, Gemini CLI, Qwen Code, Qoder, iFlow, Kimi CLI, Factory Droid, Copilot CLI, Cursor, Cortex Code, Kiro, Cline, Kode, Deep Agents Code, Auggie, Crush, Goose, Amazon Q, Pi, Oh My Pi, Gentle Shell, OpenCode, Kilo Code, Neovate, Amp, Trae, Letta Code, Windsurf, CodeBuddy, Junie, IBM Bob, AdaL, Lingma, Posit Assistant, Tabnine CLI, Mastra Code, Devin CLI, Enconvo, Nanocoder, PiG |
+| **The memory tool, installed** (63) | om writes its MCP server into the harness's config | Claude Desktop, Continue, Roo Code, Void, Warp, Jan, Theia IDE, Twinny and more |
+| **The memory tool, added by hand** (91) | the harness keeps servers in its own UI, so `om install` prints the steps | JetBrains AI Assistant, Cherry Studio, LM Studio, Msty Studio, Chatbox, OpenHands and more |
+
+How it reads each conversation:
+
+- **From the harness's own transcript**, through a reader in `memory/transcript` written from that
+  harness's docs or source. om reads the harness's files and never writes them. Its own entries sit beside
+  them in `~/.om/sessions`.
+- **From SQLite sessions** (Crush, Goose, Amazon Q), with the `sqlite3` command or Python's `sqlite3`
+  module. No database driver is linked into the engine.
+- **From hooks that carry the turn's text**, when the harness keeps no transcript om can read. om records
+  each prompt and reply in its own transcript under `~/.om/transcripts`.
+
+`om` makes no model request. Level 1 needs the session model, which only PiG hands the engine, so
+everywhere else om runs the code-only path: level 0, the rendered summary with its intent and next
+sections, ranked search, curated memory and kept definitions.
+
+The readers are tested on transcripts the harnesses themselves wrote (`memory/transcript/testdata/real`,
+with sources and licenses), not only on samples built from their docs. Those real files caught gaps the
+docs never mentioned, such as Gemini's tool results kept on the call and Droid's injected context, and
+each is fixed. Any harness that can run a command at a turn's end can use the generic protocol (`om hook
+generic`). [om](docs/universal.md) has the details, and [Harnesses](docs/harnesses.md) lists every harness
+and the clients researched and found out of reach.
 
 ## How it works
 
@@ -176,6 +206,10 @@ memory/                            the harness-neutral memory engine, a Go modul
 ├── curated/, harness/, rules/     long-lived memories, the per-model harness, rules
 ├── kernel/, layer/, declare/      what no definition may touch; the model-built layer
 ├── host/, hostinfo/               the interfaces a harness adapter implements, and what it injects
+├── engine/                        the session setup every adapter shares
+├── neutral/                       a host over any harness's transcript, with om's entries beside it
+├── transcript/                    readers for each harness's transcript (testdata/real: their own files)
+├── cli/, cmd/om/                  the om binary: hooks, MCP server, installers, the harness registry
 ├── config/, serialize/, …         settings, source serialization, token estimates, debug log
 └── testfix/                       fake host and entry builders for tests
 extensions/observational-memory/   the PiG adapter, its own Go module
@@ -206,10 +240,11 @@ done
 | [Configuration](docs/configuration.md) | Every setting, debugging and the removed settings |
 | [PiG extension](docs/pig.md) | Install details, package layout and notes for migrating from the TypeScript extension |
 | [Contributing](docs/contributing.md) | Where changes go and which checks they must pass |
-| [om: other harnesses](docs/universal.md) | The `om` binary for Claude Code, Codex, OpenCode, Pi and any other harness |
+| [om: other harnesses](docs/universal.md) | The `om` binary: how it reads each harness, what each tier gets, the generic protocol |
 | [Harnesses](docs/harnesses.md) | Every harness `om install` supports, and how (generated) |
 | [Memory interface](docs/memory-interface.md) | Tables and codecs, the harness, the kernel and the layer |
 | [The code tool](docs/code-tool.md) | The `memory` tool: Go code over the `om` API in a child process |
+| [Bench results](docs/bench-results.md) | LongMemEval_s through real PiG sessions |
 
 ## Credits
 
