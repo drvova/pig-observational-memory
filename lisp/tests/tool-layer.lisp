@@ -38,7 +38,9 @@
                   "#.(+ 1 2)" "#+sbcl 1" "#-sbcl 1" "#:foo" "#p\"/tmp\"" "#s(foo)" "#1=(1 . #1#)"
                   "#a((1))" "(cl:car '(1))" "(cl::eval 1)" "(om.layer::refuse \"x\")" "(sb-ext:quit)"
                   "|EVAL|" "ev\\al" "(quit)" "(getenv \"HOME\")" "(defun car (x) x)"
-                  "(defvar *print-length* 1)" "(defparameter notes 1)" "'(a ,b)" "``(a)"))
+                  "(defvar *print-length* 1)" "(defparameter notes 1)" "'(a ,b)" "``(a)"
+                  "(loop for s being the external-symbols of \"SB-EXT\" collect s)"
+                  "(loop for s being each symbol of \"CL\" collect s)" "(symbol-name 'car)"))
     (om::check (refused-p text) t text)))
 
 (om::deftest reader-reads-model-code

@@ -54,13 +54,13 @@
     string-downcase string-capitalize string-trim string-left-trim string-right-trim char char=
     char/= char< char> char<= char>= char-equal char-upcase char-downcase char-code code-char
     alpha-char-p digit-char-p alphanumericp upper-case-p lower-case-p both-case-p
-    schar digit-char character simple-string symbol-name write-to-string
+    schar digit-char character simple-string write-to-string
     ;; output to the call's captured output
     princ prin1 print write-string write-line write-char terpri fresh-line princ-to-string
     prin1-to-string with-output-to-string make-string-output-stream get-output-stream-string
     ;; hash tables and arrays
     make-hash-table gethash remhash maphash hash-table-count clrhash hash-table
-    array-dimension vector-push vector-push-extend fill-pointer array boolean symbol keyword
+    array-dimension vector-push vector-push-extend fill-pointer array boolean keyword
     cons list vector)
   "The CL symbols model code may name.")
 
@@ -96,6 +96,11 @@ other CL symbol outside +allowed-cl+ is refused too.")
     ("MAKE-STRING" . safe-make-string) ("MAKE-LIST" . safe-make-list))
   "CL names model code reads as a checked wrapper.")
 
+(defparameter +denied-names+
+  '("SYMBOLS" "PRESENT-SYMBOL" "PRESENT-SYMBOLS" "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS")
+  "Names that are no CL symbol but that LOOP reads as iterating a package's symbols, which would
+hand model code symbols it could call; SYMBOL itself is a CL symbol outside the allowed set.")
+
 (defvar *allowed* nil "Name -> symbol, built on first use: the allowed set but the model's own.")
 
 (defun allowed-table ()
@@ -108,6 +113,8 @@ other CL symbol outside +allowed-cl+ is refused too.")
 
 (defun denied-reason (name)
   "Why a new name may not be read as a model symbol, or nil."
+  (when (member name +denied-names+ :test #'string=)
+    (return-from denied-reason (format nil "~(~A~): iterating a package's symbols is denied in model code" name)))
   (multiple-value-bind (s status) (find-symbol name "COMMON-LISP")
     (when (and s (eq status :external))
       (return-from denied-reason

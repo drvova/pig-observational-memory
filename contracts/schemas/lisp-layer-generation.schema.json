@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lisp layer manifest line",
+  "description": "One line of <layer root>/<model dir>/manifest.jsonl, the Lisp image's record of a model's layer of adaptable-function definitions (<layer root> is ~/.om/layer; <model dir> is layer.ModelDir of the model id). Each line is one generation: a definition held, settled or reverted on the evidence rule, forgotten, or the layer rolled back to an earlier generation. The definitions themselves (held/<name>.lisp, settled/<name>.lisp, blobs/<digest>.lisp) are Lisp source text, not JSON; held/index.json has the layer-held-index shape. Source: lisp/src/layer/store.lisp (append-generation, replay).",
+  "type": "object",
+  "required": ["gen", "time", "op"],
+  "additionalProperties": false,
+  "properties": {
+    "gen": { "description": "The generation number, from 1 in manifest order.", "type": "integer", "minimum": 1 },
+    "time": { "description": "RFC 3339 with nanoseconds.", "type": "string" },
+    "op": { "enum": ["hold", "settle", "revert", "forget", "rollback"] },
+    "kind": { "enum": ["adaptable"] },
+    "name": { "description": "The adaptable function's name.", "type": "string" },
+    "digest": { "description": "The digest of the definition's text (layer.Digest): 16 hex characters.", "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "target": { "description": "A rollback's generation.", "type": "integer", "minimum": 0 },
+    "reason": { "description": "Why the evidence rule settled or reverted it.", "type": "string" }
+  }
+}

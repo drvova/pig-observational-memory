@@ -33,6 +33,7 @@ member is cleared, not fatal).
 | `model-event` | `<store>/models/<model>.jsonl` | curated store |
 | `layer-generation` | `<store>/harness/<model>/manifest.jsonl` | curated store |
 | `layer-held-index` | `<store>/harness/<model>/held/index.json` | curated store |
+| `lisp-layer-generation` | `~/.om/layer/<model>/manifest.jsonl` (the Lisp image's layer; its `held/index.json` is `layer-held-index`) | Lisp layer |
 | `floor-lowering` | `<store>/harness/floor.jsonl` | curated store |
 | `code-units` | `<config>/observational-memory/memories/code/<project>/units.json` | code store |
 | `defs` | the shared record, reflection, alias, details and envelope shapes | — |
