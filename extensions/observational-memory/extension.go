@@ -11,17 +11,23 @@ import (
 
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
 	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/engine"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
-	"github.com/drvova/pig-observational-memory/memory/session"
 )
 
 // Name is the extension identity PiG expects: the factory directory's name.
 const Name = "observational-memory"
 
-// Extension is the PiG factory. PiG discovers it by its exact signature.
+// Extension is the PiG factory. PiG discovers it by its exact signature. The engine runs in
+// this process unless the user's global settings ask for an engine process
+// (docs/engine-rpc.md), which then answers every event.
 func Extension() *sdk.Extension {
 	ext := sdk.New(Name)
+	if client := processEngine(); client != nil {
+		RegisterProcess(ext, client)
+		return ext
+	}
 	rt := runtime.New()
 	Register(ext, rt)
 	return ext
@@ -124,140 +130,40 @@ func wantsContext(rt *runtime.Runtime) bool {
 	return !rt.Config().Passive
 }
 
-// handleBeforeCompact answers session_before_compact. It reads only the request's own
-// cancellation, which a manual /compact's run abort leaves live, never the agent run's signal.
+// handleBeforeCompact answers session_before_compact (engine.BeforeCompact). It reads only
+// the request's own cancellation, which a manual /compact's run abort leaves live, never the
+// agent run's signal.
 //
 // A panic anywhere in the handler (decoding, the host, the configuration, the hook, the
-// result) is recovered into hooks.RecoveredCompactionV2, and a result that would not encode is
-// replaced by it too: an error or a nil result would send PiG to its own summarizer, whose
-// requests the extension replaces (docs/memory-v2.md, "Owning every compaction PiG prepares").
-func handleBeforeCompact(ctx sdk.Context, rt *runtime.Runtime, data map[string]any) (result any, err error) {
-	defer func() {
-		recovered := recover()
-		if recovered == nil {
-			return
-		}
-		fallback, ok := recoveredBeforeCompact(rt, data)
-		if !ok {
-			panic(recovered)
-		}
-		result, err = fallback, nil
-	}()
-	event := decodeBeforeCompact(data)
+// result) is recovered into hooks.RecoveredCompactionV2, and a result that would not encode in
+// the SDK's JSON is replaced by it too: an error or a nil result would send PiG to its own
+// summarizer, whose requests the extension replaces (docs/memory-v2.md, "Owning every
+// compaction PiG prepares").
+func handleBeforeCompact(ctx sdk.Context, rt *runtime.Runtime, data map[string]any) (any, error) {
 	h := sdkhost.New(ctx)
-	outcome := hooks.HandleBeforeCompactRequest(h.RequestContext(), rt, h, event)
-	answer := outcome.ToResult()
-	if answer == nil {
+	result := engine.BeforeCompact(h.RequestContext(), rt, h, data, sdkEncodes)
+	if result == nil {
 		return nil, nil
 	}
-	if outcome.Compaction != nil {
-		if _, err := json.Marshal(answer); err != nil {
-			if fallback, ok := recoveredBeforeCompact(rt, data); ok {
-				return fallback, nil
-			}
-		}
-	}
-	return answer, nil
+	return result, nil
+}
+
+// sdkEncodes reports whether v encodes in the SDK's JSON, the encoding PiG receives.
+func sdkEncodes(v any) error {
+	_, err := json.Marshal(v)
+	return err
 }
 
 // recoveredBeforeCompact is the answer after a panic in the session_before_compact handler,
 // built from PiG's payload alone: false when the payload names no firstKeptEntryId to keep.
-func recoveredBeforeCompact(rt *runtime.Runtime, data map[string]any) (result map[string]any, ok bool) {
-	event := recoveredEvent(data)
-	if event.FirstKeptEntryID == "" {
-		return nil, false
-	}
-	result = hooks.RecoveredCompactionV2(rt, event).ToResult()
-	if _, err := json.Marshal(result); err != nil {
-		// The recovered compaction's details are empty lists and an engine name,
-		// so this does not happen; the summary alone still keeps PiG's cut.
-		result = map[string]any{"compaction": map[string]any{"summary": hooks.V2FallbackSummary, "firstKeptEntryId": event.FirstKeptEntryID, "tokensBefore": event.TokensBefore}}
-	}
-	return result, true
+func recoveredBeforeCompact(rt *runtime.Runtime, data map[string]any) (map[string]any, bool) {
+	return engine.RecoveredBeforeCompact(rt, data, sdkEncodes)
 }
 
-// recoveredEvent decodes as much of the payload as decodes without a panic: all
-// of it, else the preparation's firstKeptEntryId and tokensBefore alone.
-func recoveredEvent(data map[string]any) (event hooks.BeforeCompactEvent) {
-	defer func() {
-		if recover() == nil {
-			return
-		}
-		event = hooks.BeforeCompactEvent{}
-		func() {
-			defer func() { _ = recover() }()
-			preparation, _ := data["preparation"].(map[string]any)
-			event.FirstKeptEntryID, _ = preparation["firstKeptEntryId"].(string)
-			if tokensBefore, ok := preparation["tokensBefore"].(float64); ok {
-				event.TokensBefore = int(tokensBefore)
-			}
-		}()
-	}()
-	return decodeBeforeCompact(data)
-}
+// recoveredEvent decodes as much of the payload as decodes without a panic (engine.RecoveredEvent).
+func recoveredEvent(data map[string]any) hooks.BeforeCompactEvent { return engine.RecoveredEvent(data) }
 
-// decodeBeforeCompact reads PiG's session_before_compact payload: the whole
-// preparation, the branch, the reason and the custom instructions.
+// decodeBeforeCompact reads PiG's session_before_compact payload (engine.DecodeBeforeCompact).
 func decodeBeforeCompact(data map[string]any) hooks.BeforeCompactEvent {
-	event := hooks.BeforeCompactEvent{}
-	if preparation, ok := data["preparation"].(map[string]any); ok {
-		event.FirstKeptEntryID, _ = preparation["firstKeptEntryId"].(string)
-		if tokensBefore, ok := preparation["tokensBefore"].(float64); ok {
-			event.TokensBefore = int(tokensBefore)
-		}
-		event.Preparation = decodePreparation(preparation)
-	}
-	event.BranchEntries = session.FromAny(data["branchEntries"])
-	event.Reason, _ = data["reason"].(string)
-	event.CustomInstructions, _ = data["customInstructions"].(string)
-	return event
-}
-
-// decodePreparation reads the rest of PiG's CompactionPreparation; a missing or
-// malformed member stays zero.
-func decodePreparation(preparation map[string]any) hooks.CompactionPreparation {
-	out := hooks.CompactionPreparation{
-		MessagesToSummarize: messageList(preparation["messagesToSummarize"]),
-		TurnPrefixMessages:  messageList(preparation["turnPrefixMessages"]),
-	}
-	out.IsSplitTurn, _ = preparation["isSplitTurn"].(bool)
-	out.PreviousSummary, _ = preparation["previousSummary"].(string)
-	if ops, ok := preparation["fileOps"].(map[string]any); ok {
-		out.FileOps = hooks.CompactionFileOps{Read: stringList(ops["read"]), Written: stringList(ops["written"]), Edited: stringList(ops["edited"])}
-	}
-	if settings, ok := preparation["settings"].(map[string]any); ok {
-		out.Settings.Enabled, _ = settings["enabled"].(bool)
-		out.Settings.ReserveTokens = wholeNumber(settings["reserveTokens"])
-		out.Settings.KeepRecentTokens = wholeNumber(settings["keepRecentTokens"])
-	}
-	return out
-}
-
-func messageList(v any) []map[string]any {
-	list, _ := v.([]any)
-	out := make([]map[string]any, 0, len(list))
-	for _, item := range list {
-		if message, ok := item.(map[string]any); ok {
-			out = append(out, message)
-		}
-	}
-	return out
-}
-
-func stringList(v any) []string {
-	list, _ := v.([]any)
-	out := make([]string, 0, len(list))
-	for _, item := range list {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func wholeNumber(v any) int {
-	if n, ok := v.(float64); ok && n > 0 {
-		return int(n)
-	}
-	return 0
+	return engine.DecodeBeforeCompact(data)
 }

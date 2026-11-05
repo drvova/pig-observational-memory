@@ -27,6 +27,8 @@ const usage = `om: observational memory for coding agents
   om tool-spec                       the memory tool's name, description and JSON schema
   om status [--harness h] [--dir d]  the current session's memory figures
   om view [--harness h] [--dir d] [args]  print memory content (as /om:view)
+  om serve                           run the engine as a long-lived process for one harness
+                                     process: JSON-RPC 2.0 on stdin and stdout (docs/engine-rpc.md)
   om version
 
 The store lives under $OM_HOME (default ~/.om); its settings.json holds the settings.
@@ -63,6 +65,8 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	case "version":
 		_, err := fmt.Fprintln(stdout, "om", Version)
 		return err
+	case "serve":
+		return serve(root, stdin, stdout)
 	case "hook":
 		if len(args) < 3 {
 			return fmt.Errorf("om hook <harness> <event>")
