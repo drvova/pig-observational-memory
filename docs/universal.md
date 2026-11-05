@@ -26,10 +26,10 @@ with exactly what it gets.
 
 | How om reads the conversation | Harnesses |
 |---|---|
-| A hook (or notify program) at each turn's end, over the transcript the harness writes; most also compact at a pre-compaction hook and hand the summary back | Claude Code, OpenClaude, Codex, Open Interpreter, Gemini CLI, Qwen Code, Qoder CLI, iFlow CLI, Kimi CLI, Factory Droid, Copilot CLI, Cursor, Cortex Code, Deep Agents Code, Kode, Auggie, Cline |
+| A hook (or notify program) at each turn's end, over the transcript the harness writes; most also compact at a pre-compaction hook and hand the summary back | Claude Code, OpenClaude, Codex (hooks beside its notify program), Open Interpreter, Gemini CLI, Qwen Code, Qoder CLI, iFlow CLI, Kimi CLI, Factory Droid, Copilot CLI, Cursor, Cortex Code, Deep Agents Code, Kode, Auggie, Cline |
 | The same, over the harness's SQLite sessions, read with the `sqlite3` command or `python3` (no driver is linked) | Crush, Goose (a plugin's hook), Amazon Q Developer CLI (its row per directory; the hook goes in your agent file, which `om install` prints) |
 | A plugin or extension inside the harness | Pi, Oh My Pi, Gentle Shell (Pi's extension: om compacts on Pi's own cut and Pi stores it), OpenCode, Kilo Code (plugin: the summary joins their compaction context), Neovate Code |
-| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin), CodeBuddy Code, Junie; Nanocoder passes only the prompt, so om records the requests; Kiro's transcript is read where om finds it under `~/.kiro/sessions`, else its prompts are recorded |
+| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin), CodeBuddy Code, Junie, IBM Bob Shell, AdaL, Lingma, Posit Assistant, Tabnine CLI, Mastra Code; Devin CLI and Enconvo pass only the prompt or only the reply; Nanocoder passes only the prompt, so om records the requests; Kiro's transcript is read where om finds it under `~/.kiro/sessions`, else its prompts are recorded |
 | The memory tool alone (MCP), shared through `~/.om` | every other harness |
 | `om hook generic turn-end` / `compact` | any other harness that can run a command |
 
@@ -92,8 +92,13 @@ text. These stay on the memory tool:
 - **Mistral Vibe:** its hook carries no text, and its session store is private and versioned, not a transcript.
 - **Rovo Dev CLI:** its hook format is undocumented and its code is obfuscated.
 - **Zed:** no hooks.
-- **Every client with no hooks or plugins** (most desktop chat apps and editor plugins): their memory is
-  the tool's.
+- **Harnesses whose recording hook is in-process plugin code** (Neovim's CodeCompanion, Avante and
+  CopilotChat, Emacs' gptel, ellama and agent-shell, OpenClaw, Agent Zero, AiderDesk, Code Puppy and
+  others): each needs a plugin written in its own language. These are not written yet.
+- **Harnesses whose hooks are project-level only** (OpenHands, Raxol Code, Octomind), and the ones with
+  hooks but neither the turn's text nor a documented transcript (Firebender, Antigravity, Grok Build,
+  Refact, DeepChat).
+- **Every client with no hooks or plugins** (most desktop chat apps): their memory is the tool's.
 
 The readers for Cursor and Windsurf work from lossy sources. Cursor's transcript keeps no tool results, and
 Windsurf hands over a Markdown summary of each response. So level 0 records the requests and replies.

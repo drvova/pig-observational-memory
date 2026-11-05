@@ -603,3 +603,66 @@ func TestKiroTranscript(t *testing.T) {
 		t.Fatal("om recorded the prompts although Kiro's transcript was found")
 	}
 }
+
+// Codex's hooks (beside notify) read its rollout: Stop records, PreCompact compacts, and the
+// SessionStart after a compaction hands the summary back.
+func TestCodexHooks(t *testing.T) {
+	_, home := env(t)
+	rollout := filepath.Join(home, ".codex", "sessions", "2026", "11", "05", "rollout-x-th7.jsonl")
+	lines := []string{`{"timestamp":"2026-11-05T10:00:00Z","type":"session_meta","payload":{"id":"th7","cwd":"/p"}}`}
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf(`{"timestamp":"2026-11-05T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Service svc-%d listens on port %d and caches in /var/cache/svc%d."}]}}`, i, 8000+i, i))
+	}
+	writeLines(t, rollout, lines)
+	payload := func(source string) string {
+		b, _ := json.Marshal(map[string]any{"session_id": "th7", "transcript_path": rollout, "cwd": "/p", "hook_event_name": "x", "source": source, "trigger": "auto"})
+		return string(b)
+	}
+	om(t, payload(""), "hook", "codex", "Stop")
+	om(t, payload(""), "hook", "codex", "PreCompact")
+	if ctx := hookContext(t, om(t, payload("compact"), "hook", "codex", "SessionStart")); !strings.Contains(ctx, "before the compaction") || !strings.Contains(ctx, "svc-58") {
+		t.Fatalf("codex summary %q", ctx)
+	}
+	om(t, "", "install", "codex")
+	if b, err := os.ReadFile(filepath.Join(home, ".codex", "hooks.json")); err != nil || !strings.Contains(string(b), "hook codex PreCompact") {
+		t.Fatalf("codex hooks.json %s %v", b, err)
+	}
+}
+
+// The data harnesses with hooks: each records its turns from the payload, Tabnine's settings get
+// hooks switched on, and Mastra Code's hooks.json is keyed by event.
+func TestDataHarnessHooks(t *testing.T) {
+	root, home := env(t)
+	for i := range 30 {
+		b, _ := json.Marshal(map[string]any{"session_id": "b1", "cwd": "/p", "prompt": fmt.Sprintf("Queue q-%d drains into bucket b-%d.", i, i)})
+		om(t, string(b), "hook", "ibm-bob", "UserPromptSubmit")
+		om(t, `{"session_id":"b1","cwd":"/p","last_assistant_message":"noted"}`, "hook", "ibm-bob", "Stop")
+		b, _ = json.Marshal(map[string]any{"session_id": "t1", "cwd": "/p", "prompt": fmt.Sprintf("Host h-%d runs on rack r-%d.", i, i), "prompt_response": "ok"})
+		om(t, string(b), "hook", "tabnine", "AfterAgent")
+		b, _ = json.Marshal(map[string]any{"session_id": "m1", "cwd": "/p", "user_message": fmt.Sprintf("Service svc-%d listens on port %d.", i, 8000+i)})
+		om(t, string(b), "hook", "mastra-code", "UserPromptSubmit")
+		om(t, `{"session_id":"m1","cwd":"/p","assistant_message":"noted"}`, "hook", "mastra-code", "Stop")
+	}
+	for harness, want := range map[string]string{"ibm-bob/b1": "b-17", "tabnine/t1": "r-17", "mastra-code/m1": "svc-17"} {
+		if data, err := os.ReadFile(filepath.Join(root, "sessions", harness+".jsonl")); err != nil || !strings.Contains(string(data), want) {
+			t.Fatalf("%s: no level-0 record of %s: %v", harness, want, err)
+		}
+	}
+	om(t, "", "install", "tabnine")
+	om(t, "", "install", "mastra-code")
+	var tab struct {
+		HooksConfig map[string]bool `json:"hooksConfig"`
+		Hooks       map[string]any  `json:"hooks"`
+	}
+	b, _ := os.ReadFile(filepath.Join(home, ".tabnine", "agent", "settings.json"))
+	json.Unmarshal(b, &tab)
+	if !tab.HooksConfig["enabled"] || tab.Hooks["AfterAgent"] == nil {
+		t.Fatalf("tabnine settings %s", b)
+	}
+	var mc map[string][]map[string]any
+	b, _ = os.ReadFile(filepath.Join(home, ".mastracode", "hooks.json"))
+	json.Unmarshal(b, &mc)
+	if e := mc["Stop"]; len(e) != 1 || e[0]["timeout"] != float64(120000) || e[0]["type"] != "command" {
+		t.Fatalf("mastra hooks %s", b)
+	}
+}

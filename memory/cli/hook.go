@@ -22,7 +22,9 @@ import (
 func (a *app) hook(harnessName, event string, args []string, in io.Reader, out io.Writer) error {
 	switch harnessName {
 	case "codex":
-		return a.codexHook(event, args)
+		if event == "notify" {
+			return a.codexHook(event, args)
+		}
 	case "pi":
 		return a.piHook(event, in, out)
 	case "generic":

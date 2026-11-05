@@ -92,6 +92,9 @@ type HookSpec struct {
 	// NoTimeout leaves it out where the harness has none (Windsurf).
 	TimeoutKey string
 	NoTimeout  bool
+	// Enable is a settings key path om sets to true on install, for a harness that runs hooks
+	// only when they are switched on (Tabnine's hooksConfig.enabled).
+	Enable []string
 	// NoStdin says the harness passes everything in the environment, so om does not read stdin
 	// (which it may leave open: Nanocoder).
 	NoStdin bool
@@ -166,7 +169,9 @@ func init() {
 	})
 	register(Harness{
 		Name: "codex", Title: "Codex CLI", Custom: installCodex,
-		Note: "no compaction hook: memory is reached through the tool",
+		Hooks:  &HookSpec{Path: map[string]string{"": "${CODEX_HOME:-~/.codex}/hooks.json"}, Events: claudeEventNames, Transcript: "codex"},
+		Note:   "hooks (Stop, PreCompact, SessionStart after a compaction) over its rollout, which Codex asks you to review once (Settings > Hooks or /hooks), beside the notify program, which records even before",
+		Source: "https://developers.openai.com/codex/hooks.md",
 	})
 	register(Harness{
 		Name: "opencode", Title: "OpenCode", Custom: pluginInstaller("opencode", "${XDG_CONFIG_HOME:-~/.config}/opencode/plugin"),
@@ -323,7 +328,13 @@ func init() {
 	})
 	register(Harness{
 		Name: "roo-code", Title: "Roo Code",
-		Manual: "open the MCP panel, Edit Global MCP, and add it under mcpServers (the global file's path is not documented)",
+		MCP: &MCPSpec{Path: map[string]string{
+			"darwin":  "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+			"linux":   "${XDG_CONFIG_HOME:-~/.config}/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+			"windows": "${APPDATA}/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+		}, Key: []string{"mcpServers"}, Entry: plainEntry},
+		Note:   "the global mcp_settings.json in stock VS Code's storage (Edit Global MCP opens it); with roo-cline.customStoragePath set, or in a VS Code fork, use om install --mcp-config on that file",
+		Source: "https://github.com/RooCodeInc/Roo-Code/blob/main/src/services/mcp/McpHub.ts",
 	})
 	register(Harness{
 		Name: "crush", Title: "Crush", Custom: installCrush,
@@ -465,6 +476,56 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+	for name, h := range dataHooks {
+		e, ok := registry[name]
+		if !ok {
+			panic("om: hooks for unknown harness " + name)
+		}
+		e.Hooks, e.Note = h.spec, strings.TrimPrefix(e.Note+"; "+h.note, "; ")
+		registry[name] = e
+	}
+}
+
+// dataHooks are the hooks of harnesses whose MCP entry is data (assets/harnesses.json), each
+// from the harness's own hook documentation (its source).
+var dataHooks = map[string]struct {
+	spec *HookSpec
+	note string
+}{
+	"ibm-bob": {&HookSpec{Path: map[string]string{"darwin": "~/.bob/settings/settings.json", "linux": "~/.bob/settings/settings.json"}, Transcript: "generic", Events: claudeEventNames,
+		Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"})},
+		"Bob Shell's hooks hand om each prompt and reply, which it records itself; it compacts at PreCompact and hands the summary back at the SessionStart after Bob's (source compact) (bob.ibm.com/docs/shell/configuration/lifecycle-hooks)"},
+	"adal": {&HookSpec{Path: map[string]string{"darwin": "~/.adal/settings.json", "linux": "~/.adal/settings.json"}, Transcript: "generic",
+		Events: map[string]string{evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"},
+		Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"})},
+		"its hooks hand om each prompt and reply, which it records itself; no compaction hook; restart AdaL after installing (docs.sylph.ai/customize/lifecycle-hooks)"},
+	"lingma": {&HookSpec{Path: map[string]string{"darwin": "~/.lingma/settings.json", "linux": "~/.lingma/settings.json"}, Transcript: "generic",
+		Events: map[string]string{evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"},
+		Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"})},
+		"its hooks hand om each prompt and reply, which it records itself; no compaction hook; restart the IDE after installing (help.aliyun.com/zh/lingma/user-guide/hooks)"},
+	"posit-assistant": {&HookSpec{Path: map[string]string{"darwin": "~/.posit/assistant/settings.json", "linux": "~/.posit/assistant/settings.json"}, Transcript: "generic",
+		Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"},
+		Record: recordFields(map[string]string{"prompt": "user", "last_assistant_message": "assistant"})},
+		"its hooks hand om each prompt and reply, which it records itself; no compaction hook yet (assistant.posit.co/docs/features/hooks)"},
+	"tabnine": {&HookSpec{Path: map[string]string{"darwin": "~/.tabnine/agent/settings.json", "linux": "~/.tabnine/agent/settings.json"}, Transcript: "generic", TimeoutMS: true,
+		Enable: []string{"hooksConfig", "enabled"},
+		Events: map[string]string{evSessionStart: "SessionStart", evTurnEnd: "AfterAgent", evPreCompact: "PreCompress"},
+		Record: recordFields(map[string]string{"prompt": "user", "prompt_response": "assistant"})},
+		"Tabnine CLI's hooks (Gemini CLI style): AfterAgent hands om the prompt and reply, which it records itself, and PreCompress compacts; the CLI is deprecated after 2026-12-31 (docs.tabnine.com, Tabnine CLI hooks)"},
+	"devin-cli": {&HookSpec{Path: map[string]string{"darwin": "${XDG_CONFIG_HOME:-~/.config}/devin/config.json", "linux": "${XDG_CONFIG_HOME:-~/.config}/devin/config.json"}, Transcript: "generic",
+		EnvFields: map[string]string{"cwd": "DEVIN_PROJECT_DIR"},
+		Events:    map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"},
+		Record:    recordFields(map[string]string{"prompt": "user"})},
+		"Devin's hooks hand om each prompt (not the reply, and no transcript), which it records itself (docs.devin.ai/cli/extensibility/hooks)"},
+	"enconvo": {&HookSpec{Path: map[string]string{"darwin": "~/.enconvo/hooks.json"}, Transcript: "generic", TimeoutMS: true,
+		Events: map[string]string{evTurnEnd: "Stop"},
+		Record: recordFields(map[string]string{"last_assistant_message": "assistant"})},
+		"its Stop hook hands om each reply (not the prompt), which it records itself (docs.enconvo.ai/configuration/hooks)"},
+	"mastra-code": {&HookSpec{Path: map[string]string{"darwin": "~/.mastracode/hooks.json", "linux": "~/.mastracode/hooks.json"}, Transcript: "generic", TopLevel: true, Flat: true,
+		TimeoutKey: "timeout", TimeoutMS: true,
+		Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"},
+		Record: recordFields(map[string]string{"user_message": "user", "assistant_message": "assistant"})},
+		"its hooks hand om each prompt and reply, which it records itself; no compaction hook (code.mastra.ai/configuration, mastracode/sdk/src/hooks)"},
 }
 
 // OwnSpec is a file om owns whole: install writes it, uninstall removes it, and nothing of the
@@ -645,6 +706,18 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 	hooks, _ := parent[last].(map[string]any)
 	if spec.TopLevel {
 		hooks = settings
+	}
+	if len(spec.Enable) > 0 && !remove {
+		obj := settings
+		for _, k := range spec.Enable[:len(spec.Enable)-1] {
+			next, _ := obj[k].(map[string]any)
+			if next == nil {
+				next = map[string]any{}
+			}
+			obj[k] = next
+			obj = next
+		}
+		obj[spec.Enable[len(spec.Enable)-1]] = true
 	}
 	if hooks == nil {
 		hooks = map[string]any{}
