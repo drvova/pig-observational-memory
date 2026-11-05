@@ -62,14 +62,19 @@ func (h *Host) compact(ctx context.Context, rt *runtime.Runtime, reason, cut str
 }
 
 // tokensBefore is the estimated context the compaction replaces: the entries from the previous
-// compaction's boundary up to the cut, as PiG's tokensBefore counts the messages it removes.
+// compaction's boundary up to the cut, as PiG's tokensBefore counts the messages it removes. A
+// cut before that boundary (a stale cut in a hook payload) removes nothing: 0.
 func tokensBefore(branch []session.Entry, cut string) int {
 	total := 0
 	end := ledger.EntryIndexForID(branch, cut)
 	if end < 0 {
 		end = len(branch)
 	}
-	for _, e := range branch[ledger.CompactionRangeStartIndex(branch):end] {
+	start := ledger.CompactionRangeStartIndex(branch)
+	if end < start {
+		return 0
+	}
+	for _, e := range branch[start:end] {
 		total += tokens.EstimateEntryTokens(e)
 	}
 	return total

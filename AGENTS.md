@@ -21,7 +21,10 @@ keep loading. Check each module: `cd memory` (and `cd extensions/observational-m
 && go test -race ./...` (CI runs both; under a tight memory limit add `-p 2`); registrations: `pig install
 ./extensions/observational-memory --validate-only --json`. The code tool's `memory/om/docs_gen.go` and
 `memory/sandbox/symbols` are generated (`cd memory && go generate ./om ./sandbox`, run as tests with `-write`);
-their tests fail on a diff or an undocumented om export. Keep `main` packages out of the PiG adapter module (PiG
+their tests fail on a diff or an undocumented om export. The language-neutral contracts (`contracts/README.md`,
+`docs/protocol.md`) are checked by `memory/contracts`: every stored file and entry must validate against
+`contracts/schemas` (a new stored shape needs a schema), and `contracts/golden` is generated (`go test ./contracts
+-args -write`) and compared byte for byte, so a change to level 0 or the summary regenerates it. Keep `main` packages out of the PiG adapter module (PiG
 refuses one there); the `om` binary for other harnesses is `memory/cmd/om` (`memory/cli`, `docs/universal.md`):
 it runs the engine over `memory/neutral` (the engine's entries in `~/.om` beside a transcript `memory/transcript` reads,
 never writing the harness's files) and makes no model request; `memory/engine` is the session setup both adapters share. Building the PiG checkout itself needs `GOFLAGS` unset (it is a Go workspace).

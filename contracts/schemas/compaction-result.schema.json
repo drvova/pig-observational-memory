@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "before-compact output",
+  "description": "What om hook pi before-compact prints: the compaction for the host to store (Pi's SessionBeforeCompactResult.compaction). usage is present only when a model request built the summary (never in the neutral host). Source: memory/cli/hook.go (piHook), memory/hooks/compaction_hook.go (CompactionResult.ToMap).",
+  "type": "object",
+  "required": [
+    "compaction"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "compaction": {
+      "type": "object",
+      "required": [
+        "summary",
+        "firstKeptEntryId",
+        "tokensBefore",
+        "details"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "firstKeptEntryId": {
+          "$ref": "defs.schema.json#/$defs/entryId"
+        },
+        "tokensBefore": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "details": {
+          "$ref": "defs.schema.json#/$defs/memoryDetails"
+        },
+        "usage": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

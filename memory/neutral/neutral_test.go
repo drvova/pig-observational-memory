@@ -105,3 +105,38 @@ func TestTurnEndAndCompaction(t *testing.T) {
 		t.Fatal("no store path")
 	}
 }
+
+// A cut before the latest compaction's kept boundary (a stale cut in a before-compact payload)
+// still answers with a compaction; it once panicked counting the tokens it removes.
+func TestCompactionAtStaleCut(t *testing.T) {
+	h, tr, rt := setup(t)
+	*tr = append(*tr, testfix.CompactionEntry("c1", testfix.CompactionArgs{FirstKeptEntryID: "q30"}), testfix.RawMessage("u2", "And the queue drains nightly.", at("2026-05-02T09:00:00.000Z")))
+	c, err := h.CompactionAt(context.Background(), rt, "threshold", "q5", 0)
+	if err != nil || c == nil {
+		t.Fatalf("compaction %v %v", c, err)
+	}
+}
+
+// An entry the host appends reads back from the host's cache as the decoded JSON a fresh load
+// gives: a compaction in the same process as the turn end sees the turn end's markers and
+// extracts nothing again.
+func TestAppendedEntriesReadAsStored(t *testing.T) {
+	h, _, rt := setup(t)
+	hooks.OnTurnEnd(rt, h)
+	if _, err := h.Compaction(context.Background(), rt, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := h.GetBranch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := ledger.EntryIndexForID(branch, branch[len(branch)-1].FirstKeptEntryID)
+	if cut < 0 || ledger.ExtractionProgressIndex(branch[:cut]) < 0 {
+		t.Fatalf("no extraction marker before the cut (%d)", cut)
+	}
+	for _, e := range branch[cut:] {
+		if e.CustomType == ledger.OMObservationsRecorded {
+			t.Fatalf("the compaction extracted the turn end's range again: %s", e.ID)
+		}
+	}
+}

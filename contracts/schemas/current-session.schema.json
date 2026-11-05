@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Current-session pointer",
+  "description": "<root>/current/<harness>/<first 16 hex of sha256(clean cwd)>.json: the session a harness's hooks last named in a directory, which the MCP server (started per project) reads to know which session a memory call is about. Written atomically on every hook. Source: memory/cli/session.go (Session, pointerPath, remember, current).",
+  "type": "object",
+  "required": ["harness", "sessionId", "transcriptPath", "format", "cwd"],
+  "additionalProperties": false,
+  "properties": {
+    "harness": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "transcriptPath": { "type": "string" },
+    "format": {
+      "description": "A transcript reader name (transcript.Formats or transcript.DBFormats).",
+      "type": "string",
+      "minLength": 1
+    },
+    "cwd": { "type": "string" },
+    "updated": { "description": "RFC 3339, UTC.", "type": "string" }
+  }
+}

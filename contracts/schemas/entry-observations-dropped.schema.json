@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.observations.dropped entry",
+  "description": "Drops of records by id and the coverage marker they carry (v1's dropper; v2's level-0 corrections and level 1's replacements, marked consolidated). Source: memory/ledger/types.go (ObservationsDroppedData, ObservationsDroppedDataFrom), written by memory/hooks/extract_v2.go and memory/hooks/consolidate_v2.go.",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.observations.dropped"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "observationIds",
+        "coversUpToId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "observationIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "coversUpToId": {
+          "$ref": "defs.schema.json#/$defs/entryId"
+        },
+        "consolidated": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

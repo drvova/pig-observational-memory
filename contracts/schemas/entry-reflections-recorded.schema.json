@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.reflections.recorded entry",
+  "description": "Reflections and the coverage marker they carry (v1's reflector; v2's level 1). Source: memory/ledger/types.go (ReflectionsRecordedData, ReflectionsRecordedDataFrom), written by memory/hooks/consolidate_v2.go.",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.reflections.recorded"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "reflections",
+        "coversUpToId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reflections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "defs.schema.json#/$defs/reflection"
+          }
+        },
+        "coversUpToId": {
+          "$ref": "defs.schema.json#/$defs/entryId"
+        }
+      }
+    }
+  }
+}
