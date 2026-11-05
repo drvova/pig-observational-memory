@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/memory/session"
@@ -22,8 +23,8 @@ func checkEntries(t *testing.T, name string, es []session.Entry) map[string]int 
 		}
 		seen[e.ID] = true
 		role, _ := e.Message["role"].(string)
-		if role == "" {
-			continue // Pi's model changes, custom entries and the like
+		if role == "" || role == "system" {
+			continue // Pi's model changes, custom entries, its system prompt and the like
 		}
 		roles[role]++
 		content, _ := e.Message["content"].([]any)
@@ -113,5 +114,45 @@ func TestRealSamples(t *testing.T) {
 	checkEntries(t, "goose", es)
 	if len(es) != 3 || es[1].Message["content"].([]any)[0].(map[string]any)["text"] != "Tool output text" || es[2].Message["content"].([]any)[0].(map[string]any)["text"] != "New format output" {
 		t.Fatalf("goose %s %v", roles(es), es)
+	}
+}
+
+// Transcripts the harnesses wrote (copied from tools that parse them): every one reads with no
+// duplicate ids, no empty message and no tool result without an earlier call, and holds the
+// conversation (a user message and an answer).
+func TestHarnessWrittenSamples(t *testing.T) {
+	cases := []struct {
+		file   string
+		format Format
+	}{
+		{"cursor-agent-cli.jsonl", Cursor}, {"cursor-ide.jsonl", Cursor}, {"copilot-cli-events.jsonl", Copilot},
+		{"droid-compaction.jsonl", Droid}, {"droid-fork.jsonl", Droid}, {"cortex.history.jsonl", Cortex},
+		{"kiro-v3.messages.jsonl", Kiro}, {"kiro-v2.jsonl", Kiro}, {"claude-code-compaction.jsonl", ClaudeCode},
+		{"claude-code-preserved.jsonl", ClaudeCode}, {"codex-rollout.jsonl", Codex}, {"gemini-jsonl.jsonl", Gemini},
+		{"qwen-chat.jsonl", Qwen}, {"kimi-legacy-wire.jsonl", Kimi}, {"pi-tool-calls.jsonl", Pi},
+		{"qoder-cli.jsonl", Qoder}, {"cline-cli.messages.json", Cline},
+	}
+	for _, c := range cases {
+		es, err := File{Path: filepath.Join("testdata", "real", c.file), Format: c.format}.Entries()
+		if err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		r := checkEntries(t, c.file, es)
+		// The compaction sample keeps only the lines from its compactions on: no answer is left.
+		if r["user"] == 0 || r["assistant"] == 0 && c.file != "claude-code-compaction.jsonl" {
+			t.Errorf("%s: %v", c.file, r)
+		}
+		// Context a harness injects as a user message is not something the user said.
+		for _, e := range es {
+			if e.Message["role"] != "user" {
+				continue
+			}
+			for _, raw := range e.Message["content"].([]any) {
+				if b, _ := raw.(map[string]any); b["type"] == "text" && (strings.HasPrefix(strings.TrimSpace(b["text"].(string)), "<system-reminder>") || strings.HasPrefix(strings.TrimSpace(b["text"].(string)), "<local-command-stdout>") || strings.Contains(b["text"].(string), "[scrubbed")) {
+					t.Errorf("%s: %s reads injected context as the user's: %.60s", c.file, e.ID, b["text"])
+				}
+			}
+		}
+		t.Logf("%-30s %v", c.file, r)
 	}
 }

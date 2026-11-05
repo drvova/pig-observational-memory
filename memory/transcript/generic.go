@@ -61,6 +61,7 @@ var Formats = map[string]Format{
 	"iflow":       IFlow,
 	"cortex":      Cortex,
 	"auggie":      Auggie,
+	"kiro":        Kiro,
 	"copilot":     Copilot,
 	"gemini":      Gemini,
 	"qwen":        Qwen,

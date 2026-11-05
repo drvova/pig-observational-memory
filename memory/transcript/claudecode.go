@@ -103,7 +103,11 @@ func ClaudeCode(lines []map[string]any) []session.Entry {
 					isError, _ := b["is_error"].(bool)
 					out = append(out, message(rid, ts, map[string]any{"role": "toolResult", "toolCallId": callID, "toolName": toolNames[callID], "content": []any{text(resultText(b["content"]))}, "isError": isError}, nil))
 				case "text":
-					content = append(content, text(str(b["text"])))
+					// A local command's output (/compact, /cost) is echoed as a user message; it is the
+					// CLI's, not the user's.
+					if t := strings.TrimSpace(str(b["text"])); !strings.HasPrefix(t, "<local-command-stdout>") && !strings.HasPrefix(t, "<local-command-stderr>") {
+						content = append(content, text(str(b["text"])))
+					}
 				case "image":
 					content = append(content, map[string]any{"type": "image"})
 				}

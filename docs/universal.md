@@ -29,7 +29,7 @@ with exactly what it gets.
 | A hook (or notify program) at each turn's end, over the transcript the harness writes; most also compact at a pre-compaction hook and hand the summary back | Claude Code, OpenClaude, Codex, Open Interpreter, Gemini CLI, Qwen Code, Qoder CLI, iFlow CLI, Kimi CLI, Factory Droid, Copilot CLI, Cursor, Cortex Code, Deep Agents Code, Kode, Auggie, Cline |
 | The same, over the harness's SQLite sessions, read with the `sqlite3` command or `python3` (no driver is linked) | Crush, Goose (a plugin's hook), Amazon Q Developer CLI (its row per directory; the hook goes in your agent file, which `om install` prints) |
 | A plugin or extension inside the harness | Pi, Oh My Pi, Gentle Shell (Pi's extension: om compacts on Pi's own cut and Pi stores it), OpenCode, Kilo Code (plugin: the summary joins their compaction context), Neovate Code |
-| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin), CodeBuddy Code, Junie; Kiro and Nanocoder pass only the prompt, so om records the requests |
+| Hooks that hand om the turn's text, which om records in its own transcript (`~/.om/transcripts`) | Trae, Letta Code, Windsurf (Devin Desktop's Cascade hooks), Amp (plugin), CodeBuddy Code, Junie; Nanocoder passes only the prompt, so om records the requests; Kiro's transcript is read where om finds it under `~/.kiro/sessions`, else its prompts are recorded |
 | The memory tool alone (MCP), shared through `~/.om` | every other harness |
 | `om hook generic turn-end` / `compact` | any other harness that can run a command |
 
@@ -41,17 +41,25 @@ so `om` runs code only everywhere else: no model request is ever made. Everythin
 summary with its intent and next sections, ranked search, curated memory, kept definitions) works the same.
 
 Tested: every hook protocol end to end against the `om` binary (`memory/cli/cli_test.go`,
-`hookfamilies_test.go`), the Claude Code reader against a real Claude Code transcript, and the installers'
-round trips. The other readers are tested two ways (`memory/transcript`):
-- On samples built from each harness's own source (`hookformats_test.go`).
-- On transcript samples copied from the harnesses' repositories (`testdata/real`, `real_test.go`). Those
-  are a session Gemini CLI recorded, a recorded Oh My Pi session, and fixtures from the Qwen Code, Kimi
-  CLI, Goose, OpenClaude, Cline, Neovate Code and Copilot SDK test suites.
+`hookfamilies_test.go`), and the installers' round trips.
 
-The repository samples caught four gaps, now fixed:
-- **Gemini CLI:** tool results kept on the call itself, its legacy single-JSON sessions, and its
-  `$set`/`$patch` checkpoints.
-- **Claude Code:** messages a compaction keeps on a side chain.
+The readers are tested on transcripts the harnesses themselves wrote (`memory/transcript/testdata/real`,
+`real_test.go`, sources and licenses in its README). They come from tools that parse these formats:
+- Claude Code (including compactions that keep messages), Codex, Gemini CLI, Qwen Code, Qoder CLI, Kimi
+  CLI, Pi and Oh My Pi.
+- Cursor (agent CLI and IDE), Copilot CLI, Factory Droid, Cortex Code, Kiro (both session layouts) and
+  Cline.
+
+Each reads with unique ids, no empty messages, no tool result without an earlier call, and no injected
+context read as the user's words. The other readers are tested on samples built from each harness's
+source (`hookformats_test.go`).
+
+The real files caught these gaps, now fixed:
+- **Gemini CLI:** tool results kept on the call itself, its legacy and `$set`/`$patch` formats.
+- **Claude Code:** messages kept through a compaction on a side chain, and local command output echoed as
+  a user message.
+- **Factory Droid:** context it injects as user messages (`visibility: llm_only`) and interface-only
+  notices.
 - **Goose:** its legacy tool-result shape.
 
 No harness here has run against om: running the harnesses themselves on this machine needs the user's

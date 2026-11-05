@@ -98,6 +98,9 @@ type HookSpec struct {
 	// Key is the object path the events live under ("hooks" when empty; Nanocoder's
 	// nanocoder.hooks).
 	Key []string
+	// RecordUnlessFound records the turn (Record) only when TranscriptFrom finds no transcript,
+	// for a harness whose transcript om reads where it can find it (Kiro).
+	RecordUnlessFound bool
 	// SummaryAtPreCompact prints the engine's summary as plain text at the pre-compaction hook,
 	// for a harness that appends that hook's output to its own compaction instructions
 	// (CodeBuddy).
@@ -244,9 +247,9 @@ func init() {
 		Name: "kiro", Title: "Kiro",
 		MCP:    &MCPSpec{Path: map[string]string{"darwin": "~/.kiro/settings/mcp.json", "linux": "~/.kiro/settings/mcp.json"}, Key: []string{"mcpServers"}},
 		Custom: installKiroHooks,
-		Hooks: &HookSpec{Transcript: "generic", TextContext: true, Record: recordFields(map[string]string{"prompt": "user"}),
+		Hooks: &HookSpec{Transcript: "kiro", TranscriptFrom: transcript.KiroSessionPath, RecordUnlessFound: true, TextContext: true, Record: recordFields(map[string]string{"prompt": "user"}),
 			Events: map[string]string{evSessionStart: "SessionStart", evPrompt: "UserPromptSubmit", evTurnEnd: "Stop"}},
-		Note:   "hooks in ~/.kiro/hooks/om.json: its payloads carry the prompt but not the reply and name no transcript om reads, so om records each request itself; no compaction hook, so memory is the tool's",
+		Note:   "hooks in ~/.kiro/hooks/om.json: om reads the session's messages.jsonl where it finds it under ~/.kiro/sessions (the hooks' session id naming that directory is not documented), else records each prompt itself; no compaction hook, so memory is the tool's",
 		Source: "https://kiro.dev/docs/hooks.md",
 	})
 	register(Harness{

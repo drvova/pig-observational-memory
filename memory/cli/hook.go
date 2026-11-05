@@ -72,15 +72,17 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	if hs.Hooks.TranscriptFrom != nil {
 		p.TranscriptPath = hs.Hooks.TranscriptFrom(p.Cwd, p.SessionID)
 	}
-	if hs.Hooks.Record != nil {
+	format := hs.Hooks.Transcript
+	if hs.Hooks.Record != nil && !(hs.Hooks.RecordUnlessFound && p.TranscriptPath != "") {
 		if p.SessionID == "" {
 			return fmt.Errorf("om hook %s: the payload names no session", hs.Name)
 		}
 		if p.TranscriptPath, err = recordTurn(a.root, hs, p); err != nil {
 			return err
 		}
+		format = "generic"
 	}
-	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: hs.Hooks.Transcript, Cwd: p.Cwd}
+	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: format, Cwd: p.Cwd}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
 		return err

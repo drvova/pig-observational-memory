@@ -582,3 +582,24 @@ func TestPromptOnlyHarnesses(t *testing.T) {
 		t.Fatalf("nanocoder after uninstall %s", data)
 	}
 }
+
+// When Kiro's session is under ~/.kiro/sessions/<bucket>/sess_<id>, om reads its messages.jsonl
+// (replies and tool results included) instead of recording the prompts itself.
+func TestKiroTranscript(t *testing.T) {
+	root, home := env(t)
+	t.Setenv("KIRO_HOME", "")
+	var lines []string
+	for i := range 30 {
+		lines = append(lines,
+			fmt.Sprintf(`{"id":"u%d","timestamp":"2026-10-08T15:01:57.955Z","payload":{"type":"user","content":"Host h-%d runs on rack r-%d.","documents":[],"images":[]}}`, i, i, i),
+			fmt.Sprintf(`{"id":"s%d","timestamp":"2026-10-08T15:02:00.868Z","payload":{"type":"assistant","content":"Noted h-%d.","operationType":"Say","executionId":"e%d"}}`, i, i, i))
+	}
+	writeLines(t, filepath.Join(home, ".kiro", "sessions", "b1", "sess_k9", "messages.jsonl"), lines)
+	om(t, `{"hook_event_name":"Stop","cwd":"/p","session_id":"k9"}`, "hook", "kiro", "Stop")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "kiro", "k9.jsonl")); err != nil || !strings.Contains(string(data), "r-17") {
+		t.Fatalf("no level-0 record from Kiro's transcript: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "transcripts", "kiro", "k9.jsonl")); !os.IsNotExist(err) {
+		t.Fatal("om recorded the prompts although Kiro's transcript was found")
+	}
+}
