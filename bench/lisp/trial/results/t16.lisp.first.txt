@@ -1,0 +1,1 @@
+(format t "~d" (length (remove-duplicates (mapcar (lambda (n) (subseq (om:note-when n) 0 10)) (om:rows (om:notes :limit 200))) :test #'string=)))

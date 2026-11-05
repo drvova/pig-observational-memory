@@ -1,0 +1,18 @@
+(let ((page (om:notes :limit 200))
+      (count 0))
+  (loop
+    (dolist (note (om:rows page))
+      (let* ((text (om:note-content note))
+             (start 0))
+        (loop for pos = (search "port" text :start2 start :test #'char-equal)
+              while pos
+              for end = (+ pos 4)
+              do (when (and (or (zerop pos)
+                                (not (alphanumericp (char text (1- pos)))))
+                            (or (= end (length text))
+                                (not (alphanumericp (char text end)))))
+                   (incf count))
+                 (setf start end))))
+    (unless (om:next-page page) (return))
+    (setf page (eval (om:next-page page))))
+  (format t "~D" count))

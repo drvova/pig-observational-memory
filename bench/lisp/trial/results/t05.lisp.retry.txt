@@ -1,0 +1,4 @@
+(let* ((page (om:notes :kind "correction" :search "Elasticsearch" :sort-by "when" :desc t :limit 1))
+       (rows (om:rows page)))
+  (when rows (write-string (om:note-content (first rows))))
+  nil)

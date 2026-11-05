@@ -1,0 +1,3 @@
+for _, id := range om.Files().IDs() {
+	fmt.Println(id)
+}

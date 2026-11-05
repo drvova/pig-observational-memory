@@ -1,0 +1,5 @@
+for _, n := range om.Notes(om.SortBy("when", false).Limit(200)).Rows {
+	if len(n.SupersededBy) > 0 {
+		fmt.Println(n.ID)
+	}
+}

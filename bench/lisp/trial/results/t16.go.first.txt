@@ -1,0 +1,7 @@
+days := map[string]bool{}
+for _, n := range om.Notes(om.Limit(200)).Rows {
+	if len(n.When) >= 10 {
+		days[n.When[:10]] = true
+	}
+}
+fmt.Println(len(days))

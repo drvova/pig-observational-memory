@@ -1,0 +1,1 @@
+fmt.Println(om.History(om.Since("2026-05-03").Until("2026-05-03")).Count("role")["user"])

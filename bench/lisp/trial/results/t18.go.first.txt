@@ -1,0 +1,3 @@
+fmt.Println(om.Notes(om.Search("port")).Filter(func(n om.Note) bool {
+	return strings.Contains(strings.ToLower(n.Content), "port")
+}).Len())

@@ -1,0 +1,3 @@
+(let* ((rows (om:rows (om:attempts :failed t :sort-by "when" :limit 200)))
+       (date (subseq (om:note-when (first rows)) 0 10)))
+  (princ date))

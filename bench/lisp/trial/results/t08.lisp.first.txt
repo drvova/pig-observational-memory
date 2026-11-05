@@ -1,0 +1,6 @@
+(let* ((content (om:note-content (first (om:rows (om:commits)))))
+       (start1 (position-if-not (lambda (c) (find c '(#\Space #\Tab #\Newline #\Return))) content))
+       (end1 (position-if (lambda (c) (find c '(#\Space #\Tab #\Newline #\Return))) content :start start1))
+       (start2 (position-if-not (lambda (c) (find c '(#\Space #\Tab #\Newline #\Return))) content :start end1))
+       (end2 (position-if (lambda (c) (find c '(#\Space #\Tab #\Newline #\Return))) content :start start2)))
+  (write-string (subseq content start2 end2)))

@@ -1,0 +1,10 @@
+n := om.Notes(om.Limit(200))
+counts := n.Count("kind")
+kinds := make([]string, 0, len(counts))
+for k := range counts {
+	kinds = append(kinds, k)
+}
+sort.Strings(kinds)
+for _, k := range kinds {
+	fmt.Printf("%s=%d\n", k, counts[k])
+}

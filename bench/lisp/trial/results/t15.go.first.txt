@@ -1,0 +1,3 @@
+for _, n := range om.Notes(om.Search("preference").Limit(200)).Rows {
+	fmt.Println(n.Content)
+}

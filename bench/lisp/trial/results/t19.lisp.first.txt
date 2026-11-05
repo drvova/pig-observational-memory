@@ -1,0 +1,7 @@
+(let* ((p (om:history :search "commit rounding fix" :limit 200))
+       (e (find-if (lambda (e)
+                     (and (string= (om:entry-role e) "user")
+                          (search "rounding" (om:entry-text e) :test #'char-equal)
+                          (search "commit" (om:entry-text e) :test #'char-equal)))
+                   (om:rows p))))
+  (when e (princ (om:entry-id e))))

@@ -1,0 +1,1 @@
+fmt.Print(om.Attempts(om.Failed()).Len())

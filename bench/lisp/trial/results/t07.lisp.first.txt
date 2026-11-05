@@ -1,0 +1,3 @@
+ (mapc #'write-line (om:ids (om:files))) 
+
+(mapc #'write-line (om:ids (om:files)))
