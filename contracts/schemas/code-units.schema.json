@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kept code units",
+  "description": "<config root>/observational-memory/memories/code/<project key>/units.json (project key: first 16 hex of sha256 of the clean absolute project root): the Go declarations the memory tool kept, sorted by name, written indented through a temporary file and a rename. A file that is not an array of units loads nothing and blocks writes until repaired; a unit whose digest does not match its source is refused at load. Source: memory/codestore/store.go (Unit, read, write, Dir, ProjectKey, Digest).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["name", "src", "digest", "written"],
+    "additionalProperties": false,
+    "properties": {
+      "name": { "type": "string", "minLength": 1 },
+      "src": { "type": "string", "minLength": 1 },
+      "digest": { "description": "Hex SHA-256 of src.", "type": "string", "pattern": "^[a-f0-9]{64}$" },
+      "written": { "description": "RFC 3339, UTC.", "type": "string" }
+    }
+  }
+}

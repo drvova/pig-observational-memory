@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Curated memory front matter",
+  "description": "<store>/<name>.md, where <store> is <config root>/observational-memory/memories and <name> matches ^[a-z0-9][a-z0-9-]{0,63}$. The file is not JSON: it is \"---\\n\", one \"key: value\" line per member below, \"---\\n\", then the body (optional). This schema is of the front matter read as an object of strings (each line split at its first colon, both sides trimmed); list members are comma-separated. A key outside these is kept by v1 and refused by v2's load check (curated.Check). Source: memory/curated/store.go (Memory, format, parse).",
+  "type": "object",
+  "required": ["type", "description", "created", "updated"],
+  "additionalProperties": false,
+  "properties": {
+    "type": { "enum": ["user", "feedback", "project", "reference", "lesson"] },
+    "description": { "type": "string", "minLength": 1 },
+    "project": { "description": "The project root it applies to; absent means everywhere.", "type": "string" },
+    "sources": { "description": "The sessions that saved or edited it, comma-separated.", "type": "string" },
+    "created": { "description": "RFC 3339.", "type": "string" },
+    "updated": { "description": "RFC 3339.", "type": "string" },
+    "staged": { "const": "true" },
+    "staged-by": { "type": "string" },
+    "pinned": { "const": "true" },
+    "retired": { "description": "RFC 3339: when a forget retired it.", "type": "string" }
+  }
+}

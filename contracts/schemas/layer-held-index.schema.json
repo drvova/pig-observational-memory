@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Held index",
+  "description": "<store>/harness/<model dir>/held/index.json: each held definition's kind/name and the layer.Digest of the held file its hold wrote. A held file it does not record is never loaded; an unreadable index records nothing. Written atomically. Source: memory/layer/held.go (heldIndexPath, heldIndex, recordHeld).",
+  "type": "object",
+  "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{16}$" }
+}

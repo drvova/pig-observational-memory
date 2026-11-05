@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.summary.handed entry",
+  "description": "Marks the compaction whose summary a prompt hook handed the model, so it is handed once (HookSpec.SummaryOnPrompt). Only the neutral store holds it. Source: memory/cli/hook.go (summaryHanded, summaryToHand).",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.summary.handed"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "compaction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "compaction": {
+          "$ref": "defs.schema.json#/$defs/entryId"
+        }
+      }
+    }
+  }
+}

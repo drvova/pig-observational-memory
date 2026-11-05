@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Compaction entry the engine wrote",
+  "description": "A compaction entry whose details are the engine's (om.folded). In Pi/PiG the host stores it from the compaction the extension returned; the neutral host stores it itself after its om.cut marker. A compaction whose details are not om.folded (a host's native summary, the TypeScript extension's old details) is not the engine's and is out of this schema: the engine reads it as an unbacked summary (extract.HostSummary). Source: memory/neutral/compact.go (Host.compact), memory/hooks/compaction_hook.go (CompactionResult.ToMap), memory/ledger/types.go (MemoryDetails).",
+  "type": "object",
+  "required": [
+    "type",
+    "id",
+    "summary",
+    "firstKeptEntryId",
+    "details"
+  ],
+  "properties": {
+    "type": {
+      "const": "compaction"
+    },
+    "id": {
+      "$ref": "defs.schema.json#/$defs/entryId"
+    },
+    "parentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "firstKeptEntryId": {
+      "$ref": "defs.schema.json#/$defs/entryId"
+    },
+    "tokensBefore": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "details": {
+      "$ref": "defs.schema.json#/$defs/memoryDetails"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kernel floor record line",
+  "description": "One line of <store>/harness/floor.jsonl: a lowering or engagement of the kernel floor, recorded with who asked and why before it takes effect (only the user can lower it, in configuration). Source: memory/kernel/floor.go (Lowering, OpLower, OpEngage), memory/layer/manifest.go (RecordFloor, FloorRecord).",
+  "type": "object",
+  "required": ["requestedBy", "reason", "time", "op"],
+  "additionalProperties": false,
+  "properties": {
+    "requestedBy": { "type": "string" },
+    "reason": { "type": "string" },
+    "time": { "type": "string" },
+    "op": { "enum": ["lower", "engage"] }
+  }
+}

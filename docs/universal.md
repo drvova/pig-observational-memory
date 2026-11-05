@@ -154,4 +154,4 @@ echo '{"harness":"mine","session_id":"s1","transcript_path":"/path/t.jsonl","for
 
 `format` is `generic`, `claude-code`, `codex`, `pi`, `gemini`, `qwen`, `kimi`, `droid`, `copilot`, `deepagents`, `cursor`, `qoder`, `cline`, `neovate`, `iflow`, `cortex` or `auggie`. The memory tool is `om mcp --harness mine` for an MCP
 client, or one call at a time with `om call --harness mine --dir /repo` (the tool's arguments as JSON on
-stdin); `om tool-spec` prints its name, description and JSON schema for registering it natively.
+stdin); `om tool-spec` prints its name, description and JSON schema for registering it natively. The full protocol, with its payload fields, outputs and errors, is [protocol.md](protocol.md).
