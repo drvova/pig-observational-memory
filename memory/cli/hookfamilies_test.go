@@ -232,3 +232,30 @@ func TestPiExtensionHarnesses(t *testing.T) {
 		}
 	}
 }
+
+// Kode's payload points at a plain-text rendering; om reads the Claude-format session log Kode
+// keeps under its root instead, at Stop and PreCompact.
+func TestKodeHooks(t *testing.T) {
+	root, home := env(t)
+	t.Setenv("KODE_CONFIG_DIR", "")
+	t.Setenv("ANYKODE_CONFIG_DIR", "")
+	proj := filepath.Join(home, "proj")
+	slug := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, proj)
+	claudeTranscript(t, filepath.Join(home, ".kode", "projects", slug, "k1.jsonl"), 60)
+	text := filepath.Join(home, "k1.transcript.txt")
+	writeLines(t, text, []string{"user: not this"})
+	payload, _ := json.Marshal(map[string]any{"session_id": "k1", "transcript_path": text, "cwd": proj, "hook_event_name": "Stop"})
+	om(t, string(payload), "hook", "kode", "Stop")
+	if data, err := os.ReadFile(filepath.Join(root, "sessions", "kode", "k1.jsonl")); err != nil || !strings.Contains(string(data), "svc-7") {
+		t.Fatalf("no level-0 batch: %v", err)
+	}
+	om(t, string(payload), "hook", "kode", "PreCompact")
+	if data, _ := os.ReadFile(filepath.Join(root, "sessions", "kode", "k1.jsonl")); !strings.Contains(string(data), `"compaction"`) {
+		t.Fatal("no compaction stored")
+	}
+}

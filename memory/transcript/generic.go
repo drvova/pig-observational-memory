@@ -53,6 +53,7 @@ func Generic(lines []map[string]any) []session.Entry {
 var Formats = map[string]Format{
 	"claude-code": ClaudeCode,
 	"droid":       Droid,
+	"deepagents":  DeepAgents,
 	"copilot":     Copilot,
 	"gemini":      Gemini,
 	"qwen":        Qwen,

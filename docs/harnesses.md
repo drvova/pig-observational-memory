@@ -4,7 +4,7 @@
 
 `om install <name>` wires om into 198 harnesses. Each entry takes only what the harness's own documentation or source confirms, linked in its last column; `om install --mcp-config <file>` covers any harness with a JSON MCP config not listed here, and [om](universal.md) has the protocol for any other.
 
-## Recording, compaction and the memory tool (13)
+## Recording, compaction and the memory tool (16)
 
 Hooks, a plugin or an extension hand om the conversation, and the memory tool reads it.
 
@@ -12,19 +12,22 @@ Hooks, a plugin or an extension hand om the conversation, and the memory tool re
 |---|---|---|---|
 | Claude Code | `claude-code` | `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` hooks | compaction: om's summary is handed back after Claude's own (SessionStart, source compact) |
 | Codex CLI | `codex` | its own config (`om install codex --dry-run` shows the files) | no compaction hook: memory is reached through the tool |
+| Deep Agents Code (LangChain dcode) | `deepagents-code` | `${DEEPAGENTS_HOME:-~/.deepagents}/.mcp.json` `mcpServers` | its hook transcript records no tool call ids (results pair with calls by tool name); om's summary is handed back at the SessionStart after its compaction (source compact); [docs](https://github.com/langchain-ai/deepagents/blob/master/libs/code/HOOKS.md) |
 | Factory Droid | `factory-droid` | `~/.factory/mcp.json` `mcpServers` | compaction: om's summary is handed back at the SessionStart after Droid's (source compact) |
 | Gemini CLI | `gemini-cli` | `~/.gemini/settings.json` `mcpServers` | compaction: om compacts at PreCompress and hands its summary to the model at the next prompt |
 | Gentle Shell | `gentle-shell` | its own config (`om install gentle-shell --dry-run` shows the files) | Pi's extension in Gentle Shell's own home (with --link it uses Pi's: om install pi); [docs](https://github.com/Gentleman-Programming/gentle-shell) |
 | GitHub Copilot (CLI, VS Code) | `copilot` | `${COPILOT_HOME:-~/.copilot}/mcp-config.json` `mcpServers` | the CLI's hooks: om compacts at preCompact; Copilot's sessionStart never follows its compaction, so om's summary comes back on resume and through the tool |
 | Kilo Code | `kilo-code` | `${XDG_CONFIG_HOME:-~/.config}/kilo/kilo.json` `mcp` | OpenCode's plugin API: level 0 on session.idle; om's summary joins Kilo's compaction context (plugin not yet run inside Kilo) |
 | Kimi CLI | `kimi-cli` | `~/.kimi/mcp.json` `mcpServers` | Kimi's hooks cannot hand the model context: om records each turn and compacts with Kimi, and memory is read through the tool |
+| Kode (shareAI-lab) | `kode` | `~/.kode.json` `mcpServers` | Stop and PreCompact only (Kode runs SessionStart hooks from plugins alone): om reads its Claude-format session log, and the summary is reached through the tool; [docs](https://github.com/shareAI-lab/Kode-cli/blob/main/packages/protocol/src/utils/kodeAgentSessionLog.ts) |
 | Oh My Pi | `oh-my-pi` | its own config (`om install oh-my-pi --dry-run` shows the files) | Pi's extension, which Oh My Pi loads from its own agent directory: om compacts on its cut; the default profile only; [docs](https://github.com/can1357/oh-my-pi/blob/main/docs/extension-loading.md) |
+| OpenClaude | `openclaude` | `${OPENCLAUDE_CONFIG_DIR:-~}/.openclaude.json` `mcpServers` | Claude Code's source: its hooks and transcript, so om's summary is handed back at the SessionStart after its compaction (source compact); [docs](https://raw.githubusercontent.com/Gitlawb/openclaude/main/src/services/mcp/config.ts) |
 | OpenCode | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/opencode.json` `mcp` | plugin: level 0 on session.idle; om's summary joins OpenCode's compaction context |
 | Pi | `pi` | its own config (`om install pi --dry-run` shows the files) | extension: om compacts on Pi's own cut and Pi stores it; the tool runs through om call |
 | PiG | `pig` | its own config (`om install pig --dry-run` shows the files) | the engine runs inside PiG as its extension, with level 1 on the session model: om install runs pig install |
 | Qwen Code | `qwen-code` | `~/.qwen/settings.json` `mcpServers` | compaction: om's summary is handed back at the SessionStart after Qwen's (source compact) |
 
-## The memory tool, installed by om (87)
+## The memory tool, installed by om (84)
 
 om writes its MCP server into the harness's config, beside what is there, and uninstall takes out exactly that. The tool serves the curated memory and kept definitions, shared across harnesses.
 
@@ -51,7 +54,6 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | Cortex Code CLI (Snowflake CoCo) | `cortex-code` | `~/.snowflake/cortex/mcp.json` `mcpServers` | SNOWFLAKE_HOME replaces ~/.snowflake; user servers load only if the account administrator allows user MCP servers; `cortex mcp add` writes the same file; [docs](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-mcp https://docs.snowflake.com/en/user-guide/cortex-code/settings) |
 | Crush | `crush` | its own config (`om install crush --dry-run` shows the files) | its session-start and turn-start hooks cannot hand the model context, so they are not wired |
 | Cursor | `cursor` | `~/.cursor/mcp.json` `mcpServers` | Cursor's hooks are not wired: its transcript keeps no entry ids, timestamps or tool results, and folds reasoning into the reply |
-| Deep Agents Code (LangChain dcode) | `deepagents-code` | `~/.deepagents/.mcp.json` `mcpServers` | user profile dir is $DEEPAGENTS_HOME when set; `dcode mcp` with the paths flag prints the discovery order (user, project .deepagents/.mcp.json, project .mcp.json); transport defaults to stdio; [docs](https://raw.githubusercontent.com/langchain-ai/deepagents/master/libs/code/deepagents_code/_paths.py https://raw.githubusercontent.com/langchain-ai/deepagents/master/libs/code/deepagents_code/client/commands/mcp.py https://raw.githubusercontent.com/langchain-ai/deepagents/master/libs/code/deepagents_code/mcp_tools.py) |
 | Devin Desktop (Windsurf) | `devin` | `${XDG_CONFIG_HOME:-~/.config}/devin/mcp_config.json` `mcpServers` | its hooks carry no transcript path, so they are not wired |
 | Dive AI Agent | `dive` | `~/.dive/config/mcp_config.json` `mcpServers` | file is created on first launch; BUILD.md calls it config.json but the code reads mcp_config.json; restart Dive; [docs](https://raw.githubusercontent.com/OpenAgentPlatform/Dive/main/electron/main/constant.ts https://raw.githubusercontent.com/OpenAgentPlatform/Dive/main/src-tauri/src/host.rs https://raw.githubusercontent.com/OpenAgentPlatform/Dive/main/BUILD.md) |
 | ECA (Editor Code Assistant) | `eca` | `${XDG_CONFIG_HOME:-~/.config}/eca/config.json` `mcpServers` | a config with comments is refused: add it by hand there; [docs](https://eca.dev/config/tools/) |
@@ -73,7 +75,6 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | JetBrains Junie (IDE and CLI) | `junie` | `${JUNIE_HOME:-~/.junie}/mcp/mcp.json` `mcpServers` | [docs](https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html) |
 | Kimi Code CLI | `kimi-code` | `${KIMI_CODE_HOME:-~/.kimi-code}/mcp.json` `mcpServers` | [docs](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html) |
 | Kiro | `kiro` | `~/.kiro/settings/mcp.json` `mcpServers` | its hooks carry no transcript path (sessions are SQLite, schema unpublished) and it has no compaction hook, so they are not wired |
-| Kode (shareAI-lab) | `kode` | `~/.kode.json` `mcpServers` | global scope of `kode mcp add --scope user`; with KODE_CONFIG_DIR set the file is $KODE_CONFIG_DIR/config.json; [docs](https://raw.githubusercontent.com/shareAI-lab/Kode-cli/main/packages/core/src/mcp/client/config.ts https://raw.githubusercontent.com/shareAI-lab/Kode-cli/main/packages/config/src/paths.ts https://raw.githubusercontent.com/shareAI-lab/Kode-cli/main/docs/mcp.md) |
 | Kombai | `kombai` | `~/.kombai/mcp.json` `mcpServers` | file may contain comments; project .kombai/mcp.json overrides same name; [docs](https://docs.kombai.com/features/mcp/external-mcp-servers.md) |
 | kubectl-ai | `kubectl-ai` | `${XDG_CONFIG_HOME:-~/.config}/kubectl-ai/mcp.yaml` `servers` | MCP client mode must be enabled per run with --mcp-client; [docs](https://raw.githubusercontent.com/GoogleCloudPlatform/kubectl-ai/main/pkg/mcp/config.go https://raw.githubusercontent.com/GoogleCloudPlatform/kubectl-ai/main/README.md) |
 | llm (Simon Willison) with llm-tools-mcp | `llm-tools-mcp` | `~/.llm-tools-mcp/mcp.json` `mcpServers` | needs llm install llm-tools-mcp; tools are used only when a prompt passes -T MCP; [docs](https://raw.githubusercontent.com/VirtusLab/llm-tools-mcp/main/README.md) |
@@ -97,7 +98,6 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | Octomind | `octomind` | `${OCTOMIND_DATA_DIR:-~/.local/share/octomind}/config/mcp-om.toml` (a file of om's own) | a file of its own (mcp-*.toml loads last); bound to the developer:general role; [docs](https://raw.githubusercontent.com/muvon/octomind/main/doc/usage/07-mcp-tools.md) |
 | ollmcp (MCP Client for Ollama) | `ollmcp` | `~/.config/ollmcp/mcp.json` `mcpServers` | user scope of `ollmcp mcp add --scope user`; always loaded as the base layer; [docs](https://raw.githubusercontent.com/jonigl/mcp-client-for-ollama/main/README.md https://raw.githubusercontent.com/jonigl/mcp-client-for-ollama/main/mcp_client_for_ollama/utils/constants.py) |
 | Open Interpreter (terminal agent) | `open-interpreter` | `~/.openinterpreter/config.toml` `[mcp_servers.om]` | current Open Interpreter is a Codex-derived terminal agent; `interpreter mcp add <name> -- <cmd>` writes the same table; older Python open-interpreter had no MCP; [docs](https://raw.githubusercontent.com/openinterpreter/open-interpreter/main/docs/mcp.md) |
-| OpenClaude | `openclaude` | `~/.openclaude.json` `mcpServers` | Claude Code fork; user scope of `openclaude mcp add -s user`; with OPENCLAUDE_CONFIG_DIR the file is $OPENCLAUDE_CONFIG_DIR/.openclaude.json; does not read ~/.claude; [docs](https://raw.githubusercontent.com/Gitlawb/openclaude/main/src/services/mcp/config.ts https://raw.githubusercontent.com/Gitlawb/openclaude/main/src/utils/env.ts https://raw.githubusercontent.com/Gitlawb/openclaude/main/README.md) |
 | OpenClaw | `openclaw` | `${OPENCLAW_CONFIG_PATH:-~/.openclaw/openclaw.json}` `mcp.servers` | a JSON5 file with comments is refused, not rewritten: then run openclaw mcp add om --command <om> --arg mcp --arg --harness --arg openclaw; [docs](https://docs.openclaw.ai/tools/mcp.md) |
 | oterm | `oterm` | `${XDG_DATA_HOME:-~/.local/share}/oterm/config.json` `mcpServers` | restart oterm after installing; with OTERM_DATA_DIR set, use om install --mcp-config $OTERM_DATA_DIR/config.json; [docs](https://github.com/ggozad/oterm/blob/main/docs/mcp/index.md) |
 | PicoClaw | `picoclaw` | `~/.picoclaw/config.json` `tools.mcp.servers` | tools.mcp.enabled must be true; PICOCLAW_CONFIG overrides the path; CLI: picoclaw mcp add NAME -- CMD ARGS; [docs](https://raw.githubusercontent.com/sipeed/picoclaw/main/docs/reference/mcp-cli.md) |

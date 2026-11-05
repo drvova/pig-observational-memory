@@ -2,6 +2,8 @@ package transcript
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/session"
@@ -140,4 +142,32 @@ func blocks(v any) []any {
 		return []any{text(c)}
 	}
 	return nil
+}
+
+// KodeSessionPath is the session log Kode writes for a session, in Claude Code's format:
+// ${KODE_CONFIG_DIR:-~/.kode}/projects/<cwd with every non-alphanumeric character as ->/<session>.jsonl
+// (packages/protocol/src/utils/kodeAgentSessionLog.ts). Kode's hook payload names a plain-text
+// rendering instead, which om does not read.
+func KodeSessionPath(cwd, sessionID string) string {
+	if cwd == "" || sessionID == "" {
+		return ""
+	}
+	root := os.Getenv("KODE_CONFIG_DIR")
+	if root == "" {
+		root = os.Getenv("ANYKODE_CONFIG_DIR")
+	}
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Join(home, ".kode")
+	}
+	slug := []byte(cwd)
+	for i, c := range slug {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			slug[i] = '-'
+		}
+	}
+	return filepath.Join(root, "projects", string(slug), sessionID+".jsonl")
 }

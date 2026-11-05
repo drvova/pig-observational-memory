@@ -252,6 +252,28 @@ func init() {
 		Note: "its session-start and turn-start hooks cannot hand the model context, so they are not wired",
 	})
 	register(Harness{
+		Name: "openclaude", Title: "OpenClaude",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "${OPENCLAUDE_CONFIG_DIR:-~}/.openclaude.json", "linux": "${OPENCLAUDE_CONFIG_DIR:-~}/.openclaude.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks:  &HookSpec{Path: map[string]string{"darwin": "${OPENCLAUDE_CONFIG_DIR:-~/.openclaude}/settings.json", "linux": "${OPENCLAUDE_CONFIG_DIR:-~/.openclaude}/settings.json"}, Events: claudeEventNames, Transcript: "claude-code"},
+		Note:   "Claude Code's source: its hooks and transcript, so om's summary is handed back at the SessionStart after its compaction (source compact)",
+		Source: "https://raw.githubusercontent.com/Gitlawb/openclaude/main/src/services/mcp/config.ts",
+	})
+	register(Harness{
+		Name: "deepagents-code", Title: "Deep Agents Code (LangChain dcode)",
+		MCP:    &MCPSpec{Path: map[string]string{"darwin": "${DEEPAGENTS_HOME:-~/.deepagents}/.mcp.json", "linux": "${DEEPAGENTS_HOME:-~/.deepagents}/.mcp.json"}, Key: []string{"mcpServers"}},
+		Hooks:  &HookSpec{Path: map[string]string{"darwin": "${DEEPAGENTS_HOME:-~/.deepagents}/hooks.json", "linux": "${DEEPAGENTS_HOME:-~/.deepagents}/hooks.json"}, Events: claudeEventNames, Transcript: "deepagents"},
+		Note:   "its hook transcript records no tool call ids (results pair with calls by tool name); om's summary is handed back at the SessionStart after its compaction (source compact)",
+		Source: "https://github.com/langchain-ai/deepagents/blob/master/libs/code/HOOKS.md",
+	})
+	register(Harness{
+		Name: "kode", Title: "Kode (shareAI-lab)",
+		MCP: &MCPSpec{Path: map[string]string{"darwin": "~/.kode.json", "linux": "~/.kode.json"}, Key: []string{"mcpServers"}, Entry: stdioEntry},
+		Hooks: &HookSpec{Path: map[string]string{"darwin": "${KODE_CONFIG_DIR:-~/.kode}/settings.json", "linux": "${KODE_CONFIG_DIR:-~/.kode}/settings.json"}, Transcript: "claude-code", TranscriptFrom: transcript.KodeSessionPath,
+			Events: map[string]string{evTurnEnd: "Stop", evPreCompact: "PreCompact"}},
+		Note:   "Stop and PreCompact only (Kode runs SessionStart hooks from plugins alone): om reads its Claude-format session log, and the summary is reached through the tool",
+		Source: "https://github.com/shareAI-lab/Kode-cli/blob/main/packages/protocol/src/utils/kodeAgentSessionLog.ts",
+	})
+	register(Harness{
 		Name: "oh-my-pi", Title: "Oh My Pi", Custom: piExtensionInstaller("oh-my-pi", "${PI_CONFIG_DIR:-~/.omp}/agent/extensions"),
 		Note:   "Pi's extension, which Oh My Pi loads from its own agent directory: om compacts on its cut; the default profile only",
 		Source: "https://github.com/can1357/oh-my-pi/blob/main/docs/extension-loading.md",

@@ -594,30 +594,6 @@
   "source": "https://raw.githubusercontent.com/lukilabs/craft-agents-oss/main/README.md"
  },
  {
-  "name": "deepagents-code",
-  "title": "Deep Agents Code (LangChain dcode)",
-  "class": "file",
-  "path": {
-   "darwin": "~/.deepagents/.mcp.json",
-   "linux": "~/.deepagents/.mcp.json",
-   "windows": "~/.deepagents/.mcp.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "user profile dir is $DEEPAGENTS_HOME when set; `dcode mcp` with the paths flag prints the discovery order (user, project .deepagents/.mcp.json, project .mcp.json); transport defaults to stdio",
-  "source": "https://raw.githubusercontent.com/langchain-ai/deepagents/master/libs/code/deepagents_code/_paths.py https://raw.githubusercontent.com/langchain-ai/deepagents/master/libs/code/deepagents_code/client/commands/mcp.py https://raw.githubusercontent.com/langchain-ai/deepagents/master/libs/code/deepagents_code/mcp_tools.py"
- },
- {
   "name": "deepchat",
   "title": "DeepChat",
   "class": "manual",
@@ -1161,31 +1137,6 @@
   "manual": "launch with --mcpfile <path to Claude Desktop format mcp.json>, or launcher Model tab > MCP JSON",
   "note": "no default file location; the user picks the file (om install --mcp-config could write one); since v1.106",
   "source": "https://raw.githubusercontent.com/LostRuins/koboldcpp/concedo/koboldcpp.py"
- },
- {
-  "name": "kode",
-  "title": "Kode (shareAI-lab)",
-  "class": "file",
-  "path": {
-   "darwin": "~/.kode.json",
-   "linux": "~/.kode.json",
-   "windows": "~/.kode.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "type": "stdio",
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "global scope of `kode mcp add --scope user`; with KODE_CONFIG_DIR set the file is $KODE_CONFIG_DIR/config.json",
-  "source": "https://raw.githubusercontent.com/shareAI-lab/Kode-cli/main/packages/core/src/mcp/client/config.ts https://raw.githubusercontent.com/shareAI-lab/Kode-cli/main/packages/config/src/paths.ts https://raw.githubusercontent.com/shareAI-lab/Kode-cli/main/docs/mcp.md"
  },
  {
   "name": "kombai",
@@ -1857,31 +1808,6 @@
   },
   "note": "current Open Interpreter is a Codex-derived terminal agent; `interpreter mcp add <name> -- <cmd>` writes the same table; older Python open-interpreter had no MCP",
   "source": "https://raw.githubusercontent.com/openinterpreter/open-interpreter/main/docs/mcp.md"
- },
- {
-  "name": "openclaude",
-  "title": "OpenClaude",
-  "class": "file",
-  "path": {
-   "darwin": "~/.openclaude.json",
-   "linux": "~/.openclaude.json",
-   "windows": "~/.openclaude.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "type": "stdio",
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "Claude Code fork; user scope of `openclaude mcp add -s user`; with OPENCLAUDE_CONFIG_DIR the file is $OPENCLAUDE_CONFIG_DIR/.openclaude.json; does not read ~/.claude",
-  "source": "https://raw.githubusercontent.com/Gitlawb/openclaude/main/src/services/mcp/config.ts https://raw.githubusercontent.com/Gitlawb/openclaude/main/src/utils/env.ts https://raw.githubusercontent.com/Gitlawb/openclaude/main/README.md"
  },
  {
   "name": "openclaw",

@@ -169,3 +169,29 @@ func TestOhMyPi(t *testing.T) {
 		t.Fatalf("entries %v", es)
 	}
 }
+
+// Deep Agents Code: records in order, a tool result paired with the call of its tool name, and
+// system records left out.
+func TestDeepAgents(t *testing.T) {
+	p := write(t,
+		`{"schema_version":1,"sequence":0,"record_id":"s0","thread_id":"t1","role":"system","content":"rules"}`,
+		`{"schema_version":1,"sequence":1,"record_id":"m1","thread_id":"t1","role":"user","message_id":"m1","content":"fix the test"}`,
+		`{"schema_version":1,"sequence":2,"record_id":"m2","thread_id":"t1","role":"assistant","message_id":"m2","content":[{"type":"text","text":"Running it."},{"type":"tool_use","id":"tu1","name":"execute","input":{"command":"pytest"}}]}`,
+		`{"schema_version":1,"sequence":3,"record_id":"m3","thread_id":"t1","role":"tool","message_id":"m3","content":"1 passed","name":"execute"}`,
+		`{"schema_version":1,"sequence":4,"record_id":"assistant:4","thread_id":"t1","role":"assistant","content":"Done."}`,
+	)
+	es, err := File{Path: p, Format: DeepAgents}.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := roles(es); got != "m1:user m2:assistant m3:toolResult assistant:4:assistant" {
+		t.Fatalf("entries %s", got)
+	}
+	if es[2].Message["toolCallId"] != "tu1" || es[2].Message["toolName"] != "execute" {
+		t.Fatalf("result %v", es[2].Message)
+	}
+	t.Setenv("KODE_CONFIG_DIR", "/k")
+	if got := KodeSessionPath("/w/my app", "s1"); got != filepath.Join("/k", "projects", "-w-my-app", "s1.jsonl") {
+		t.Fatalf("kode path %s", got)
+	}
+}
