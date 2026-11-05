@@ -204,3 +204,6 @@ echo '{"harness":"mine","session_id":"s1","transcript_path":"/path/t.jsonl","for
 `format` is `generic`, `claude-code`, `codex`, `pi`, `gemini`, `qwen`, `kimi`, `droid`, `copilot`, `deepagents`, `cursor`, `qoder`, `cline`, `neovate`, `iflow`, `cortex` or `auggie`. The memory tool is `om mcp --harness mine` for an MCP
 client, or one call at a time with `om call --harness mine --dir /repo` (the tool's arguments as JSON on
 stdin); `om tool-spec` prints its name, description and JSON schema for registering it natively. The full protocol, with its payload fields, outputs and errors, is [protocol.md](protocol.md).
+A harness that can host a long-lived child and answer its host calls (the branch, appends, the
+session model, one model stream) can run `om serve` instead and get the PiG adapter's whole
+feature set: thinning, exact-cut compaction and level 1 ([engine-rpc.md](engine-rpc.md)).
