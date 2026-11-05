@@ -665,7 +665,7 @@ func installHooks(w writer, exe, harness string, spec *HookSpec, remove bool) er
 			if spec.TimeoutMS {
 				timeout *= 1000
 			}
-			command := map[string]any{"type": "command", "command": strconv.Quote(exe) + " hook " + harness + " " + name, "timeout": timeout}
+			command := map[string]any{"type": "command", "command": hookCommand(exe, harness, name), "timeout": timeout}
 			group := map[string]any{"hooks": []any{command}}
 			if spec.Flat {
 				key := spec.TimeoutKey
@@ -726,12 +726,7 @@ func installTOMLHooks(w writer, exe, harness string, spec *HookSpec, path string
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	var kept []string
-	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if !strings.HasSuffix(line, managedMark) && (line != "" || len(kept) > 0) {
-			kept = append(kept, line)
-		}
-	}
+	kept, extras := stripManaged(data)
 	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
 	if remove {
 		if body == "" {
@@ -757,7 +752,7 @@ func installTOMLHooks(w writer, exe, harness string, spec *HookSpec, path string
 	if body != "" {
 		out = body + "\n\n"
 	}
-	return w.write(path, []byte(out+strings.Join(tables, "\n")+"\n"))
+	return w.write(path, []byte(out+strings.Join(withExtras(tables, extras), "\n")+"\n"))
 }
 
 // claudeMCP registers the MCP server with Claude Code's own command, at user scope.

@@ -33,12 +33,7 @@ func installTOML(w writer, exe, harness string, spec *TOMLSpec, remove bool) err
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	var kept []string
-	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if !strings.HasSuffix(line, managedMark) && (line != "" || len(kept) > 0) {
-			kept = append(kept, line)
-		}
-	}
+	kept, extras := stripManaged(data)
 	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
 	if remove {
 		if body == "" {
@@ -70,7 +65,7 @@ func installTOML(w writer, exe, harness string, spec *TOMLSpec, remove bool) err
 	if body != "" {
 		out = body + "\n\n"
 	}
-	return w.write(path, []byte(out+strings.Join(table, "\n")+"\n"))
+	return w.write(path, []byte(out+strings.Join(withExtras(table, extras), "\n")+"\n"))
 }
 
 // tomlValue is a string, bool, number or list of those as TOML.

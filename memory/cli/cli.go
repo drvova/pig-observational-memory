@@ -33,7 +33,15 @@ The store lives under $OM_HOME (default ~/.om); its settings.json holds the sett
 `
 
 // Run is the om command over args (without the program name); it returns the exit status.
-func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
+	// A panic would exit 2 with a stack trace, which a harness may read as a blocking hook
+	// answer and hand to the model: report it as an error instead.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(stderr, "om: internal error: %v\n", r)
+			code = 1
+		}
+	}()
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(stdout, usage)
 		return 0

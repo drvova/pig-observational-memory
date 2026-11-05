@@ -81,6 +81,9 @@ type DBFormat struct {
 	Read  Format
 }
 
+// Version is the database's and its write-ahead log's sizes and modification times.
+func (d DB) Version() string { return statVersion(d.Path, d.Path+"-wal") }
+
 // Entries reads the session's rows.
 func (d DB) Entries() ([]session.Entry, error) {
 	rows, err := QuerySQLite(d.Path, d.Kind.Query(d.Session))

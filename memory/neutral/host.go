@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/host"
@@ -37,6 +39,20 @@ type Host struct {
 	Log io.Writer
 	// Now is the clock entries are stamped with; nil is time.Now.
 	Now func() time.Time
+
+	// The parsed transcript and store, kept while their files are unchanged (Versioned), so a
+	// hook that appends many entries reads each file once rather than once per append.
+	mu                sync.Mutex
+	transcript        []session.Entry
+	transcriptVersion string
+	stored            []Stored
+	storeVersion      string
+}
+
+// Versioned is a transcript that can say when it changed: a value that differs whenever its
+// content may have (a file's size and modification time).
+type Versioned interface {
+	Version() string
 }
 
 var _ host.ToolHost = (*Host)(nil)
@@ -50,21 +66,45 @@ func (h *Host) now() time.Time {
 	return time.Now()
 }
 
-// stored reads the transcript and the store.
+// read is the merged branch of the transcript and the store, each parsed again only when its
+// file changed.
 func (h *Host) read() ([]session.Entry, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	var transcript []session.Entry
 	if h.Transcript != nil {
-		t, err := h.Transcript.Entries()
+		v, versioned := h.Transcript.(Versioned)
+		version := ""
+		if versioned {
+			version = v.Version()
+		}
+		if versioned && version != "" && version == h.transcriptVersion {
+			transcript = h.transcript
+		} else {
+			t, err := h.Transcript.Entries()
+			if err != nil {
+				return nil, err
+			}
+			transcript, h.transcript, h.transcriptVersion = t, t, version
+		}
+	}
+	if version := fileVersion(h.Store.Path); version == "" || version != h.storeVersion {
+		stored, err := h.Store.Load()
 		if err != nil {
 			return nil, err
 		}
-		transcript = t
+		h.stored, h.storeVersion = stored, version
 	}
-	stored, err := h.Store.Load()
+	return Branch(transcript, h.stored), nil
+}
+
+// fileVersion is a file's size and modification time, "" when it cannot be read.
+func fileVersion(path string) string {
+	st, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	return Branch(transcript, stored), nil
+	return fmt.Sprintf("%d:%d", st.Size(), st.ModTime().UnixNano())
 }
 
 // GetBranch is the merged branch (Branch).
@@ -96,7 +136,21 @@ func (h *Host) appendEntry(entry map[string]any) (string, error) {
 	}
 	entry["id"], entry["parentId"] = id, tip
 	entry["timestamp"] = h.now().UTC().Format("2006-01-02T15:04:05.000Z")
-	return id, h.Store.Append(tip, entry)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := fileVersion(h.Store.Path)
+	if err := h.Store.Append(tip, entry); err != nil {
+		return "", err
+	}
+	// The store grew by exactly this line unless another writer got in between: keep the cache
+	// only when it was current before the append.
+	if before == h.storeVersion {
+		h.stored = append(h.stored, Stored{After: tip, Entry: entry})
+		h.storeVersion = fileVersion(h.Store.Path)
+	} else {
+		h.storeVersion = ""
+	}
+	return id, nil
 }
 
 // newID is an entry id the harness never uses ("om" and eight hex digits).

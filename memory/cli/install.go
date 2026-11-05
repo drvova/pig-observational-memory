@@ -25,6 +25,54 @@ var assets embed.FS
 // exactly those.
 const managedMark = "# om:managed"
 
+// stripManaged takes om's marked lines out of a config (and the blank lines before the first
+// kept one). A line the user added inside one of om's tables (an unmarked line after om's
+// marked table header, before the next table) belongs to that table: it is left out of kept
+// so it never lands in the table before, and returned by the header (without the mark) so an
+// install puts it back after om's table.
+func stripManaged(data []byte) (kept []string, extras map[string][]string) {
+	extras = map[string][]string{}
+	inOm := ""
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasSuffix(line, managedMark) {
+			if head := strings.TrimSpace(strings.TrimSuffix(trimmed, managedMark)); strings.HasPrefix(head, "[") {
+				inOm = head
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			inOm = ""
+		}
+		if inOm != "" {
+			if trimmed != "" {
+				extras[inOm] = append(extras[inOm], line)
+			}
+			continue
+		}
+		if line != "" || len(kept) > 0 {
+			kept = append(kept, line)
+		}
+	}
+	return kept, extras
+}
+
+// withExtras is om's table lines with the user's own lines of each of om's tables put back
+// after its header's table (the first table under that header).
+func withExtras(table []string, extras map[string][]string) []string {
+	var out []string
+	pending := []string(nil)
+	for _, line := range table {
+		if head := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), managedMark)); strings.HasPrefix(head, "[") {
+			out = append(out, pending...)
+			pending = extras[head]
+			delete(extras, head)
+		}
+		out = append(out, line)
+	}
+	return append(out, pending...)
+}
+
 // install wires om into a harness (or, with remove, takes out what install wrote), printing
 // each change; with dry nothing is written.
 func install(harnessName string, remove, dry bool, out io.Writer) error {
@@ -35,7 +83,7 @@ func install(harnessName string, remove, dry bool, out io.Writer) error {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	w := writer{dry: dry, out: out}
+	w := writer{dry: dry, out: out, removing: remove}
 	h, ok := registry[harnessName]
 	if !ok {
 		return fmt.Errorf("om install: unknown harness %q (om harnesses lists them)", harnessName)
@@ -109,13 +157,15 @@ func installAny(path, key, name string, remove, dry bool, out io.Writer) error {
 		name = "generic"
 	}
 	spec := &MCPSpec{Path: map[string]string{"": path}, Key: strings.Split(key, "/")}
-	return installMCP(writer{dry: dry, out: out}, exe, name, spec, remove)
+	return installMCP(writer{dry: dry, out: out, removing: remove}, exe, name, spec, remove)
 }
 
 // writer writes config files, keeping a one-time backup of what was there.
 type writer struct {
 	dry bool
 	out io.Writer
+	// removing is set by uninstall, which never creates a file that is not there.
+	removing bool
 }
 
 func (w writer) write(path string, data []byte) error {
@@ -125,6 +175,9 @@ func (w writer) write(path string, data []byte) error {
 // writeMode is write with the file's permission bits (an executable hook).
 func (w writer) writeMode(path string, data []byte, mode os.FileMode) error {
 	old, err := os.ReadFile(path)
+	if w.removing && errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err == nil && bytes.Equal(old, data) {
 		fmt.Fprintf(w.out, "unchanged %s\n", path)
 		return nil
@@ -201,9 +254,15 @@ func readJSONObject(path string) (map[string]any, error) {
 	return obj, nil
 }
 
+// encodeJSON writes a config back with two-space indents, leaving &, < and > as they are (the
+// standard encoder escapes them for HTML, which would rewrite a user's "cd x && make").
 func encodeJSON(v any) ([]byte, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	return append(data, '\n'), err
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	err := enc.Encode(v)
+	return buf.Bytes(), err
 }
 
 // installCodex adds the MCP server and the notify program to Codex's config
@@ -215,14 +274,12 @@ func installCodex(w writer, exe string, remove bool) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	var kept []string
-	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if !strings.HasSuffix(line, managedMark) && line != "" || line == "" && len(kept) > 0 {
-			kept = append(kept, line)
-		}
-	}
+	kept, extras := stripManaged(data)
 	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
 	if remove {
+		if body == "" {
+			return w.write(path, nil)
+		}
 		return w.write(path, []byte(body+"\n"))
 	}
 	q := func(s string) string { return strconv.Quote(s) }
@@ -251,7 +308,7 @@ func installCodex(w writer, exe string, remove bool) error {
 	if body != "" {
 		out += body + "\n\n"
 	}
-	out += strings.Join(table, "\n") + "\n"
+	out += strings.Join(withExtras(table, extras), "\n") + "\n"
 	return w.write(path, []byte(out))
 }
 
@@ -288,7 +345,7 @@ func installCrush(w writer, exe string, remove bool) error {
 	}
 	var kept []string
 	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if line != "" && !strings.HasSuffix(line, managedMark) {
+		if !strings.HasSuffix(line, managedMark) && (line != "" || len(kept) > 0) {
 			kept = append(kept, line)
 		}
 	}
@@ -303,6 +360,16 @@ func installCrush(w writer, exe string, remove bool) error {
 }
 
 // shellQuote is s single-quoted for a POSIX shell.
+// hookCommand is the shell command a JSON hook runs: om's path quoted for the shell the
+// harness runs hooks in (sh on Unix, where a double-quoted path would still expand $ and `).
+func hookCommand(exe, harness, event string) string {
+	q := shellQuote(exe)
+	if runtime.GOOS == "windows" {
+		q = strconv.Quote(exe)
+	}
+	return q + " hook " + harness + " " + event
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

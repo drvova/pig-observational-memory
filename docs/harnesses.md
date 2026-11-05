@@ -2,7 +2,7 @@
 
 <!-- Generated from memory/cli's registry by TestHarnessDocIsCurrent (go test ./cli -run HarnessDoc -args -write); do not edit. -->
 
-`om install <name>` wires om into 198 harnesses. Each entry takes only what the harness's own documentation or source confirms, linked in its last column; `om install --mcp-config <file>` covers any harness with a JSON MCP config not listed here, and [om](universal.md) has the protocol for any other.
+`om install <name>` wires om into 197 harnesses. Each entry takes only what the harness's own documentation or source confirms, linked in its last column; `om install --mcp-config <file>` covers any harness with a JSON MCP config not listed here, and [om](universal.md) has the protocol for any other.
 
 ## Recording, compaction and the memory tool (35)
 
@@ -46,7 +46,7 @@ Hooks, a plugin or an extension hand om the conversation, and the memory tool re
 | Qwen Code | `qwen-code` | `~/.qwen/settings.json` `mcpServers` | compaction: om's summary is handed back at the SessionStart after Qwen's (source compact) |
 | Trae | `trae` | Settings > MCP > Add > Add Manually, and paste it under mcpServers | Claude-style hooks: om records each prompt and reply itself (no transcript it reads); no compaction hook, so memory is the tool's and the session-start context; [docs](https://docs.trae.ai/ide/hook-configuration-reference) |
 
-## The memory tool, installed by om (67)
+## The memory tool, installed by om (66)
 
 om writes its MCP server into the harness's config, beside what is there, and uninstall takes out exactly that. The tool serves the curated memory and kept definitions, shared across harnesses.
 
@@ -83,7 +83,6 @@ om writes its MCP server into the harness's config, beside what is there, and un
 | Kimi Code CLI | `kimi-code` | `${KIMI_CODE_HOME:-~/.kimi-code}/mcp.json` `mcpServers` | [docs](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html) |
 | Kombai | `kombai` | `~/.kombai/mcp.json` `mcpServers` | file may contain comments; project .kombai/mcp.json overrides same name; [docs](https://docs.kombai.com/features/mcp/external-mcp-servers.md) |
 | kubectl-ai | `kubectl-ai` | `${XDG_CONFIG_HOME:-~/.config}/kubectl-ai/mcp.yaml` `servers` | MCP client mode must be enabled per run with --mcp-client; [docs](https://raw.githubusercontent.com/GoogleCloudPlatform/kubectl-ai/main/pkg/mcp/config.go https://raw.githubusercontent.com/GoogleCloudPlatform/kubectl-ai/main/README.md) |
-| llm (Simon Willison) with llm-tools-mcp | `llm-tools-mcp` | `~/.llm-tools-mcp/mcp.json` `mcpServers` | needs llm install llm-tools-mcp; tools are used only when a prompt passes -T MCP; [docs](https://raw.githubusercontent.com/VirtusLab/llm-tools-mcp/main/README.md) |
 | LLM (simonw) with llm-tools-mcp | `llm` | `~/.llm-tools-mcp/mcp.json` `mcpServers` | needs the third-party plugin (`llm install llm-tools-mcp`) and tools enabled per run (`llm -T MCP ...`); llm core has no MCP; [docs](https://raw.githubusercontent.com/VirtusLab/llm-tools-mcp/main/README.md) |
 | Mastra Code | `mastra-code` | `~/.mastracode/mcp.json` `mcpServers` | [docs](https://mastra.ai/docs/mastra-code/configuration) |
 | MCPCLIHost | `mcpclihost` | `~/.mcp.json` `mcpServers` | [docs](https://raw.githubusercontent.com/vincent-pli/mcp-cli-host/main/README.md) |

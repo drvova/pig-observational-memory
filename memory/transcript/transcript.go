@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"time"
@@ -36,6 +37,23 @@ func (f File) Entries() ([]session.Entry, error) {
 }
 
 var _ neutral.Transcript = File{}
+var _ neutral.Versioned = File{}
+
+// Version is the file's size and modification time ("" when it is missing).
+func (f File) Version() string { return statVersion(f.Path) }
+
+func statVersion(paths ...string) string {
+	out := ""
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil {
+			out += "-;"
+			continue
+		}
+		out += fmt.Sprintf("%d:%d;", st.Size(), st.ModTime().UnixNano())
+	}
+	return out
+}
 
 func readLines(path string) ([]map[string]any, error) {
 	file, err := os.Open(path)

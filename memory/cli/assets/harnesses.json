@@ -1144,30 +1144,6 @@
   "source": "https://raw.githubusercontent.com/VirtusLab/llm-tools-mcp/main/README.md"
  },
  {
-  "name": "llm-tools-mcp",
-  "title": "llm (Simon Willison) with llm-tools-mcp",
-  "class": "file",
-  "path": {
-   "darwin": "~/.llm-tools-mcp/mcp.json",
-   "linux": "~/.llm-tools-mcp/mcp.json",
-   "windows": "~/.llm-tools-mcp/mcp.json"
-  },
-  "format": "json",
-  "key": [
-   "mcpServers"
-  ],
-  "entry": {
-   "command": "$OM",
-   "args": [
-    "mcp",
-    "--harness",
-    "$HARNESS"
-   ]
-  },
-  "note": "needs llm install llm-tools-mcp; tools are used only when a prompt passes -T MCP",
-  "source": "https://raw.githubusercontent.com/VirtusLab/llm-tools-mcp/main/README.md"
- },
- {
   "name": "lm-studio",
   "title": "LM Studio",
   "class": "manual",

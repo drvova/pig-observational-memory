@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/filelock"
 	"github.com/drvova/pig-observational-memory/memory/session"
@@ -37,7 +38,18 @@ type Store struct {
 // StoreFor is the store of one session of a harness under root (the engine's config root):
 // <root>/sessions/<harness>/<session>.jsonl.
 func StoreFor(root, harness, sessionID string) Store {
-	return Store{Path: filepath.Join(root, "sessions", harness, sessionID+".jsonl")}
+	return Store{Path: filepath.Join(root, "sessions", harness, SafeName(sessionID)+".jsonl")}
+}
+
+// SafeName is a session id usable as one file name: path separators and NUL become _, and a
+// leading dot is dropped, so an id from a hook payload never names a path outside the store.
+func SafeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == 0 {
+			return '_'
+		}
+		return r
+	}, strings.TrimPrefix(s, "."))
 }
 
 // Load reads every stored entry, in the order written; a missing store is empty, and a line

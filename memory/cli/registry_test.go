@@ -105,3 +105,21 @@ func TestRegistryDryRun(t *testing.T) {
 		}
 	}
 }
+
+// No two harnesses write om's server into the same file under the same key: each would
+// overwrite the other's --harness, and uninstalling one would remove the other's.
+func TestRegistryTargetsAreDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for name, h := range registry {
+		if h.MCP == nil {
+			continue
+		}
+		for goos, p := range h.MCP.Path {
+			target := goos + " " + p + " " + strings.Join(h.MCP.Key, "/")
+			if other, ok := seen[target]; ok {
+				t.Errorf("%s and %s both write %s", name, other, target)
+			}
+			seen[target] = name
+		}
+	}
+}

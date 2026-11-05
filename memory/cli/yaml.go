@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"runtime"
@@ -34,9 +35,31 @@ func installYAML(w writer, exe, harness string, spec *YAMLSpec, remove bool) err
 		return err
 	}
 	var doc yaml.Node
+	var prefix []byte
 	if len(bytes.TrimSpace(data)) > 0 {
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return fmt.Errorf("%s is not YAML om can edit: %w", path, err)
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		docs := 0
+		for {
+			var d yaml.Node
+			err := dec.Decode(&d)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("%s is not YAML om can edit: %w", path, err)
+			}
+			if docs == 0 {
+				doc = d
+			}
+			docs++
+		}
+		if docs > 1 {
+			return fmt.Errorf("%s holds %d YAML documents; om edits a file with one, so add its entry by hand (om install --dry-run shows it)", path, docs)
+		}
+		if doc.Kind == 0 || len(doc.Content) == 0 {
+			// Comments alone: keep them above the file om writes.
+			prefix = append(bytes.TrimRight(data, "\n"), '\n')
+			doc = yaml.Node{}
 		}
 	}
 	if doc.Kind == 0 {
@@ -91,6 +114,7 @@ func installYAML(w writer, exe, harness string, spec *YAMLSpec, remove bool) err
 		}
 	}
 	var out bytes.Buffer
+	out.Write(prefix)
 	enc := yaml.NewEncoder(&out)
 	enc.SetIndent(2)
 	if err := enc.Encode(&doc); err != nil {

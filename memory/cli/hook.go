@@ -85,6 +85,11 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 	if err != nil {
 		return err
 	}
+	release, err := lockEngine(h)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := remember(a.root, s); err != nil {
 		return err
 	}
@@ -232,7 +237,7 @@ func decodeHookPayload(in io.Reader, env map[string]string) (hookPayload, error)
 // of the session, ~/.om/transcripts/<harness>/<session>.jsonl in the generic format, each line
 // given the next id; it returns that transcript's path.
 func recordTurn(root string, hs Harness, p hookPayload) (string, error) {
-	path := filepath.Join(root, "transcripts", hs.Name, safeName(p.SessionID)+".jsonl")
+	path := filepath.Join(root, "transcripts", hs.Name, neutral.SafeName(p.SessionID)+".jsonl")
 	lines := hs.Hooks.Record(p.Raw)
 	if len(lines) == 0 {
 		return path, nil
@@ -269,16 +274,6 @@ func recordTurn(root string, hs Harness, p hookPayload) (string, error) {
 	})
 }
 
-// safeName is s usable as one path segment.
-func safeName(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' || r == 0 {
-			return '_'
-		}
-		return r
-	}, strings.TrimPrefix(s, "."))
-}
-
 // codexHook answers Codex's notify program (om hook codex notify '<json>'), called after each
 // agent turn with the turn as its last argument: level 0 over the rollout of the thread.
 func (a *app) codexHook(event string, args []string) error {
@@ -296,7 +291,16 @@ func (a *app) codexHook(event string, args []string) error {
 	if p.Type != "agent-turn-complete" || p.Thread == "" {
 		return nil
 	}
-	rollout, err := codexRollout(p.Thread)
+	rollout := ""
+	if cur, ok := current(a.root, "codex", p.Cwd); ok && cur.ID == p.Thread {
+		if _, err := os.Stat(cur.Transcript); err == nil {
+			rollout = cur.Transcript
+		}
+	}
+	var err error
+	if rollout == "" {
+		rollout, err = codexRollout(p.Thread)
+	}
 	if err != nil {
 		return err
 	}
@@ -305,6 +309,11 @@ func (a *app) codexHook(event string, args []string) error {
 	if err != nil {
 		return err
 	}
+	release, err := lockEngine(h)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := remember(a.root, s); err != nil {
 		return err
 	}
@@ -323,6 +332,14 @@ func codexRollout(thread string) (string, error) {
 			return "", err
 		}
 		home = filepath.Join(dir, ".codex")
+	}
+	// A turn's rollout is almost always in a recent day's folder (sessions/YYYY/MM/DD): look
+	// there before walking the whole tree, which grows with every session.
+	for back := 0; back < 3; back++ {
+		day := time.Now().AddDate(0, 0, -back).Format("2006/01/02")
+		if matches, _ := filepath.Glob(filepath.Join(home, "sessions", filepath.FromSlash(day), "*"+thread+".jsonl")); len(matches) > 0 {
+			return matches[0], nil
+		}
 	}
 	found := ""
 	err := filepath.WalkDir(filepath.Join(home, "sessions"), func(path string, d os.DirEntry, err error) error {
@@ -377,6 +394,11 @@ func (a *app) genericHook(name string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	release, err := lockEngine(h)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := remember(a.root, s); err != nil {
 		return err
 	}
@@ -414,6 +436,11 @@ func (a *app) piHook(name string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	release, err := lockEngine(h)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := remember(a.root, s); err != nil {
 		return err
 	}
@@ -439,4 +466,14 @@ func (a *app) piHook(name string, in io.Reader, out io.Writer) error {
 		return json.NewEncoder(out).Encode(map[string]any{"compaction": c.ToMap()})
 	}
 	return fmt.Errorf("om hook pi: unknown event %q (session-start, turn-end, before-compact)", name)
+}
+
+// lockEngine holds the session's engine lock (beside its store) for one hook's engine work: each
+// hook is its own process, and two at once on one session (Codex's notify is not waited on, a
+// plugin's idle event can repeat) would each extract the same turns.
+func lockEngine(h *neutral.Host) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(h.Store.Path), 0o700); err != nil {
+		return nil, err
+	}
+	return filelock.Lock(h.Store.Path + ".engine.lock")
 }
