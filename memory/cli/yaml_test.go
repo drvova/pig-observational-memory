@@ -54,3 +54,31 @@ func TestYAMLRoundTrip(t *testing.T) {
 		t.Fatalf("continue after uninstall:\n%s", data)
 	}
 }
+
+// A TOML list harness (Mistral Vibe) gets one marked [[table]] carrying name = "om", and a
+// dotted table (Moltis) a [<a.b>.om] table; uninstall leaves the file as it was.
+func TestTOMLListAndDotted(t *testing.T) {
+	for _, name := range []string{"mistral-vibe", "moltis"} {
+		h := registry[name]
+		path := filepath.Join(t.TempDir(), "config.toml")
+		h.TOML.Path = map[string]string{"": path}
+		before := "model = \"m\"\n"
+		os.WriteFile(path, []byte(before), 0o600)
+		w := writer{out: &strings.Builder{}}
+		if err := installTOML(w, "/opt/om", name, h.TOML, false); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(path)
+		want := "[mcp.servers.om]"
+		if name == "mistral-vibe" {
+			want = "[[mcp_servers]]"
+		}
+		if !strings.Contains(string(data), want) || (name == "mistral-vibe") != strings.Contains(string(data), `name = "om"`) {
+			t.Fatalf("%s:\n%s", name, data)
+		}
+		installTOML(w, "/opt/om", name, h.TOML, true)
+		if data, _ := os.ReadFile(path); string(data) != before {
+			t.Fatalf("%s after uninstall %q", name, data)
+		}
+	}
+}

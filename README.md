@@ -67,8 +67,8 @@ pig install ./extensions/observational-memory --validate-only --json
 
 ## Other harnesses
 
-The same engine runs outside PiG as one binary, `om`, for 128 harnesses (Claude Code, Codex, OpenCode, Pi,
-Cursor, Copilot, Gemini CLI, Zed, Cline, JetBrains, Jan and more; [Harnesses](docs/harnesses.md) lists them) and any harness that can run a
+The same engine runs outside PiG as one binary, `om`, for 198 harnesses (Claude Code, Codex, OpenCode, Pi,
+Oh My Pi, Cursor, Copilot, Gemini CLI, Zed, Cline, JetBrains, Jan and more; [Harnesses](docs/harnesses.md) lists them) and any harness that can run a
 command at a turn's end:
 
 ```sh

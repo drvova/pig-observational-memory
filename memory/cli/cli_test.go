@@ -245,7 +245,7 @@ func TestInstallRoundTrip(t *testing.T) {
 		t.Fatalf("codex config:\n%s", toml)
 	}
 	for _, p := range []string{filepath.Join(home, ".config", "opencode", "plugin", "om.js"), filepath.Join(home, ".pi", "agent", "extensions", "om.ts")} {
-		if b, err := os.ReadFile(p); err != nil || strings.Contains(string(b), "__OM_BIN__") {
+		if b, err := os.ReadFile(p); err != nil || strings.Contains(string(b), "__OM_") {
 			t.Fatalf("%s: %v", p, err)
 		}
 	}

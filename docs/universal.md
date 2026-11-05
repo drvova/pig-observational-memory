@@ -26,11 +26,14 @@ om install claude-code      # or any name om harnesses lists; --dry-run prints t
 | Claude Code | `Stop` hook | `PreCompact` runs the engine's compaction of the whole conversation; `SessionStart` (`source: compact`) hands the summary back beside Claude's own | MCP server `om` | `~/.claude/settings.json` hooks; `claude mcp add --scope user om` |
 | Codex | `notify` program after each turn | none (Codex exposes no compaction hook): recorded memory is reached through the tool | MCP server `om` | `~/.codex/config.toml` (`notify`, `[mcp_servers.om]`, each line marked `# om:managed`) |
 | OpenCode | plugin, on `session.idle` | plugin, on `experimental.session.compacting`: the engine's summary joins the context OpenCode's summary is written from | MCP server `om` | `~/.config/opencode/plugin/om.js`, `opencode.json` `mcp.om` |
-| Pi | extension, on `turn_end` | extension, on `session_before_compact`: the engine compacts on Pi's own cut and Pi stores the result, as in PiG | `memory` tool run through `om call` | `~/.pi/agent/extensions/om.ts` |
+| Pi, Oh My Pi, Gentle Shell | extension, on `turn_end` | extension, on `session_before_compact`: the engine compacts on Pi's own cut and Pi stores the result, as in PiG | `memory` tool run through `om call` | `~/.pi/agent/extensions/om.ts`; `~/.omp/agent/extensions/om.ts`; `~/.gentle-shell/agent/extensions/om.ts`, each under its own harness name |
 | Gemini CLI, Qwen Code, Factory Droid | `AfterAgent` / `Stop` hook | `PreCompress` / `PreCompact` runs the engine's compaction; Qwen's and Droid's `SessionStart` (`source: compact`) hand the summary back, Gemini's next `BeforeAgent` does, once | MCP server `om` | the harness's settings (`~/.gemini/settings.json`, `~/.qwen/settings.json`, `~/.factory/hooks.json`) |
 | Kimi CLI | `Stop` hook (om finds the session's `wire.jsonl` from its cwd and id) | `PreCompact` runs the engine's compaction; Kimi's hooks cannot hand the model context, so the summary is reached through the tool | MCP server `om` | `~/.kimi/config.toml` `[[hooks]]`, each line marked `# om:managed` |
 | Copilot CLI | `agentStop` hook (om reads `session-state/<id>/events.jsonl`) | `preCompact` runs the engine's compaction; `sessionStart` never follows Copilot's compaction, so the summary comes back on resume and through the tool | MCP server `om` | `~/.copilot/settings.json` `hooks`, `mcp-config.json` |
 | Any other | `om hook generic turn-end` | `om hook generic compact` prints the summary | `om mcp --harness <name>` or `om call` | your harness's own hook config |
+
+`om install pig` runs `pig install` for this repository: PiG runs the engine as its own extension, not
+through `om`.
 
 Level 1, the one model request per compaction, needs the session model, which only PiG hands the engine,
 so `om` runs code only everywhere else: no model request is ever made. Everything else (level 0, the

@@ -149,3 +149,23 @@ func TestCopilot(t *testing.T) {
 		t.Fatalf("path %s", got)
 	}
 }
+
+// Oh My Pi: the 256-byte title slot and the header come before Pi-shaped entries.
+func TestOhMyPi(t *testing.T) {
+	title := `{"type":"title","title":"t"}`
+	title += strings.Repeat(" ", 255-len(title))
+	p := write(t,
+		title,
+		`{"type":"session","version":3,"id":"s1","cwd":"/p"}`,
+		`{"type":"message","id":"e1","parentId":null,"timestamp":"2026-11-04T10:00:00.000Z","message":{"role":"user","content":"hi","timestamp":1}}`,
+		`{"type":"model_usage","id":"e2","parentId":"e1","timestamp":"2026-11-04T10:00:01.000Z"}`,
+		`{"type":"message","id":"e3","parentId":"e2","timestamp":"2026-11-04T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"timestamp":2}}`,
+	)
+	es, err := File{Path: p, Format: Pi}.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(es) != 3 || es[0].ID != "e1" || es[2].ID != "e3" {
+		t.Fatalf("entries %v", es)
+	}
+}

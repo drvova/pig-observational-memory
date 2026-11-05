@@ -19,6 +19,8 @@ type harnessData struct {
 	Format string            `json:"format"` // json | yaml | toml
 	Key    []string          `json:"key"`
 	List   bool              `json:"list"`
+	// ID is the field a list entry is identified by, when not "name".
+	ID string `json:"id"`
 	// Entry is the server entry, with $OM for om's path and $HARNESS for the harness name in any
 	// string.
 	Entry  map[string]any `json:"entry"`
@@ -88,17 +90,14 @@ func (d harnessData) harness() (Harness, error) {
 	}
 	switch d.Format {
 	case "json":
-		h.MCP = &MCPSpec{Path: d.Path, Key: d.Key, Entry: entry, List: d.List}
+		h.MCP = &MCPSpec{Path: d.Path, Key: d.Key, Entry: entry, List: d.List, ID: d.ID}
 	case "yaml":
 		if len(d.Key) != 1 {
 			return h, fmt.Errorf("a YAML key is one top-level key")
 		}
 		h.YAML = &YAMLSpec{Path: d.Path, Key: d.Key[0], List: d.List, Entry: entry}
 	case "toml":
-		if d.List || len(d.Key) != 1 {
-			return h, fmt.Errorf("a TOML key is one table of servers")
-		}
-		h.TOML = &TOMLSpec{Path: d.Path, Table: d.Key[0], Entry: entry}
+		h.TOML = &TOMLSpec{Path: d.Path, Table: strings.Join(d.Key, "."), Entry: entry, List: d.List}
 	default:
 		return h, fmt.Errorf("unknown format %q", d.Format)
 	}

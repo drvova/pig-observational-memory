@@ -18,6 +18,9 @@ type TOMLSpec struct {
 	Path  map[string]string
 	Table string
 	Entry func(exe, harness string) map[string]any
+	// List says the servers are an array of tables ([[Table]]) each carrying its name, not
+	// [Table.<name>] tables.
+	List bool
 }
 
 func installTOML(w writer, exe, harness string, spec *TOMLSpec, remove bool) error {
@@ -50,6 +53,12 @@ func installTOML(w writer, exe, harness string, spec *TOMLSpec, remove bool) err
 	}
 	sort.Strings(keys)
 	table := []string{"[" + spec.Table + ".om] " + managedMark}
+	if spec.List {
+		entry["name"] = "om"
+		keys = append(keys, "name")
+		sort.Strings(keys)
+		table = []string{"[[" + spec.Table + "]] " + managedMark}
+	}
 	for _, k := range keys {
 		v, err := tomlValue(entry[k])
 		if err != nil {

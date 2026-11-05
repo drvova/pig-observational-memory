@@ -54,6 +54,8 @@ type MCPSpec struct {
 	Entry func(exe, harness string) map[string]any
 	// List says the servers are a list of entries each carrying its "name", not a map by name.
 	List bool
+	// ID is the field a list entry is identified by, when not "name".
+	ID string
 }
 
 // HookSpec is a harness's hooks in Claude Code's schema, the family most harnesses copied:
@@ -250,6 +252,20 @@ func init() {
 		Note: "its session-start and turn-start hooks cannot hand the model context, so they are not wired",
 	})
 	register(Harness{
+		Name: "oh-my-pi", Title: "Oh My Pi", Custom: piExtensionInstaller("oh-my-pi", "${PI_CONFIG_DIR:-~/.omp}/agent/extensions"),
+		Note:   "Pi's extension, which Oh My Pi loads from its own agent directory: om compacts on its cut; the default profile only",
+		Source: "https://github.com/can1357/oh-my-pi/blob/main/docs/extension-loading.md",
+	})
+	register(Harness{
+		Name: "gentle-shell", Title: "Gentle Shell", Custom: piExtensionInstaller("gentle-shell", "${GENTLE_SHELL_HOME:-~/.gentle-shell/agent}/extensions"),
+		Note:   "Pi's extension in Gentle Shell's own home (with --link it uses Pi's: om install pi)",
+		Source: "https://github.com/Gentleman-Programming/gentle-shell",
+	})
+	register(Harness{
+		Name: "pig", Title: "PiG", Custom: installPiG,
+		Note: "the engine runs inside PiG as its extension, with level 1 on the session model: om install runs pig install",
+	})
+	register(Harness{
 		Name: "pi", Title: "Pi", Custom: installPi,
 		Note: "extension: om compacts on Pi's own cut and Pi stores it; the tool runs through om call",
 	})
@@ -367,9 +383,13 @@ func installMCPList(w writer, exe, harness string, spec *MCPSpec, cfg map[string
 		obj = next
 	}
 	list, _ := obj[spec.Key[last]].([]any)
+	id := spec.ID
+	if id == "" {
+		id = "name"
+	}
 	kept := []any{}
 	for _, item := range list {
-		if m, _ := item.(map[string]any); m == nil || m["name"] != "om" {
+		if m, _ := item.(map[string]any); m == nil || m[id] != "om" {
 			kept = append(kept, item)
 		}
 	}
@@ -378,7 +398,7 @@ func installMCPList(w writer, exe, harness string, spec *MCPSpec, cfg map[string
 		if spec.Entry != nil {
 			entry = spec.Entry(exe, harness)
 		}
-		entry["name"] = "om"
+		entry[id] = "om"
 		kept = append(kept, entry)
 	}
 	if len(kept) == 0 {

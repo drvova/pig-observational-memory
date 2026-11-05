@@ -31,7 +31,11 @@ func TestRegistryMCPRoundTrip(t *testing.T) {
 			cfg, _ := readJSONObject(path)
 			if h.MCP.List {
 				data, _ := json.Marshal(cfg)
-				if !strings.Contains(string(data), `"name":"om"`) || !strings.Contains(string(data), exe) || cfg["theirs"] == nil {
+				id := h.MCP.ID
+				if id == "" {
+					id = "name"
+				}
+				if !strings.Contains(string(data), `"`+id+`":"om"`) || !strings.Contains(string(data), exe) || cfg["theirs"] == nil {
 					t.Fatalf("list config %s", data)
 				}
 				if err := installMCP(w, exe, name, h.MCP, true); err != nil {

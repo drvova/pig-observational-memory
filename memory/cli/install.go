@@ -294,7 +294,19 @@ func shellQuote(s string) string {
 // installPi writes the om extension into Pi's global extensions directory
 // ($PI_CODING_AGENT_DIR/extensions, ~/.pi/agent/extensions), which Pi loads at start.
 func installPi(w writer, exe string, remove bool) error {
-	path := filepath.Join(homeDir("PI_CODING_AGENT_DIR", ".pi", "agent"), "extensions", "om.ts")
+	return installPiExtension(w, exe, "pi", filepath.Join(homeDir("PI_CODING_AGENT_DIR", ".pi", "agent"), "extensions"), remove)
+}
+
+// piExtensionInstaller installs Pi's extension into a harness that loads Pi extensions from its
+// own agent directory (dir, a path template), under its own harness name.
+func piExtensionInstaller(harness, dir string) func(w writer, exe string, remove bool) error {
+	return func(w writer, exe string, remove bool) error {
+		return installPiExtension(w, exe, harness, pathTemplate(dir), remove)
+	}
+}
+
+func installPiExtension(w writer, exe, harness, dir string, remove bool) error {
+	path := filepath.Join(dir, "om.ts")
 	if remove {
 		return w.remove(path)
 	}
@@ -302,5 +314,20 @@ func installPi(w writer, exe string, remove bool) error {
 	if err != nil {
 		return err
 	}
-	return w.write(path, bytes.ReplaceAll(src, []byte("__OM_BIN__"), []byte(strconv.Quote(exe))))
+	src = bytes.ReplaceAll(src, []byte("__OM_BIN__"), []byte(strconv.Quote(exe)))
+	return w.write(path, bytes.ReplaceAll(src, []byte("__OM_HARNESS__"), []byte(strconv.Quote(harness))))
+}
+
+// pigSource is the PiG package this repository publishes (README.md).
+const pigSource = "git:github.com/drvova/pig-observational-memory"
+
+// installPiG adds the engine to PiG the way PiG installs any package: PiG runs it natively, so
+// nothing of om's binary is written.
+func installPiG(w writer, exe string, remove bool) error {
+	if remove {
+		w.run("pig", "remove", pigSource)
+	} else {
+		w.run("pig", "install", pigSource)
+	}
+	return nil
 }

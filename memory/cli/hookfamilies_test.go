@@ -210,3 +210,25 @@ func TestCopilotHooks(t *testing.T) {
 		t.Fatalf("after uninstall %s", data)
 	}
 }
+
+// Oh My Pi and Gentle Shell take Pi's extension in their own agent directories, under their own
+// harness names, so their memory is kept apart from Pi's.
+func TestPiExtensionHarnesses(t *testing.T) {
+	_, home := env(t)
+	t.Setenv("PI_CONFIG_DIR", "")
+	t.Setenv("GENTLE_SHELL_HOME", "")
+	for name, path := range map[string]string{
+		"oh-my-pi":     filepath.Join(home, ".omp", "agent", "extensions", "om.ts"),
+		"gentle-shell": filepath.Join(home, ".gentle-shell", "agent", "extensions", "om.ts"),
+	} {
+		om(t, "", "install", name)
+		b, err := os.ReadFile(path)
+		if err != nil || strings.Contains(string(b), "__OM_") || !strings.Contains(string(b), `const HARNESS: string = "`+name+`"`) {
+			t.Fatalf("%s: %v\n%s", name, err, b)
+		}
+		om(t, "", "uninstall", name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s left %s", name, path)
+		}
+	}
+}
