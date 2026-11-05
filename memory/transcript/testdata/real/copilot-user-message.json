@@ -1,0 +1,10 @@
+{
+    "id": "11111111-1111-1111-1111-111111111111",
+    "timestamp": "2026-08-28T00:00:00Z",
+    "parentId": null,
+    "type": "user.message",
+    "data": {
+        "content": "hello"
+        , "messageId": "message-1"
+    }
+}

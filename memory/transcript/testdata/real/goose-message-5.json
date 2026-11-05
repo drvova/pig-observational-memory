@@ -1,0 +1,21 @@
+{
+            "role": "user",
+            "created": 1640995200,
+            "content": [{
+                "type": "toolResponse",
+                "id": "tool456",
+                "toolResult": {
+                    "status": "success",
+                    "value": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "New format output"
+                            }
+                        ],
+                        "isError": false
+                    }
+                }
+            }],
+            "metadata": { "agentVisible": true, "userVisible": true }
+        }

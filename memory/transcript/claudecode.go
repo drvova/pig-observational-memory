@@ -16,7 +16,9 @@ import (
 // message.id) are one assistant entry, under the first line's uuid; a user line's tool_result
 // blocks are toolResult entries. Subagent (isSidechain), meta and transcript-only lines, the
 // harness's own compaction summary (isCompactSummary), attachments and API errors are not the
-// conversation and are left out.
+// conversation and are left out. A compaction that keeps recent messages (a compact_boundary's
+// compactMetadata.preservedSegment, head to tail) leaves them on a side chain that Claude Code
+// relinks after the anchor; they are read there.
 func ClaudeCode(lines []map[string]any) []session.Entry {
 	byID := map[string]map[string]any{}
 	leaf := ""
@@ -48,6 +50,7 @@ func ClaudeCode(lines []map[string]any) []session.Entry {
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
+	chain = splicePreserved(chain, byID)
 	toolNames := map[string]string{}
 	var out []session.Entry
 	var group *ccGroup
@@ -170,4 +173,51 @@ func KodeSessionPath(cwd, sessionID string) string {
 		}
 	}
 	return filepath.Join(root, "projects", string(slug), sessionID+".jsonl")
+}
+
+// splicePreserved puts each compaction's preserved segment (compactMetadata.preservedSegment
+// {headUuid, anchorUuid, tailUuid}: the messages kept through the compaction, on a side chain)
+// into the walked chain after its anchor, as Claude Code relinks it when it loads the session.
+func splicePreserved(chain []map[string]any, byID map[string]map[string]any) []map[string]any {
+	in := map[string]bool{}
+	for _, l := range chain {
+		in[str(l["uuid"])] = true
+	}
+	for _, l := range chain {
+		meta, _ := l["compactMetadata"].(map[string]any)
+		seg, _ := meta["preservedSegment"].(map[string]any)
+		head, anchor, tail := str(seg["headUuid"]), str(seg["anchorUuid"]), str(seg["tailUuid"])
+		if head == "" || tail == "" || in[tail] {
+			continue
+		}
+		var segment []map[string]any
+		seen := map[string]bool{}
+		for id := tail; id != "" && !seen[id]; id = str(byID[id]["parentUuid"]) {
+			seen[id] = true
+			line := byID[id]
+			if line == nil {
+				segment = nil
+				break
+			}
+			segment = append([]map[string]any{line}, segment...)
+			if id == head {
+				break
+			}
+		}
+		if len(segment) == 0 || str(segment[0]["uuid"]) != head {
+			continue
+		}
+		at := len(chain)
+		for i, c := range chain {
+			if str(c["uuid"]) == anchor {
+				at = i + 1
+			}
+		}
+		for _, s := range segment {
+			in[str(s["uuid"])] = true
+		}
+		chain = append(chain[:at], append(segment, chain[at:]...)...)
+		return splicePreserved(chain, byID)
+	}
+	return chain
 }

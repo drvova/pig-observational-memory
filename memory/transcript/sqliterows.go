@@ -99,8 +99,8 @@ func CrushDBPath(cwd, _ string) string {
 
 // GooseRows reads Goose's messages rows (crates/goose session_manager: message_id, role,
 // content_json, metadata_json): text, thinking, toolRequest {id, toolCall {status, value {name,
-// arguments}}} and, in a user message, toolResponse {id, toolResult {status, value {content,
-// isError}}}. A compaction rewrites the rows but keeps the originals (agent-invisible) and adds
+// arguments}}} and, in a user message, toolResponse {id, toolResult {status, value}}, whose value
+// is {content, isError} or, in the legacy shape, the bare content list. A compaction rewrites the rows but keeps the originals (agent-invisible) and adds
 // a summary (compactionSummary), which is left out.
 func GooseRows(rows []map[string]any) []session.Entry {
 	var out []session.Entry
@@ -127,9 +127,15 @@ func GooseRows(rows []map[string]any) []session.Entry {
 				content = append(content, map[string]any{"type": "toolCall", "id": str(b["id"]), "name": str(value["name"]), "arguments": value["arguments"]})
 			case "toolResponse":
 				res, _ := b["toolResult"].(map[string]any)
-				value, _ := res["value"].(map[string]any)
-				isError, _ := value["isError"].(bool)
-				body := resultText(value["content"])
+				var isError bool
+				var body string
+				switch value := res["value"].(type) {
+				case map[string]any: // CallToolResult {content, isError}
+					isError, _ = value["isError"].(bool)
+					body = resultText(value["content"])
+				case []any: // the legacy shape: a bare content list
+					body = resultText(value)
+				}
 				if str(res["status"]) == "error" {
 					isError, body = true, fmt.Sprint(res["error"])
 				}

@@ -41,11 +41,22 @@ so `om` runs code only everywhere else: no model request is ever made. Everythin
 summary with its intent and next sections, ranked search, curated memory, kept definitions) works the same.
 
 Tested: every hook protocol end to end against the `om` binary (`memory/cli/cli_test.go`,
-`hookfamilies_test.go`), the Claude Code reader against a real Claude Code transcript, and the
-installers' round trips. The readers after Claude Code, Codex and Pi are tested on samples built
-from each harness's own source or published types (`memory/transcript/hookformats_test.go`), not on
-files those harnesses wrote. The OpenCode plugin and the Pi extension are checked by `node --check` and
-`tsc --strict` but have not run inside OpenCode or Pi.
+`hookfamilies_test.go`), the Claude Code reader against a real Claude Code transcript, and the installers'
+round trips. The other readers are tested two ways (`memory/transcript`):
+- On samples built from each harness's own source (`hookformats_test.go`).
+- On transcript samples copied from the harnesses' repositories (`testdata/real`, `real_test.go`). Those
+  are a session Gemini CLI recorded, a recorded Oh My Pi session, and fixtures from the Qwen Code, Kimi
+  CLI, Goose, OpenClaude, Cline, Neovate Code and Copilot SDK test suites.
+
+The repository samples caught four gaps, now fixed:
+- **Gemini CLI:** tool results kept on the call itself, its legacy single-JSON sessions, and its
+  `$set`/`$patch` checkpoints.
+- **Claude Code:** messages a compaction keeps on a side chain.
+- **Goose:** its legacy tool-result shape.
+
+No harness here has run against om: running the harnesses themselves on this machine needs the user's
+approval. The OpenCode plugin and the Pi extension are checked by `node --check` and `tsc --strict` but
+have not run inside OpenCode or Pi.
 
 ## Harness registry
 

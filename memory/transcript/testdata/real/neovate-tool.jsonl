@@ -1,0 +1,3 @@
+{"uuid":"1","parentUuid":null,"role":"user","content":"test","type":"message","timestamp":"2024-01-01T00:00:00Z"}
+{"uuid":"2","parentUuid":"1","role":"assistant","content":[{"type":"tool_use","id":"toolu_001","name":"read","input":{}}],"type":"message","timestamp":"2024-01-01T00:00:01Z","text":"","model":"test","usage":{"input_tokens":0,"output_tokens":0}}
+{"uuid":"3","parentUuid":"2","role":"tool","content":[{"type":"tool-result","toolCallId":"toolu_001","toolName":"read","input":{},"result":{"llmContent":"file content"}}],"type":"message","timestamp":"2024-01-01T00:00:02Z"}

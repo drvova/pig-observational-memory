@@ -1,0 +1,22 @@
+{"type": "metadata", "protocol_version": "1.10"}
+{"timestamp": 123.456, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "hi"}]}}}
+{"timestamp": 124.0, "message": {"type": "TurnBegin", "payload": {"user_input": "Hello, world!"}}}
+{"timestamp": 125.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello"}, {"type": "text", "text": "world!"}]}}}
+{"timestamp": 126.0, "message": {"type": "StepBegin", "payload": {"n": 1}}}
+{"timestamp": 127.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hello world"}}}
+{"timestamp": 128.0, "message": {"type": "ContentPart", "payload": {"type": "image_url", "image_url": {"url": "http://example.com/image.png", "id": null}}}}
+{"timestamp": 129.0, "message": {"type": "ToolCall", "payload": {"type": "function", "id": "call_123", "function": {"name": "bash", "arguments": "{\"command\": \"ls -la\"}"}, "extras": null}}}
+{"timestamp": 130.0, "message": {"type": "ToolCallPart", "payload": {"arguments_part": "}"}}}
+{"timestamp": 131.0, "message": {"type": "ApprovalRequest", "payload": {"id": "request_123", "tool_call_id": "call_999", "sender": "bash", "action": "Execute dangerous command", "description": "This command will delete files", "source_kind": null, "source_id": null, "agent_id": null, "subagent_type": null, "source_description": null, "display": []}}}
+{"timestamp": 132.0, "message": {"type": "ApprovalResponse", "payload": {"request_id": "request_123", "response": "approve", "feedback": ""}}}
+{"timestamp": 133.0, "message": {"type": "ToolResult", "payload": {"tool_call_id": "call_123", "return_value": {"is_error": false, "output": "", "message": "Command completed", "display": [{"type": "brief", "text": "Command completed"}], "extras": null}}}}
+{"timestamp": 134.0, "message": {"type": "SubagentEvent", "payload": {"parent_tool_call_id": "call_parent_789", "agent_id": "a1234567", "subagent_type": "coder", "event": {"type": "StepBegin", "payload": {"n": 2}}}}}
+{"timestamp": 135.0, "message": {"type": "StepRetry", "payload": {"n": 1, "next_attempt": 2, "max_attempts": 3, "wait_s": 1.25, "error_type": "APIStatusError", "status_code": 429}}}
+{"timestamp": 136.0, "message": {"type": "StepInterrupted", "payload": {}}}
+{"timestamp": 137.0, "message": {"type": "SteerInput", "payload": {"user_input": "Follow up"}}}
+{"timestamp": 138.0, "message": {"type": "CompactionBegin", "payload": {}}}
+{"timestamp": 139.0, "message": {"type": "CompactionEnd", "payload": {}}}
+{"timestamp": 140.0, "message": {"type": "StatusUpdate", "payload": {"context_usage": 0.5, "context_tokens": null, "max_context_tokens": null, "token_usage": null, "message_id": null, "plan_mode": null, "mcp_status": {"loading": true, "connected": 0, "total": 1, "tools": 0, "servers": [{"name": "context7", "status": "connecting", "tools": []}]}}}}
+{"timestamp": 141.0, "message": {"type": "PlanDisplay", "payload": {"content": "## Plan\n\n1. Step one\n2. Step two", "file_path": "/Users/test/.kimi/plans/iron-man-spider-man.md"}}}
+{"timestamp": 142.0, "message": {"type": "Notification", "payload": {"id": "n1234567", "category": "task", "type": "task.completed", "source_kind": "background_task", "source_id": "b1234567", "title": "Background task completed", "body": "Task ID: b1234567", "severity": "success", "created_at": 123.456, "payload": {"task_id": "b1234567"}}}}
+{"timestamp": 143.0, "message": {"type": "TurnEnd", "payload": {}}}

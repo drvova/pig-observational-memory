@@ -1,0 +1,22 @@
+{
+            "role": "assistant",
+            "created": 1740171566,
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll help you with that."
+                },
+                {
+                    "type": "toolRequest",
+                    "id": "tool123",
+                    "toolCall": {
+                        "status": "success",
+                        "value": {
+                            "name": "test_tool",
+                            "arguments": {"param": "value"}
+                        }
+                    }
+                }
+            ],
+            "metadata": { "agentVisible": true, "userVisible": true }
+        }
