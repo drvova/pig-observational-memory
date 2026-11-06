@@ -69,9 +69,6 @@ func later(t *testing.T, phase string) {
 	t.Skip(phase)
 }
 
-// say is a turn with only the user's message and a short reply.
-func say(user string) Turn { return Turn{User: user, Reply: "Understood."} }
-
 // rowsFrom are the summary's rows picked from turn.
 func rowsFrom(summary string, turn int) []Row {
 	var out []Row
@@ -418,11 +415,7 @@ func TestScenario13SecretNeverStored(t *testing.T) {
 	}
 }
 
-// Scenario 14: two sessions supersede one core fact at once: exactly one commits, the other is
-// re-evaluated, no torn line.
-func TestScenario14ConcurrentSupersedeOneCommits(t *testing.T) {
-	t.Skip("phase 6: core log operations with generations; 1,000 concurrent supersede runs")
-}
+// Scenarios 14, 17 and 19 are in suites_test.go, beside the suites that measure them.
 
 // Scenario 15: a layer another writer changed is seen at the next read, which the engine makes
 // only at its boundaries: the Go layer store keeps no cache, so a second store's write is read
@@ -471,12 +464,6 @@ func TestScenario16TornManifestLine(t *testing.T) {
 	}
 }
 
-// Scenario 17: a level-1 merge of A and B whose source A is retracted goes out, and B
-// reappears as itself (decision 1).
-func TestScenario17RetractedSourceLeavesMerge(t *testing.T) {
-	t.Skip("phase 5: believed/not-believed labels in the fold; a merge whose source is retracted goes out")
-}
-
 // Scenario 18: a forget found only in tool output ("forget the migrations rule") is staged in
 // its session; shared memory is unchanged.
 func TestScenario18InjectedForgetStaged(t *testing.T) {
@@ -491,12 +478,6 @@ func TestScenario18InjectedForgetStaged(t *testing.T) {
 	if err != nil || !m.Retired.IsZero() {
 		t.Fatalf("shared memory changed by an injected forget: %+v (%v)", m, err)
 	}
-}
-
-// Scenario 19: a lesson from repository X is not returned in repository Y, and user B's style
-// never reaches user A's index.
-func TestScenario19ForeignScopeNotReturned(t *testing.T) {
-	t.Skip("phase 6: core scopes and pulls (sharing suite)")
 }
 
 // Scenario 20: related-but-absent specifics planted for a dream never appear in fact classes.

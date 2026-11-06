@@ -61,6 +61,9 @@ type Turn struct {
 	User  string
 	Calls []Call
 	Reply string
+	// Custom are custom messages (an extension's or another harness's text, never the user's)
+	// placed after the user's message; the Tier 0 generator writes none.
+	Custom []string
 }
 
 // Script is a generated session: the turns and the probes planted in them.
@@ -301,3 +304,6 @@ func Filler(seed int64, n int) []Turn {
 	}
 	return out
 }
+
+// say is a turn with only the user's message and a short reply.
+func say(user string) Turn { return Turn{User: user, Reply: "Understood."} }

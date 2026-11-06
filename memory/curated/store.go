@@ -481,7 +481,8 @@ func (s Store) StageForget(name, project, session string) error {
 	return s.appendUsage(usageLine{Name: name, Event: EventForgetStaged, Session: session})
 }
 
-// QuotedForgets counts the forgets the user's words quote (normalized) confirmed.
+// QuotedForgets counts the forgets the user's words quote (normalized) confirmed, compared as
+// the ledger keeps quotes (redacted).
 func (s Store) QuotedForgets(quote string) (int, error) {
 	lines, err := s.readUsageLines()
 	if err != nil {
@@ -489,7 +490,7 @@ func (s Store) QuotedForgets(quote string) (int, error) {
 	}
 	n := 0
 	for _, line := range lines {
-		if line.Event == EventForget && line.User && line.Quote == quote {
+		if line.Event == EventForget && line.User && line.Quote == secrets.Redact(quote) {
 			n++
 		}
 	}
@@ -574,6 +575,9 @@ func (s Store) appendUsage(entry usageLine) error {
 		return err
 	}
 	entry.Time = s.Now().UTC().Format(time.RFC3339)
+	// A quote is the user's or the model's words, which may hold a value: the ledger keeps it
+	// redacted, as every stored text is (contracts/secrets.md).
+	entry.Quote = secrets.Redact(entry.Quote)
 	line, _ := json.Marshal(entry)
 	_, err := jsonl.Append(s.usagePath(), line)
 	return err

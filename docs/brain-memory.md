@@ -201,6 +201,30 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
   The controls and ship rule of decision 21 (A-versus-A, shuffled order, filler, NullMemory and
   format arms; Newcombe and TOST) are not built yet.
 
+### Phase 0 status: forgetting and sharing suites
+
+- **Forgetting (Tier 0b): recorded** ([brain-memory-baseline.md](brain-memory-baseline.md),
+  "Tier 0b"; `go run ./cmd/memeval -suite forgetting`).
+  - Holding: injected forgets are staged and leave shared memory; nothing injected is promoted;
+    no protected class is lost in 20 compactions; a retracted source takes its merge out.
+  - Findings, each a skipped test naming its phase:
+    - an injected edit overwrites shared memory (phase 7);
+    - an injected layer forget or rollback changes the model's layer (phase 5);
+    - a layer write keeps a secret (phase 8);
+    - the merge's other source does not reappear (phase 5).
+  - Two secret leaks fixed in Go and Lisp: level 1's projection in the compaction details, and
+    the usage ledger's quotes.
+  - Decay and erasure: not built.
+- **Sharing (Tier 0c): recorded** ("Tier 0c"; `-suite sharing`).
+  - Holding: project-scoped and staged memories stay in their repository; concurrent writers
+    lose no save, line or generation; another writer's layer change is seen only at the next
+    compaction; no secret reaches another session but through the layer.
+  - Findings:
+    - a re-read rendered in other bytes counts as independent evidence (phase 6);
+    - an unscoped fact or a lesson crosses projects with its values (phase 6);
+    - two concurrent edits both commit (scenario 14, phase 6).
+  - The core log: not built.
+
 ### Phase 2 status: encoding
 
 Parts A, B, C and D (episodes and assistant pushback) have landed. Claim records and scoped

@@ -58,3 +58,39 @@ func TestCuratedWritesRedactSecrets(t *testing.T) {
 		t.Errorf("index line %q", line)
 	}
 }
+
+// A quote holding a secret (a feedback's, a forget's, a release's) is kept redacted in the usage
+// ledger, and a forget's quote still counts against MaxForgetsPerQuote (the Tier 0b residue
+// suite, docs/brain-memory-baseline.md, found the ledger holding them).
+func TestUsageLedgerRedactsQuotes(t *testing.T) {
+	value := strings.Join([]string{"Hb1Jc5Fd0Ge8", "QaT2Zq8Vt2"}, "")
+	dir := t.TempDir()
+	s := New(dir)
+	quote := "forget the deploy notes, api_key=" + value + " is revoked"
+	c := Call{Store: s, Source: "s1", UserEvidence: func(string) bool { return true }}
+	for i := 0; i < MaxForgetsPerQuote+1; i++ {
+		name := "note-" + string(rune('a'+i))
+		if _, err := c.Run(OpSave, map[string]string{"name": name, "type": TypeProject, "description": "A deploy note.", "quote": "remember the deploy notes"}); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if _, err := c.Run(OpFeedback, map[string]string{"name": name, "outcome": EventHelped, "quote": "yes, token=" + value + " was the one"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		text, err := Call{Store: s, Source: "s2", UserEvidence: func(string) bool { return true }}.Run(OpForget, map[string]string{"name": name, "quote": quote})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if retired := strings.HasPrefix(text, "Forgot memory"); retired != (i < MaxForgetsPerQuote) {
+			t.Fatalf("forget %d: %s", i, text)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "usage.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), value) || !strings.Contains(string(raw), "[redacted:") {
+		t.Fatalf("usage ledger:\n%s", raw)
+	}
+}

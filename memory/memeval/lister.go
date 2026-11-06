@@ -33,7 +33,23 @@ func (l *ChildLister) Output(branch []session.Entry, snippet string) (string, er
 	return l.run(branch, "l := "+snippet+"\nfmt.Print(l.String())")
 }
 
+// OutputWith is Output with call's curated store (and the rest of its context) as the memory
+// tool would see it; call.Entries is the branch.
+func (l *ChildLister) OutputWith(call *omhost.Call, snippet string) (string, error) {
+	return l.runCall(call, "l := "+snippet+"\nfmt.Print(l.String())", true)
+}
+
+// Printed is Output, but an answer the memory tool cuts is returned as far as it goes, as the
+// model would read it: what the suites scan for values.
+func (l *ChildLister) Printed(branch []session.Entry, snippet string) (string, error) {
+	return l.runCall(&omhost.Call{Entries: branch, Skip: []string{omtool.ToolName}}, "l := "+snippet+"\nfmt.Print(l.String())", true)
+}
+
 func (l *ChildLister) run(branch []session.Entry, code string) (string, error) {
+	return l.runCall(&omhost.Call{Entries: branch, Skip: []string{omtool.ToolName}}, code, false)
+}
+
+func (l *ChildLister) runCall(call *omhost.Call, code string, cut bool) (string, error) {
 	l.once.Do(func() {
 		l.sup = sandbox.New(sandbox.Config{Mode: sandbox.ModeNamespace, Methods: sandbox.NamespaceMethods()})
 	})
@@ -41,7 +57,6 @@ func (l *ChildLister) run(branch []session.Entry, code string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("policy: %w", err)
 	}
-	call := &omhost.Call{Entries: branch, Skip: []string{omtool.ToolName}}
 	res := l.sup.Run(context.Background(), sandbox.Request{Program: p}, call)
 	if res.Outcome == sandbox.OutcomeCrashed && strings.Contains(res.Err, "signal: killed") {
 		// The child is the out-of-memory killer's first pick; the next call starts a fresh one.
@@ -50,7 +65,7 @@ func (l *ChildLister) run(branch []session.Entry, code string) (string, error) {
 	if res.Outcome != sandbox.OutcomeOK {
 		return "", fmt.Errorf("%s: %s", res.Outcome, res.Err)
 	}
-	if res.Cut > 0 {
+	if res.Cut > 0 && !cut {
 		return "", fmt.Errorf("output cut by %d characters", res.Cut)
 	}
 	return res.Out, nil
