@@ -51,8 +51,10 @@ type Client struct {
 
 	// fallback answers what the engine could not (SetFallback); requireBuild is the build id
 	// the engine must report (RequireBuild).
-	fallback     *Client
-	fallbackLog  io.Writer
+	fallback    *Client
+	fallbackLog io.Writer
+	// failovers counts the events the fallback ran (Failovers).
+	failovers    int
 	requireBuild string
 
 	// ctxMu serializes context requests; ctxPrev is the last one's encoded messages, sent as
@@ -81,6 +83,15 @@ func (c *Client) SetFallback(fallback *Client, log io.Writer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.fallback, c.fallbackLog = fallback, log
+}
+
+// Failovers is how many events the fallback engine ran since the client was made: the PiG
+// adapter's /om:status shows it beside the image's own refusal counter, which misses the
+// events the image never saw (it could not be started or reached).
+func (c *Client) Failovers() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failovers
 }
 
 // RequireBuild makes the connection refuse an engine whose initialize reports another build id
@@ -333,6 +344,9 @@ func (c *Client) failover(method string, err error) (*Client, bool) {
 	}
 	c.mu.Lock()
 	fallback, log := c.fallback, c.fallbackLog
+	if fallback != nil {
+		c.failovers++
+	}
 	c.mu.Unlock()
 	if fallback == nil {
 		return nil, false

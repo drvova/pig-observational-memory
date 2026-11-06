@@ -1,6 +1,7 @@
 package lispimage
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -59,5 +60,19 @@ func LogFailover(root, event, reason string) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s om: fallback: %s ran on the Go engine: %s\n", time.Now().UTC().Format(time.RFC3339), event, reason)
+	fmt.Fprintf(f, "%s"+fallbackMark+"%s ran on the Go engine: %s\n", time.Now().UTC().Format(time.RFC3339), event, reason)
+}
+
+// fallbackMark is what every LogFailover line holds.
+const fallbackMark = " om: fallback: "
+
+// FallbackCount is how many fallbacks root's engine log holds (engine.log, without the rotated
+// engine.log.1): om status shows it, since the image's own refusal counter misses the events it
+// never saw.
+func FallbackCount(root string) int {
+	raw, err := os.ReadFile(LogPath(root))
+	if err != nil {
+		return 0
+	}
+	return bytes.Count(raw, []byte(fallbackMark))
 }

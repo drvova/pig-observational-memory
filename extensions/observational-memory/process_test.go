@@ -77,7 +77,9 @@ func TestProcessEngineLifecycle(t *testing.T) {
 	}
 }
 
-// testStatusOverTheRPC runs /om:status: the engine's Notify reaches PiG's notify call.
+// testStatusOverTheRPC runs /om:status: the engine's Notify reaches PiG's notify call. With
+// the "lisp" engine refusing every event (useLispEngine), the status runs on the Go fallback
+// and a second line counts the events it ran.
 func testStatusOverTheRPC(t *testing.T) {
 	w := connect(t)
 	w.event("session_start")
@@ -89,8 +91,16 @@ func testStatusOverTheRPC(t *testing.T) {
 		return nil
 	}
 	w.request(map[string]any{"method": "command", "tool": "om:status", "args": ""})
-	if len(notified) != 1 || !strings.Contains(notified[0], "emory") {
+	want := 1
+	if config.ReadEngine(config.DefaultPaths()).Lisp() {
+		want = 2
+	}
+	if len(notified) != want || !strings.Contains(notified[0], "emory") {
 		t.Fatalf("notify calls %v (all calls %v)", notified, w.calls)
+	}
+	// session_start and the status itself ran on the fallback.
+	if want == 2 && !strings.Contains(notified[1], "Engine fallbacks: 2 events ran on the Go engine") {
+		t.Fatalf("fallback line %v", notified[1])
 	}
 }
 

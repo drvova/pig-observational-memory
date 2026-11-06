@@ -44,6 +44,16 @@ func TestLispDefaultWithoutSBCL(t *testing.T) {
 	if strings.Count(log, "\n") != 2 || strings.Count(log, "no sbcl on PATH") != 2 || !strings.Contains(log, "fallback: turn-end ran on the Go engine") {
 		t.Fatalf("engine log %q", log)
 	}
+	// om status (itself on the Go engine) shows the count the engine log holds, its own
+	// fallback included.
+	if status := om(t, "", "status", "--harness", "mine", "--dir", home); !strings.Contains(status, "Engine fallbacks: 3 events ran on the Go engine") {
+		t.Fatalf("status %s", status)
+	}
+	t.Setenv(EngineEnv, "go")
+	if status := om(t, "", "status", "--harness", "mine", "--dir", home); strings.Contains(status, "Engine fallbacks") {
+		t.Fatalf("status with the kill switch %s", status)
+	}
+	t.Setenv(EngineEnv, "")
 	t.Setenv(LispFallbackEnv, "0")
 	if _, errOut, code := omErr(t, p, "hook", "generic", "turn-end"); code != 1 || !strings.Contains(errOut, "no sbcl on PATH") {
 		t.Fatalf("exit %d: %s", code, errOut)

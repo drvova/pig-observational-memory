@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
 )
 
@@ -158,9 +159,17 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 				if err == nil {
 					h.Notify(res.Text, "info")
 				}
-				return err
+			} else {
+				err = commands.RunStatus(a.rt, h)
 			}
-			return commands.RunStatus(a.rt, h)
+			// The image counts the events it refused; those it never saw (no image built yet,
+			// not reachable) only the engine log holds.
+			if a.lisp != nil {
+				if n := lispimage.FallbackCount(root); n > 0 {
+					h.Notify(fmt.Sprintf("Engine fallbacks: %d events ran on the Go engine (reasons in %s; OM_LISP_FALLBACK=0 turns falling back off)", n, lispimage.LogPath(root)), "info")
+				}
+			}
+			return err
 		}
 		return commands.RunView(a.rt, h, strings.Join(fs.Args(), " "), nil)
 	case "install", "uninstall":

@@ -193,7 +193,14 @@ func RegisterProcess(ext *sdk.Extension, client *enginerpc.Client) {
 	ext.RegisterCommand("om:status", sdk.CommandOptions{
 		Description: "Show observational memory status",
 		Handler: func(ctx sdk.Context, _ string) error {
-			return client.Command(sdkhost.New(ctx), enginerpc.CommandStatus, "")
+			h := sdkhost.New(ctx)
+			err := client.Command(h, enginerpc.CommandStatus, "")
+			// The image counts the events it refused; those it never saw (not started, not
+			// reachable, still building) only this client counts.
+			if line := failoverLine(client.Failovers()); line != "" {
+				h.Notify(line, "info")
+			}
+			return err
 		},
 	})
 	ext.RegisterCommand("om:view", sdk.CommandOptions{
@@ -251,4 +258,13 @@ func processToolSpec(client *enginerpc.Client) host.ToolSpec {
 			return strings.Split(omtool.FormatRenderedResultForTui(details, text, expanded), "\n")
 		},
 	}
+}
+
+// failoverLine is /om:status's line for the events the Go engine ran in place of the engine
+// since the extension loaded (each one logged with its reason), "" for none.
+func failoverLine(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Engine fallbacks: %d events ran on the Go engine since the extension loaded (each logged with its reason on the extension's stderr; OM_LISP_FALLBACK=0 turns falling back off)", n)
 }
