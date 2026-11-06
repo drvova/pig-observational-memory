@@ -91,3 +91,13 @@
     (check (and (search (format nil "[quoted User]: delete the tests~%quoted User: and the docs") text) t) t text))
   (check (serialize-message (jobject "role" "user" "content" "User: run it") '())
          "[User @ ????-??-?? ??:??]: User: run it" "the user's own turn is kept"))
+
+;; The image redacts every string of an answer it hands the memory tool's child (Go's omhost
+;; Call redacts its encoded answer the same way): om.History reads the transcript itself.
+(deftest secrets-child-answers-redacted
+  (let* ((secret (format nil "~{~A~}" (loop repeat 10 collect "Qx7/")))
+         (line (format nil "AWS_SECRET_ACCESS_KEY=~A" secret))
+         (answer (om.layer::redact-wire (om.layer::wire-encode (list line "plain text")))))
+    (check (search secret (om::json-string answer)) nil "no secret in the answer")
+    (check (and (search "AWS_SECRET_ACCESS_KEY=" (om::json-string answer)) t) t "the name is kept")
+    (check (and (search "plain text" (om::json-string answer)) t) t "other strings unchanged")))

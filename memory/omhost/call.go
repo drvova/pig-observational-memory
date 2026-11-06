@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"maps"
 	"slices"
 	"strconv"
@@ -217,7 +218,14 @@ func (c *Call) Call(ctx context.Context, method string, raw json.RawMessage) (js
 	if v == nil {
 		return nil, nil
 	}
-	return json.Marshal(v)
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	// Every answer the memory tool reads back is a render of stored or transcript text, so its
+	// secrets are redacted as the summary's are (contracts/secrets.md): om.History and om.Recall
+	// read the transcript itself, which the engine never writes.
+	return json.RawMessage(secrets.RedactJSON(string(encoded))), nil
 }
 
 func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (any, error) {

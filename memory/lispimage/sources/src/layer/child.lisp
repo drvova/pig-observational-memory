@@ -110,6 +110,17 @@ interns a name a child sent), :intern makes them (the child, reading the image's
                  (t (error "an unknown tagged value ~A" k)))))
         (t (error "an untagged value"))))
 
+(defun redact-wire (v)
+  "An answer's encoded value (wire-encode) with every string redacted (secrets.RedactJSON's rule,
+contracts/secrets.md): what the image hands the child is a render of stored or transcript text."
+  (cond ((stringp v) (om::redact-secrets v))
+        ((hash-table-p v)
+         (let ((h (make-hash-table :test 'equal)))
+           (maphash (lambda (k x) (setf (gethash k h) (redact-wire x))) v)
+           h))
+        ((vectorp v) (map 'simple-vector #'redact-wire v))
+        (t v)))
+
 (defun write-wire (stream object)
   (write-string (om::json-string object :escape-html nil) stream)
   (write-char #\Newline stream)
@@ -461,7 +472,7 @@ by default timeout plus *child-kill-grace*) or \"cancelled\" (cancelled-p turned
                                        (handler-case
                                            (write-wire input (if err
                                                                  (om::jobject "error" err)
-                                                                 (om::jobject "value" (handler-case (wire-encode value)
+                                                                 (om::jobject "value" (handler-case (redact-wire (wire-encode value))
                                                                                         (error (e) (setf err (princ-to-string e)) :null)))))
                                          (error () nil))))
                                     (t (setf killed t)
