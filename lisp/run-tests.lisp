@@ -45,6 +45,8 @@
 
 ;; W6: the two-way peer.
 (load (merge-pathnames "tests/peer.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; W3t: the memory tool in a child SBCL.
+(load (merge-pathnames "tests/tool-child.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
 (let ((errors 0))
   (dolist (test *tests*)

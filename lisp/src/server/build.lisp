@@ -43,8 +43,19 @@ NUL, its bytes and a NUL, the files sorted by path."
                (sb-ext:octets-to-string (read-octets (merge-pathnames "src/server/toolspec.json" (source-root)))
                                         :external-format :utf-8)))
 
-(defparameter *tool-spec-json* (read-tool-spec)
-  "The memory tool's spec as initialize answers it (enginerpc.ToolSpec's JSON).")
+(defparameter *tool-specs* (om::json-parse (coerce (read-tool-spec) 'simple-string))
+  "toolspec.json decoded: {\"go\": the Go engine's spec, \"lisp\": the image's} (enginerpc's
+MemoryToolSpec and LispMemoryToolSpec).")
+
+(defparameter *tool-spec* (om::jget *tool-specs* "lisp")
+  "The memory tool's spec the image serves (docs/lisp-core.md, decision 10): the Lisp text.")
+
+(defparameter *tool-spec-json* (om::json-string *tool-spec*)
+  "The memory tool's spec as initialize answers it (enginerpc.ToolSpec's JSON, keys sorted).")
+
+(defun tool-spec-string (key) (om::str (om::jget *tool-spec* key)))
+
+(defun tool-prompt-guidelines () (coerce (om::jget *tool-spec* "promptGuidelines") 'list))
 
 (defparameter *build-id* (compute-build-id)
   "The image's build id: the sources it was loaded from.")

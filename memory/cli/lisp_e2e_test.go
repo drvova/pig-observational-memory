@@ -11,6 +11,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/memory/curated"
+	omapi "github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/omtool"
 )
 
 // TestLispImageEndToEnd builds the real engine image (lisp/build-image.sh), runs a Claude Code
@@ -132,7 +136,12 @@ func lispFlow(t *testing.T, image string) string {
 		`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`,
 		"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"memory\",\"arguments\":{\"code\":\"om.History(om.Search(`svc-42 port`))\"}}}",
 	}, "\n") + "\n"
-	section("MCP", om(t, mcp, "mcp", "--harness", "claude-code", "--dir", proj))
+	// On the image the MCP server serves the Lisp tool (docs/lisp-core.md, decision 10): its
+	// text and its answers are the Lisp tool's, so they are checked on their own, not against
+	// Go's.
+	if mcpOut := om(t, mcp, "mcp", "--harness", "claude-code", "--dir", proj); image != "" {
+		checkLispMCP(t, mcpOut)
+	}
 	section("store", store("claude-code", "s1"))
 
 	gen := filepath.Join(home, "g.jsonl")
@@ -196,7 +205,80 @@ func lispFlow(t *testing.T, image string) string {
 	om(t, string(pp), "hook", "pi", "turn-end")
 	section("pi before-compact", om(t, string(pp), "hook", "pi", "before-compact"))
 	section("pi store", store("pi", "p1"))
-	return normalizeFlow(out.String(), root, home)
+	flow := out.String()
+	if image != "" {
+		flow = lispTextsAsGo(t, flow)
+	}
+	return normalizeFlow(flow, root, home)
+}
+
+// lispTextsAsGo puts Go's fixed texts back where the image's start contexts name the Lisp tool
+// (decision 10): its lines, and the curated index's header and last line with the Lisp forms.
+// Every other byte is compared with Go's. Each text is replaced as printed and as a JSON string
+// (a hook's output).
+func lispTextsAsGo(t *testing.T, flow string) string {
+	t.Helper()
+	block := func(snippet string, guidelines []string) string {
+		return "- " + strings.Join(append([]string{snippet}, guidelines...), "\n- ")
+	}
+	forms := strings.NewReplacer(
+		"om.Recall(`<name>`)", `(recall "<name>")`,
+		"om.Saved(om.Search(`<words>`))", `(saved :search "<words>")`,
+		"om.Save(`<name>`, `<type>`, `<description>`, om.Body(`<body>`))", `(save "<name>" "<type>" "<description>" :body "<body>")`,
+		"om.Edit", "edit", "om.ForgetMemory", "forget-memory",
+		"om.Feedback(`<name>`, `<outcome>`, `<quote>`)", `(feedback "<name>" "<outcome>" "<quote>")`,
+	)
+	more := "find them with the memory tool's " + omapi.SnippetSavedSearch + ".)"
+	pairs := [][2]string{
+		{block(omtool.LispPromptSnippet, omtool.LispPromptGuidelines), block(omtool.PromptSnippet, omtool.PromptGuidelines)},
+		{forms.Replace(curated.IndexHeader), curated.IndexHeader},
+		{forms.Replace(more), more},
+	}
+	if !strings.Contains(flow, pairs[0][0]) {
+		t.Fatal("the image's start context does not name the Lisp tool")
+	}
+	for _, p := range pairs {
+		flow = strings.ReplaceAll(flow, p[0], p[1])
+		lisp, _ := json.Marshal(p[0])
+		golang, _ := json.Marshal(p[1])
+		flow = strings.ReplaceAll(flow, strings.Trim(string(lisp), `"`), strings.Trim(string(golang), `"`))
+	}
+	return flow
+}
+
+// checkLispMCP checks the image's MCP answers (initialize, ping, tools/list, the tools/call of a
+// Go pointer the summary prints): the Lisp tool's text, and the pointer run as its Lisp call
+// over the session's branch, with no error.
+func checkLispMCP(t *testing.T, out string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("MCP answers:\n%s", out)
+	}
+	var answers [4]struct {
+		Result map[string]any `json:"result"`
+	}
+	for i, l := range lines {
+		if err := json.Unmarshal([]byte(l), &answers[i]); err != nil || answers[i].Result == nil {
+			t.Fatalf("MCP answer %d: %s (%v)", i+1, l, err)
+		}
+	}
+	instructions, _ := answers[0].Result["instructions"].(string)
+	if !strings.HasPrefix(instructions, omtool.LispDescription+"\n\n"+omtool.LispPromptSnippet) {
+		t.Fatalf("initialize: %s", lines[0])
+	}
+	tools, _ := answers[2].Result["tools"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["description"] != instructions {
+		t.Fatalf("tools/list: %s", lines[2])
+	}
+	content, _ := answers[3].Result["content"].([]any)
+	if answers[3].Result["isError"] != false || len(content) != 1 {
+		t.Fatalf("tools/call: %s", lines[3])
+	}
+	text, _ := content[0].(map[string]any)["text"].(string)
+	if !strings.HasPrefix(text, ";; om.History(om.Search(`svc-42 port`)) runs here as (history :search \"svc-42 port\")\n") || !strings.Contains(text, "svc-42") {
+		t.Fatalf("tools/call text:\n%s", text)
+	}
 }
 
 // curatedFixture writes a curated store under root for a session in home and appends to the

@@ -79,6 +79,9 @@
 
 (define-mcp-method "ping" (params harness cwd) (om::jobject))
 
+(defvar *mcp-outer* nil
+  "The mcp method's own params while an MCP handler runs: the session fields the client resolved.")
+
 (define-method "mcp" (params)
   ;; One MCP message the client received: {"message": the MCP answer, or null for a
   ;; notification}. MCP's own errors go inside the answer; "not ported" is this request's error,
@@ -93,9 +96,10 @@
         (cond ((not has-id) (om::jobject "message" :null))
               ((null handler) (not-ported (format nil "the MCP method ~A" method)))
               (t (om::jobject "message"
-                              (response id (funcall handler (or (om::jget message "params") (om::jobject))
-                                                    (param-string params "harness")
-                                                    (param-string params "cwd"))))))))))
+                              (response id (let ((*mcp-outer* params))
+                                             (funcall handler (or (om::jget message "params") (om::jobject))
+                                                      (param-string params "harness")
+                                                      (param-string params "cwd")))))))))))
 
 (define-not-ported "call")
 

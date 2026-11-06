@@ -20,5 +20,7 @@
   ;; answer to refuse a stale image (memory/lispimage ExpectedBuild).
   (with-open-file (out (concatenate 'string output ".build") :direction :output :if-exists :supersede)
     (write-line om.server::*build-id* out))
+  ;; A memory tool child is this executable run with --tool-child (docs/lisp-core.md, decision 9).
+  (setf om.layer::*image-child* t)
   (sb-ext:save-lisp-and-die output :executable t :toplevel #'om.server:main
                                    :save-runtime-options t :compression compress))

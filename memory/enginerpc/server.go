@@ -229,6 +229,13 @@ func MemoryToolSpec() ToolSpec {
 	return ToolSpec{Name: omtool.ToolName, Label: omtool.Label, Description: omtool.Description, PromptSnippet: omtool.PromptSnippet, PromptGuidelines: omtool.PromptGuidelines, Parameters: omtool.Parameters}
 }
 
+// LispMemoryToolSpec is the memory tool's fixed text and schema when the SBCL image serves it
+// (memory/omtool's Lisp text, docs/lisp-core.md decision 10): what the image's initialize
+// answers, from lisp/src/server/toolspec.json, which TestLispToolSpec keeps equal to this.
+func LispMemoryToolSpec() ToolSpec {
+	return ToolSpec{Name: omtool.ToolName, Label: omtool.Label, Description: omtool.LispDescription, PromptSnippet: omtool.LispPromptSnippet, PromptGuidelines: omtool.LispPromptGuidelines, Parameters: omtool.LispParameters}
+}
+
 // context thins the request's messages (hooks.OnContext edits them in place) and sends back
 // only the messages it changed. The messages a request reuses from the previous one are not
 // decoded again: the engine keeps the previous request's messages as decoded, unedited, and

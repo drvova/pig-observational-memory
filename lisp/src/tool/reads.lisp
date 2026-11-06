@@ -20,7 +20,8 @@
 
 (defstruct note
   (id "") (when "") (kind "") (subject "") (scope "") (relevance "") (content "") (status "")
-  (event-date "") (origin "") (outcome "") (tool "") (target "") (source "") (anchor ""))
+  (event-date "") (origin "") (outcome "") (tool "") (target "") (source "") (anchor "")
+  (superseded-by '()))
 
 (defstruct turn (id "") (when "") (role "") (text ""))
 
@@ -33,7 +34,7 @@
      (defun ,(find-symbol (format nil "~A-P" struct) "OM.TOOL") (x)
        (,(intern (format nil "~A-P" struct) "OM.LAYER") x))))
 
-(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor)
+(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by)
 (export-readers turn id when role text)
 
 (defun om.tool:memory-name (m) (mem-name m))
@@ -105,7 +106,15 @@ content."
 
 (defun branch () (call-branch (the-call)))
 
-(defun note-of (o positions)
+(defun superseded-by-map (folded)
+  "Each record id -> the ids of the records that supersede it, in fold order (om.Note.SupersededBy)."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (o (om::folded-observations folded) h)
+      (dolist (id (om::obs-supersedes o))
+        (unless (or (string= id (om::obs-id o)) (member (om::obs-id o) (gethash id h) :test #'string=))
+          (setf (gethash id h) (append (gethash id h) (list (om::obs-id o)))))))))
+
+(defun note-of (o positions &optional superseded)
   (let ((day (om::record-anchor-day (om::obs-timestamp o))))
     (make-note :id (om::obs-id o)
                :when (if (string= (om::obs-timestamp o) "") "" (om::format-timestamp (om::obs-timestamp o)))
@@ -116,7 +125,8 @@ content."
                :outcome (om::obs-outcome o) :tool (om::obs-tool o) :target (om::obs-target o)
                :source (or (first (om::obs-source-ids o)) "")
                :anchor (multiple-value-bind (id at ok) (om::observation-anchor o positions)
-                         (declare (ignore at)) (if ok id "")))))
+                         (declare (ignore at)) (if ok id ""))
+               :superseded-by (and superseded (copy-list (gethash (om::obs-id o) superseded))))))
 
 (defun limit-of (limit)
   (cond ((null limit) +default-limit+)
@@ -138,14 +148,27 @@ content."
      notes)))
 
 (defun all-notes ()
-  (let* ((entries (branch)) (positions (om::entry-index-by-id entries)))
-    (mapcar (lambda (o) (note-of o positions)) (om::folded-active (om::fold-ledger entries)))))
+  (let* ((entries (branch)) (positions (om::entry-index-by-id entries)) (folded (om::fold-ledger entries))
+         (superseded (superseded-by-map folded)))
+    (mapcar (lambda (o) (note-of o positions superseded)) (om::folded-active folded))))
 
-(defun om.tool:notes (&key search kind status subject since until limit)
+(defun bound-position (id folded positions)
+  "omhost's From/Through bound: an entry's branch position, else a record's own anchor's."
+  (multiple-value-bind (at ok) (gethash id positions)
+    (when ok (return-from bound-position at)))
+  (let ((o (gethash id (om::folded-by-id folded))))
+    (when o
+      (multiple-value-bind (aid at ok) (om::observation-anchor o positions)
+        (declare (ignore aid))
+        (when ok (return-from bound-position at)))))
+  (tool-fail "entry ~A is not on this branch: take entry ids from history or from a summary line on this branch" id))
+
+(defun om.tool:notes (&key search kind status subject since until from through limit)
   "The active folded records, oldest first, filtered: search (every word, case-insensitive,
-over every field), kind, status, subject, since and until (YYYY-MM-DD). A search no record
-matches with every word ranks the records holding any of its words instead (rank-notes).
-At most limit (1 to 200, 20 when not given)."
+over every field), kind, status, subject, since and until (YYYY-MM-DD), from and through (an
+entry or record id: the records anchored at or after, at or before its branch position). A
+search no record matches with every word ranks the records holding any of its words instead
+(rank-notes). At most limit (1 to 200, 20 when not given)."
   (let* ((n (limit-of limit))
          (all (all-notes))
          (kept (filter-notes all :search search :kind kind :status status :subject subject :since since :until until)))
@@ -154,6 +177,14 @@ At most limit (1 to 200, 20 when not given)."
              (candidates (remove-if-not (lambda (x) (plusp (word-score (note-haystack x) words)))
                                         (filter-notes all :kind kind :status status :subject subject :since since :until until))))
         (when candidates (setf kept (om.engine::rank-notes candidates words)))))
+    (when (or from through)
+      (let* ((entries (branch)) (positions (om::entry-index-by-id entries)) (folded (om::fold-ledger entries))
+             (lo (and from (bound-position from folded positions)))
+             (hi (and through (bound-position through folded positions))))
+        (setf kept (remove-if-not (lambda (x)
+                                    (multiple-value-bind (pos ok) (gethash (note-anchor x) positions)
+                                      (and ok (or (null lo) (>= pos lo)) (or (null hi) (<= pos hi)))))
+                                  kept))))
     (subseq kept 0 (min n (length kept)))))
 
 (defun om.tool:note-by-id (id)
@@ -161,7 +192,7 @@ At most limit (1 to 200, 20 when not given)."
   (let* ((entries (branch)) (folded (om::fold-ledger entries))
          (o (gethash id (om::folded-by-id folded))))
     (unless o (tool-fail "no record ~A on this branch" (q id)))
-    (note-of o (om::entry-index-by-id entries))))
+    (note-of o (om::entry-index-by-id entries) (superseded-by-map folded))))
 
 ;;; History
 
@@ -269,13 +300,18 @@ rows holding every word."
 
 ;;; Saved and the curated writes
 
-(defun om.tool:saved ()
-  "The curated memories this project and session see, ranked as the index ranks them."
-  (let ((c (the-call)))
+(defun om.tool:saved (&key search)
+  "The curated memories this project and session see, ranked as the index ranks them; search
+keeps the ones holding every word (case-insensitive, over name, type, description and body)."
+  (let ((c (the-call)) (needles (search-words (as-list search))))
     (unless (call-curated-dir c) (tool-fail "curated memory is off"))
-    (curated-rank (remove-if-not (lambda (m) (seen-by-p m (call-session c)))
-                                 (list-memories (call-curated-dir c) (call-project c)))
-                  (handler-case (curated-usage (call-curated-dir c)) (error () nil)))))
+    (remove-if-not (lambda (m)
+                     (let ((hay (string-downcase (om::join (list (mem-name m) (mem-type m) (mem-description m) (mem-body m))
+                                                           (string #\Newline)))))
+                       (every (lambda (w) (search w hay)) needles)))
+                   (curated-rank (remove-if-not (lambda (m) (seen-by-p m (call-session c)))
+                                                (list-memories (call-curated-dir c) (call-project c)))
+                                 (handler-case (curated-usage (call-curated-dir c)) (error () nil))))))
 
 (defun write-call ()
   (let ((c (the-call)))

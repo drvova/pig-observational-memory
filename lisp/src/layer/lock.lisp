@@ -13,7 +13,13 @@
     (when (and (fboundp s) (not (macro-function s)) (not (special-operator-p s))
                (not (eq (fdefinition s) (gethash s *tool-entries*))))
       (let* ((f (fdefinition s))
-             (entry (lambda (&rest args) (tool-entry f args))))
+             (name s)
+             ;; In a tool child, a call that reads or writes the image's state is one round
+             ;; trip to the image (child.lisp), still under tool-entry's check and deferral.
+             (entry (lambda (&rest args)
+                      (if (and *remote* (remote-function-p name))
+                          (tool-entry (lambda (&rest a) (remote-invoke (string-downcase (symbol-name name)) a)) args)
+                          (tool-entry f args)))))
         (setf (documentation entry 'function) (documentation f 'function))
         (setf (gethash s *tool-entries*) entry
               (fdefinition s) entry)))))

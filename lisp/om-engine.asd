@@ -64,9 +64,15 @@
                              (:file "layer/store")
                              (:file "layer/adaptable")
                              (:file "tool/reads")
+                             ;; W3t: the memory tool in a child SBCL (docs/lisp-port-tool-layer.md)
+                             (:file "tool/snippets")
+                             (:file "layer/child")
+                             (:file "tool/memory-tool")
                              (:file "layer/lock")
                              ;; 1b, the curated ranked index (docs/lisp-port-tool-layer.md)
-                             (:file "tool/curated-index")))
+                             (:file "tool/curated-index")
+                             ;; W3t: the fixed texts the image hands with the Lisp forms
+                             (:file "tool/lisp-texts")))
                ;; W5, hooks (docs/lisp-port-hooks.md)
                (:module "w5"
                 :pathname "src"
@@ -80,4 +86,9 @@
                (:module "w6"
                 :pathname "src"
                 :serial t
-                :components ((:file "server/events")))))
+                :components ((:file "server/events")))
+               ;; W3t, the memory tool on the image (docs/lisp-port-tool-layer.md)
+               (:module "w3t"
+                :pathname "src"
+                :serial t
+                :components ((:file "server/tool")))))

@@ -187,8 +187,11 @@ runs in a thread and the server is returned; else it runs here until the server 
     out))
 
 (defun main ()
-  "The dumped image's toplevel: om-engine [--root dir] [--socket path] [--idle-seconds n]."
+  "The dumped image's toplevel: om-engine [--root dir] [--socket path] [--idle-seconds n]; with
+--tool-child it is a memory tool child instead (om.layer's child.lisp, decision 9)."
   (sb-ext:disable-debugger)
+  (when (equal (second sb-ext:*posix-argv*) "--tool-child")
+    (funcall (find-symbol "TOOL-CHILD-MAIN" "OM.LAYER")))
   (let ((code 0))
     (handler-case
         (let ((options (parse-args (rest sb-ext:*posix-argv*))))

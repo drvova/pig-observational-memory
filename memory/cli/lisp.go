@@ -299,7 +299,7 @@ func (a *app) mcpViaLisp(harnessName, dir string, raw []byte) (answer json.RawMe
 	var res struct {
 		Message json.RawMessage `json:"message"`
 	}
-	err = a.lisp.call("mcp", map[string]any{"root": a.root, "harness": harnessName, "cwd": dir, "message": json.RawMessage(raw)}, &res)
+	err = a.lisp.call("mcp", a.toolParams(harnessName, dir, map[string]any{"message": json.RawMessage(raw)}), &res)
 	if a.fallsBack(err) {
 		return nil, false, nil
 	}
@@ -311,9 +311,20 @@ func (a *app) callViaLisp(harnessName, dir string, arguments map[string]any) (re
 	if a.lisp == nil {
 		return nil, false, nil
 	}
-	err = a.lisp.call("call", map[string]any{"root": a.root, "harness": harnessName, "cwd": dir, "arguments": arguments}, &res)
+	err = a.lisp.call("call", a.toolParams(harnessName, dir, map[string]any{"arguments": arguments}), &res)
 	if a.fallsBack(err) {
 		return nil, false, nil
 	}
 	return res, true, err
+}
+
+// toolParams are a memory tool request's params for the image: the session callTool would read
+// (the current one in dir, else the scratch session of an MCP client with no transcript), as
+// sessionParams gives an event's, so the image reads the branch the Go engine would.
+func (a *app) toolParams(harnessName, dir string, extra map[string]any) map[string]any {
+	s, ok := session(a.root, harnessName, dir)
+	if !ok {
+		s = scratchSession(harnessName, dir)
+	}
+	return a.sessionParams(s, extra)
 }

@@ -18,7 +18,7 @@
    ;; a note (one record) and a history row
    "NOTE-ID" "NOTE-WHEN" "NOTE-KIND" "NOTE-SUBJECT" "NOTE-SCOPE" "NOTE-RELEVANCE" "NOTE-CONTENT"
    "NOTE-STATUS" "NOTE-EVENT-DATE" "NOTE-ORIGIN" "NOTE-OUTCOME" "NOTE-TOOL" "NOTE-TARGET"
-   "NOTE-SOURCE" "NOTE-ANCHOR" "NOTE-LINE" "NOTE-P"
+   "NOTE-SOURCE" "NOTE-ANCHOR" "NOTE-LINE" "NOTE-P" "NOTE-SUPERSEDED-BY"
    "TURN-ID" "TURN-WHEN" "TURN-ROLE" "TURN-TEXT" "TURN-P"
    "MEMORY-NAME" "MEMORY-TYPE" "MEMORY-DESCRIPTION" "MEMORY-BODY" "MEMORY-P"
    ;; curated writes
@@ -26,7 +26,9 @@
    ;; the model's layer
    "DEFINE" "LAYER" "LAYER-FORGET" "LAYER-ROLLBACK" "ADAPTABLES"
    ;; output
-   "SHOW"))
+   "SHOW"
+   ;; the call's strings argument (the memory tool in a child)
+   "TEXT"))
 
 (defpackage "OM.LAYER"
   (:use "COMMON-LISP")

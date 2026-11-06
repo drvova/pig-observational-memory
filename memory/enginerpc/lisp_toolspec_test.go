@@ -11,11 +11,16 @@ import (
 
 var writeToolSpec = flag.Bool("write", false, "rewrite lisp/src/server/toolspec.json")
 
-// TestLispToolSpec keeps the Lisp image's copy of the memory tool's spec (what its initialize
-// answers, docs/lisp-port-peer.md) equal to MemoryToolSpec, byte for byte; -args -write
-// regenerates it.
+// TestLispToolSpec keeps the Lisp image's copy of the memory tool's specs equal to Go's, byte
+// for byte (docs/lisp-port-peer.md): "lisp" is LispMemoryToolSpec, what the image's initialize,
+// MCP server and start context answer (docs/lisp-core.md, decision 10), and "go" is
+// MemoryToolSpec, the Go engine's text, which the image only names to tell the two apart;
+// -args -write regenerates it.
 func TestLispToolSpec(t *testing.T) {
-	encoded, err := json.Marshal(MemoryToolSpec())
+	encoded, err := json.Marshal(struct {
+		Go   ToolSpec `json:"go"`
+		Lisp ToolSpec `json:"lisp"`
+	}{MemoryToolSpec(), LispMemoryToolSpec()})
 	if err != nil {
 		t.Fatal(err)
 	}

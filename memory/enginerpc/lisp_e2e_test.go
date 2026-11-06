@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/enginerpc"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
+	"github.com/drvova/pig-observational-memory/memory/omtool"
 )
 
 // buildLispImage builds the SBCL engine image (lisp/build-image.sh) into a temporary directory,
@@ -108,19 +110,84 @@ func stopImage(t *testing.T, l *lispimage.Launcher) {
 
 // TestLispEngineMatchesInProcess runs the engine-rpc scenario against the Lisp image over its
 // socket, with no curated store (so the harness detectors, which the image has not ported, do
-// not run on either path): session_start, both turn ends and the context event run on the
-// image, and every appended entry and edited context message equals the in-process path's.
-// The compaction and the memory tool call, which the image has not ported, are refused before
-// any host write and run on the Go fallback, each logged once; no other event falls back.
+// not run on either path): session_start, both turn ends, the context event and the memory
+// tool call run on the image, and every appended entry and edited context message equals the
+// in-process path's. The compaction, which the image has not ported, is refused before any host
+// write and runs on the Go fallback, logged once; no other event falls back. The tool call runs
+// the scenario's Go pointer (om.History(om.Search("loader"))) as the Lisp call it stands for, in
+// a child SBCL: its text is the Lisp tool's, so it is checked on its own (checkLispTool).
 func TestLispEngineMatchesInProcess(t *testing.T) {
 	image := buildLispImage(t)
 	agentDir := settingsDir(t)
 	want := scenario(t, newInProcess())
 	log := &lockedLog{}
 	got := scenario(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log)})
+	checkLispTool(t, got)
+	got.Tool, got.ToolText = want.Tool, want.ToolText
 	compareTranscripts(t, "lisp", want, got)
 	lines := log.lines()
-	if len(lines) != 2 || !strings.Contains(lines[0], enginerpc.MethodSessionBeforeCompact+": not ported") || !strings.Contains(lines[1], enginerpc.MethodToolCall+": not ported") {
+	if len(lines) != 1 || !strings.Contains(lines[0], enginerpc.MethodSessionBeforeCompact+": not ported") {
 		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// checkLispTool checks the scenario's memory tool call as the image answered it: the Go pointer
+// ran as its Lisp call over the branch, and the details carry what level 0 and the detectors
+// read back (the outcome, the search).
+func checkLispTool(t *testing.T, got transcript) {
+	t.Helper()
+	if !strings.HasPrefix(got.ToolText, `;; om.History(om.Search("loader")) runs here as (history :search "loader")`+"\n") ||
+		!strings.Contains(got.ToolText, "loader") {
+		t.Fatalf("tool text:\n%s", got.ToolText)
+	}
+	d := omtool.DetailsFrom(got.Tool)
+	if d == nil || d.Outcome != omtool.OutcomeOK || d.Code != `om.History(om.Search("loader"))` || !slices.Equal(d.Searches, []string{"loader"}) {
+		t.Fatalf("tool details %+v", got.Tool)
+	}
+}
+
+// TestLispMemoryTool runs the memory tool over engine-rpc on the image with no fallback: the
+// initialize answer is the Lisp text, and model Lisp reads the branch, prints, errors and is
+// refused in the shapes the adapter records (omtool.Details), each in a child SBCL.
+func TestLispMemoryTool(t *testing.T) {
+	image := buildLispImage(t)
+	root := t.TempDir()
+	l := &lispimage.Launcher{Root: root, Socket: filepath.Join(root, "engine.sock"), Image: image, Idle: 60, StartTimeout: 30 * time.Second}
+	client := enginerpc.NewClient(enginerpc.SocketDialer(l), enginerpc.InitializeParams{AgentDir: settingsDir(t), ConfigDirName: ".pig"})
+	client.RequireBuild(l.ExpectedBuild())
+	spec, err := client.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close()
+		stopImage(t, l)
+	})
+	if want := enginerpc.LispMemoryToolSpec(); spec.Description != want.Description || spec.PromptSnippet != want.PromptSnippet {
+		t.Fatalf("the image serves %+v", spec)
+	}
+	h := newHost(codingTurn("p", "fix the loader"))
+	for _, c := range []struct {
+		code, text, outcome string
+		isError             bool
+	}{
+		{`(format t "~a~%" (mapcar #'turn-role (history :search "loader")))`, "", omtool.OutcomeOK, false},
+		{`(+ 40 2)`, "42", omtool.OutcomeOK, false},
+		{`(car 1)`, "Error: ", omtool.OutcomeRuntime, true},
+		{`(eval 1)`, "Error: refused: eval is denied in model code", omtool.OutcomeCompile, true},
+		{`(recall "<id>")`, "Error: nothing ran: `<id>` is a placeholder", omtool.OutcomeCompile, true},
+	} {
+		res, err := client.ToolCall(h, omtool.ToolName, map[string]any{"code": c.code})
+		if err != nil {
+			t.Fatalf("%s: %v", c.code, err)
+		}
+		d := omtool.DetailsFrom(res.Details)
+		if res.IsError != c.isError || !strings.HasPrefix(res.Text, c.text) || d == nil || d.Outcome != c.outcome || d.Code != c.code {
+			t.Errorf("%s: %+v (details %+v)", c.code, res, res.Details)
+		}
+	}
+	res, err := client.ToolCall(h, omtool.ToolName, map[string]any{"code": ""})
+	if err != nil || res.IsError || !strings.HasPrefix(res.Text, "The memory tool runs Common Lisp") {
+		t.Fatalf("manual: %+v %v", res, err)
 	}
 }

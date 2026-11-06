@@ -182,6 +182,14 @@ compile runs in the run's thread, so the run's timeout covers it; the budget is 
         ((memory-p v) (format nil "~A [~A]: ~A" (mem-name v) (mem-type v) (mem-description v)))
         (t (prin1-to-string v))))
 
+(defvar *remote* nil
+  "In a tool child (child.lisp): true, and the OM.TOOL calls that read or write the image's state
+are answered by the image over the child's pipe.")
+
+(defun held-message (d model)
+  (format nil "Held definition ~(~A~) for ~A: it runs beside the default at the next compactions and replaces it once the evidence settles it."
+          (ldef-name d) model))
+
 (defstruct (tool-result (:conc-name tool-result-))
   (text "") (error nil) (held '()))
 
@@ -205,10 +213,14 @@ is what the code printed, or, when it printed nothing, its last value."
                    (destructuring-bind (form . source) f
                      (setf last
                            (if (and (consp form) (eq (car form) 'om.tool:define))
-                               (let ((d (progn (tick) (layer-hold model source))))
-                                 (push d held)
-                                 (format nil "Held definition ~(~A~) for ~A: it runs beside the default at the next compactions and replaces it once the evidence settles it."
-                                         (ldef-name d) model))
+                               (progn
+                                 (tick)
+                                 (if *remote*
+                                     ;; In a tool child the image holds it (child.lisp).
+                                     (remote-invoke "define" (list source))
+                                     (let ((d (layer-hold model source)))
+                                       (push d held)
+                                       (held-message d model))))
                                (funcall (compile-form form))))))
                  (show-string last)))
              :timeout timeout :package package)
