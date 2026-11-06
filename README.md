@@ -103,6 +103,11 @@ How it reads each conversation:
 everywhere else om runs the code-only path: level 0, the rendered summary with its intent and next
 sections, ranked search, curated memory and kept definitions.
 
+The engine behind `om` and the PiG extension is the SBCL memory core ([lisp-core.md](docs/lisp-core.md)):
+one image per user, built on first use from the sources `om` carries when `sbcl` is on `PATH`
+([lisp-build.md](docs/lisp-build.md)), with the Go engine running any event the image could not take
+before it acted. `OM_ENGINE=go` (or `"engine": "go"`) is the kill switch; Windows stays on the Go engine.
+
 The readers are tested on transcripts the harnesses themselves wrote (`memory/transcript/testdata/real`,
 with sources and licenses), not only on samples built from their docs. Those real files caught gaps the
 docs never mentioned, such as Gemini's tool results kept on the call and Droid's injected context, and

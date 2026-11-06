@@ -32,8 +32,11 @@ const usage = `om: observational memory for coding agents
   om version
 
 The store lives under $OM_HOME (default ~/.om); its settings.json holds the settings.
-OM_ENGINE=lisp forwards hook, mcp and call to the SBCL engine image over <root>/engine.sock,
-starting it from $OM_LISP_IMAGE (docs/lisp-port-image-client.md).
+hook, mcp and call run on the SBCL engine image over <root>/engine.sock, started from
+$OM_LISP_IMAGE, else built on first use with the sbcl on PATH into <root>/engine (until then,
+and for anything the image cannot take, the Go engine runs; see <root>/engine.log).
+OM_ENGINE=go (or "engine": "go" in settings.json) always runs the Go engine; it is the default
+on Windows (docs/universal.md).
 `
 
 // Run is the om command over args (without the program name); it returns the exit status.

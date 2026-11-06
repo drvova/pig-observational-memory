@@ -5,7 +5,7 @@ the client mode of `om` that forwards to it. With them, `OM_ENGINE=lisp om hook 
 the image, and the store it writes is byte for byte the Go engine's. Everything not yet ported
 answers "not ported", and `om` runs the Go engine for it, over the same store.
 
-Without `OM_ENGINE=lisp`, nothing changes: `om` never opens the socket (`TestLispModeOff`).
+Since the switch ([lisp-core.md](lisp-core.md), "The switch") the image is the default; with `OM_ENGINE=go` (or `"engine": "go"`), nothing here runs: `om` never opens the socket (`TestLispModeOff`, `TestLispKillSwitch`).
 
 ## What was built
 
@@ -101,7 +101,7 @@ own file, loaded after `methods.lisp`. That replaces the not-ported entry.
 
 | Variable | Setting in `<root>/settings.json` | Meaning |
 |---|---|---|
-| `OM_ENGINE=lisp` | | Lisp mode: forward hook events, MCP messages and `om call` |
+| `OM_ENGINE=lisp` (the default; `go` is the kill switch) | `observational-memory.engine` | Lisp mode: forward hook events, MCP messages and `om call` |
 | `OM_LISP_IMAGE` | `observational-memory.lispImage` (absolute path) | The image to start |
 | `OM_ENGINE_SOCKET` | | The socket (default `<root>/engine.sock`) |
 | `OM_ENGINE_IDLE_SECONDS` | `observational-memory.lispIdleSeconds` | Passed to the image at start |
