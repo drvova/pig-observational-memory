@@ -48,6 +48,9 @@
 ;; W3t: the memory tool in a child SBCL.
 (load (merge-pathnames "tests/tool-child.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Compaction on PiG and the remaining PiG events.
+(load (merge-pathnames "tests/pig.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

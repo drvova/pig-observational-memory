@@ -2,9 +2,11 @@
 
 This work package lets the SBCL image serve PiG. The image speaks engine-rpc
 ([engine-rpc.md](engine-rpc.md)) on its unix socket in both directions. The PiG adapter reaches it
-with `"engine": "lisp"`. The first three events run on the image: `event/sessionStart`,
-`event/turnEnd` and `event/context`. Every other event is refused before it has any effect, and
-the in-process Go engine runs it instead.
+with `"engine": "lisp"`. W6 ported `event/sessionStart`, `event/turnEnd` and `event/context`; work
+package 2 ("Compaction on PiG") added the compaction trigger, `event/sessionBeforeCompact` at level
+0 on PiG's cut and the remaining session events (see "Compaction on PiG" below). An event the image
+cannot run the way Go does is refused before it has any effect, and the in-process Go engine runs
+it instead.
 
 ## Files
 
@@ -14,7 +16,11 @@ the in-process Go engine runs it instead.
 | `lisp/src/server/connection.lisp` | Per-connection state, host calls, the branch cache, and the configuration (`config.Load`, `EnsureConfig`). |
 | `lisp/src/server/build.lisp` | The build id and the memory tool's spec. |
 | `lisp/src/server/toolspec.json` | `enginerpc.MemoryToolSpec()` (`go`) and `LispMemoryToolSpec()` (`lisp`, the one the image serves). It is generated: `cd memory && go test ./enginerpc -run LispToolSpec -args -write`, and the test fails when the file is stale. |
-| `lisp/src/server/events.lisp` | The three events. |
+| `lisp/src/server/events.lisp` | `event/turnEnd` and `event/context`. |
+| `lisp/src/server/pig-session.lisp` | `event/sessionStart` with a curated store, `beforeAgentStart`, `agentStart`, `projectTrust`, `sessionCompact`, `sessionShutdown`, `command/run` (`/om:view`, with `memory/clipboard`'s copy). |
+| `lisp/src/server/pig-compaction.lisp` | The trigger at `event/agentSettled` and `event/sessionBeforeCompact`. |
+| `lisp/src/server/compaction-harness.lisp` | The harness hook point of a compaction (`compaction-harness-refusal`, `after-compaction`). |
+| `lisp/tests/pig.lisp` | The trigger and its backoff, the compaction's refusals and level 0, its cancellation, session start over a store, the section's pin, `/om:view`. |
 | `lisp/tests/peer.lisp` | Five tests: concurrent requests, a host call mid-request, cancellation, connection loss, per-connection shutdown, and the events over a scripted host. |
 | `memory/lispimage` | The launcher, shared by `om`'s Lisp mode and the dialer: start, wait, exit-3 lock handling, `<image>.build`. |
 | `memory/enginerpc` | `SocketDialer`, `Client.SetFallback`, `Client.RequireBuild`, `CodeNotPorted`, `InitializeParams.Env`, `InitializeResult.BuildID`. |
@@ -64,6 +70,7 @@ the in-process Go engine runs it instead.
   - the branch cache, with incremental `host/getBranch` from the anchor;
   - slots for the compaction trigger's in-flight flag and backoff, which no ported event uses yet.
 - **The `initialize` answer.** It also returns `tool` (the Lisp spec, decision 10) and `buildId`: the first 16 hex
+  - the compaction trigger's in-flight flag and backoff (work package 2).
   digits of a SHA-256 over every `lisp/src` file, computed at load time and so carried into the
   dumped image. `lisp/build-image.sh` also writes the id to `<image>.build`. The adapter's client
   requires that id and treats a mismatch as a failure to start.
@@ -73,9 +80,7 @@ the in-process Go engine runs it instead.
 
 ## Events
 
-- **`event/sessionStart`.** It runs `ReloadConfig` and resets the pin. Without a store it answers
-  `{}`. With a store (curated memory on and a `host/configHome`) it is refused: the retired-name
-  read, the v1 layer migration and the curated settle are not ported.
+- **`event/sessionStart`.** See "Compaction on PiG" below.
 - **`event/turnEnd`.** It runs `EnsureConfig`. When passive it does nothing. Otherwise it runs
   level 0 over `host/getBranch` and appends through `host/appendEntry` (`appendExtraction`,
   stopping at the first append that fails), then answers `{"thinning": bool}`.
@@ -107,26 +112,119 @@ in-process path.
   load, the extension logs one line and runs fully in-process.
 - **Turning it off.** `OM_LISP_FALLBACK=0` turns fallback off.
 
-## Gate and results
+## Gate and results (W6)
 
-- `sbcl --non-interactive --load lisp/run-tests.lisp`: 94 tests pass.
+- `sbcl --non-interactive --load lisp/run-tests.lisp`: 94 tests passed at W6.
 - `OM_LISP_PARITY=1 go test ./enginerpc -run LispEngine` runs `TestLispEngineMatchesInProcess`, the
   e2e `scenario` against the real image over its socket with no store:
   - the session start, both turn ends and the context event run on the image;
-  - the compaction falls back, logged once; the memory tool call runs on the image too
-    (work package 3, [lisp-port-tool-layer.md](lisp-port-tool-layer.md), "The memory tool in a child");
+  - at W6 the compaction and the tool call fell back, each logged once (now neither: work package 2 ported the compaction and work package 3 the tool call,
+    [lisp-port-tool-layer.md](lisp-port-tool-layer.md), "The memory tool in a child");
   - the appended entries, compaction and context edits equal the in-process path; the tool
     result is the Lisp tool's, checked on its own.
 - `TestFailoverBeforeTheEngineActed` checks the fallback rule against a fake engine.
 - `TestLispEngine*` in the adapter drive the lifecycle tests through the Lisp mode.
 
+## Compaction on PiG (work package 2)
+
+### Events
+
+| Event | Go | The image |
+|---|---|---|
+| `event/sessionStart` | `ReloadConfig`, `engine.SessionStart` | The pin reset, then with a store (`engine.CuratedCall`: the configuration read fresh under `host/projectTrusted`, curated memory on, a `host/configHome`) the curated settle (`curated-settle` over the branch's corrections), each notice through `host/notify`. Refused first when the store holds retired defined tools (`definitions/`, `harness/_2a/tool/`) or a layer the v1 migration reads (any `harness/*/instructions/` file, or the removed `model` setting). |
+| `event/beforeAgentStart` | `engine.Index`, `SectionText` | `{"sections": {"curated-memory": ...}}`: the tool-note line, then the index through the connection's pin within `curatedMemoryIndexTokens`. Never a returned `systemPrompt`. |
+| `event/agentStart` | `hooks.OnAgentStart` | `EnsureConfig`, then `{"thinning": bool}`. |
+| `event/projectTrust` | `ReloadConfig` | The same. |
+| `event/agentSettled` | `OnAgentSettledEvent`, `SettleCurated` | The trigger (below), then the curated settle. |
+| `event/sessionBeforeCompact` | `engine.BeforeCompact` | Level 0 on PiG's exact cut (below). |
+| `event/sessionCompact` | `pin.Reset` | The same. |
+| `event/sessionShutdown` | namespace reset, detector stop | `{}`: the image holds neither. |
+| `command/run` | `RunStatus`, `RunView` | `om:view` runs on the image: `EnsureConfig`, the branch, `view-text`, then `ShowView`'s notices, with `clipboard.CopyIfAvailable` ported (the same commands, display and socket checks, the 2 s timeout; the "no clipboard" note once per image). `om:status` is refused. |
+
+### The trigger (`hooks.maybeTriggerCompactionV2`)
+
+At `agentSettled`, after `EnsureConfig`, not passive, with PiG's `compaction.enabled` false (read
+from disk at every check, the trusted project's file over the global one) and the connection's
+compaction slot free (`runtime.TryStartCompact`):
+
+- the branch is read, and a "Nothing to compact" backoff whose tip is the branch's leaf (and whose
+  session identity is this session's) suspends the trigger;
+- the threshold is PiG's: reported context > window − `reserveTokens`, the window reported by
+  `host/getContextUsage`, else the session model's; `reserveTokens` is the model's
+  `compaction.modelOverrides` entry, else `compaction.reserveTokens`, else 16,384, read under the
+  configuration's trust; never with unknown usage;
+- over it, the backoff is cleared, the notice is shown, and the deferred step runs in a thread of
+  its own (the event answers at once): `host/isIdle` up to 10 times 0.1 s apart, the branch and the
+  threshold again, then `host/compact`. Its answer arrives once PiG has compacted; a "Nothing to
+  compact", "Already compacted" or "Invalid compaction." refusal sets the backoff at the tip it
+  compacted from. While the slot is held, a compaction PiG runs is the extension's own, and level
+  1 skips it with Go's reason.
+
+### `event/sessionBeforeCompact`
+
+- **Decoding.** `engine.DecodeBeforeCompact`: the preparation's `firstKeptEntryId`,
+  `tokensBefore`, `messagesToSummarize`, `turnPrefixMessages`, `isSplitTurn`, `previousSummary`,
+  `fileOps` and `settings.reserveTokens`, the branch entries, the reason and the custom
+  instructions.
+- **Refusals, before any side effect.** In this order: a skip list the image does not hold
+  (retired tools, see session start); the harness hook point (a session model with a store, see
+  below); and level 1 when it would run, that is consolidation on, not passive, not the
+  extension's own compaction, not an overflow, and a session model. Level 1 is a later work
+  package, so the Go engine runs that compaction whole.
+- **Level 0.** Under the connection's extraction mutex, W5's `build-compaction` over the host:
+  level 0 over the unextracted cut range (a fresh `host/getBranch`), the host summary, the budget
+  with the session model's context window and output cap, PiG's `reserveTokens` and
+  `ledger.NextRunHeadroom` (ported), then `selection.Render` or the minimal brief, the drops by
+  rule, and `details` with the level-1 report (`consolidate is false`, `passive mode`, the own
+  trigger, an overflow, `the session model is unavailable: no session model`). Without a store
+  the profile is `harness.Default`, whose `ApplySummary` is the room itself and whose codec is
+  rows, so the summary is Go's.
+- **Always a compaction.** An error after the refusals is recovered into
+  `RecoveredCompactionV2`'s compaction (the minimal brief in its pointer form, else
+  `V2FallbackSummary`), with the report's reason `panic: ...`. A failed append is logged and
+  dropped.
+- **Cancellation.** `$/cancelRequest` for the event sets its flag, and a host call in flight
+  passes it on (`peer-call`). A cancelled compaction answers `{"result": null}`, as Go's handler
+  returns nil for a cancelled request; it is not an error.
+
+### The harness hook point
+
+`lisp/src/server/compaction-harness.lisp` is the one place the harness's part of a compaction
+goes, for the evidence work package to fill:
+
+- `compaction-harness-refusal` runs before the compaction's first side effect. Today it refuses a
+  session model with a store, for which Go reads the model's profile, records the pass event,
+  settles held definitions and starts the detector pass.
+- `after-compaction` runs once the answer is built, before it is sent, unless the request was
+  cancelled. It receives a `compaction-harness` struct: the connection, the session model and its
+  key, the store directory, the configuration, the decoded event, the branch the compaction folded
+  (level 0's batches included), the cut range's source entries and the result. It does nothing
+  yet. An error in it is logged and never changes the answer.
+
+`event/turnEnd`'s refusal for a store with a session model (detect and keep-head) is unchanged.
+
+### Gate and results
+
+- `sbcl --non-interactive --load lisp/run-tests.lisp`: 116 tests, 1,028 checks pass.
+- `OM_LISP_PARITY=1 go test -p 1 ./enginerpc -run Lisp`:
+  - `TestLispEngineMatchesInProcess`: the scenario's compaction now runs on the image, with
+    consolidation off and a session model, and the appended entries, the compaction and the
+    context edits equal the in-process path's. The tool call now runs on the image too (work package 3).
+  - `TestLispBeforeCompactCancellation`: level 1 on, so the image refuses and the Go fallback's
+    level-1 request is cancelled; the answer equals the in-process path's.
+  - `TestLispCommandsAndRendering`: `/om:status` falls back; the section and four `/om:view`
+    calls run on the image, with the in-process path's notifications.
+  - `TestLispTriggerMatchesInProcess`: over the threshold, "Nothing to compact", the backoff at
+    the same tip, then a new tip: the same compact calls and notifications as the in-process path.
+
 ## Left
 
-`agentStart`, `projectTrust`, `beforeAgentStart`, `agentSettled` (the trigger), `sessionBeforeCompact`,
-`sessionCompact`, `sessionShutdown`, `tool/renderCall`, `tool/renderResult` and `command/run` are not
-ported yet (`tool/call` is, in work package 3). Also not
-ported:
-
-- the store cases of the three events (detect, curated settle, layer migration, retired names);
-- the `$/acted` notice for the image's direct store writes, which none of these events makes;
+- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's), `/om:status`, level 1 and the harness's part of a compaction (the
+  hook point above).
+- The store cases: `turnEnd` with a store and a session model (detect, keep-head), and a store
+  with retired defined tools or a v1 layer to migrate (the names and the migration are not read).
+- A failed append inside the compaction is dropped, and the appends after it are still made; Go
+  stops the extraction's appends at the first failure.
+- The `$/acted` notice for the image's direct store writes (the curated settle writes the store
+  before it notifies).
 - Windows.

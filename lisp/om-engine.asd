@@ -87,6 +87,13 @@
                 :pathname "src"
                 :serial t
                 :components ((:file "server/events")))
+               ;; Compaction on PiG and the remaining PiG events (docs/lisp-port-peer.md)
+               (:module "pig"
+                :pathname "src"
+                :serial t
+                :components ((:file "server/compaction-harness")
+                             (:file "server/pig-session")
+                             (:file "server/pig-compaction")))
                ;; W3t, the memory tool on the image (docs/lisp-port-tool-layer.md)
                (:module "w3t"
                 :pathname "src"

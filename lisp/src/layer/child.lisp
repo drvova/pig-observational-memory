@@ -300,6 +300,11 @@ threads joined, so nothing of it is left."
     (when (and kill (sb-ext:process-alive-p p))
       (ignore-errors (sb-ext:process-kill p 9)))
     (ignore-errors (close (sb-ext:process-input p)))
+    ;; A child that said done exits at once; one that has not after 5 s is killed, so this
+    ;; never waits without a bound.
+    (loop repeat 100 while (ignore-errors (sb-ext:process-alive-p p)) do (sleep 0.05))
+    (when (ignore-errors (sb-ext:process-alive-p p))
+      (ignore-errors (sb-ext:process-kill p 9)))
     (ignore-errors (sb-ext:process-wait p))
     (ignore-errors (sb-thread:join-thread (child-reader c) :timeout 5 :default nil))
     (ignore-errors (sb-thread:join-thread (child-drainer c) :timeout 5 :default nil))
@@ -427,7 +432,8 @@ by default timeout plus *child-kill-grace*) or \"cancelled\" (cancelled-p turned
                             (finish "cancelled" "the call was cancelled and the program's process was killed")
                             (return))
                            ((eq m :eof)
-                            (sb-ext:process-wait (child-process c))
+                            (loop repeat 100 while (sb-ext:process-alive-p (child-process c)) do (sleep 0.05))
+                            (setf killed (sb-ext:process-alive-p (child-process c)))
                             (let ((tail (child-stderr-tail c)))
                               (finish "crashed" (format nil "the program's process ended (exit ~A)~@[: ~A~]"
                                                         (sb-ext:process-exit-code (child-process c))
