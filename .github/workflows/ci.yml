@@ -29,3 +29,62 @@ jobs:
       - run: GOOS=darwin go vet ./...
       - run: GOOS=windows go vet ./...
       - run: go test -race ./...
+
+  lisp:
+    # The SBCL memory core (docs/lisp-build.md): the Lisp suite, the Go parity tests against it,
+    # and the image, all on the SBCL release pinned in lisp/SBCL_VERSION.
+    runs-on: ubuntu-latest
+    env:
+      # The sha256 of sbcl-<version>-x86-64-linux-binary.tar.bz2 for the version in lisp/SBCL_VERSION,
+      # checked against the SBCL release's signed checksum file. TO FILL IN: while it is empty the
+      # install step fails and prints the downloaded tarball's sha256 instead of trusting it.
+      SBCL_TARBALL_SHA256: ""
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: pin
+        run: echo "version=$(tr -d ' \t\r\n' < lisp/SBCL_VERSION)" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/sbcl-pinned
+          key: sbcl-${{ steps.pin.outputs.version }}-x86-64-linux-${{ env.SBCL_TARBALL_SHA256 }}
+      - name: Install the pinned SBCL
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SBCL_VERSION: ${{ steps.pin.outputs.version }}
+        run: |
+          set -eu
+          name="sbcl-${SBCL_VERSION}-x86-64-linux"
+          work="$RUNNER_TEMP/sbcl-download"
+          mkdir -p "$work"
+          curl -fsSL --retry 3 -o "$work/$name-binary.tar.bz2" \
+            "https://downloads.sourceforge.net/project/sbcl/sbcl/${SBCL_VERSION}/${name}-binary.tar.bz2"
+          got=$(sha256sum "$work/$name-binary.tar.bz2" | cut -d' ' -f1)
+          if [ -z "$SBCL_TARBALL_SHA256" ]; then
+            echo "::error::SBCL_TARBALL_SHA256 is not set; the downloaded tarball's sha256 is $got (check it against the release's signed checksums before setting it)"
+            exit 1
+          fi
+          if [ "$got" != "$SBCL_TARBALL_SHA256" ]; then
+            echo "::error::sha256 mismatch for $name-binary.tar.bz2: got $got, want $SBCL_TARBALL_SHA256"
+            exit 1
+          fi
+          tar -xjf "$work/$name-binary.tar.bz2" -C "$work"
+          (cd "$work/$name" && INSTALL_ROOT="$HOME/.cache/sbcl-pinned" sh install.sh)
+      - name: Put SBCL on the path
+        run: |
+          echo "$HOME/.cache/sbcl-pinned/bin" >> "$GITHUB_PATH"
+          echo "SBCL_HOME=$HOME/.cache/sbcl-pinned/lib/sbcl" >> "$GITHUB_ENV"
+      - run: sbcl --version
+      - run: sbcl --non-interactive --load lisp/run-tests.lisp
+      # The runner's Go honours GOTOOLCHAIN=auto, as in the go job.
+      - name: Go parity against the Lisp core
+        working-directory: memory
+        run: OM_LISP_PARITY=1 go test -count=1 -p 1 ./selection ./transcript ./contracts ./cli ./enginerpc -run Lisp
+      - run: mkdir -p "$RUNNER_TEMP/om-image" && lisp/build-image.sh "$RUNNER_TEMP/om-image/om"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: om-image-sbcl-${{ steps.pin.outputs.version }}-x86-64-linux
+          path: |
+            ${{ runner.temp }}/om-image/om
+            ${{ runner.temp }}/om-image/om.build
+          if-no-files-found: error
