@@ -315,47 +315,51 @@ func TestBeforeCompactCancellationCrossesTheBoundary(t *testing.T) {
 	agentDir := settingsDir(t)
 	must(t, os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"observational-memory": {"consolidate": true}}`), 0o600))
 	client := startEngine(t, agentDir)
-	run := func(name string, d driver) map[string]any {
-		entries := append(codingTurn("p", "fix the loader"), codingTurn("q", "and the saver")...)
-		h := newHost(entries)
-		h.ModelsFake.Streams.Block = true
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		h.Ctx = ctx
-		d.sessionStart(h)
-		data := map[string]any{
-			"preparation": map[string]any{
-				"firstKeptEntryId": "qu", "tokensBefore": float64(30_000),
-				"settings": map[string]any{"enabled": true, "reserveTokens": float64(16_384), "keepRecentTokens": float64(20_000)},
-			},
-			"branchEntries": maps(entries),
-			"reason":        "threshold",
-		}
-		go func() {
-			// Cancel once level 1's request is in flight.
-			for h.ModelsFake.Streams.Calls() == 0 {
-				time.Sleep(time.Millisecond)
-			}
-			cancel()
-		}()
-		done := make(chan map[string]any, 1)
-		go func() { done <- d.beforeCompact(h, data) }()
-		select {
-		case result := <-done:
-			if h.ModelsFake.Streams.Calls() != 1 {
-				t.Fatalf("%s: level 1 made %d requests", name, h.ModelsFake.Streams.Calls())
-			}
-			return result
-		case <-time.After(30 * time.Second):
-			t.Fatalf("%s: the cancelled compaction did not return", name)
-		}
-		return nil
-	}
-	want := run("in-process", newInProcess())
-	got := run("process", overRPC{t: t, c: client})
+	want := cancelledCompaction(t, "in-process", newInProcess())
+	got := cancelledCompaction(t, "process", overRPC{t: t, c: client})
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("in-process %v, process %v", want, got)
 	}
+}
+
+// cancelledCompaction runs a compaction with level 1 on through d and cancels its request once
+// level 1's request is in flight; it returns the answer.
+func cancelledCompaction(t *testing.T, name string, d driver) map[string]any {
+	t.Helper()
+	entries := append(codingTurn("p", "fix the loader"), codingTurn("q", "and the saver")...)
+	h := newHost(entries)
+	h.ModelsFake.Streams.Block = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.Ctx = ctx
+	d.sessionStart(h)
+	data := map[string]any{
+		"preparation": map[string]any{
+			"firstKeptEntryId": "qu", "tokensBefore": float64(30_000),
+			"settings": map[string]any{"enabled": true, "reserveTokens": float64(16_384), "keepRecentTokens": float64(20_000)},
+		},
+		"branchEntries": maps(entries),
+		"reason":        "threshold",
+	}
+	go func() {
+		// Cancel once level 1's request is in flight.
+		for h.ModelsFake.Streams.Calls() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	done := make(chan map[string]any, 1)
+	go func() { done <- d.beforeCompact(h, data) }()
+	select {
+	case result := <-done:
+		if h.ModelsFake.Streams.Calls() != 1 {
+			t.Fatalf("%s: level 1 made %d requests", name, h.ModelsFake.Streams.Calls())
+		}
+		return result
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s: the cancelled compaction did not return", name)
+	}
+	return nil
 }
 
 // TestCommandsAndRendering runs /om:status and the renderers over the connection.

@@ -1,27 +1,11 @@
 ;;;; W6: the first PiG events over engine-rpc (docs/lisp-port-peer.md; docs/engine-rpc.md):
-;;;; event/sessionStart, event/turnEnd (without the harness detectors) and event/context, with
-;;;; the host/* calls they make. Loaded after methods.lisp and server/hooks.lisp, so each
+;;;; event/turnEnd (without the harness detectors) and event/context, with the host/* calls
+;;;; they make (event/sessionStart is in pig-session.lisp). Loaded after methods.lisp and server/hooks.lisp, so each
 ;;;; define-method here replaces a not-ported entry. Every other engine-rpc method stays not
 ;;;; ported, and a ported one refuses (not ported) what it cannot do the way Go does, always
 ;;;; before its first host write, so the adapter can run the event on the Go engine instead.
 
 (in-package "OM.SERVER")
-
-;;; Session start
-
-(define-method "event/sessionStart" (params)
-  ;; Server.handle: ReloadConfig, then engine.SessionStart: the pin and the namespace reset, a
-  ;; detector pass stops, the retired tools' names are read, the v1 layer migrated and the
-  ;; curated evidence settled. The image holds no namespace or detector pass; the last three
-  ;; act only with a store, which is not ported: that start is refused (after the image's own
-  ;; state is reset, which changes nothing the Go engine would see).
-  (with-event (c params)
-    (conn-reload-config c)
-    (sb-thread:with-mutex ((conn-mutex c)) (setf (conn-pin c) nil))
-    (ensure-config c)
-    (when (store-on-p c)
-      (not-ported "event/sessionStart with a curated store (retired tool names, the v1 layer migration, the curated settle)"))
-    (om::jobject)))
 
 ;;; Turn end
 
@@ -70,6 +54,7 @@ refused (not ported), so the Go engine reads the turn instead."
   (with-event (c params)
     (ensure-config c)
     (unless (rcfg-passive (conn-cfg c))
+      (check-skip-tools c "event/turnEnd")
       (when (and (store-on-p c) (string/= (session-model-key) ""))
         (not-ported "event/turnEnd with the harness detectors (detectV2, keep-head)"))
       (extract-turn c))
@@ -116,6 +101,7 @@ Returns how many results it thinned; a failure leaves what it did so far (Go rec
   ;; pristine list; -32001 when the image does not hold the request it builds on. The engine
   ;; edits deep copies and answers only the messages it changed.
   (with-event (c params)
+    (check-skip-tools c "event/context")
     (let* ((seq (param-int params "seq")) (base (param-int params "base")) (reuse (param-int params "reuse"))
            (raw (let ((m (om::jget params "messages"))) (if (and (vectorp m) (not (stringp m))) m #())))
            (pristine nil))

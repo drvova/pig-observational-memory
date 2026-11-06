@@ -2,17 +2,25 @@ package enginerpc_test
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/engine"
 	"github.com/drvova/pig-observational-memory/memory/enginerpc"
+	"github.com/drvova/pig-observational-memory/memory/hooks"
+	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
+	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
 // buildLispImage builds the SBCL engine image (lisp/build-image.sh) into a temporary directory,
@@ -107,11 +115,12 @@ func stopImage(t *testing.T, l *lispimage.Launcher) {
 }
 
 // TestLispEngineMatchesInProcess runs the engine-rpc scenario against the Lisp image over its
-// socket, with no curated store (so the harness detectors, which the image has not ported, do
-// not run on either path): session_start, both turn ends and the context event run on the
-// image, and every appended entry and edited context message equals the in-process path's.
-// The compaction and the memory tool call, which the image has not ported, are refused before
-// any host write and run on the Go fallback, each logged once; no other event falls back.
+// socket, with no curated store (so the harness detectors and the compaction's evidence, which
+// the image has not ported, do not run on either path) and level 1 off: session_start, both
+// turn ends, the compaction on PiG's cut and the context event run on the image, and every
+// appended entry, the compaction and every edited context message equal the in-process path's.
+// The memory tool call, which the image has not ported, is refused before any host write and
+// runs on the Go fallback, logged once; no other event falls back.
 func TestLispEngineMatchesInProcess(t *testing.T) {
 	image := buildLispImage(t)
 	agentDir := settingsDir(t)
@@ -120,7 +129,125 @@ func TestLispEngineMatchesInProcess(t *testing.T) {
 	got := scenario(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log)})
 	compareTranscripts(t, "lisp", want, got)
 	lines := log.lines()
-	if len(lines) != 2 || !strings.Contains(lines[0], enginerpc.MethodSessionBeforeCompact+": not ported") || !strings.Contains(lines[1], enginerpc.MethodToolCall+": not ported") {
+	if len(lines) != 1 || !strings.Contains(lines[0], enginerpc.MethodToolCall+": not ported") {
 		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestLispBeforeCompactCancellation is TestBeforeCompactCancellationCrossesTheBoundary against
+// the image: with level 1 on and a session model, the image refuses the compaction before any
+// side effect (level 1 is not ported), the Go fallback makes the level-1 request, and PiG's
+// cancellation crosses to it; the answer equals the in-process path's. The image's own
+// cancellation of a host call in flight is pig-before-compact-cancel in lisp/tests/pig.lisp.
+func TestLispBeforeCompactCancellation(t *testing.T) {
+	image := buildLispImage(t)
+	agentDir := settingsDir(t)
+	must(t, os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"observational-memory": {"consolidate": true}}`), 0o600))
+	log := &lockedLog{}
+	client := startLispEngine(t, image, agentDir, log)
+	want := cancelledCompaction(t, "in-process", newInProcess())
+	got := cancelledCompaction(t, "lisp", overRPC{t: t, c: client})
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("in-process %v, lisp %v", want, got)
+	}
+	lines := log.lines()
+	if len(lines) != 1 || !strings.Contains(lines[0], enginerpc.MethodSessionBeforeCompact+": not ported") || !strings.Contains(lines[0], "level 1") {
+		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestLispCommandsAndRendering is TestCommandsAndRendering against the image: /om:status falls
+// back (not ported); the system-prompt section and /om:view run on the image, and the view's
+// notifications equal the in-process path's.
+func TestLispCommandsAndRendering(t *testing.T) {
+	image := buildLispImage(t)
+	agentDir := settingsDir(t)
+	log := &lockedLog{}
+	client := startLispEngine(t, image, agentDir, log)
+	h := newHost(codingTurn("p", "fix the loader"))
+	must(t, client.SessionStart(h))
+	must(t, client.Command(h, enginerpc.CommandStatus, ""))
+	if len(h.Messages()) != 1 || !strings.Contains(h.Messages()[0], "emory") {
+		t.Fatalf("status %q", h.Messages())
+	}
+	sections, err := client.BeforeAgentStart(h)
+	must(t, err)
+	if sections[enginerpc.MemorySection] != engine.ToolNoteLine {
+		t.Fatalf("sections %v", sections)
+	}
+	lines := log.lines()
+	if len(lines) != 1 || !strings.Contains(lines[0], enginerpc.MethodCommand+": not ported") {
+		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
+	}
+	view := func(run func(h *testfix.FakeHost, args string)) []testfix.Notification {
+		h := newHost(codingTurn("p", "fix the loader"))
+		hooks.OnTurnEnd(runtime.New(), h)
+		for _, args := range []string{"", "full", "full", "bogus"} {
+			run(h, args)
+		}
+		return h.Notifications
+	}
+	rt := runtime.New()
+	want := view(func(h *testfix.FakeHost, args string) { must(t, commands.RunView(rt, h, args, nil)) })
+	got := view(func(h *testfix.FakeHost, args string) { must(t, client.Command(h, enginerpc.CommandView, args)) })
+	if len(want) != 4 || !reflect.DeepEqual(want, got) {
+		t.Fatalf("view: in-process %q, lisp %q", want, got)
+	}
+	if len(log.lines()) != 1 {
+		t.Fatalf("the view fell back:\n%s", strings.Join(log.lines(), "\n"))
+	}
+}
+
+// TestLispTriggerMatchesInProcess runs the compaction trigger at agent_settled with PiG's
+// auto-compaction off on both paths: over the threshold it asks PiG to compact, a "Nothing to
+// compact" answer suspends it at that tip, and a new entry lifts the suspension; the host's
+// compact calls and the notifications are the same.
+func TestLispTriggerMatchesInProcess(t *testing.T) {
+	image := buildLispImage(t)
+	agentDir := settingsDir(t)
+	must(t, os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"compaction": {"enabled": false, "reserveTokens": 20000}, "observational-memory": {"consolidate": false}}`), 0o600))
+	log := &lockedLog{}
+	client := startLispEngine(t, image, agentDir, log)
+	run := func(settle func(h *testfix.FakeHost)) (int, []testfix.Notification) {
+		h := newHost(codingTurn("p", "fix the loader"))
+		tokens := 190_000
+		h.Usage = &host.ContextUsage{Tokens: &tokens, ContextWindow: 200_000}
+		h.CompactFn = func(callbacks host.CompactCallbacks) {
+			callbacks.OnError(errors.New("Nothing to compact (session too small)"))
+		}
+		settle(h)
+		settle(h)
+		h.SetBranch(append(h.Entries, testfix.RawMessage("x1", "next")))
+		settle(h)
+		return h.CompactCount(), h.Notifications
+	}
+	rt := runtime.New()
+	inProcess := func(h *testfix.FakeHost) {
+		if done := hooks.MaybeTriggerCompaction(rt, h); done != nil {
+			<-done
+		}
+		engine.SettleCurated(h)
+	}
+	overLisp := func(h *testfix.FakeHost) {
+		before := len(h.Messages())
+		must(t, client.AgentSettled(h))
+		// The deferred step answers later: wait for its notification when the trigger fired.
+		if n := len(h.Messages()); n > before {
+			for range 500 {
+				if len(h.Messages()) > n {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatal("the deferred compaction step did not finish")
+		}
+	}
+	wantCalls, want := run(inProcess)
+	gotCalls, got := run(overLisp)
+	if wantCalls != 2 || gotCalls != wantCalls || !reflect.DeepEqual(want, got) {
+		t.Fatalf("in-process %d %q, lisp %d %q", wantCalls, want, gotCalls, got)
+	}
+	if len(log.lines()) != 0 {
+		t.Fatalf("fallbacks:\n%s", strings.Join(log.lines(), "\n"))
 	}
 }
