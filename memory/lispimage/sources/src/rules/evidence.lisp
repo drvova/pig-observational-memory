@@ -75,8 +75,9 @@ nothing for a run that read none."
   "rules.AfterPass with Engine v2 (afterCompaction): records one compaction of model as its
 evidence unit and decides its v2 rules, writing the ones that changed. counts are the kernel
 counts the compaction adds (an alist), level1 whether its level-1 request answered, ran-held the
-held ids it ran with. Returns the transitions. A store whose rules predate the layer is recorded
-and not evaluated (rules.migrate is not ported)."
+held ids it ran with. Returns the transitions. Rules written before the layer are migrated first
+(rules.migrate, src/harness/rule-migration.lisp)."
+  (migrate-legacy-rules store)
   (let ((catalog (catalog-of (go-effective-remedies store model))) (transitions '()))
     (with-store-lock (store)
       (let ((events (model-events store model)))
@@ -100,11 +101,10 @@ and not evaluated (rules.migrate is not ported)."
                                    (model-event-line :model model :kind "pass" :stage "compaction" :tokens tokens
                                                      :counts sum :kinds kinds :revisions (revisions) :engine "v2"
                                                      :level1 level1 :ran-held ran-held))
-              (unless (go-legacy-rules-p store)
-                (multiple-value-bind (changed ts)
-                    (evaluate-rules model (model-events store model) (list-rules store) (cons (time-nanos (now)) 0) catalog)
-                  (dolist (r changed) (write-rule store r))
-                  (setf transitions ts)))))))
+              (multiple-value-bind (changed ts)
+                  (evaluate-rules model (model-events store model) (list-rules store) (cons (time-nanos (now)) 0) catalog)
+                (dolist (r changed) (write-rule store r))
+                (setf transitions ts))))))
     transitions))
 
 ;;; The snapshot (decision 8)

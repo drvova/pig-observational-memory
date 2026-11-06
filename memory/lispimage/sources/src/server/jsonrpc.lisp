@@ -23,7 +23,9 @@
 
 (defun not-ported (what)
   "Answers the request with the not-ported error. Call it before any side effect, so a client
-that falls back to the Go engine finds nothing half done."
+that falls back to the Go engine finds nothing half done. Each one is counted for /om:status
+(note-refusal, src/server/status.lisp)."
+  (ignore-errors (note-refusal what))
   (rpc-fail +not-ported+ "om engine: ~A is not ported to the Lisp engine yet" what))
 
 (defvar *methods* (make-hash-table :test 'equal)

@@ -296,7 +296,9 @@ refuses a scalar or a list."
           owner))
 
 (defun kernel-check (kind name text)
-  "kernel.Check: the refusal's message, or nil."
+  "kernel.Check: the refusal's message, or nil; nil for everything under a lowered floor
+(kernel.Floor.Check, om::*kernel-floor-lowered*)."
+  (when om::*kernel-floor-lowered* (return-from kernel-check nil))
   (let ((owner (kernel-owns kind name)))
     (when owner (return-from kernel-check (kernel-refusal kind name "name" owner nil))))
   (multiple-value-bind (decoded err) (try-rows-decode text)
