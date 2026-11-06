@@ -152,7 +152,9 @@ does not exist."
 
 ;;; The store's lock: flock(LOCK_EX) on <dir>/.lock, as curated.Store.locked takes it.
 
-(defvar *lock-mutex* (sb-thread:make-mutex :name "om.layer store lock"))
+(defvar *lock-mutex* (sb-thread:make-mutex :name "om.layer store lock")
+  "Serializes the image's own holders of store locks (flock locks per open file, not per
+thread); held recursively by one thread across two stores.")
 
 (defvar *held-locks* '()
   "The lock files this thread holds, so a nested hold of one does not deadlock.")
@@ -163,19 +165,34 @@ does not exist."
    fd operation))
 
 (defun call-locked (dir fn)
+  "Runs fn holding the store's lock: the in-image mutex, then flock(LOCK_EX) on <dir>/.lock.
+Interrupts are deferred from before the lock is taken until after it is released, so neither an
+asynchronous unwind nor a stop lands while it is held and fn writes; the one place they are
+allowed is the pure wait for the flock (allow-with-interrupts, which an OM.TOOL call keeps off),
+where a run of model code past its budget also ends cooperatively (wait-pause) before holding
+the flock."
   (let ((path (join-path dir ".lock")))
     (if (member path *held-locks* :test #'string=)
         (funcall fn)
-        (sb-thread:with-recursive-lock (*lock-mutex*)
-          (ensure-dir dir)
-          (let ((fd (sb-posix:open path (logior sb-posix:o-creat sb-posix:o-rdwr) #o600)))
+        (let ((got-mutex nil) (fd nil) (got-flock nil))
+          (sb-sys:without-interrupts
             (unwind-protect
                  (progn
-                   (loop until (zerop (flock fd 2)))
+                   (sb-sys:allow-with-interrupts
+                     (unless (sb-thread:holding-mutex-p *lock-mutex*)
+                       (loop until (sb-thread:grab-mutex *lock-mutex* :timeout 0.05)
+                             do (wait-check))
+                       (setf got-mutex t))
+                     (ensure-dir dir)
+                     (setf fd (sb-posix:open path (logior sb-posix:o-creat sb-posix:o-rdwr) #o600))
+                     ;; LOCK_EX|LOCK_NB, retried: the wait is where a stop may end the call.
+                     (loop until (zerop (flock fd 6)) do (wait-pause 0.002))
+                     (setf got-flock t))
                    (let ((*held-locks* (cons path *held-locks*)))
                      (funcall fn)))
-              (flock fd 8)
-              (sb-posix:close fd)))))))
+              (when got-flock (flock fd 8))
+              (when fd (sb-posix:close fd))
+              (when got-mutex (sb-thread:release-mutex *lock-mutex*))))))))
 
 (defmacro with-store-lock ((dir) &body body)
   `(call-locked ,dir (lambda () ,@body)))
