@@ -241,6 +241,7 @@ func TestLispModeOff(t *testing.T) {
 func TestLispForwardsEvents(t *testing.T) {
 	root, home := env(t)
 	t.Setenv(EngineEnv, "lisp")
+	t.Setenv(LispFallbackEnv, "")
 	t.Setenv("PI_OBSERVATIONAL_MEMORY_PASSIVE", "0")
 	socket, requests := fakeServer(t, root, defaultFakeAnswer)
 	t.Setenv(LispSocketEnv, socket)
@@ -374,11 +375,12 @@ func TestLispStartsImage(t *testing.T) {
 	}
 }
 
-// With no image running and none configured, an event runs on the Go engine; with falling back
-// off it fails with what to set.
+// With no image running and none configured (so the embedded build, and no sbcl to build it),
+// an event runs on the Go engine; with falling back off it fails with what to set.
 func TestLispNoImage(t *testing.T) {
 	_, home := env(t)
 	t.Setenv(EngineEnv, "lisp")
+	t.Setenv(LispFallbackEnv, "")
 	t.Setenv(LispImageEnv, "")
 	t.Setenv(LispSocketEnv, "")
 	p := genericFixture(t, home)

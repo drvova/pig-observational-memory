@@ -3,6 +3,7 @@ package cli
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -150,6 +151,57 @@ func stopFakeImage(t *testing.T, l *lispimage.Launcher) {
 		conn.Close()
 	}
 	l.WaitGone(10 * time.Second)
+}
+
+// TestLispFirstUseBuildReal builds the real image from the embedded sources with the sbcl on
+// PATH, as a user's first event does, and runs the next events on it with falling back off: the
+// image's initialize reports lispimage.BuildID (the Go hash of the embedded copy equals the Lisp
+// one), or the client would refuse it. Gated like the other image tests.
+func TestLispFirstUseBuildReal(t *testing.T) {
+	if os.Getenv("OM_LISP_PARITY") != "1" {
+		t.Skip("set OM_LISP_PARITY=1 to build the SBCL engine image from the embedded sources")
+	}
+	sbcl, err := exec.LookPath("sbcl")
+	if err != nil {
+		t.Skip("sbcl is not on PATH")
+	}
+	root, home := env(t)
+	t.Setenv("PATH", filepath.Dir(sbcl)+":/usr/bin:/bin")
+	t.Setenv(EngineEnv, "")
+	t.Setenv(LispImageEnv, "")
+	t.Setenv(LispSocketEnv, "")
+	t.Setenv(LispFallbackEnv, "")
+	t.Setenv(LispIdleEnv, "30")
+	p := genericFixture(t, home)
+	om(t, p, "hook", "generic", "turn-end")
+	l := lispimage.FromEnv(root)
+	start := time.Now()
+	deadline := start.Add(5 * time.Minute)
+	for {
+		if release, ok := lispimage.TryLock(filepath.Join(l.BuildDir(), "build.lock")); ok {
+			release()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the build never finished")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Cleanup(func() { stopFakeImage(t, l) })
+	if err := l.Ensure(); err != nil {
+		failed, _ := os.ReadFile(filepath.Join(l.BuildDir(), l.Build+".failed"))
+		t.Fatalf("after the build: %v\n%s", err, failed)
+	}
+	info, _ := os.Stat(l.Image)
+	t.Logf("built %s in %s, %d MB", l.Build, time.Since(start).Round(time.Second), info.Size()>>20)
+	t.Setenv(LispFallbackEnv, "0")
+	om(t, p, "hook", "generic", "turn-end")
+	if summary := om(t, p, "hook", "generic", "compact"); !strings.Contains(summary, "9000") {
+		t.Fatalf("summary on the image %s", summary)
+	}
+	if _, err := os.Stat(filepath.Join(root, "engine.pid")); err != nil {
+		t.Fatalf("no image ran: %v", err)
+	}
 }
 
 // An image reporting another build (om upgraded under a running image) is stopped before the

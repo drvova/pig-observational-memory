@@ -451,6 +451,14 @@ func sqliteDB(t *testing.T, path string, statements ...string) {
 	old := transcript.SQLiteCommands
 	transcript.SQLiteCommands = []string{py}
 	t.Cleanup(func() { transcript.SQLiteCommands = old })
+	// The engine image (OM_ENGINE=lisp) looks the reader up on the PATH of the hook that started
+	// it, not in SQLiteCommands: the same python3, alone on PATH.
+	if os.Getenv("PATH") == "" {
+		bin := t.TempDir()
+		if err := os.Symlink(py, filepath.Join(bin, "python3")); err == nil {
+			t.Setenv("PATH", bin)
+		}
+	}
 	os.MkdirAll(filepath.Dir(path), 0o700)
 	script := "import sqlite3, sys, json\nc = sqlite3.connect(sys.argv[1])\nfor s in json.loads(sys.argv[2]):\n    c.execute(s)\nc.commit()\n"
 	stmts, _ := json.Marshal(statements)
