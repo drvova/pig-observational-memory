@@ -13,6 +13,9 @@
                              (:file "regex")
                              (:file "sha256")
                              (:file "timefmt")
+                             ;; The secret scanner and role-label escaping (contracts/secrets.md).
+                             (:file "secrets")
+                             (:file "roles")
                              (:file "end-base")
                              (:file "entry")
                              (:file "ledger")

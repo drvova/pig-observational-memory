@@ -167,8 +167,9 @@ no detectors or remedies; evidence is the harness evidence text."
 (defparameter +subjects-not-shown+ "(not shown: no room; reuse the subjects on the records above)")
 
 (defun record-line (o)
-  "consolidate.RecordLine."
-  (let ((line (observation-observer-line o)))
+  "consolidate.RecordLine: the record's text with its role labels escaped."
+  (let ((line (observation-observer-line
+               (let ((c (copy-obs o))) (setf (obs-content c) (escape-role-labels (obs-content c))) c))))
     (when (string/= (obs-outcome o) "") (setf line (cat line " (outcome: " (obs-outcome o) ")")))
     (when (string/= (obs-status o) "") (setf line (cat line " (status: " (obs-status o) ")")))
     line))

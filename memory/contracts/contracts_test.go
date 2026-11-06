@@ -48,10 +48,18 @@ var fixtures = []fixture{
 }
 
 // name is the fixture's golden directory: its file name without the last extension.
-func (f fixture) name() string { return strings.TrimSuffix(f.file, filepath.Ext(f.file)) }
+func (f fixture) name() string {
+	base := filepath.Base(f.file)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
 
+// path is the fixture's transcript: f.file under the real transcripts, or f.file itself when it
+// is absolute (a transcript a test generated).
 func (f fixture) path(t *testing.T) string {
 	t.Helper()
+	if filepath.IsAbs(f.file) {
+		return f.file
+	}
 	p, err := filepath.Abs(filepath.Join(realDir, f.file))
 	if err != nil {
 		t.Fatal(err)

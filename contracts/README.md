@@ -54,6 +54,13 @@ writer (`TestStoreWritersValidate`), and the v1 ledger data the migration fixtur
 (`TestV1AndFixtureEntriesValidate`, which also checks the schemas refuse what the ledger refuses). A
 stored file no schema covers fails them.
 
+## Secret redaction and role labels
+
+[secrets.md](secrets.md) specifies the secret scanner (its rules, placeholder, allowlist and exact
+entropy test) and role-label escaping, which every engine applies byte for byte; `secrets.jsonl`
+and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secrets ./serialize
+-args -write`.
+
 ## Golden corpus
 
 `golden/<fixture>/` holds, for each real transcript in `memory/transcript/testdata/real` (the SQL

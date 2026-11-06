@@ -25,7 +25,7 @@ first that fails. Returns how many landed."
     (when (and (string/= covers "") (or (null batches) (string/= (om::batch-covers (car (last batches))) covers)))
       (push (cons "om.extracted" (format nil "{\"coversUpToId\":~A}" (om::json-string covers))) queue))
     (dolist (p (nreverse queue) landed)
-      (handler-case (progn (host-call "host/appendEntry" "customType" (car p) "data" (om::raw-json (cdr p)))
+      (handler-case (progn (host-call "host/appendEntry" "customType" (car p) "data" (om::raw-json (om::redact-json-text (cdr p))))
                            (incf landed))
         (error (e)
           (log-line "turn end: append ~A: ~A" (car p) e)

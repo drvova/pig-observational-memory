@@ -263,7 +263,7 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
   (om::make-hhost
    :read (lambda () (get-branch c))
    :append (lambda (type data-json)
-             (handler-case (host-call "host/appendEntry" "customType" type "data" (om::raw-json data-json))
+             (handler-case (host-call "host/appendEntry" "customType" type "data" (om::raw-json (om::redact-json-text data-json)))
                (error (e) (log-line "compaction: append ~A: ~A" type e)))
              "")
    :cwd (scope-cwd)

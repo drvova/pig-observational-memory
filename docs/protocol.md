@@ -7,7 +7,9 @@ it (the Go one in `memory/` today), and any adapter can rely on it. It is a supe
 that exists keeps its name, fields and output, and the proposed ones are additions an adapter can
 ignore. The data the engine stores is specified by the JSON Schemas in `contracts/schemas/`, and
 its output for real transcripts by the golden corpus in `contracts/golden/`
-([contracts/README.md](../contracts/README.md)).
+([contracts/README.md](../contracts/README.md)). What the engine stores and renders never holds a
+detected secret's value, and the level-1 request escapes role-like labels in tool text, by the
+rules of [contracts/secrets.md](../contracts/secrets.md).
 
 Status: **exists** means `om` implements it today, with a test; **proposed** means this document
 specifies it and no code implements it yet.
