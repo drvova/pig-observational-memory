@@ -204,7 +204,8 @@ func (s Store) GetIn(name, project string) (Memory, error) {
 }
 
 // GetAs reads one memory as session sees it from project: GetIn, a staged memory only in the
-// sessions that staged it, and never one whose forget this session staged (HiddenIn).
+// sessions that staged it, never one whose forget this session staged (HiddenIn), and as this
+// session's staged edit left it (PendingRevision).
 func (s Store) GetAs(name, project, session string) (Memory, error) {
 	m, err := s.GetIn(name, project)
 	if err != nil {
@@ -220,11 +221,12 @@ func (s Store) GetAs(name, project, session string) (Memory, error) {
 	if HiddenIn(m, events, session) {
 		return Memory{}, ErrNotFound
 	}
-	return m, nil
+	return withRevision(m, events, session), nil
 }
 
 // ListAs is List as session sees it: a staged memory only in the sessions that staged it
-// (SeenBy), and no memory whose forget this session staged (HiddenIn).
+// (SeenBy), no memory whose forget this session staged (HiddenIn), and each memory as this
+// session's staged edit left it (PendingRevision).
 func (s Store) ListAs(project, session string) ([]Memory, error) {
 	listed, err := s.List(project)
 	if err != nil {
@@ -237,7 +239,7 @@ func (s Store) ListAs(project, session string) ([]Memory, error) {
 	out := []Memory{}
 	for _, m := range listed {
 		if SeenBy(m, session) && !HiddenIn(m, events[m.Name], session) {
-			out = append(out, m)
+			out = append(out, withRevision(m, events[m.Name], session))
 		}
 	}
 	return out, nil
@@ -414,6 +416,16 @@ type Edit struct {
 // memory v2's load check, so an edit can bring a memory the validator refuses within it (a
 // rewrite keeps only the fields a memory takes); the edited memory is checked as every write is.
 func (s Store) Update(name, project string, edit Edit, source string) (Memory, error) {
+	return s.update(name, project, edit, source, usageLine{Name: name, Event: EventEdit})
+}
+
+// UpdateQuoted is Update on a user's words: the edit's usage line keeps the quote (normalized)
+// that asks for it, which bounds how many changes one quote confirms (MaxForgetsPerQuote).
+func (s Store) UpdateQuoted(name, project string, edit Edit, source, quote string) (Memory, error) {
+	return s.update(name, project, edit, source, usageLine{Name: name, Event: EventEdit, Quote: quote, User: true})
+}
+
+func (s Store) update(name, project string, edit Edit, source string, line usageLine) (Memory, error) {
 	var updated Memory
 	err := s.locked(func() error {
 		m, err := s.readIn(name, project)
@@ -423,24 +435,8 @@ func (s Store) Update(name, project string, edit Edit, source string) (Memory, e
 		if !SeenBy(m, source) {
 			return ErrNotFound
 		}
-		if edit.Type != nil {
-			if !ValidType(*edit.Type) {
-				return fmt.Errorf("memory type %q must be one of %s", *edit.Type, strings.Join(Types, ", "))
-			}
-			m.Type = *edit.Type
-		}
-		if edit.Description != nil {
-			if strings.TrimSpace(*edit.Description) == "" {
-				return errors.New("a memory needs a one-sentence description")
-			}
-			if m.Staged && !sameDescription(m.Description, *edit.Description) {
-				// Another session's staging named the old description.
-				m.StagedBy = addSource(nil, source)
-			}
-			m.Description = oneLine(*edit.Description)
-		}
-		if edit.Body != nil {
-			m.Body = strings.TrimSpace(*edit.Body)
+		if m, err = applyEdit(m, edit, source); err != nil {
+			return err
 		}
 		m.Updated = s.Now().UTC()
 		m.Sources = addSource(m.Sources, source)
@@ -451,7 +447,32 @@ func (s Store) Update(name, project string, edit Edit, source string) (Memory, e
 	if err != nil {
 		return Memory{}, err
 	}
-	return updated, s.Record(name, EventEdit)
+	return updated, s.appendUsage(line)
+}
+
+// applyEdit is m with edit applied, as session makes it: a staged memory whose description
+// changes is staged by session alone, since another session's staging named the old one.
+func applyEdit(m Memory, edit Edit, session string) (Memory, error) {
+	if edit.Type != nil {
+		if !ValidType(*edit.Type) {
+			return Memory{}, fmt.Errorf("memory type %q must be one of %s", *edit.Type, strings.Join(Types, ", "))
+		}
+		m.Type = *edit.Type
+	}
+	if edit.Description != nil {
+		if strings.TrimSpace(*edit.Description) == "" {
+			return Memory{}, errors.New("a memory needs a one-sentence description")
+		}
+		if m.Staged && !sameDescription(m.Description, *edit.Description) {
+			// Another session's staging named the old description.
+			m.StagedBy = addSource(nil, session)
+		}
+		m.Description = oneLine(*edit.Description)
+	}
+	if edit.Body != nil {
+		m.Body = strings.TrimSpace(*edit.Body)
+	}
+	return m, nil
 }
 
 // Forget retires the memory name, as seen from project (Memory.Retired), keeping the file.
@@ -481,16 +502,17 @@ func (s Store) StageForget(name, project, session string) error {
 	return s.appendUsage(usageLine{Name: name, Event: EventForgetStaged, Session: session})
 }
 
-// QuotedForgets counts the forgets the user's words quote (normalized) confirmed, compared as
-// the ledger keeps quotes (redacted).
-func (s Store) QuotedForgets(quote string) (int, error) {
+// QuotedChanges counts the changes to shared memory the user's words quote (normalized)
+// confirmed: forgets and edits of curated memories and the layer's forgets and rollbacks
+// (quotedChangeEvents), compared as the ledger keeps quotes (redacted).
+func (s Store) QuotedChanges(quote string) (int, error) {
 	lines, err := s.readUsageLines()
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, line := range lines {
-		if line.Event == EventForget && line.User && line.Quote == secrets.Redact(quote) {
+		if quotedChangeEvents[line.Event] && line.User && line.Quote == secrets.Redact(quote) {
 			n++
 		}
 	}
@@ -552,6 +574,11 @@ type usageLine struct {
 	Session string `json:"session,omitempty"`
 	// Source is a staging's SourceDigest: the source content it cites, "" for none.
 	Source string `json:"source,omitempty"`
+	// Model is the model whose layer a layer change (the layer events) acts on.
+	Model string `json:"model,omitempty"`
+	// Revision is a staged edit's content (EventEditStaged): the memory as the edit made it in
+	// its session.
+	Revision *Revision `json:"revision,omitempty"`
 }
 
 func (s Store) usagePath() string { return filepath.Join(s.Dir, "usage.jsonl") }
@@ -578,6 +605,10 @@ func (s Store) appendUsage(entry usageLine) error {
 	// A quote is the user's or the model's words, which may hold a value: the ledger keeps it
 	// redacted, as every stored text is (contracts/secrets.md).
 	entry.Quote = secrets.Redact(entry.Quote)
+	if entry.Revision != nil {
+		r := Revision{Type: entry.Revision.Type, Description: secrets.Redact(entry.Revision.Description), Body: secrets.Redact(entry.Revision.Body)}
+		entry.Revision = &r
+	}
 	line, _ := json.Marshal(entry)
 	_, err := jsonl.Append(s.usagePath(), line)
 	return err

@@ -40,16 +40,17 @@ memory-name memory-type memory-description memory-body
 (save name type description &key body scope quoting)
   Saves a memory, staged unless quoting gives the user's confirming words. type: user, feedback,
   project, reference or lesson.
-(edit name &key type description body)   (feedback name outcome quote)
+(edit name &key type description body quoting)   (feedback name outcome quote)
 (forget-memory name &key quoting)
-  Forgets a memory for every session when quoting gives the user's words asking for it;
-  without them it hides the memory in this session only and stages the forget.
+  Edits or forgets a memory for every session when quoting gives the user's words asking for
+  it; without them the change applies in this session only and is staged (/om:status lists it).
 
 ── Your layer ──
 (adaptables)                    The functions a definition may replace.
 (define name (params) body...)  A top-level form: holds a definition; it runs beside the default
                                 at the next compactions and replaces it once the evidence settles it.
-(layer)  (layer-forget name)  (layer-rollback generation)
+(layer)  (layer-forget name &key quoting)  (layer-rollback generation &key quoting)
+                                Without quoting's user words a forget or rollback is only staged.
 
 ── Output ──
 (show x) prints x as the tool shows a value; format, princ and print print as usual.

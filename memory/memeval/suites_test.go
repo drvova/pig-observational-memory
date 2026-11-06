@@ -18,8 +18,6 @@ import (
 // skips naming the phase that fixes it. A finding that starts to pass fails this test, so the
 // phase that fixes it deletes its entry and the skip together.
 var findings = map[string]string{
-	"injected overwrite leaves shared memory":                                                                                 "TestInjectedOverwriteLeavesSharedMemory",
-	"injected layer forget or rollback leaves the model's layer":                                                              "TestInjectedLayerForgetLeavesLayer",
 	"secret redaction: layer files":                                                                                           "TestLayerWriteHoldsNoSecret",
 	"no value in the shared layer":                                                                                            "TestLayerWriteHoldsNoSecret",
 	"the merge's other source reappears as itself (decision 1)":                                                               "TestScenario17RetractedSourceLeavesMerge",
@@ -103,10 +101,10 @@ func TestSuitesDeterministic(t *testing.T) {
 	}
 }
 
-// Finding (Tier 0b, part a): an overwrite planted in tool output, which a model obeys with the
-// memory tool's edit, changes a shared memory for every session: an edit has no quote gate.
+// Tier 0b, part a: an overwrite planted in tool output, which a model obeys with the memory
+// tool's edit, leaves the shared memory as it was for every other session (decision 2's gate):
+// the edit has no user's words, so it applies in its own session only and is staged.
 func TestInjectedOverwriteLeavesSharedMemory(t *testing.T) {
-	later(t, "phase 7: quote-gated correction as supersession (an edit of shared memory needs the user's words)")
 	store := curated.New(t.TempDir())
 	owner := curated.Call{Store: store, Source: "owner", UserEvidence: func(string) bool { return true }}
 	if _, err := owner.Run(curated.OpSave, map[string]string{"name": "build-target", "type": curated.TypeProject, "description": "Build with make ci.", "quote": "please remember the build target"}); err != nil {
@@ -118,20 +116,34 @@ func TestInjectedOverwriteLeavesSharedMemory(t *testing.T) {
 	if m, err := store.GetAs("build-target", "", "observer"); err != nil || m.Description != "Build with make ci." {
 		t.Fatalf("shared memory changed by an injected overwrite: %+v (%v)", m, err)
 	}
+	if m, err := store.GetAs("build-target", "", "victim"); err != nil || m.Description != "Build with make release-unsafe." {
+		t.Fatalf("the staged edit is not seen in its own session: %+v (%v)", m, err)
+	}
+	if staged, err := store.StagedChanges(""); err != nil || len(staged) != 1 || staged[0].Op != "edit" {
+		t.Fatalf("staged %+v (%v)", staged, err)
+	}
 }
 
-// Finding (Tier 0b, part a): a layer forget planted in tool output changes the model's layer,
-// which every later session of that model loads.
+// Tier 0b, part a: a layer forget or rollback planted in tool output leaves the model's layer,
+// which every later session of that model loads, and its generations as they were: without the
+// user's words both are staged (decision 2's gate).
 func TestInjectedLayerForgetLeavesLayer(t *testing.T) {
-	later(t, "phase 5: forget records and scopes (a layer forget or rollback that reaches other sessions needs the user's words)")
 	store := curated.New(t.TempDir())
 	def := layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: modelKey, Text: "Merge one deploy target per line, with its port."}
 	if _, err := store.Layer().Put(def); err != nil {
 		t.Fatal(err)
 	}
-	_ = obey(store, testfix.NewFakeHost(), "victim", nil, injection{op: "layer-forget"})
-	if d, err := store.Layer().Get(modelKey, layer.KindInstructions, "consolidation"); err != nil || d.Text != def.Text {
-		t.Fatalf("an injected layer forget changed the shared layer: %+v (%v)", d, err)
+	before := layerState(store)
+	for _, op := range []string{"layer-forget", "layer-rollback"} {
+		if err := obey(store, testfix.NewFakeHost(), "victim", nil, injection{op: op}); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	if d, err := store.Layer().Get(modelKey, layer.KindInstructions, "consolidation"); err != nil || d.Text != def.Text || layerState(store) != before {
+		t.Fatalf("an injected layer change changed the shared layer: %+v (%v)", d, err)
+	}
+	if staged, err := store.StagedChanges(""); err != nil || len(staged) != 2 {
+		t.Fatalf("staged %+v (%v)", staged, err)
 	}
 }
 

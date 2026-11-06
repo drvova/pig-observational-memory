@@ -29,7 +29,8 @@ type Call struct {
 	// UserEvidence reports whether a quote (normalized) is a user's words in the conversation:
 	// a save quoting one is live at once, any other save is staged,
 	// and a helped feedback quoting one is evidence for a staged memory (Store.Settle). Nil
-	// finds no user quote. A forget quoting one retires a memory for every session.
+	// finds no user quote. A forget or an edit quoting one changes a memory for every session
+	// (Covers).
 	UserEvidence func(quote string) bool
 	// SourceOf is the SourceDigest of the tool output holding a quote (normalized) that is no
 	// user's words, "" when none does: a save quoting it is staged citing that content, the
@@ -38,9 +39,10 @@ type Call struct {
 	SourceOf func(quote string) string
 }
 
-// MaxForgetsPerQuote is how many memories one quote of the user's words forgets for every
-// session (docs/brain-memory.md, decision 2): a forget of more items needs the user's words for
-// each, and a further forget with the same quote is staged.
+// MaxForgetsPerQuote is how many changes to shared memory one quote of the user's words confirms
+// (docs/brain-memory.md, decision 2): forgets and edits of curated memories and the layer's
+// forgets and rollbacks together (Store.QuotedChanges). A change of more items needs the user's
+// words for each, and a further change with the same quote is staged.
 const MaxForgetsPerQuote = 3
 
 // userQuoted reports whether quote is a user's words (UserEvidence).
@@ -148,19 +150,23 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		if edit.Type == nil && edit.Description == nil && edit.Body == nil {
 			return "", errors.New("nothing to change: give a new type, description or body")
 		}
+		quote, quoted, err := GateQuote(args, "edit")
+		if err != nil {
+			return "", err
+		}
+		if m, err := c.Store.readIn(name, c.Project); err == nil && SeenBy(m, c.Source) && !(m.Staged && len(m.StagedBy) == 1) {
+			return c.editShared(m, edit, quote, quoted)
+		}
+		// Only this session sees a memory it alone staged: editing it reaches no other session.
 		m, err := c.Store.Update(name, c.Project, edit, c.Source)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Updated memory %s [%s]: %s", m.Name, m.Type, m.Description), nil
 	case OpForget:
-		quote, quoted := args["quote"]
-		if quoted {
-			normalized, err := NormalizeQuote(quote)
-			if err != nil {
-				return "", errors.New(strings.Replace(err.Error(), "feedback needs", "forget's quote needs", 1))
-			}
-			quote = normalized
+		quote, quoted, err := GateQuote(args, "forget")
+		if err != nil {
+			return "", err
 		}
 		m, err := c.Store.readIn(name, c.Project)
 		switch {
@@ -232,32 +238,48 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 }
 
 // forgetShared is the forget of memory m that other sessions see (docs/brain-memory.md, decision
-// 2): retired for every session on a user's words asking for it (quote, normalized), at most
-// MaxForgetsPerQuote memories per quote; any other forget, a quote-less one and one quoting tool
-// output or the model's own words among them, hides m in this session at once and is staged
-// (Store.StageForget), which a later forget with the user's words confirms.
+// 2): retired for every session on a user's words asking for it (quote, normalized) that Covers
+// one more change; any other forget, a quote-less one and one quoting tool output or the model's
+// own words among them, hides m in this session at once and is staged (Store.StageForget), which
+// a later forget with the user's words confirms.
 func (c Call) forgetShared(m Memory, quote string, quoted bool) (string, error) {
-	reason := "no user's words ask for it"
-	if quoted {
-		reason = "the quote is not a user's words in this conversation"
-		if c.userQuoted(quote) {
-			n, err := c.Store.QuotedForgets(quote)
-			if err != nil {
-				return "", err
-			}
-			if n < MaxForgetsPerQuote {
-				if err := c.Store.ForgetQuoted(m.Name, c.Project, quote); err != nil {
-					return "", err
-				}
-				return "Forgot memory " + m.Name + ".", nil
-			}
-			reason = fmt.Sprintf("the quote already forgot %d memories, the most one quote forgets; a forget of more needs the user's words for each", MaxForgetsPerQuote)
+	ok, reason, err := c.Covers(quote, quoted)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		if err := c.Store.ForgetQuoted(m.Name, c.Project, quote); err != nil {
+			return "", err
 		}
+		return "Forgot memory " + m.Name + ".", nil
 	}
 	if err := c.Store.StageForget(m.Name, c.Project, c.Source); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Hid memory %s in this session and staged its forget: %s, so other sessions still see it. Forgetting it for every session needs words copied verbatim from a user message asking for it, quoted with the forget.", m.Name, reason), nil
+}
+
+// editShared is the edit of memory m that other sessions see (decision 2, as forgetShared): made
+// for every session on a user's words asking for it that Covers one more change; any other edit
+// changes m in this session at once and is staged (Store.StageEdit), every other session seeing
+// m as it was until an edit with the user's words.
+func (c Call) editShared(m Memory, edit Edit, quote string, quoted bool) (string, error) {
+	ok, reason, err := c.Covers(quote, quoted)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		updated, err := c.Store.UpdateQuoted(m.Name, c.Project, edit, c.Source, quote)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Updated memory %s [%s]: %s", updated.Name, updated.Type, updated.Description), nil
+	}
+	staged, err := c.Store.StageEdit(m.Name, c.Project, c.Source, edit)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Changed memory %s [%s] in this session only and staged the edit: %s, so other sessions still see it as it was. Changing it for every session needs words copied verbatim from a user message asking for it, quoted with the edit.", staged.Name, staged.Type, reason), nil
 }
 
 func scopeNote(m Memory) string {

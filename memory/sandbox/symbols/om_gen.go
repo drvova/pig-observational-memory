@@ -19,6 +19,7 @@ func init() {
 		"Define":         reflect.ValueOf(om.Define),
 		"Dropped":        reflect.ValueOf(om.Dropped),
 		"Edit":           reflect.ValueOf(om.Edit),
+		"EditQuoting":    reflect.ValueOf(om.EditQuoting),
 		"ErrNoCall":      reflect.ValueOf(om.ErrNoCall),
 		"Failed":         reflect.ValueOf(om.Failed),
 		"Feedback":       reflect.ValueOf(om.Feedback),

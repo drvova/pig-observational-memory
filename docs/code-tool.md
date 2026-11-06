@@ -800,22 +800,23 @@ helpers into `omhost` (see "Order of work").
 type SaveOpt struct{ /* unexported */ }
 func Body(text string) SaveOpt
 func Scope(scope string) SaveOpt      // "global" or "project"
-func Quoting(text string) SaveOpt     // a user's words that confirm it (or, for ForgetMemory, ask to forget it)
+func Quoting(text string) SaveOpt     // a user's words that confirm it (or, for a forget or rollback, ask for it)
 
 type EditOpt struct{ /* unexported */ }
 func SetType(typ string) EditOpt
 func SetDescription(text string) EditOpt
 func SetBody(text string) EditOpt
+func EditQuoting(text string) EditOpt // a user's words asking for the edit
 
 func Save(name, typ, description string, opts ...SaveOpt) (string, error) // staged unless Quoting is a user's words in the conversation
-func Edit(name string, opts ...EditOpt) (string, error)                   // never sets Pinned
-func ForgetMemory(name string, opts ...SaveOpt) (string, error)           // only Quoting: see "The forget gate" below
+func Edit(name string, opts ...EditOpt) (string, error)                   // never sets Pinned; see "The quote gate" below
+func ForgetMemory(name string, opts ...SaveOpt) (string, error)           // only Quoting: see "The quote gate" below
 func Feedback(name, outcome, quote string) (string, error)                // helped or harmed; the quote must be in a user or assistant message
 
-func LayerForget(kind, name string) (string, error) // forgets one definition from the session model's layer; never a rule
-func LayerRollback(gen int) (string, error)         // the session model's layer as it was at generation gen (0: before its first change); never a rule
-func Propose(kind, name, text string) error         // always harness.ErrDefinedInLevel1
-func Define(name string) error                      // always the retirement notice (see below)
+func LayerForget(kind, name string, opts ...SaveOpt) (string, error) // only Quoting; forgets one definition from the session model's layer; never a rule
+func LayerRollback(gen int, opts ...SaveOpt) (string, error)         // only Quoting; the session model's layer as it was at generation gen (0: before its first change); never a rule
+func Propose(kind, name, text string) error                          // always harness.ErrDefinedInLevel1
+func Define(name string) error                                       // always the retirement notice (see below)
 ```
 
 Each curated write calls `curated.Call.Run(op, args)` on the call's `Call` in the extension, so
@@ -827,18 +828,41 @@ anything (tested). Save and edit notify the user, and forget and feedback notify
 as `notifyChanges` does today. The curated forget is `ForgetMemory`, so the namespace's
 `forget(name)` stays the one for kept definitions.
 
-**The forget gate** (`docs/brain-memory.md`, decision 2). A memory other sessions see is retired
-for every session only on a user's words: ``om.ForgetMemory(`<name>`, om.Quoting(`<quote>`))``
-whose quote (at least 8 characters, whitespace collapsed, case ignored) is in a user message on
-the branch, checked as `Save`'s is. Any other forget, with no quote, or quoting tool output, a file
-or the model's own words, hides the memory in this session at once (`om.Saved`, `om.Recall` and the
-next index render of this session leave it out, and level 1 does not list it) and is recorded as a
-staged forget (a `forget-staged` usage line naming the session); the memory stays shared, and a
-later forget with the user's words confirms it. One quote forgets at most
-`curated.MaxForgetsPerQuote` (3) memories: a forget of more needs the user's words for each, and a
-further forget with the same quote is staged. A memory only its own session staged reaches no other
-session, so its forget needs no quote. Code evidence (a scanner rule, a path gone) retires through
-`curated.Store.Forget` directly. `ForgetMemory` with `Body` or `Scope` is refused. A save quoting
+**The quote gate** (`docs/brain-memory.md`, decision 2). A change to shared memory reaches every
+session only on a user's words asking for it: a forget or an edit of a memory other sessions see,
+and a forget or rollback of the session model's layer. The quote (at least 8 characters,
+whitespace collapsed, case ignored) must be in a user message on the branch, checked as `Save`'s
+is: ``om.ForgetMemory(`<name>`, om.Quoting(`<the user's words>`))``,
+``om.Edit(`<name>`, om.SetDescription(`<description>`), om.EditQuoting(`<the user's words>`))``,
+`om.LayerForget(kind, name, om.Quoting(...))` and `om.LayerRollback(gen, om.Quoting(...))`.
+One quote confirms at most `curated.MaxForgetsPerQuote` (3) changes of any of these kinds
+(`curated.Store.QuotedChanges` counts the `forget`, `edit`, `layer-forget` and `layer-rollback`
+usage lines carrying it); a change of more items needs the user's words for each, and a further
+change with the same quote is staged. Any other change, with no quote, or quoting tool output, a
+file or the model's own words, is staged:
+
+- A **forget** hides the memory in this session at once (`om.Saved`, `om.Recall` and the next
+  index render of this session leave it out, and level 1 does not list it) and is recorded as a
+  `forget-staged` usage line naming the session.
+- An **edit** changes the memory in this session at once and is recorded as an `edit-staged`
+  usage line naming the session and carrying the revision (type, description and body as the edit
+  left them, redacted). `curated.Store.GetAs` and `ListAs`, and so `om.Saved`, `om.Recall`, the
+  index and level 1's input in that session, show the revision (`curated.PendingRevision`); every
+  other session keeps the old content. A later save or edit for every session supersedes it.
+- A **layer forget or rollback** is recorded as a `layer-forget-staged` or
+  `layer-rollback-staged` usage line (name `layer:<kind>/<name>` or `layer:rollback`, with the
+  model, the session and a rollback's target) and changes nothing: not the layer, not its
+  generations, and not this session's layer either, since a session's layer is the model's. It is
+  still refused first when there is nothing to forget or no such generation, and a rule
+  (`rules.IsRule`) stays refused whatever the quote.
+
+In each case the memory or layer stays shared, and a later change with the user's words confirms
+it. `/om:status` lists every staged change still standing (`curated.Store.StagedChanges`); slash
+commands stay read-only, so nothing confirms one but the user's words in a session. A memory only
+its own session staged reaches no other session, so its forget or edit needs no quote. Code
+evidence (a scanner rule, a path gone) changes memory through `curated.Store.Forget` and
+`Update` directly. `ForgetMemory`, `LayerForget` and `LayerRollback` with `Body` or `Scope` are
+refused. A plain save keeps its own gate: staged unless its quote is a user's words. A save quoting
 tool output (not a user's words) is staged citing that content: its usage line records the
 session and `curated.SourceDigest` of the tool result holding the quote (the memory tool's own
 results left out), and the same save staged in two sessions is promotion evidence only when the
@@ -855,7 +879,7 @@ helped `Feedback` whose user quote itself matches the list records a `released` 
 that session, which lasts until the memory is next edited. ``om.Recall(`<name>`)`` still reads it.
 
 `LayerForget` and `LayerRollback` reach `harness.layerWriter`, the code the memory tool's `harness
-forget` and `rollback` writes run today: they act on the session model's layer through `layer.Store`,
+forget` and `rollback` writes run today, behind the quote gate above: they act on the session model's layer through `layer.Store`,
 which re-runs `kernel.Check`, and never touch a rule (`rules.IsRule`) or another model's layer, as
 CLAUDE.md requires. Their effect depends on the session model's stored layer, as today, and their
 result text names that model explicitly (`forgot detector x from the layer of <model>`), so the

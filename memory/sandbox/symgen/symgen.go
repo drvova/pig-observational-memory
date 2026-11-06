@@ -52,7 +52,7 @@ var OMNames = []string{
 	"Notes", "Reflections", "History", "Recall", "NoteByID", "ReflectionByID", "Files", "Commits",
 	"Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Str", "ErrNoCall",
 	// Writes.
-	"SaveOpt", "Body", "Scope", "Quoting", "EditOpt", "SetType", "SetDescription", "SetBody",
+	"SaveOpt", "Body", "Scope", "Quoting", "EditOpt", "SetType", "SetDescription", "SetBody", "EditQuoting",
 	"Save", "Edit", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define",
 }
 

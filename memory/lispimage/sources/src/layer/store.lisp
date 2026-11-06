@@ -326,6 +326,17 @@ checks (compile-definition). Returns the held ldef; signals refused."
 (defun current-state (model)
   (let ((states (replay (read-manifest model)))) (aref states (1- (length states)))))
 
+(defun layer-holds-p (model name)
+  "Whether model's layer holds a settled or held definition of name: what layer-forget removes.
+It changes nothing, so a forget with no user's words is checked before it is staged."
+  (and (or (assoc name (current-state model) :test #'equal) (file-exists-p (held-path model name))) t))
+
+(defun check-rollback-target (model target)
+  "Signals refused unless target is one of model's generations, 0 to the latest."
+  (let ((n (manifest-generation (read-manifest model))))
+    (unless (and (integerp target) (<= 0 target n))
+      (refuse "generation ~A is not one of ~A's layer: 0 to ~D" target model n))))
+
 (defun layer-forget (model name)
   "Forgets name's settled and held definitions: the default stands at once. Returns the
 generation, or signals refused when the model's layer holds no definition of the name."

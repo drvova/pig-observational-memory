@@ -32,7 +32,7 @@ var (
 var ManualGroups = []ManualGroup{
 	{"Reads", []string{"Notes", "Reflections", "History", "Recall", "NoteByID", "ReflectionByID", "Files", "Commits", "Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Str", "ErrNoCall"}},
 	{"Options (each is also an Opt method, so they chain: " + SnippetOptionChain + ")", []string{"Opt", "Search", "From", "Through", "Since", "Until", "ByEvent", "AsOf", "Where", "Contains", "Kind", "Subject", "WithStatus", "SortBy", "Limit", "Offset", "Failed", "Worked", "Open"}},
-	{"Writes", []string{"Save", "SaveOpt", "Body", "Scope", "Quoting", "Edit", "EditOpt", "SetType", "SetDescription", "SetBody", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define"}},
+	{"Writes", []string{"Save", "SaveOpt", "Body", "Scope", "Quoting", "Edit", "EditOpt", "SetType", "SetDescription", "SetBody", "EditQuoting", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define"}},
 	{"Values (describe(x) lists a value's fields and methods with their docs)", append(append([]string{}, valueTypes...), listTypes...)},
 }
 

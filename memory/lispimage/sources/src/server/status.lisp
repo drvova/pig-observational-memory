@@ -138,6 +138,10 @@ security, each with its rule, its content (redacted, on one line) and its anchor
               (list (cat* "Flagged by a user correction since their last edit (ranked last): " (om::join (nreverse flagged) ", "))))
             (loop for (name type description rule) in (handler-case (om.layer::held-memories store project) (error () '()))
                   collect (cat* om::+insecure-held-notice+ " (" rule "): " name " [" type "]: " (om::redact-secrets description)))
+            (let ((staged (handler-case (om.layer::staged-changes store project) (error () '()))))
+              (when staged
+                (list (format nil "Staged changes to shared memory, waiting for a user's words (~D; a staged forget or edit applies in its own session only, a staged layer change nowhere): ~A"
+                              (length staged) (om::join (mapcar #'om.layer::staged-change-string staged) "; ")))))
             (let ((refused (refused-memories store project)))
               (when refused
                 (list (format nil "Refused by the validator, so not loaded (~D; edit within it or forget): ~A" (length refused)

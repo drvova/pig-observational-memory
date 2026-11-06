@@ -64,10 +64,30 @@ func (w layerWriter) Define(kind, name, text string) (string, error) {
 	return "", ErrDefinedInLevel1
 }
 
+// gate is the quote gate on a layer change (docs/brain-memory.md, decision 2, curated.Call.Covers):
+// the normalized quote and whether it confirms one more change to shared memory, else why not.
+// what names the change in the error of a quote too short.
+func (w layerWriter) gate(q omhost.Quote, what string) (quote string, ok bool, reason string, err error) {
+	args := map[string]string{}
+	if q.Given {
+		args["quote"] = q.Text
+	}
+	quote, quoted, err := curated.GateQuote(args, what)
+	if err != nil {
+		return "", false, "", err
+	}
+	call := curated.Call{Store: w.store, Source: w.h.SessionID(), UserEvidence: q.ByUser}
+	ok, reason, err = call.Covers(quote, quoted)
+	return quote, ok, reason, err
+}
+
 // Forget removes the session model's definition of kind named name: only a kind the model may
 // define (CheckModelDefinition). A retired defined tool stays stored (om.Retired lists it);
-// a rule is the harness's to establish or retire, so the model cannot remove one.
-func (w layerWriter) Forget(kind, name string) (string, error) {
+// a rule is the harness's to establish or retire, so the model cannot remove one. The layer is
+// every later session's, so the forget applies only on a user's words asking for it (q, at most
+// curated.MaxForgetsPerQuote changes per quote); any other forget is staged in the usage ledger,
+// listed in /om:status, and changes nothing, the layer's generations included.
+func (w layerWriter) Forget(kind, name string, q omhost.Quote) (string, error) {
 	kind, name = strings.TrimSpace(kind), strings.TrimSpace(name)
 	switch {
 	case kind == layer.KindTool:
@@ -76,11 +96,27 @@ func (w layerWriter) Forget(kind, name string) (string, error) {
 		return "", fmt.Errorf("refused: %s is a rule, which the harness establishes or retires by its detector's counts; a remedy definition you can forget is a catalogue (%s)", name, strings.Join(rules.Remedies, ", "))
 	}
 	model := w.session
+	if !w.store.Layer().Holds(model, kind, name) {
+		return "", fmt.Errorf("%s has no %s definition %q to forget", model, kind, name)
+	}
+	quote, ok, reason, err := w.gate(q, "layer forget")
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		if err := w.store.RecordLayerChange(curated.EventLayerForgetStaged, curated.LayerKey(kind, name), model, w.h.SessionID(), "", -1); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Staged the forget of %s/%s for %s: %s, so the layer is unchanged for every session, this one included, and /om:status lists the staged forget. Forgetting it needs words copied verbatim from a user message asking for it, quoted with the forget.", kind, name, model, reason), nil
+	}
 	seed, seeded, err := w.store.Layer().Forget(model, kind, name, w.h.SessionID())
 	if errors.Is(err, layer.ErrNotFound) {
 		return "", fmt.Errorf("%s has no %s definition %q to forget", model, kind, name)
 	}
 	if err != nil {
+		return "", err
+	}
+	if err := w.store.RecordLayerChange(curated.EventLayerForget, curated.LayerKey(kind, name), model, w.h.SessionID(), quote, -1); err != nil {
 		return "", err
 	}
 	stands := "nothing stands for it"
@@ -93,8 +129,9 @@ func (w layerWriter) Forget(kind, name string) (string, error) {
 
 // Rollback rolls the session model's layer back to generation n (model, when given, must name
 // it, or memory v1's memory-worker model, whose layer v1 kept the session's definitions in). The rules (rules.IsRule) are left as they are: the harness wrote and decided them, so no
-// rollback of the model's removes, restores or drops one.
-func (w layerWriter) Rollback(n int, model string) (string, error) {
+// rollback of the model's removes, restores or drops one. As Forget, it applies only on a user's
+// words asking for it (q); any other rollback is staged and changes nothing.
+func (w layerWriter) Rollback(n int, model string, q omhost.Quote) (string, error) {
 	model = strings.TrimSpace(model)
 	switch {
 	case model == "":
@@ -105,8 +142,28 @@ func (w layerWriter) Rollback(n int, model string) (string, error) {
 		}
 		return "", fmt.Errorf("model=%q is not the session model (%s); you can roll back only your own harness", model, w.session)
 	}
+	gens, err := w.store.Layer().Generations(model)
+	if err != nil {
+		return "", err
+	}
+	if n < 0 || n > len(gens) {
+		return "", fmt.Errorf("generation %d does not exist; %s has generations 0 to %d", n, model, len(gens))
+	}
+	quote, ok, reason, err := w.gate(q, "layer rollback")
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		if err := w.store.RecordLayerChange(curated.EventLayerRollbackStaged, curated.LayerRollbackKey, model, w.h.SessionID(), "", n); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Staged the rollback of %s's harness to generation %d: %s, so the layer is unchanged for every session, this one included, and /om:status lists the staged rollback. Rolling it back needs words copied verbatim from a user message asking for it, quoted with the rollback.", model, n, reason), nil
+	}
 	gen, changes, err := w.store.Layer().RollbackKeeping(model, n, w.h.SessionID(), rules.IsRule)
 	if err != nil {
+		return "", err
+	}
+	if err := w.store.RecordLayerChange(curated.EventLayerRollback, curated.LayerRollbackKey, model, w.h.SessionID(), quote, n); err != nil {
 		return "", err
 	}
 	message := RollbackMessage(model, gen, changes)

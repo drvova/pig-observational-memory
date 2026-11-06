@@ -118,6 +118,13 @@
                           h)))
              (cond
                ((index-step n op dir step args pin))
+               ((string= op "layer-change")
+                (record-layer-change dir (gethash "event" args) (gethash "key" args) (or (gethash "model" args) "")
+                                     (or (om::jget step "session") "") (gethash "quote" args)
+                                     (let ((tg (gethash "target" args))) (and tg (string/= tg "") (parse-integer tg))))
+                (line "~D recorded" n))
+               ((string= op "staged")
+                (line "~D staged ~A" n (one-line-json (om::join (mapcar #'staged-change-string (staged-changes dir (or (om::jget step "project") ""))) "; "))))
                ((string= op "describe")
                 (handler-case (line "~D describe ~A" n (one-line-json (curated-describe (get-memory dir (gethash "name" args)))))
                   (curated-error (e) (line "~D error ~A" n (one-line-json (curated-error-message e))))))

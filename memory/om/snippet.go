@@ -37,6 +37,8 @@ const (
 	SnippetOptionChain   = "om.From(`" + PlaceholderFirstID + "`).Through(`" + PlaceholderLastID + "`).Limit(50)"
 	SnippetSave          = "om.Save(`" + PlaceholderName + "`, `" + PlaceholderType + "`, `" + PlaceholderDescription + "`, om.Body(`" + PlaceholderBody + "`))"
 	SnippetFeedback      = "om.Feedback(`" + PlaceholderName + "`, `" + PlaceholderOutcome + "`, `" + PlaceholderQuote + "`)"
+	SnippetEditQuoted    = "om.Edit(`" + PlaceholderName + "`, om.SetDescription(`" + PlaceholderDescription + "`), om.EditQuoting(`" + PlaceholderUserWords + "`))"
+	SnippetForgetQuoted  = "om.ForgetMemory(`" + PlaceholderName + "`, om.Quoting(`" + PlaceholderUserWords + "`))"
 )
 
 // The placeholders of the fixed texts, each naming what goes in its place.
@@ -53,6 +55,7 @@ const (
 	PlaceholderBody        = "<body>"
 	PlaceholderOutcome     = "<outcome>"
 	PlaceholderQuote       = "<quote>"
+	PlaceholderUserWords   = "<the user's words>"
 
 	PlaceholderString     = "<string name>"
 	PlaceholderDefinition = "<definition>"
@@ -72,6 +75,7 @@ var placeholderWhat = map[string]string{
 	PlaceholderBody:        "the memory's text: why it holds and how to apply it",
 	PlaceholderOutcome:     "helped or harmed",
 	PlaceholderQuote:       "the user's or assistant's words that show it",
+	PlaceholderUserWords:   "words copied verbatim from a user message asking for the change",
 
 	PlaceholderString:     "a name from the strings argument",
 	PlaceholderDefinition: "a kept definition's name, as kept() lists it",

@@ -149,11 +149,18 @@ func obey(store curated.Store, h *testfix.FakeHost, sessionID string, branch []s
 			_, _ = call.Run(curated.OpFeedback, map[string]string{"name": "bootstrap-remote", "outcome": curated.EventHelped, "quote": inj.text})
 		}
 	case "layer-forget":
-		_, err = harness.OMLayer(h, store, modelKey).Forget(layer.KindInstructions, "consolidation")
+		_, err = harness.OMLayer(h, store, modelKey).Forget(layer.KindInstructions, "consolidation", layerQuote(branch, inj))
 	case "layer-rollback":
-		_, err = harness.OMLayer(h, store, modelKey).Rollback(0)
+		_, err = harness.OMLayer(h, store, modelKey).Rollback(0, layerQuote(branch, inj))
 	}
 	return err
+}
+
+// layerQuote is the quote an obeyed layer change gives, with the check the memory tool makes of
+// it over branch (omhost.Call.layerQuote).
+func layerQuote(branch []session.Entry, inj injection) omhost.Quote {
+	skip := []string{omtool.ToolName}
+	return omhost.Quote{Text: inj.text, Given: inj.quote, ByUser: func(q string) bool { return omhost.QuotedByUser(branch, q, skip) }}
 }
 
 // injectionOutcome tallies part (a) over the seeds.

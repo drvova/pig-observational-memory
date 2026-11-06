@@ -174,6 +174,7 @@ func curatedScript() []curatedStep {
 	steps = append(steps, safetyScript(&at, user, conversation)...)
 	steps = append(steps, indexScript(&at, user, conversation)...)
 	steps = append(steps, heldScript(&at, conversation)...)
+	steps = append(steps, gateScript(&at, user, conversation)...)
 
 	rng := rand.New(rand.NewPCG(3, 5))
 	pick := func(list []string) string { return list[rng.IntN(len(list))] }
@@ -186,7 +187,7 @@ func curatedScript() []curatedStep {
 	bodies := []string{"", "Why: it matters.", "  padded body  ", strings.Repeat("x", 9990)}
 	for i := 0; i < 300; i++ {
 		args := map[string]string{"name": pick(names)}
-		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "forget", "feedback", "describe", "describe-as", "list", "list-as", "record", "index", "index-as", "rank", "settle", "pin", "usage"})
+		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "forget", "feedback", "describe", "describe-as", "list", "list-as", "record", "index", "index-as", "rank", "settle", "pin", "usage", "staged"})
 		switch op {
 		case "save":
 			args["type"], args["description"], args["scope"] = pick(types), pick(descriptions), pick(scopes)
@@ -197,6 +198,9 @@ func curatedScript() []curatedStep {
 				args["body"] = b
 			}
 		case "edit":
+			if q := pick(quotes); q != "" {
+				args["quote"] = q
+			}
 			for _, k := range []string{"type", "description", "body"} {
 				if rng.IntN(2) == 0 {
 					switch k {
@@ -274,8 +278,56 @@ func heldScript(at *time.Time, conversation []string) []curatedStep {
 		add("list-as", session, nil)
 	}
 	add("index", "h1", map[string]string{"budget": "2000"})
-	add("edit", "h1", map[string]string{"name": "skip-tls", "body": "Only for the internal registry."})
+	add("edit", "h1", map[string]string{"name": "skip-tls", "body": "Only for the internal registry.", "quote": "skip TLS verification for the internal registry"})
 	add("index-as", "h1", map[string]string{"budget": "2000"})
+	return steps
+}
+
+// gateScript is decision 2's gate on edits and layer changes (docs/brain-memory.md): an edit of a
+// memory other sessions see without the user's words (or quoting other words) changes it in its
+// session only and is staged, a second staged edit builds on the first, a quoted edit reaches
+// every session and supersedes the staged one, one quote confirms at most
+// curated.MaxForgetsPerQuote changes of any kind, an edit of a memory only its session staged is
+// made at once, and the layer's staged and confirmed changes as /om:status lists them.
+func gateScript(at *time.Time, user, conversation []string) []curatedStep {
+	var steps []curatedStep
+	add := func(op, session string, args map[string]string) {
+		*at = at.Add(17 * time.Minute)
+		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: "/work", Time: at.Format(time.RFC3339), User: user, Conversation: conversation})
+	}
+	for _, name := range []string{"gate-a", "gate-b", "gate-c", "gate-d"} {
+		add("save", "g1", map[string]string{"name": name, "type": "project", "description": "Shared " + name + ".", "body": "Kept as it is.", "quote": "the build runs with make all"})
+	}
+	add("edit", "g2", map[string]string{"name": "gate-a", "description": "Build with make release-unsafe.", "body": "password=" + "hunter" + "2hunter2"})
+	add("edit", "g2", map[string]string{"name": "gate-a", "type": "lesson", "quote": "deploys go out on Tuesdays"})
+	add("edit", "g2", map[string]string{"name": "gate-a", "body": ""})
+	add("edit", "g2", map[string]string{"name": "gate-a", "quote": "short", "body": "x"})
+	add("describe-as", "g2", map[string]string{"name": "gate-a"})
+	add("describe-as", "g3", map[string]string{"name": "gate-a"})
+	add("list-as", "g2", nil)
+	add("index-as", "g2", map[string]string{"budget": "2000"})
+	add("index-as", "g3", map[string]string{"budget": "2000"})
+	add("forget", "g2", map[string]string{"name": "gate-b"})
+	add("edit", "g2", map[string]string{"name": "gate-b", "body": "Hidden here."})
+	add("layer-change", "g2", map[string]string{"event": curated.EventLayerForgetStaged, "key": curated.LayerKey("instructions", "consolidation"), "model": "p/m"})
+	add("layer-change", "g2", map[string]string{"event": curated.EventLayerForgetStaged, "key": curated.LayerKey("instructions", "consolidation"), "model": "p/m"})
+	add("layer-change", "g3", map[string]string{"event": curated.EventLayerRollbackStaged, "key": curated.LayerRollbackKey, "model": "p/m", "target": "0"})
+	add("layer-change", "g3", map[string]string{"event": curated.EventLayerRollbackStaged, "key": curated.LayerRollbackKey, "model": "q/n", "target": "2"})
+	add("staged", "g1", nil)
+	// One quote: an edit, a forget and a layer change, then nothing more.
+	add("edit", "g3", map[string]string{"name": "gate-a", "description": "Build with make ci.", "quote": "please forget the old api notes"})
+	add("forget", "g3", map[string]string{"name": "gate-c", "quote": "please forget the old api notes"})
+	add("layer-change", "g3", map[string]string{"event": curated.EventLayerForget, "key": curated.LayerKey("instructions", "consolidation"), "model": "p/m", "quote": "please forget the old api notes"})
+	add("edit", "g3", map[string]string{"name": "gate-d", "body": "Too many.", "quote": "please forget the old api notes"})
+	add("describe-as", "g2", map[string]string{"name": "gate-a"})
+	add("describe-as", "g4", map[string]string{"name": "gate-d"})
+	add("describe-as", "g3", map[string]string{"name": "gate-d"})
+	add("layer-change", "g3", map[string]string{"event": curated.EventLayerRollback, "key": curated.LayerRollbackKey, "model": "p/m", "quote": "the build runs with make all", "target": "0"})
+	add("staged", "g1", nil)
+	add("save", "g5", map[string]string{"name": "gate-own", "type": "lesson", "description": "My own guess."})
+	add("edit", "g5", map[string]string{"name": "gate-own", "body": "Only mine."})
+	add("describe-as", "g5", map[string]string{"name": "gate-own"})
+	add("usage", "g1", nil)
 	return steps
 }
 
@@ -503,6 +555,25 @@ func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
 				promoted = append(promoted, p.Name+"="+p.Evidence)
 			}
 			lines = append(lines, fmt.Sprintf("%d settle %s | %s", n+1, quoted(strings.Join(promoted, ";")), strings.Join(settled.Flagged, ",")))
+		case "layer-change":
+			target := -1
+			if s.Args["target"] != "" {
+				target, _ = strconv.Atoi(s.Args["target"])
+			}
+			if err := store.RecordLayerChange(s.Args["event"], s.Args["key"], s.Args["model"], s.Session, s.Args["quote"], target); err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d recorded", n+1))
+		case "staged":
+			staged, err := store.StagedChanges(s.Project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parts := []string{}
+			for _, c := range staged {
+				parts = append(parts, c.String())
+			}
+			lines = append(lines, fmt.Sprintf("%d staged %s", n+1, quoted(strings.Join(parts, "; "))))
 		case "describe":
 			m, err := store.Get(s.Args["name"])
 			if err != nil {
@@ -666,13 +737,21 @@ func TestLispCuratedParity(t *testing.T) {
 	if also == 0 || more == 0 || promoted == 0 || flagged == 0 {
 		t.Error("the script no longer reaches every branch of the index and the settle")
 	}
-	// docs/brain-memory.md's gates: staged and confirmed forgets, the per-quote bound, stagings
-	// from the same source and from distinct ones, and a promotion on independent sessions.
+	// docs/brain-memory.md's gates: staged and confirmed forgets and edits, the per-quote bound,
+	// the layer's staged changes, stagings from the same source and from distinct ones, and a
+	// promotion on independent sessions.
 	joined := strings.Join(want, "\n")
 	for _, reach := range []string{
 		"ok \"Hid memory tea in this session and staged its forget: no user's words ask for it",
 		"staged its forget: the quote is not a user's words",
-		"the most one quote forgets",
+		"the most one quote confirms",
+		"ok \"Changed memory gate-a [project] in this session only and staged the edit: no user's words ask for it",
+		"staged the edit: the quote is not a user's words",
+		"ok \"Updated memory gate-a [project]: Build with make ci.\"",
+		"ok \"Changed memory gate-d [project] in this session only and staged the edit: the quote already confirmed 3 changes",
+		"edit gate-a (g2): Build with make release-unsafe.; forget gate-b (g2);",
+		"; layer forget p/m instructions/consolidation (g2); layer rollback p/m to generation 0 (g3); layer rollback q/n to generation 2 (g3)\"",
+		"ok \"Updated memory gate-own [lesson]: My own guess.\"",
 		"ok \"Forgot memory api-4.\"",
 		"ok \"Forgot memory own-guess.\"",
 		"but not from other source content it quotes",
@@ -685,6 +764,15 @@ func TestLispCuratedParity(t *testing.T) {
 		if !strings.Contains(joined, reach) {
 			t.Errorf("the script no longer reaches %q", reach)
 		}
+	}
+	// The quoted layer forget and rollback take theirs out of the staged changes.
+	confirmed := false
+	for _, l := range want {
+		confirmed = confirmed || strings.Contains(l, " staged \"") && strings.Contains(l, "forget gate-b (g2); edit gate-d (g3): Shared gate-d.;") &&
+			!strings.Contains(l, "layer forget p/m") && !strings.Contains(l, "layer rollback p/m") && strings.HasSuffix(l, "; layer rollback q/n to generation 2 (g3)\"")
+	}
+	if !confirmed {
+		t.Error("the script no longer confirms a staged layer change")
 	}
 }
 

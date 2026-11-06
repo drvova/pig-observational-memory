@@ -86,3 +86,37 @@ func TestSettleCuratedWithoutRequests(t *testing.T) {
 		t.Fatalf("the evidence check made %d requests", counter.Total())
 	}
 }
+
+// /om:status lists every change to shared memory staged until a user's words confirm it
+// (docs/brain-memory.md, decision 2): a forget and an edit of a curated memory, each in the
+// session that staged it, and a layer forget and rollback; it confirms none (slash commands stay
+// read-only).
+func TestStatusListsStagedChanges(t *testing.T) {
+	h, _, _ := session(t)
+	cfg := v2Config()
+	store, _ := harness.StoreOf(h, cfg)
+	owner := curated.Call{Store: store, Source: "owner", UserEvidence: func(string) bool { return true }}
+	for _, name := range []string{"build-target", "deploy-day"} {
+		if _, err := owner.Run(curated.OpSave, map[string]string{"name": name, "type": curated.TypeProject, "description": "Shared " + name + ".", "quote": "remember this for later"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := curated.Call{Store: store, Source: "s2"}
+	if _, err := other.Run(curated.OpEdit, map[string]string{"name": "build-target", "description": "Build with make release-unsafe."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Run(curated.OpForget, map[string]string{"name": "deploy-day"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordLayerChange(curated.EventLayerRollbackStaged, curated.LayerRollbackKey, "p/m", "s2", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	status := strings.Join(harness.CuratedStatusLines(h, cfg), "\n")
+	want := harness.StagedChangesHeading + " (3; a staged forget or edit applies in its own session only, a staged layer change nowhere): edit build-target (s2): Build with make release-unsafe.; forget deploy-day (s2); layer rollback p/m to generation 0 (s2)"
+	if !strings.Contains(status, want) {
+		t.Fatalf("status:\n%s", status)
+	}
+	if m, err := store.GetAs("build-target", "", "s3"); err != nil || m.Description != "Shared build-target." {
+		t.Fatalf("listing confirmed a staged edit: %+v %v", m, err)
+	}
+}

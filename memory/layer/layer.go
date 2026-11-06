@@ -1026,3 +1026,18 @@ func contains(values []string, value string) bool {
 	}
 	return false
 }
+
+// Holds reports whether model's layer holds a definition of kind named name, written or held:
+// what Forget would remove. It changes nothing, so a forget that has no user's words can be
+// checked before it is staged (docs/brain-memory.md, decision 2).
+func (s Store) Holds(model, kind, name string) bool {
+	if !ValidKind(kind) || !validName.MatchString(name) {
+		return false
+	}
+	for _, path := range []string{s.heldPath(model, kind, name), s.Path(model, kind, name)} {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
+}

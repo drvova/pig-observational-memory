@@ -63,7 +63,7 @@ func TestHeldMemoryReleasedOnlyWhereTheUserRestatesIt(t *testing.T) {
 		t.Fatalf("feedback: %q %v", text, err)
 	}
 	// An edit changes what was restated: no session has released the new text.
-	if _, err := heldCall(store, "s1").Run(OpEdit, map[string]string{"name": "skip-tls", "body": "Only for the registry."}); err != nil {
+	if _, err := heldCall(store, "s1", "keep it only for the registry").Run(OpEdit, map[string]string{"name": "skip-tls", "body": "Only for the registry.", "quote": "only for the registry"}); err != nil {
 		t.Fatal(err)
 	}
 	if indexHas(t, store, "s1", "skip-tls") || indexHas(t, store, "s3", "skip-tls") {

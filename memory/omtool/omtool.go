@@ -55,7 +55,11 @@ var PromptGuidelines = []string{
 	"Use memory to search before saying something was not discussed or is unknown when the compaction summary lists omitted records; otherwise read memory when a remembered detail will materially improve the next action.",
 	"Use memory to look up what the user said about themselves (likes, habits, situation) before giving personal advice or recommendations when the compaction summary lists omitted records.",
 	"Use memory with a few short searches, one per item, before counting or totalling things the conversation mentioned across several exchanges; a search with no row matching every word returns the closest rows, marked partial.",
+	"Use memory to change or forget a saved memory, or forget or roll back your layer, for every session only with words copied verbatim from a user message asking for it (" + om.SnippetEditQuoted + ", " + om.SnippetForgetQuoted + "): without them a memory changes in this session only and a layer change is only staged, both listed in /om:status, and one quote confirms at most " + maxChangesPerQuote + " changes.",
 }
+
+// maxChangesPerQuote is curated.MaxForgetsPerQuote as the guideline writes it.
+const maxChangesPerQuote = "3"
 
 // Parameters is the tool's JSON schema: the code, and optional named strings.
 var Parameters = map[string]any{

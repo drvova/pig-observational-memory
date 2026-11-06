@@ -183,13 +183,35 @@
                               (not (time-before-p (usage-event-time e) (mem-created m)))))
              events)))
 
+(defun pending-revision (m events session)
+  "curated.PendingRevision: the last edit session staged of m since m was saved, (type
+description body), unless a save or an edit for every session came after it; nil for none."
+  (let ((rev nil))
+    (when (string/= session "")
+      (dolist (e events)
+        (unless (time-before-p (usage-event-time e) (mem-created m))
+          (let ((event (ul-event e)))
+            (cond ((or (string= event "save") (string= event "edit")) (setf rev nil))
+                  ((and (string= event "edit-staged") (string= (ul-session e) session) (ul-revision e))
+                   (setf rev (ul-revision e))))))))
+    rev))
+
+(defun with-revision (m events session)
+  "withRevision: m with the edit session staged applied (a copy when there is one)."
+  (let ((rev (pending-revision m events session)))
+    (if rev
+        (let ((c (copy-memory m)))
+          (setf (mem-type c) (first rev) (mem-description c) (second rev) (mem-body c) (third rev))
+          c)
+        m)))
+
 (defun get-as (dir name project session)
-  "Store.GetAs: get-in, a staged memory only in its staging sessions, and none whose forget
-session staged."
-  (let ((m (get-in dir name project)))
+  "Store.GetAs: get-in, a staged memory only in its staging sessions, none whose forget session
+staged, and as session's staged edit left it."
+  (let ((m (get-in dir name project)) (events (gethash name (usage-events-by-name dir))))
     (unless (seen-by-p m session) (error 'not-found))
-    (when (hidden-in-p m (gethash name (usage-events-by-name dir)) session) (error 'not-found))
-    m))
+    (when (hidden-in-p m events session) (error 'not-found))
+    (with-revision m events session)))
 
 (defun read-in (dir name project)
   (let ((m (read-memory dir name)))
@@ -206,10 +228,11 @@ session staged."
         when (and m (visible-p m project) (zero-time-p (mem-retired m))) collect m))
 
 (defun list-as (dir project session)
-  "Store.ListAs: list-memories as session sees them (seen-by-p, not hidden-in-p)."
+  "Store.ListAs: list-memories as session sees them (seen-by-p, not hidden-in-p, with-revision)."
   (let ((listed (list-memories dir project)) (events (usage-events-by-name dir)))
-    (remove-if-not (lambda (m) (and (seen-by-p m session) (not (hidden-in-p m (gethash (mem-name m) events) session))))
-                   listed)))
+    (loop for m in listed
+          when (and (seen-by-p m session) (not (hidden-in-p m (gethash (mem-name m) events) session)))
+            collect (with-revision m (gethash (mem-name m) events) session))))
 
 (defun source-digest (text)
   "curated.SourceDigest: sha256 hex of the text, whitespace collapsed."
@@ -239,8 +262,9 @@ session staged."
 
 (defun same-description-p (a b) (string-equal (one-line a) (one-line b)))
 
-(defun append-usage (dir name event &key quote user record session source)
-  "Store.appendUsage: one usage line, in the Go struct's member order."
+(defun append-usage (dir name event &key quote user record session source model revision)
+  "Store.appendUsage: one usage line, in the Go struct's member order. revision is a staged
+edit's (type description body)."
   (ensure-dir dir)
   (append-line (usage-path dir)
                (with-output-to-string (out)
@@ -259,6 +283,13 @@ session staged."
                    (when (and record (string/= record "")) (member* "record" record))
                    (when (and session (string/= session "")) (member* "session" session))
                    (when (and source (string/= source "")) (member* "source" source))
+                   (when (and model (string/= model "")) (member* "model" model))
+                   (when revision
+                     (write-string ",\"revision\":{" out)
+                     (member* "type" (first revision) nil)
+                     (member* "description" (om::redact-secrets (second revision)))
+                     (when (string/= (third revision) "") (member* "body" (om::redact-secrets (third revision))))
+                     (write-char #\} out))
                    (write-char #\} out)))))
 
 (defun defined-query-path (dir name)
@@ -319,29 +350,46 @@ legacy definitions directory."
         (append-usage dir (mem-name m) (if joined "staged" "save")))
     (values saved joined)))
 
-(defun update-memory (dir name project source &key (type nil type-p) (description nil description-p) (body nil body-p))
-  "Store.Update."
-  (let ((updated nil))
+(defun apply-edit (m source &key (type nil type-p) (description nil description-p) (body nil body-p))
+  "applyEdit: m with the edit applied in place, as session source makes it."
+  (when type-p
+    (unless (valid-type-p type) (fail "~A" (type-error-text type)))
+    (setf (mem-type m) type))
+  (when description-p
+    (when (string= (om::trim-space description) "")
+      (fail "a memory needs a one-sentence description"))
+    (when (and (mem-staged m) (not (same-description-p (mem-description m) description)))
+      (setf (mem-staged-by m) (add-source '() source)))
+    (setf (mem-description m) (one-line description)))
+  (when body-p (setf (mem-body m) (om::trim-space body)))
+  m)
+
+(defun update-memory (dir name project source &rest edit &key quote &allow-other-keys)
+  "Store.Update, and Store.UpdateQuoted with a quote: the edit line keeps the user's words."
+  (let ((updated nil) (edit (loop for (k v) on edit by #'cddr unless (eq k :quote) append (list k v))))
     (with-store-lock (dir)
       (let ((m (read-in dir name project)))
         (unless (seen-by-p m source) (error 'not-found))
-        (when type-p
-          (unless (valid-type-p type) (fail "~A" (type-error-text type)))
-          (setf (mem-type m) type))
-        (when description-p
-          (when (string= (om::trim-space description) "")
-            (fail "a memory needs a one-sentence description"))
-          (when (and (mem-staged m) (not (same-description-p (mem-description m) description)))
-            (setf (mem-staged-by m) (add-source '() source)))
-          (setf (mem-description m) (one-line description)))
-        (when body-p (setf (mem-body m) (om::trim-space body)))
+        (apply #'apply-edit m source edit)
         (setf (mem-updated m) (now)
               (mem-sources m) (add-source (mem-sources m) source))
         (redact-memory m)
         (setf updated m)
         (write-checked dir m)))
-    (append-usage dir name "edit")
+    (if quote
+        (append-usage dir name "edit" :quote quote :user t)
+        (append-usage dir name "edit"))
     updated))
+
+(defun stage-edit (dir name project session &rest edit)
+  "Store.StageEdit: session sees the memory as the edit leaves it, every other session as it was."
+  (let ((m (copy-memory (get-as dir name project session))))
+    (apply #'apply-edit m session edit)
+    (redact-memory m)
+    (curated-check m)
+    (append-usage dir name "edit-staged" :session session
+                  :revision (list (mem-type m) (mem-description m) (mem-body m)))
+    m))
 
 (defun forget-memory* (dir name project &key quote)
   "Store.Forget, and Store.ForgetQuoted with a quote: retires the memory, keeping its file."
@@ -358,11 +406,69 @@ legacy definitions directory."
   (read-in dir name project)
   (append-usage dir name "forget-staged" :session session))
 
-(defun quoted-forgets (dir quote)
-  "Store.QuotedForgets: compared as the ledger keeps quotes (redacted)."
+(defparameter +quoted-change-events+ '("forget" "edit" "layer-forget" "layer-rollback")
+  "quotedChangeEvents: the events whose user quote counts toward +max-forgets-per-quote+.")
+
+(defun quoted-changes (dir quote)
+  "Store.QuotedChanges: compared as the ledger keeps quotes (redacted)."
   (let ((quote (om::redact-secrets quote)))
-    (count-if (lambda (l) (and (string= (ul-event l) "forget") (ul-user l) (string= (ul-quote l) quote)))
+    (count-if (lambda (l) (and (member (ul-event l) +quoted-change-events+ :test #'string=)
+                               (ul-user l) (string= (ul-quote l) quote)))
               (read-usage-lines dir))))
+
+(defun record-layer-change (dir event key model session quote target)
+  "Store.RecordLayerChange: target is a rollback's generation, nil for a forget."
+  (append-usage dir key event :quote quote :user (and quote (string/= quote "")) :session session :model model
+                              :record (and target (princ-to-string target))))
+
+(defun layer-key (kind name) (concatenate 'string "layer:" kind "/" name))
+
+(defun staged-change-string (c)
+  "StagedChange.String: c is (op name session model detail)."
+  (destructuring-bind (op name session model detail) c
+    (cond ((string= op "edit") (concatenate 'string "edit " name " (" session "): " detail))
+          ((string= op "layer forget") (concatenate 'string "layer forget " model " " name " (" session ")"))
+          ((string= op "layer rollback") (concatenate 'string "layer rollback " model " to generation " detail " (" session ")"))
+          (t (concatenate 'string op " " name " (" session ")")))))
+
+(defun staged-changes (dir project)
+  "Store.StagedChanges: the staged forgets and edits of the memories that apply in project, then
+the layer's staged forgets and rollbacks no confirmed one came after; each (op name session
+model detail)."
+  (let ((events (usage-events-by-name dir)) (out '()) (layer '()))
+    (dolist (m (list-memories dir project))
+      (let ((seen (make-hash-table :test 'equal)) (mevents (gethash (mem-name m) events)))
+        (dolist (e mevents)
+          (unless (or (string= (ul-session e) "") (time-before-p (usage-event-time e) (mem-created m)))
+            (let ((event (ul-event e)) (session (ul-session e)))
+              (cond ((string= event "forget-staged")
+                     (unless (gethash (cons "forget" session) seen)
+                       (setf (gethash (cons "forget" session) seen) t)
+                       (push (list "forget" (mem-name m) session "" "") out)))
+                    ((string= event "edit-staged")
+                     (unless (gethash (cons "edit" session) seen)
+                       (setf (gethash (cons "edit" session) seen) t)
+                       (let ((rev (pending-revision m mevents session)))
+                         (when rev
+                           (push (list "edit" (mem-name m) session "" (om::redact-secrets (second rev))) out)))))))))))
+    (dolist (line (read-usage-lines dir))
+      (let ((event (ul-event line)))
+        (cond ((or (string= event "layer-forget-staged") (string= event "layer-rollback-staged"))
+               (let ((c (if (string= event "layer-rollback-staged")
+                            (list "layer rollback" "" (ul-session line) (ul-model line) (ul-record line))
+                            (list "layer forget" (if (om::has-prefix (ul-name line) "layer:") (subseq (ul-name line) 6) (ul-name line))
+                                  (ul-session line) (ul-model line) ""))))
+                 (unless (member c layer :test #'equal) (setf layer (append layer (list c))))))
+              ((or (string= event "layer-forget") (string= event "layer-rollback"))
+               (setf layer (remove-if (lambda (have)
+                                        (and (string= (fourth have) (ul-model line))
+                                             (or (and (string= event "layer-rollback") (string= (first have) "layer rollback"))
+                                                 (and (string= event "layer-forget") (string= (first have) "layer forget")
+                                                      (string= (concatenate 'string "layer:" (second have)) (ul-name line))))))
+                                      layer))))))
+    (append (nreverse out) layer)))
+
+(defparameter +layer-rollback-key+ "layer:rollback")
 
 (defparameter +max-forgets-per-quote+ 3 "curated.MaxForgetsPerQuote.")
 
@@ -446,13 +552,14 @@ of the write's string arguments; a key absent is an argument not given."
          (when (arg-p args "body")
            (setf edit (list* :body (arg args "body") edit)))
          (unless edit (fail "nothing to change: give a new type, description or body"))
-         (let ((m (apply #'update-memory dir name (cc-project c) (cc-source c) edit)))
-           (format nil "Updated memory ~A [~A]: ~A" (mem-name m) (mem-type m) (mem-description m)))))
+         (multiple-value-bind (quote quoted) (gate-quote args "edit")
+           (let ((m (handler-case (read-in dir name (cc-project c)) (curated-error () nil))))
+             (if (and m (seen-by-p m (cc-source c)) (not (and (mem-staged m) (= 1 (length (mem-staged-by m))))))
+                 (edit-shared c m edit quote quoted)
+                 (let ((m (apply #'update-memory dir name (cc-project c) (cc-source c) edit)))
+                   (format nil "Updated memory ~A [~A]: ~A" (mem-name m) (mem-type m) (mem-description m))))))))
       ((string= op "forget")
-       (let ((quote (when (arg-p args "quote")
-                      (handler-case (normalize-quote (arg args "quote"))
-                        (curated-error (e)
-                          (fail "~A" (replace-first (curated-error-message e) "feedback needs" "forget's quote needs")))))))
+       (let ((quote (gate-quote args "forget")))
        (handler-case
            (let ((m (handler-case (read-in dir name (cc-project c)) (curated-error () nil))))
              (cond ((and m (not (seen-by-p m (cc-source c)))) (error 'not-found))
@@ -491,19 +598,45 @@ of the write's string arguments; a key absent is an argument not given."
                      (t text)))))))
       (t (fail "unknown memory write ~A" (q op))))))
 
+(defun gate-quote (args what)
+  "curated.GateQuote: (values normalized-quote quoted), the quote nil when none was given."
+  (if (arg-p args "quote")
+      (values (handler-case (normalize-quote (arg args "quote"))
+                (curated-error (e)
+                  (fail "~A" (replace-first (curated-error-message e) "feedback needs" (concatenate 'string what "'s quote needs")))))
+              t)
+      (values nil nil)))
+
+(defun covers (c quote)
+  "Call.Covers: (values ok reason), quote nil when none was given."
+  (cond ((null quote) (values nil "no user's words ask for it"))
+        ((not (user-quoted-p c quote)) (values nil "the quote is not a user's words in this conversation"))
+        ((>= (quoted-changes (cc-dir c) quote) +max-forgets-per-quote+)
+         (values nil (format nil "the quote already confirmed ~D changes, the most one quote confirms; more changes need the user's words for each" +max-forgets-per-quote+)))
+        (t (values t ""))))
+
 (defun forget-shared (c m quote)
-  "Call.forgetShared: retired for every session on a user's words (at most
-+max-forgets-per-quote+ per quote), else hidden in this session and staged."
-  (let ((dir (cc-dir c)) (name (mem-name m)) (reason "no user's words ask for it"))
-    (when quote
-      (setf reason "the quote is not a user's words in this conversation")
-      (when (user-quoted-p c quote)
-        (if (< (quoted-forgets dir quote) +max-forgets-per-quote+)
-            (progn (forget-memory* dir name (cc-project c) :quote quote)
-                   (return-from forget-shared (format nil "Forgot memory ~A." name)))
-            (setf reason (format nil "the quote already forgot ~D memories, the most one quote forgets; a forget of more needs the user's words for each" +max-forgets-per-quote+)))))
-    (stage-forget dir name (cc-project c) (cc-source c))
-    (format nil "Hid memory ~A in this session and staged its forget: ~A, so other sessions still see it. Forgetting it for every session needs words copied verbatim from a user message asking for it, quoted with the forget." name reason)))
+  "Call.forgetShared: retired for every session on a user's words that cover one more change,
+else hidden in this session and staged."
+  (let ((dir (cc-dir c)) (name (mem-name m)))
+    (multiple-value-bind (ok reason) (covers c quote)
+      (when ok
+        (forget-memory* dir name (cc-project c) :quote quote)
+        (return-from forget-shared (format nil "Forgot memory ~A." name)))
+      (stage-forget dir name (cc-project c) (cc-source c))
+      (format nil "Hid memory ~A in this session and staged its forget: ~A, so other sessions still see it. Forgetting it for every session needs words copied verbatim from a user message asking for it, quoted with the forget." name reason))))
+
+(defun edit-shared (c m edit quote quoted)
+  "Call.editShared: made for every session on a user's words that cover one more change, else
+made in this session only and staged."
+  (declare (ignore quoted))
+  (let ((dir (cc-dir c)))
+    (multiple-value-bind (ok reason) (covers c quote)
+      (if ok
+          (let ((u (apply #'update-memory dir (mem-name m) (cc-project c) (cc-source c) :quote quote edit)))
+            (format nil "Updated memory ~A [~A]: ~A" (mem-name u) (mem-type u) (mem-description u)))
+          (let ((s (apply #'stage-edit dir (mem-name m) (cc-project c) (cc-source c) edit)))
+            (format nil "Changed memory ~A [~A] in this session only and staged the edit: ~A, so other sessions still see it as it was. Changing it for every session needs words copied verbatim from a user message asking for it, quoted with the edit." (mem-name s) (mem-type s) reason))))))
 
 (defun quoted-in-p (texts quote)
   "omhost.quotedIn over texts: quote, whitespace collapsed and case ignored, in one of them."

@@ -238,18 +238,30 @@
       (om::check (ldef-name d) "test-double"))))
 
 (om::deftest layer-through-the-memory-tool
-  (let ((*layer-root* (test-dir "layer4")) (model "acme/tool"))
+  (let ((*layer-root* (test-dir "layer4")) (model "acme/tool") (dir (test-dir "layer4-curated"))
+        (branch (vector (msg "u1" "user" "Forget the rank-notes definition and roll the layer back to the start."))))
     (let ((r (run "(define rank-notes (notes words) (reverse notes))" :model model)))
       (om::check (tool-result-error r) nil)
       (om::check (om::has-prefix (tool-result-text r) "Held definition rank-notes for acme/tool") t))
     (om::check (tool-result-text (run "(layer)" :model model))
                (format nil "(\"held rank-notes ~A\" \"generation 1\")" (digest "(define rank-notes (notes words) (reverse notes))")))
-    (om::check (tool-result-text (run "(layer-forget 'rank-notes)" :model model))
+    ;; without the user's words a forget or rollback is staged and changes nothing
+    (om::check (tool-result-text (run "(layer-forget 'rank-notes)" :model model :curated dir :branch branch))
+               "Staged the forget of rank-notes from acme/tool's layer: no user's words ask for it, so the layer is unchanged for every session, this one included, and /om:status lists the staged forget. Forgetting it needs words copied verbatim from a user message asking for it, quoted with the forget.")
+    (om::check (search "the quote is not a user's words"
+                       (tool-result-text (run "(layer-rollback 0 :quoting \"roll your memory back now\")" :model model :curated dir :branch branch)))
+               (length "Staged the rollback of acme/tool's layer to generation 0: "))
+    (om::check (tool-result-error (run "(layer-forget 'rank-notes)" :model model)) "curated memory is off")
+    (om::check (layer-generations model) 1)
+    (om::check (mapcar #'staged-change-string (staged-changes dir ""))
+               '("layer forget acme/tool adaptable/rank-notes ()" "layer rollback acme/tool to generation 0 ()"))
+    (om::check (tool-result-text (run "(layer-forget 'rank-notes :quoting \"Forget the rank-notes definition\")" :model model :curated dir :branch branch))
                "Forgot rank-notes from acme/tool's layer (generation 2); the default stands.")
     (om::check (tool-result-error (run "(let ((x 1)) (define rank-notes (n w) n))" :model model))
                "(define rank-notes ...) is a top-level form of the memory tool")
-    (om::check (tool-result-text (run "(layer-rollback 0)" :model model))
+    (om::check (tool-result-text (run "(layer-rollback 0 :quoting \"roll the layer back to the start\")" :model model :curated dir :branch branch))
                "Rolled acme/tool's layer back to generation 0 (generation 3).")
+    (om::check (staged-changes dir "") '())
     ;; the manifest's lines carry the schema's members
     (let ((lines (read-manifest model)))
       (om::check (mapcar (lambda (g) (gethash "op" g)) lines) '("hold" "forget" "rollback"))
@@ -300,8 +312,14 @@
       (om::check (curated-run (make-curated-call :dir dir :project "/work" :source "s2") "save"
                               (args "name" "proj" "type" "project" "description" "builds  WITH make" "scope" "project"))
                  "Staged memory proj [project] (this project): Builds with make. Another session staged the same memory, but not from other source content it quotes, so it is no independent evidence: it stays staged until a user's words (feedback name=proj outcome=helped quote=\"...\"), a compaction citing it, or a session quoting other tool output confirms it.")
-      (om::check (curated-run c "edit" (args "name" "tea" "description" "Drinks green tea daily" "type" ""))
+      ;; an edit of a memory other sessions see needs the user's words asking for it
+      (om::check (curated-run c "edit" (args "name" "tea" "body" "Sencha."))
+                 "Changed memory tea [user] in this session only and staged the edit: no user's words ask for it, so other sessions still see it as it was. Changing it for every session needs words copied verbatim from a user message asking for it, quoted with the edit.")
+      (om::check (mem-body (get-as dir "tea" "/work" "s1")) "Sencha.")
+      (om::check (mem-body (get-as dir "tea" "/work" "s2")) "")
+      (om::check (curated-run c "edit" (args "name" "tea" "description" "Drinks green tea daily" "type" "" "quote" "drink green tea in the morning"))
                  "Updated memory tea [user]: Drinks green tea daily")
+      (om::check (mem-body (get-as dir "tea" "/work" "s1")) "")
       (om::check (nth-value 1 (curated-run c "edit" (args "name" "tea" "type" " "))) "nothing to change: give a new type, description or body")
       (om::check (curated-run c "feedback" (args "name" "tea" "outcome" "helped" "quote" "drink green tea"))
                  "Recorded that memory tea helped.")
@@ -318,7 +336,7 @@
       (om::check (mapcar #'mem-name (list-memories dir "/work")) '("proj"))
       (om::check (mapcar #'mem-name (list-memories dir "/elsewhere")) '()))
     (om::check (mapcar (lambda (g) (gethash "event" g)) (read-model-events (usage-path dir)))
-               '("save" "save" "staged" "edit" "helped" "forget-staged" "forget"))
+               '("save" "save" "staged" "edit-staged" "edit" "helped" "forget-staged" "forget"))
     (om::check (first (om::split (read-file (usage-path dir)) (string #\Newline)))
                "{\"time\":\"2026-11-01T12:00:00Z\",\"name\":\"tea\",\"event\":\"save\"}")
     ;; a file with a field no memory takes is refused on load, and listed nowhere

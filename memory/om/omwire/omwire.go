@@ -143,6 +143,7 @@ type EditOptions struct {
 	Type        *string `json:"type,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Body        *string `json:"body,omitempty"`
+	Quoting     *string `json:"quoting,omitempty"`
 }
 
 // ErrBadArgs is wrapped by the host's answer to a call whose arguments do not decode into its

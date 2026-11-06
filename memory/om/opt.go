@@ -177,7 +177,7 @@ func mergeOpts(opts []Opt) omwire.Options {
 	return m
 }
 
-// SaveOpt is an option of Save; ForgetMemory takes only Quoting.
+// SaveOpt is an option of Save; the forgets and LayerRollback take only Quoting.
 type SaveOpt struct{ w omwire.SaveOptions }
 
 // Body sets the memory's body.
@@ -186,7 +186,7 @@ func Body(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Body: &text}}
 // Scope sets where the memory applies: "global" or "project".
 func Scope(scope string) SaveOpt { return SaveOpt{omwire.SaveOptions{Scope: &scope}} }
 
-// Quoting gives the user's words that confirm the memory, which saves it live, or that ask to forget it, which forgets it for every session.
+// Quoting gives the user's words confirming the save, or asking for the forget or rollback.
 func Quoting(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Quoting: &text}} }
 
 func mergeSave(opts []SaveOpt) omwire.SaveOptions {
@@ -217,6 +217,9 @@ func SetDescription(text string) EditOpt { return EditOpt{omwire.EditOptions{Des
 // SetBody changes the memory's body.
 func SetBody(text string) EditOpt { return EditOpt{omwire.EditOptions{Body: &text}} }
 
+// EditQuoting gives the user's words asking for the edit.
+func EditQuoting(text string) EditOpt { return EditOpt{omwire.EditOptions{Quoting: &text}} }
+
 func mergeEdit(opts []EditOpt) omwire.EditOptions {
 	var m omwire.EditOptions
 	for _, o := range opts {
@@ -228,6 +231,9 @@ func mergeEdit(opts []EditOpt) omwire.EditOptions {
 		}
 		if o.w.Body != nil {
 			m.Body = o.w.Body
+		}
+		if o.w.Quoting != nil {
+			m.Quoting = o.w.Quoting
 		}
 	}
 	return m

@@ -1,18 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Curated usage ledger line",
-  "description": "One line of <store>/usage.jsonl, the curated store's append-only usage ledger: every view, save, edit, forget and helped or harmed sighting of a memory, by name; the index ranks memories by it. Source: memory/curated/store.go (usageLine, appendUsage, Usage, the Event constants).",
+  "description": "One line of <store>/usage.jsonl, the curated store's append-only usage ledger: every view, save, edit, forget and helped or harmed sighting of a memory, by name; the index ranks memories by it. It also keeps docs/brain-memory.md decision 2's gate on changes to shared memory: a forget or edit staged in its own session, and a layer forget or rollback, confirmed on a user's words or staged, under the name layer:<kind>/<name> or layer:rollback (curated.LayerKey, LayerRollbackKey). Source: memory/curated/store.go (usageLine, appendUsage, Usage, the Event constants) and memory/curated/gate.go.",
   "type": "object",
   "required": ["time", "name", "event"],
   "additionalProperties": false,
   "properties": {
     "time": { "description": "RFC 3339, UTC, whole seconds.", "type": "string" },
     "name": { "type": "string", "minLength": 1 },
-    "event": { "enum": ["view", "save", "edit", "forget", "helped", "harmed", "indexed", "staged", "cited", "corrected", "promoted", "forget-staged", "released"] },
-    "quote": { "description": "A helped or harmed event's evidence, the user's words a forget retired the memory on, or the user's words a released event restated a held memory with.", "type": "string" },
-    "user": { "description": "A helped, forget or released event whose quote is a user's words.", "type": "boolean" },
-    "record": { "description": "The record a corrected, cited or promoted event names.", "type": "string" },
-    "session": { "description": "The session of a staging (the save or staged event of a staged memory) or of a forget-staged event, which hides the memory in that session only, or of a released event, which shows a held memory (one that weakens security, contracts/insecure.md) in that session only.", "type": "string" },
+    "event": { "enum": ["view", "save", "edit", "forget", "helped", "harmed", "indexed", "staged", "cited", "corrected", "promoted", "forget-staged", "released", "edit-staged", "layer-forget", "layer-forget-staged", "layer-rollback", "layer-rollback-staged"] },
+    "quote": { "description": "A helped or harmed event's evidence, the user's words a forget retired the memory on, an edit or a layer forget or rollback was made on for every session (at most curated.MaxForgetsPerQuote of these per quote), or the user's words a released event restated a held memory with.", "type": "string" },
+    "user": { "description": "A helped, forget, edit, layer-forget, layer-rollback or released event whose quote is a user's words.", "type": "boolean" },
+    "record": { "description": "The record a corrected, cited or promoted event names, or a layer rollback's target generation.", "type": "string" },
+    "session": { "description": "The session of a staging (the save or staged event of a staged memory), of a forget-staged event, which hides the memory in that session only, of an edit-staged event, which changes it in that session only, of a layer change, or of a released event, which shows a held memory (one that weakens security, contracts/insecure.md) in that session only.", "type": "string" },
+    "model": { "description": "The model whose layer a layer-forget, layer-forget-staged, layer-rollback or layer-rollback-staged event acts on.", "type": "string", "minLength": 1 },
+    "revision": {
+      "description": "An edit-staged event's content: the memory's type, description and body as the edit left them in its session (curated.PendingRevision), redacted.",
+      "type": "object",
+      "required": ["type", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string" },
+        "description": { "type": "string" },
+        "body": { "type": "string" }
+      }
+    },
     "source": { "description": "A staging's source digest: sha256 hex of the tool output its quote comes from, whitespace collapsed (curated.SourceDigest); two sessions' stagings are independent evidence only when their digests differ.", "type": "string" }
   }
 }

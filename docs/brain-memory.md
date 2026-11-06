@@ -41,10 +41,14 @@ These are the owner's, accepted as the report recommended:
    is set arithmetic with no model call. Re-asking the model is never an erasure path. A level-1
    merge never rewords status-bearing text. Retractions, forget records and erasure tombstones are
    permanent.
-2. **A forget that reaches shared memory needs a user quote or code evidence** (a scanner rule, a
-   path gone). A quote-less forget hides the item in its own session at once and is staged for
-   shared memory. A forget naming more than a small number of items needs item-by-item
-   confirmation.
+2. **A change that reaches shared memory needs a user quote or code evidence** (a scanner rule, a
+   path gone). The gate covers a forget and an edit of a curated memory other sessions see, and a
+   forget and a rollback of a model's layer. A quote-less change, or one quoting words no user
+   wrote, is staged for shared memory: a forget hides the item in its own session at once, an
+   edit overrides it there at once (other sessions keep the old content), and a layer change
+   changes nothing until confirmed. `/om:status` lists what is staged. One quote confirms a small
+   number of changes (`curated.MaxForgetsPerQuote`, 3); more need item-by-item confirmation.
+   A rule stays the harness's, whatever the quote.
 3. **Memory spaces in the one image, plus child processes for batch work.** Separate processes per
    session are revisited only with measurements of real-session heap and GC.
 4. **Memory is delivered at compaction, plus append-only cues** on harnesses whose hooks allow them
@@ -174,7 +178,7 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
 | Phase | Contents | Gate |
 |---|---|---|
 | 0. Measure | Tier 0 generator, invariants and controls (retention after 1/2/4/8/16/20 compactions by class, zero model calls), with a summary-of-summary arm for the erosion curve; Compact-Bench's no-model tracks wired to level 0; a judge harness with decoys, a judge from another model family and the controls and ship rule of decision 21; a no-op definition replayed at `MinEvidence`; forgetting and sharing suites; MERIT, a cut-down StaminaBench grid, the CTXAgent benchmark, the public Pi session datasets as a no-model level-0 track (sessions recorded on `earendil-works/pi`, licences checked per session) with SWE-Together for task replay, LoCoEval, and AgentLeak and CoSec for leakage; ReqMemBench and HSC-Bench on watch; the scenario tests below | Baseline curves and Compact-Bench figures recorded; the A-versus-A flip floor, the no-op settle rate and the minimum detectable effect reported |
-| 1. Safety fixes | `ForgetMemory` quote gate with session-local staging; an independence check on cross-session staging evidence; secret scan and redaction at append, curated write and render; role-label escaping; origin as the minimum through level-1 merges; holding security-weakening preferences (`contracts/insecure.md`: held records and memories kept, listed in `/om:status`, never rendered, indexed or promoted, shown only in a session whose user's quoted words restate them); "unverified" framing in the index and summary header and the tool's guidelines (`ledger.UnverifiedNotice`) | Scenarios 10–13, 18 and 25 pass (done for the forms first written; the newer variants of 11, 13 and 18 are open) |
+| 1. Safety fixes | The quote gate on `ForgetMemory`, `Edit`, `LayerForget` and `LayerRollback` (decision 2), with session-local staging listed in `/om:status`; an independence check on cross-session staging evidence; secret scan and redaction at append, curated write and render; role-label escaping; origin as the minimum through level-1 merges; holding security-weakening preferences (`contracts/insecure.md`: held records and memories kept, listed in `/om:status`, never rendered, indexed or promoted, shown only in a session whose user's quoted words restate them); "unverified" framing in the index and summary header and the tool's guidelines (`ledger.UnverifiedNotice`) | Scenarios 10–13, 18 and 25 pass (done for the forms first written; the newer variants of 11, 13 and 18 are open) |
 | 2. Encoding | `source`, `authority`, `hedge`, `keys`, `writer`, `scope`, `timeHint` fields; adapter-supplied repo, branch and HEAD; tool-output values and evidence; assistant pushback kept beside user claims; claim records and scoped permissions (decision 23); missing rule verbs and team forms; episodes started only at a person-typed request, with test results as fields (decision 22); failed attempts as command, normalized error class and `resolvedBy`; procedures with preconditions, outcome, confirming test and a lifecycle; `timeHint` as `mentionedAt` plus a code-resolved `eventDate` where unambiguous, keeping the phrase and entry order; repo-config conventions as anchored observations | Golden regenerated; scenarios 2, 7, 24, 27 and 29 move; boundary density reported against the evenly spaced baseline |
 | 3. Working memory and trigger | Slot records rendered in `intent`/`next`, with the resolved constraint set after the summary body and finished items shown with their receipts; `closedBy` receipts (a tool receipt; a line unique to X for "read file X"); `derivedFrom` captured at write time, with staleness detected from stored state toward the plan; per-model caps; the raw floor, and the quality trigger shipped off | Scenarios 3, 4 and 21–23, absences scored by code; ConstraintRot rebuild; ARCBench run |
 | 4. Retrieval and project knowledge | Exact key index and the tokenizer contract in `protocol.md`: the whole token always, plus lowercased sub-tokens for camelCase and mixed tokens, path separators kept inside tokens; versions, SHAs and normalized error lines go to the exact index only, never to BM25; two-level RRF (k = 60), contiguous neighbours merged into one result, links that only expand lexical hits; status and as-of filters applied before top-k, the label shown with each hit, revocation enforced on read; fold checkpoints; a HEAD structure view cached by commit; per-repo project records with freshness verdicts (decision 20) | Tier 1 gains, no Tier 0 regression; scenarios 26, 35 and 36 |
@@ -205,11 +209,13 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
 
 - **Forgetting (Tier 0b): recorded** ([brain-memory-baseline.md](brain-memory-baseline.md),
   "Tier 0b"; `go run ./cmd/memeval -suite forgetting`).
-  - Holding: injected forgets are staged and leave shared memory; nothing injected is promoted;
-    no protected class is lost in 20 compactions; a retracted source takes its merge out.
+  - Holding: injected forgets and edits are staged and leave shared memory; injected layer
+    forgets and rollbacks are staged and leave the model's layer and its generations; nothing
+    injected is promoted; no protected class is lost in 20 compactions; a retracted source takes
+    its merge out.
+  - Closed since the first run: decision 2's gate now covers edits and layer forgets and
+    rollbacks (`TestInjectedOverwriteLeavesSharedMemory`, `TestInjectedLayerForgetLeavesLayer`).
   - Findings, each a skipped test naming its phase:
-    - an injected edit overwrites shared memory (phase 7);
-    - an injected layer forget or rollback changes the model's layer (phase 5);
     - a layer write keeps a secret (phase 8);
     - the merge's other source does not reappear (phase 5).
   - Two secret leaks fixed in Go and Lisp: level 1's projection in the compaction details, and

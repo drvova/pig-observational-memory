@@ -346,9 +346,10 @@ skip), so text the model printed through it is no source."
   "Saves a curated memory, staged unless quoting gives the user's confirming words."
   (run-write "save" "name" name "type" type "description" description "body" body "scope" scope "quote" quoting))
 
-(defun om.tool:edit (name &key type description body)
-  "Changes a curated memory; it never pins one."
-  (run-write "edit" "name" name "type" type "description" description "body" body))
+(defun om.tool:edit (name &key type description body quoting)
+  "Changes a curated memory for every session when quoting gives a user's words asking for it;
+without them it changes the memory in this session only and stages the edit. It never pins one."
+  (run-write "edit" "name" name "type" type "description" description "body" body "quote" quoting))
 
 (defun om.tool:forget-memory (name &key quoting)
   "Forgets a curated memory for every session when quoting gives a user's words asking for it;
@@ -378,17 +379,46 @@ without them it hides the memory in this session only and stages the forget."
             (mapcar (lambda (r) (format nil "refused ~A" r)) (loaded-reports l))
             (list (format nil "generation ~D" (layer-generations model))))))
 
-(defun om.tool:layer-forget (name)
-  "Forgets the session model's definition of the adaptable function: the default stands now."
-  (let* ((model (model-of-call)) (gen (handler-case (layer-forget model (name-of name))
-                                        (refused (e) (tool-fail "~A" (refused-reason e))))))
-    (format nil "Forgot ~A from ~A's layer (generation ~D); the default stands." (name-of name) model gen)))
+(defun layer-gate (quoting what)
+  "The quote gate on a layer change (layerWriter.gate): (values quote ok reason) over the curated
+store's usage ledger, which counts the user's words; with curated memory off nothing is changed
+or staged."
+  (let ((c (write-call)) (args (make-hash-table :test 'equal)))
+    (when quoting (setf (gethash "quote" args) (if (stringp quoting) quoting (princ-to-string quoting))))
+    (multiple-value-bind (quote err)
+        (handler-case (values (gate-quote args what) nil) (curated-error (e) (values nil (curated-error-message e))))
+      (when err (tool-fail "~A" err))
+      (multiple-value-bind (ok reason) (covers c quote)
+        (values quote ok reason c)))))
 
-(defun om.tool:layer-rollback (generation)
-  "Makes the session model's layer what it was at the generation (0: every default)."
-  (let* ((model (model-of-call)) (gen (handler-case (layer-rollback model generation)
-                                        (refused (e) (tool-fail "~A" (refused-reason e))))))
-    (format nil "Rolled ~A's layer back to generation ~D (generation ~D)." model generation gen)))
+(defun om.tool:layer-forget (name &key quoting)
+  "Forgets the session model's definition of the adaptable function, the default standing now,
+when quoting gives a user's words asking for it; without them it stages the forget and changes
+nothing."
+  (let ((model (model-of-call)) (name (name-of name)))
+    (unless (layer-holds-p model name) (tool-fail "~A's layer holds no definition of ~A" model name))
+    (multiple-value-bind (quote ok reason c) (layer-gate quoting "layer forget")
+      (unless ok
+        (record-layer-change (cc-dir c) "layer-forget-staged" (layer-key +kind-adaptable+ name) model (cc-source c) nil nil)
+        (return-from om.tool:layer-forget
+          (format nil "Staged the forget of ~A from ~A's layer: ~A, so the layer is unchanged for every session, this one included, and /om:status lists the staged forget. Forgetting it needs words copied verbatim from a user message asking for it, quoted with the forget." name model reason)))
+      (let ((gen (handler-case (layer-forget model name) (refused (e) (tool-fail "~A" (refused-reason e))))))
+        (record-layer-change (cc-dir c) "layer-forget" (layer-key +kind-adaptable+ name) model (cc-source c) quote nil)
+        (format nil "Forgot ~A from ~A's layer (generation ~D); the default stands." name model gen)))))
+
+(defun om.tool:layer-rollback (generation &key quoting)
+  "Makes the session model's layer what it was at the generation (0: every default) when quoting
+gives a user's words asking for it; without them it stages the rollback and changes nothing."
+  (let ((model (model-of-call)))
+    (handler-case (check-rollback-target model generation) (refused (e) (tool-fail "~A" (refused-reason e))))
+    (multiple-value-bind (quote ok reason c) (layer-gate quoting "layer rollback")
+      (unless ok
+        (record-layer-change (cc-dir c) "layer-rollback-staged" +layer-rollback-key+ model (cc-source c) nil generation)
+        (return-from om.tool:layer-rollback
+          (format nil "Staged the rollback of ~A's layer to generation ~D: ~A, so the layer is unchanged for every session, this one included, and /om:status lists the staged rollback. Rolling it back needs words copied verbatim from a user message asking for it, quoted with the rollback." model generation reason)))
+      (let ((gen (handler-case (layer-rollback model generation) (refused (e) (tool-fail "~A" (refused-reason e))))))
+        (record-layer-change (cc-dir c) "layer-rollback" +layer-rollback-key+ model (cc-source c) quote generation)
+        (format nil "Rolled ~A's layer back to generation ~D (generation ~D)." model generation gen)))))
 
 (defun om.tool:adaptables ()
   "The adaptable functions a definition may replace, with what each does."

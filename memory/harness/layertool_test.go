@@ -26,7 +26,7 @@ func notified(h *tf.FakeHost, substr string) bool {
 // change is told to the user, om.Layer lists the layer, and a rollback makes the layer what it
 // was. A definition reaches the layer only from level 1 (here written directly).
 func TestMemoryToolHarnessRollbackAndForget(t *testing.T) {
-	h, store, m := session(t)
+	h, store, m := session(t, tf.RawMessage("u2", "Roll the harness back one step, then forget the consolidation instructions."))
 	ls := store.Layer()
 	for _, text := range []string{"Merge one deploy target per line, with its port and its date.", "Merge one deploy target per line, and name the scope that tells two apart."} {
 		if _, err := ls.Put(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: "p/m", Text: text}); err != nil {
@@ -37,7 +37,15 @@ func TestMemoryToolHarnessRollbackAndForget(t *testing.T) {
 	if !strings.Contains(listing.Text, "p/m 2 "+harness.OriginExtends) {
 		t.Fatalf("listing after two writes: %s", listing.Text)
 	}
-	r := codeOK(t, h, m, `fmt.Print(om.LayerRollback(1))`)
+	// Without the user's words a rollback is staged and changes nothing (docs/brain-memory.md,
+	// decision 2).
+	if r := codeOK(t, h, m, `fmt.Print(om.LayerRollback(1))`); !strings.HasPrefix(r.Text, "Staged the rollback of p/m's harness to generation 1") {
+		t.Fatalf("a rollback without the user's words: %s", r.Text)
+	}
+	if d, err := ls.Get("p/m", layer.KindInstructions, "consolidation"); err != nil || !strings.Contains(d.Text, "name the scope") {
+		t.Fatalf("a staged rollback changed the layer: %+v %v", d, err)
+	}
+	r := codeOK(t, h, m, "fmt.Print(om.LayerRollback(1, om.Quoting(`Roll the harness back one step`)))")
 	if !strings.Contains(r.Text, "rolled back to generation 1") || !strings.Contains(r.Text, "p/m") {
 		t.Fatalf("rollback: %s", r.Text)
 	}
@@ -50,7 +58,7 @@ func TestMemoryToolHarnessRollbackAndForget(t *testing.T) {
 	if r := codeOK(t, h, m, `_, err := om.LayerRollback(99); fmt.Print(err)`); !strings.Contains(r.Text, "does not exist") {
 		t.Fatalf("rollback past the manifest: %s", r.Text)
 	}
-	r = codeOK(t, h, m, `fmt.Print(om.LayerForget("instructions", "consolidation"))`)
+	r = codeOK(t, h, m, "fmt.Print(om.LayerForget(`instructions`, `consolidation`, om.Quoting(`forget the consolidation instructions`)))")
 	if !strings.Contains(r.Text, "seed instructions/consolidation stands again") || !notified(h, "forgot instructions/consolidation") {
 		t.Fatalf("forget: %s", r.Text)
 	}

@@ -151,14 +151,14 @@ func Save(name, typ, description string, opts ...SaveOpt) (string, error) {
 	return s, err
 }
 
-// Edit changes a curated memory; it never pins one.
+// Edit changes a curated memory for every session on EditQuoting's user words, else in this session only (staged); it never pins one.
 func Edit(name string, opts ...EditOpt) (string, error) {
 	var s string
 	err := call(omwire.MEdit, &s, name, mergeEdit(opts))
 	return s, err
 }
 
-// ForgetMemory forgets a curated memory for every session when Quoting gives a user's words asking for it; without them it hides the memory in this session only and stages the forget.
+// ForgetMemory forgets a curated memory for every session on Quoting's user words, else hides it in this session only (staged).
 func ForgetMemory(name string, opts ...SaveOpt) (string, error) {
 	var s string
 	err := call(omwire.MForgetMemory, &s, name, mergeSave(opts))
@@ -172,17 +172,17 @@ func Feedback(name, outcome, quote string) (string, error) {
 	return s, err
 }
 
-// LayerForget forgets one definition from the session model's layer; never a rule.
-func LayerForget(kind, name string) (string, error) {
+// LayerForget forgets a definition from the session model's layer on Quoting's user words, else only stages it; never a rule.
+func LayerForget(kind, name string, opts ...SaveOpt) (string, error) {
 	var s string
-	err := call(omwire.MLayerForget, &s, kind, name)
+	err := call(omwire.MLayerForget, &s, kind, name, mergeSave(opts))
 	return s, err
 }
 
-// LayerRollback makes the session model's layer what it was at generation gen (0 is before its first change, every seed standing); never a rule.
-func LayerRollback(gen int) (string, error) {
+// LayerRollback makes the session model's layer what it was at generation gen (0: before its first change) on Quoting's user words, else only stages it; never a rule.
+func LayerRollback(gen int, opts ...SaveOpt) (string, error) {
 	var s string
-	err := call(omwire.MLayerRollback, &s, gen)
+	err := call(omwire.MLayerRollback, &s, gen, mergeSave(opts))
 	return s, err
 }
 

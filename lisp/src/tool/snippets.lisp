@@ -20,6 +20,7 @@
     ("<body>" . "the memory's text: why it holds and how to apply it")
     ("<outcome>" . "helped or harmed")
     ("<quote>" . "the user's or assistant's words that show it")
+    ("<the user's words>" . "words copied verbatim from a user message asking for the change")
     ("<string name>" . "a name from the strings argument")
     ("<definition>" . "a kept definition's name, as kept() lists it"))
   "om.placeholderWhat: each placeholder of the fixed texts and what goes in its place.")

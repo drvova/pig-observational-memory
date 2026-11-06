@@ -232,6 +232,7 @@ func lispTextsAsGo(t *testing.T, flow string) string {
 		"om.Recall(`<name>`)", `(recall "<name>")`,
 		"om.Saved(om.Search(`<words>`))", `(saved :search "<words>")`,
 		"om.Save(`<name>`, `<type>`, `<description>`, om.Body(`<body>`))", `(save "<name>" "<type>" "<description>" :body "<body>")`,
+		"om.EditQuoting or om.Quoting", ":quoting",
 		"om.Edit", "edit", "om.ForgetMemory", "forget-memory", "om.Quoting", ":quoting",
 		"om.Feedback(`<name>`, `<outcome>`, `<quote>`)", `(feedback "<name>" "<outcome>" "<quote>")`,
 	)

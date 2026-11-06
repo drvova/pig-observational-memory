@@ -143,7 +143,7 @@ func TestForgetManyNeedsItemByItem(t *testing.T) {
 		if want := i <= MaxForgetsPerQuote; want != (text == "Forgot memory "+name+".") {
 			t.Fatalf("forget %d: %s", i, text)
 		}
-		if i > MaxForgetsPerQuote && !strings.Contains(text, "the most one quote forgets") {
+		if i > MaxForgetsPerQuote && !strings.Contains(text, "the most one quote confirms") {
 			t.Fatalf("forget %d: %s", i, text)
 		}
 	}
