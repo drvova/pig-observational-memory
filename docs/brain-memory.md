@@ -107,6 +107,21 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
 | 7. Transparency and sleep | `/om:view` per-record provenance, scope, lifecycle and "used"; `/om:status` aggregates; quote-gated correction as supersession; child-SBCL idle sleep with a compaction fallback and repository verification | A/B on Tiers 1 and 2; request count unchanged |
 | 8. Delivery and dreams | Cues for `om` harnesses with PostToolUse; diff-chain `revision` records; an optional dream section after its A/B; erasure | DreamBench-SWE bar; false-promotion rate 0 |
 
+### Phase 0 status: benches
+
+- **Compact-Bench, no-model tracks: recorded** (`docs/bench-results.md`, "Compact-Bench"; run with
+  `cd memory && go run ./cmd/compactbench retention|production -data DIR`). Level 0 plus
+  `selection.Render` keeps 21.8% of the recurring details at a 16,384-token budget (23.0% at its own
+  budget), against the paper's 79.1% for mechanical extraction and at most 16.0% for model-written
+  summaries; the details lost are mostly those only a tool's output holds. The production-chain
+  track cannot be replayed: the release has no history before its boundaries, so only its recorded
+  summaries are scored (15.7% at the first boundary, as the paper reports).
+- **Judge harness: built, not yet run** (`bench/longmemeval/judging.py`, `lme.py judge` and
+  `lme.py compare`; `docs/bench-results.md`, "Judge harness"). A configured judge from another
+  family, three runs with majority vote, code scoring first, 12 + 12 controls and four decoy
+  classes per pass (void above 1 of 12 accepted), paired gained and lost with McNemar and a
+  bootstrap interval, a both-passed control set and the ship rule. Tested with scripted judges only.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (26 in all). The full catalogue, with its evidence, is in the
