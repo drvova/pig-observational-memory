@@ -107,6 +107,9 @@ func TestFailoverBeforeTheEngineActed(t *testing.T) {
 	if len(lines) != 2 || !strings.Contains(lines[0], "event/turnEnd: not ported") || !strings.Contains(lines[1], "event/sessionStart: not ported") {
 		t.Fatalf("log %q", lines)
 	}
+	if n := c.Failovers(); n != 2 {
+		t.Fatalf("%d failovers counted, want 2", n)
+	}
 
 	// A stale build is a failure to start: everything runs on the fallback.
 	stale := enginerpc.NewClient(primary.dialer(), enginerpc.InitializeParams{})
@@ -118,6 +121,9 @@ func TestFailoverBeforeTheEngineActed(t *testing.T) {
 	}
 	if got := fallback.received(); got[len(got)-1] != enginerpc.MethodAgentStart {
 		t.Fatalf("the fallback ran %q", got)
+	}
+	if n := stale.Failovers(); n != 1 {
+		t.Fatalf("%d failovers counted on the stale image, want 1", n)
 	}
 
 	// An engine that cannot be reached, without a fallback, is the dial's error.

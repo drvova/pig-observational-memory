@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
 )
 
@@ -25,6 +26,12 @@ const fakeImageEnv = "OM_TEST_FAKE_IMAGE"
 func TestMain(m *testing.M) {
 	if os.Getenv(fakeImageEnv) == "1" {
 		os.Exit(runFakeImage(os.Args[1:]))
+	}
+	// The suites assume the Go engine unless a test chooses the image: the image is the default
+	// only where sbcl can build it, which no test may depend on. OM_ENGINE=lisp in the
+	// environment runs them on the image (the switch gate, docs/lisp-core.md).
+	if os.Getenv(EngineEnv) == "" {
+		os.Setenv(EngineEnv, config.EngineGo)
 	}
 	os.Exit(m.Run())
 }
@@ -65,11 +72,21 @@ func serveFake(ln net.Listener, answer fakeAnswer, mu *sync.Mutex, log *[]fakeRe
 				if json.Unmarshal(line, &req) != nil {
 					return
 				}
-				mu.Lock()
-				*log = append(*log, fakeRequest{req.Method, req.Params})
-				mu.Unlock()
 				resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
-				if req.Method == "image/stop" {
+				if req.Method != "initialize" {
+					mu.Lock()
+					*log = append(*log, fakeRequest{req.Method, req.Params})
+					mu.Unlock()
+				}
+				if req.Method == "initialize" {
+					// The client's build check (not logged): the embedded sources' id, else
+					// OM_TEST_FAKE_BUILD's.
+					build := lispimage.BuildID()
+					if b := os.Getenv("OM_TEST_FAKE_BUILD"); b != "" {
+						build = b
+					}
+					resp["result"] = map[string]any{"protocolVersion": 1, "buildId": build}
+				} else if req.Method == "image/stop" {
 					resp["result"] = map[string]any{}
 				} else if result, code, message := answer(req.Method, req.Params); code != 0 {
 					resp["error"] = map[string]any{"code": code, "message": message}
@@ -202,10 +219,10 @@ func genericFixture(t *testing.T, home string) string {
 	return string(p)
 }
 
-// Without OM_ENGINE=lisp om never touches the socket: the Go engine runs as before.
+// With OM_ENGINE=go (the kill switch) om never touches the socket: the Go engine runs as before.
 func TestLispModeOff(t *testing.T) {
 	root, home := env(t)
-	t.Setenv(EngineEnv, "")
+	t.Setenv(EngineEnv, "go")
 	socket, requests := fakeServer(t, root, defaultFakeAnswer)
 	t.Setenv(LispSocketEnv, socket)
 	p := genericFixture(t, home)
@@ -224,6 +241,7 @@ func TestLispModeOff(t *testing.T) {
 func TestLispForwardsEvents(t *testing.T) {
 	root, home := env(t)
 	t.Setenv(EngineEnv, "lisp")
+	t.Setenv(LispFallbackEnv, "")
 	t.Setenv("PI_OBSERVATIONAL_MEMORY_PASSIVE", "0")
 	socket, requests := fakeServer(t, root, defaultFakeAnswer)
 	t.Setenv(LispSocketEnv, socket)
@@ -357,11 +375,12 @@ func TestLispStartsImage(t *testing.T) {
 	}
 }
 
-// With no image running and none configured, an event runs on the Go engine; with falling back
-// off it fails with what to set.
+// With no image running and none configured (so the embedded build, and no sbcl to build it),
+// an event runs on the Go engine; with falling back off it fails with what to set.
 func TestLispNoImage(t *testing.T) {
 	_, home := env(t)
 	t.Setenv(EngineEnv, "lisp")
+	t.Setenv(LispFallbackEnv, "")
 	t.Setenv(LispImageEnv, "")
 	t.Setenv(LispSocketEnv, "")
 	p := genericFixture(t, home)

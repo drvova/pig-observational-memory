@@ -35,9 +35,10 @@ var goEngineDialer = func() enginerpc.Dialer {
 // model's context.
 var engineLog io.Writer = os.Stderr
 
-// processEngine is the client of the engine process when the user's global settings ask for
-// one (config.ReadEngine: "engine": "process", "enginePath"), started now so a binary that
-// cannot run leaves the extension on the in-process engine; nil otherwise.
+// processEngine is the client of the engine the user's global settings or OM_ENGINE choose
+// (config.ReadEngine): the Lisp image by default (lispEngine), an `om serve` process for
+// "engine": "process" (with "enginePath"), started now so a binary that cannot run leaves the
+// extension on the in-process engine; nil for "go" (the kill switch), the in-process engine.
 func processEngine() *enginerpc.Client {
 	setting := config.ReadEngine(config.DefaultPaths())
 	if setting.Lisp() {
@@ -75,10 +76,12 @@ func initializeParams() enginerpc.InitializeParams {
 	return params
 }
 
-// lispEngine is the client of the user's Lisp engine image ("engine": "lisp",
-// docs/lisp-port-peer.md): the image's socket under the om root ($OM_HOME, else ~/.om), the
-// image to start from OM_LISP_IMAGE, else lispImage in PiG's or the om root's settings, the
-// build id written beside the image required. Each event the image refuses before acting runs
+// lispEngine is the client of the user's Lisp engine image ("engine": "lisp", the default
+// where the image has a transport; docs/lisp-port-peer.md, docs/lisp-core.md "The switch"): the
+// image's socket under the om root ($OM_HOME, else ~/.om), the image to start from
+// OM_LISP_IMAGE, else lispImage in PiG's or the om root's settings, else the build of the
+// embedded sources (built on first use, detached: until it is in place every event runs on the
+// Go engine), the build id it must report required. Each event the image refuses before acting runs
 // on the Go engine, logged once per event; OM_LISP_FALLBACK=0 turns that off. An image that
 // cannot be started now leaves the extension on the in-process engine (with falling back off,
 // the client is kept and every event fails until the image starts).
@@ -89,8 +92,8 @@ func lispEngine(setting config.EngineSetting) *enginerpc.Client {
 		return nil
 	}
 	l := lispimage.FromEnv(root)
-	if os.Getenv(lispimage.ImageEnv) == "" && setting.Image != "" {
-		l.Image = setting.Image
+	if os.Getenv(lispimage.ImageEnv) == "" {
+		l.UseImage(setting.Image)
 	}
 	params := initializeParams()
 	// The image is no child of this process: it reads the client's passive switch from here.
@@ -104,6 +107,12 @@ func lispEngine(setting config.EngineSetting) *enginerpc.Client {
 		client.SetFallback(enginerpc.NewClient(goEngineDialer(), params), engineLog)
 	}
 	if _, err := client.Start(); err != nil {
+		if unavailable, ok := lispimage.IsUnavailable(err); ok && unavailable.Building && fallback {
+			// The image is being built from the embedded sources: events run on the Go engine
+			// until it is in place, then on the image.
+			fmt.Fprintf(engineLog, "observational-memory: engine \"lisp\": %v; events run on the Go engine until it is built\n", err)
+			return client
+		}
 		if fallback {
 			fmt.Fprintf(engineLog, "observational-memory: engine \"lisp\": %v; using the in-process engine\n", err)
 			return nil
@@ -184,7 +193,14 @@ func RegisterProcess(ext *sdk.Extension, client *enginerpc.Client) {
 	ext.RegisterCommand("om:status", sdk.CommandOptions{
 		Description: "Show observational memory status",
 		Handler: func(ctx sdk.Context, _ string) error {
-			return client.Command(sdkhost.New(ctx), enginerpc.CommandStatus, "")
+			h := sdkhost.New(ctx)
+			err := client.Command(h, enginerpc.CommandStatus, "")
+			// The image counts the events it refused; those it never saw (not started, not
+			// reachable, still building) only this client counts.
+			if line := failoverLine(client.Failovers()); line != "" {
+				h.Notify(line, "info")
+			}
+			return err
 		},
 	})
 	ext.RegisterCommand("om:view", sdk.CommandOptions{
@@ -242,4 +258,13 @@ func processToolSpec(client *enginerpc.Client) host.ToolSpec {
 			return strings.Split(omtool.FormatRenderedResultForTui(details, text, expanded), "\n")
 		},
 	}
+}
+
+// failoverLine is /om:status's line for the events the Go engine ran in place of the engine
+// since the extension loaded (each one logged with its reason), "" for none.
+func failoverLine(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Engine fallbacks: %d events ran on the Go engine since the extension loaded (each logged with its reason on the extension's stderr; OM_LISP_FALLBACK=0 turns falling back off)", n)
 }

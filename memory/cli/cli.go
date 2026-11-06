@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
 )
 
@@ -32,8 +33,11 @@ const usage = `om: observational memory for coding agents
   om version
 
 The store lives under $OM_HOME (default ~/.om); its settings.json holds the settings.
-OM_ENGINE=lisp forwards hook, mcp and call to the SBCL engine image over <root>/engine.sock,
-starting it from $OM_LISP_IMAGE (docs/lisp-port-image-client.md).
+hook, mcp and call run on the SBCL engine image over <root>/engine.sock, started from
+$OM_LISP_IMAGE, else built on first use with the sbcl on PATH into <root>/engine (until then,
+and for anything the image cannot take, the Go engine runs; see <root>/engine.log).
+OM_ENGINE=go (or "engine": "go" in settings.json) always runs the Go engine; it is the default
+on Windows (docs/universal.md).
 `
 
 // Run is the om command over args (without the program name); it returns the exit status.
@@ -155,9 +159,17 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 				if err == nil {
 					h.Notify(res.Text, "info")
 				}
-				return err
+			} else {
+				err = commands.RunStatus(a.rt, h)
 			}
-			return commands.RunStatus(a.rt, h)
+			// The image counts the events it refused; those it never saw (no image built yet,
+			// not reachable) only the engine log holds.
+			if a.lisp != nil {
+				if n := lispimage.FallbackCount(root); n > 0 {
+					h.Notify(fmt.Sprintf("Engine fallbacks: %d events ran on the Go engine (reasons in %s; OM_LISP_FALLBACK=0 turns falling back off)", n, lispimage.LogPath(root)), "info")
+				}
+			}
+			return err
 		}
 		return commands.RunView(a.rt, h, strings.Join(fs.Args(), " "), nil)
 	case "install", "uninstall":

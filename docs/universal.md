@@ -1,7 +1,7 @@
 # om: the memory engine in any harness
 
 `om` is the memory engine as one Go binary (`memory/cmd/om`), built from the same packages the PiG
-extension runs, for harnesses that are not PiG: Claude Code, Codex, OpenCode, Pi, and any other that can
+extension runs (and the client of the SBCL image both use, see [The engine](#the-engine)), for harnesses that are not PiG: Claude Code, Codex, OpenCode, Pi, and any other that can
 run a command at a turn's end. The engine is unchanged: level 0 records the conversation by code,
 compaction renders the summary from the ledger (`selection.Render`), and the memory tool runs Go over
 that memory in a sandboxed child. What differs is how each harness hands the engine its conversation and
@@ -18,6 +18,24 @@ om install claude-code      # or any name om harnesses lists; --dry-run prints t
 `om install` merges into the harness's own config and keeps a `.om-backup` of any file it changes;
 `om uninstall <harness>` takes out exactly what it wrote. The store lives under `$OM_HOME` (default
 `~/.om`), whose `settings.json` takes the [settings](configuration.md).
+
+### The engine
+
+`om` forwards hook events, MCP messages and `om call` to the user's SBCL engine image
+([lisp-core.md](lisp-core.md)) over `~/.om/engine.sock`, starting it when none listens. No release ships an
+image yet: `om` carries the Lisp sources and, the first time it needs the image, builds it with the `sbcl`
+on `PATH` into `~/.om/engine/<build id>/`, detached ([lisp-build.md](lisp-build.md)). That event and any
+other the image cannot take before it acted (no `sbcl`, a build still running or failed, an image that
+does not start, a method it has not ported) run on the Go engine, each one line in `~/.om/engine.log`
+with its reason, and `om status` counts them (the image's own status also counts the refusals it
+answered). `OM_ENGINE=go` is the kill switch. The variables:
+
+| Variable | Setting in `~/.om/settings.json` | Meaning |
+|---|---|---|
+| `OM_ENGINE=go` | `"engine": "go"` | The kill switch: the Go engine, never the image. `OM_ENGINE=lisp` (or `"engine": "lisp"`) chooses the image explicitly, and then a fallback is also noted on om's stderr. The default is the image, except on Windows, where it is Go. |
+| `OM_LISP_IMAGE` | `lispImage` (absolute) | An image to start instead of the built one. |
+| `OM_LISP_FALLBACK=0` | | Never fall back: an image that cannot run, or a method it has not ported, is an error. |
+| `OM_ENGINE_SOCKET`, `OM_ENGINE_IDLE_SECONDS` | `lispIdleSeconds` | The socket, and how long the image stays up with no client (900 s). |
 
 ## What each harness gets
 

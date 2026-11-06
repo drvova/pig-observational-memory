@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
@@ -50,8 +51,10 @@ type Client struct {
 
 	// fallback answers what the engine could not (SetFallback); requireBuild is the build id
 	// the engine must report (RequireBuild).
-	fallback     *Client
-	fallbackLog  io.Writer
+	fallback    *Client
+	fallbackLog io.Writer
+	// failovers counts the events the fallback ran (Failovers).
+	failovers    int
 	requireBuild string
 
 	// ctxMu serializes context requests; ctxPrev is the last one's encoded messages, sent as
@@ -80,6 +83,15 @@ func (c *Client) SetFallback(fallback *Client, log io.Writer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.fallback, c.fallbackLog = fallback, log
+}
+
+// Failovers is how many events the fallback engine ran since the client was made: the PiG
+// adapter's /om:status shows it beside the image's own refusal counter, which misses the
+// events the image never saw (it could not be started or reached).
+func (c *Client) Failovers() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failovers
 }
 
 // RequireBuild makes the connection refuse an engine whose initialize reports another build id
@@ -224,9 +236,14 @@ func (c *Client) connection() (*Peer, error) {
 		return nil, fmt.Errorf("enginerpc: initialize: %w", err)
 	}
 	if c.requireBuild != "" && result.BuildID != c.requireBuild {
+		// A stale image (om upgraded under it) is stopped, so the next event starts the
+		// current one instead of failing over until the stale one idles out.
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = peer.Call(stopCtx, MethodImageStop, struct{}{}, nil)
+		cancel()
 		_ = stop()
 		<-peer.Done()
-		return nil, fmt.Errorf("enginerpc: the engine reports build %q, not %q: a stale image (stop it with image/stop; the next event starts the current one)", result.BuildID, c.requireBuild)
+		return nil, fmt.Errorf("enginerpc: the engine reports build %q, not %q: a stale image (stopped; the next event starts the current one)", result.BuildID, c.requireBuild)
 	}
 	c.peer, c.stop, c.tool = peer, stop, result.Tool
 	return peer, nil
@@ -327,6 +344,9 @@ func (c *Client) failover(method string, err error) (*Client, bool) {
 	}
 	c.mu.Lock()
 	fallback, log := c.fallback, c.fallbackLog
+	if fallback != nil {
+		c.failovers++
+	}
 	c.mu.Unlock()
 	if fallback == nil {
 		return nil, false

@@ -50,6 +50,12 @@ type Launcher struct {
 	Idle int
 	// StartTimeout is how long Start waits for a started image to listen.
 	StartTimeout time.Duration
+	// Auto is true when no image is configured: Image is then the build of the embedded sources
+	// (<root>/engine/<Build>/om-engine), built on first use (Ensure), and Build its id.
+	Auto  bool
+	Build string
+	// pruned is set once Ensure pruned old builds.
+	pruned bool
 }
 
 // DefaultRoot is $OM_HOME, else ~/.om.
@@ -65,7 +71,8 @@ func DefaultRoot() (string, error) {
 }
 
 // FromEnv is the launcher for root as the environment and root's settings.json set it: the
-// image from OM_LISP_IMAGE, else the absolute lispImage setting; the socket from
+// image from OM_LISP_IMAGE, else the absolute lispImage setting, else the build of the embedded
+// sources (Auto, built on first use; UseImage sets another); the socket from
 // OM_ENGINE_SOCKET, else <root>/engine.sock; the idle exit from OM_ENGINE_IDLE_SECONDS, else
 // lispIdleSeconds, else DefaultIdleSeconds.
 func FromEnv(root string) *Launcher {
@@ -91,7 +98,19 @@ func FromEnv(root string) *Launcher {
 	if l.Idle < 0 {
 		l.Idle = DefaultIdleSeconds
 	}
+	if l.Image == "" {
+		l.Auto, l.Build = true, BuildID()
+		l.Image = filepath.Join(l.BuildDir(), l.Build, ImageName)
+	}
 	return l
+}
+
+// UseImage makes path the image to start instead of the embedded build ("" keeps the launcher's).
+func (l *Launcher) UseImage(path string) {
+	if path == "" {
+		return
+	}
+	l.Image, l.Auto, l.Build = path, false, ""
 }
 
 // FallbackOn reports whether falling back to the Go engine is on (OM_LISP_FALLBACK is not 0).
@@ -115,6 +134,9 @@ func (l *Launcher) Connect() (net.Conn, error) {
 // loser exits on the image lock (code 3), and the socket the winner listens on is what this
 // waits for.
 func (l *Launcher) Start() (net.Conn, error) {
+	if err := l.Ensure(); err != nil {
+		return nil, err
+	}
 	if l.Image == "" {
 		return nil, fmt.Errorf("om: no engine image listens on %s; set %s (or lispImage in %s)", l.Socket, ImageEnv, filepath.Join(l.Root, "settings.json"))
 	}
@@ -180,9 +202,13 @@ func (l *Launcher) WaitGone(timeout time.Duration) bool {
 	}
 }
 
-// ExpectedBuild is the build id lisp/build-image.sh wrote beside the image (<image>.build), ""
+// ExpectedBuild is the build id the image must report: the embedded sources' for the embedded
+// build (Auto), else the one lisp/build-image.sh wrote beside the image (<image>.build), ""
 // when there is none: a client that knows it refuses an image built from other sources.
 func (l *Launcher) ExpectedBuild() string {
+	if l.Auto {
+		return l.Build
+	}
 	if l.Image == "" {
 		return ""
 	}
