@@ -64,12 +64,13 @@ name another tool of the host's registry holds. An unreadable store or registry 
                 (push name (conn-retired-names c))))))))))
 
 (defun defined-queries (c store)
-  "harness.DefinedQueries' names: the stored definitions (ListDefinitions) the skip list holds,
-the memory tool aside. The detectors read a call of one as a memory query (legacy-memory-call)."
+  "harness.DefinedQueries: the stored definitions (ListDefinitions) the skip list holds, the
+memory tool aside, as an alist (name . query). The detectors read a call of one as a memory query
+of its stored text with the call's input substituted (src/legacy/notes.lisp)."
   (let ((skip (rest (conn-skip-tools c))))
     (when skip
-      (loop for name in (handler-case (om.golayer::list-definitions store) (error () '()))
-            when (member name skip :test #'string=) collect name))))
+      (loop for (name . query) in (handler-case (om.golayer::definition-queries store) (error () '()))
+            when (member name skip :test #'string=) collect (cons name query)))))
 
 ;;; MigrateLayer
 
@@ -92,24 +93,26 @@ the session model."
 (defun session-start-layer (c dir cfg)
   "engine.SessionStart's NoteRetired and MigrateLayer over the curated store dir, each migration
 told the user through a host with a UI (notify-ui), as Go's MigrateLayerV2 tells it."
-  (let ((refusal (lowered-floor-refusal dir cfg)))
-    (when refusal (not-ported (format nil "event/sessionStart: ~A" refusal))))
-  (note-retired c dir)
-  (let* ((session (session-model))
-         (messages (om.golayer::migrate-layer-v2 dir (model-key-of session) (worker-model-key cfg session))))
-    (dolist (message messages)
-      (notify-ui message "info"))))
+  ;; The kernel floor (src/harness/floor.lisp): a lowering the settings ask for is recorded and
+  ;; applied to the layer's checks, as harness.StoreOf's floorOf does.
+  (let ((om::*kernel-floor-lowered* (conn-floor-lowered-p c dir)))
+    (note-retired c dir)
+    (let* ((session (session-model))
+           (messages (om.golayer::migrate-layer-v2 dir (model-key-of session) (worker-model-key cfg session))))
+      (dolist (message messages)
+        (notify-ui message "info")))))
 
 (defun om-session-start-layer ()
   "The same on om's neutral host (no session model, no tool registry, no UI): the retired names'
-side effect, then MigrateLayerV2 for every model. False when a lowered kernel floor leaves the
-migration to the Go client (the migrate-layer step)."
+side effect, then MigrateLayerV2 for every model, under the store's kernel floor (a lowering the
+root's settings ask for is recorded, as a fresh Go process records it). Always true."
   (when (curated-on-p)
     (let ((dir (curated-dir)) (cfg (make-rcfg)))
       (apply-settings cfg (format nil "~A/settings.json" (string-right-trim "/" *root*)))
-      (when (lowered-floor-refusal dir cfg)
-        (return-from om-session-start-layer nil))
-      (handler-case (om.golayer::retired-query-names dir)
-        (error (e) (log-line "retired queries: ~A" e)))
-      (om.golayer::migrate-layer-v2 dir "" "")))
+      ;; Each om hook is its own Go process, whose floor starts engaged: a fresh owner.
+      (let ((om::*kernel-floor-lowered*
+              (and (kf-lowered (floor-of (list :om) dir (format nil "~A/settings.json" (string-right-trim "/" *root*)))) t)))
+        (handler-case (om.golayer::retired-query-names dir)
+          (error (e) (log-line "retired queries: ~A" e)))
+        (om.golayer::migrate-layer-v2 dir "" ""))))
   t)

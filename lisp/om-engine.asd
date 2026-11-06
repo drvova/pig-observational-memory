@@ -122,4 +122,16 @@
                              (:file "consolidate/prompt")
                              (:file "consolidate/validate")
                              (:file "consolidate/layer")
-                             (:file "server/level1")))))
+                             (:file "server/level1")))
+               ;; /om:status and the remaining harness reads (docs/lisp-port-status.md)
+               (:module "status"
+                :pathname "src"
+                :serial t
+                :components ((:file "legacy/legacyquery")
+                             (:file "legacy/notes")
+                             (:file "harness/rule-migration")
+                             (:file "harness/profile")
+                             (:file "harness/floor")
+                             (:file "harness/retired")
+                             (:file "harness/layer-status")
+                             (:file "server/status")))))

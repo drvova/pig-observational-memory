@@ -95,19 +95,18 @@ cd memory && OM_LISP_PARITY=1 go test -count=1 -p 1 ./contracts ./enginerpc -run
 
 ## Left
 
-- **A lowered kernel floor** (`kernelFloor` with `lower`, `requestedBy` and `reason`). It admits
-  definitions the kernel refuses, and `harness.floorOf` records it in `harness/floor.jsonl`. The
-  image checks with the floor engaged and records nothing. So a PiG session start under a lowered
-  floor with layer data to read is refused (not ported) before any write. On om, the image
-  leaves `migrate-layer` to the Go client and moves no legacy definition.
+- **A lowered kernel floor**: ported in work package 6 ([lisp-port-status.md](lisp-port-status.md)).
+  The image records the lowering in `harness/floor.jsonl` as `harness.floorOf` does and admits what
+  the kernel would refuse while it stands; the session start is no longer refused, and om's no
+  longer leaves `migrate-layer` to the Go client.
 - **Other kinds.** Only instructions and tools are loaded. The detector, remedy, format, schema
   and summary validators (`rules`, `declare`) are not needed at a session start. Loading one of
   those kinds signals an error instead of skipping its check.
-- **`om.Retired()` and `/om:status`** list each retired query with its snippet
-  (`legacyquery.Hint`) and its reason. The image reads only the names. Both are the memory
-  tool's and status's work, and neither is ported.
-- **Removed settings** are parsed (`rcfg-removed`), ignored, and listed only by `/om:status`,
-  which still falls back to Go.
+- **`om.Retired()` and `/om:status`**: the retired queries with their snippets and reasons
+  (`retired-queries`) and `/om:status` are ported in work package 6; the Lisp tool has no
+  `(retired)` read yet.
+- **Removed settings** are parsed (`rcfg-removed`), ignored, and listed by `/om:status` on the
+  image.
 - **Header decoding** uses the evidence port's reader, which differs from Go's decoder on some
   hand-edited headers (extra spacing, scalars). Such a file must also match the digest its
   manifest records, so only a header Go wrote is read. Definition texts, which `kernel.Check`

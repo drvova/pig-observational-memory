@@ -143,7 +143,7 @@ in-process path.
 | `event/sessionBeforeCompact` | `engine.BeforeCompact` | Level 0 on PiG's exact cut (below). |
 | `event/sessionCompact` | `pin.Reset` | The same. |
 | `event/sessionShutdown` | namespace reset, detector stop | `{}`: the image holds neither. |
-| `command/run` | `RunStatus`, `RunView` | `om:view` runs on the image: `EnsureConfig`, the branch, `view-text`, then `ShowView`'s notices, with `clipboard.CopyIfAvailable` ported (the same commands, display and socket checks, the 2 s timeout; the "no clipboard" note once per image). `om:status` is refused. |
+| `command/run` | `RunStatus`, `RunView` | `om:view` runs on the image: `EnsureConfig`, the branch, `view-text`, then `ShowView`'s notices, with `clipboard.CopyIfAvailable` ported (the same commands, display and socket checks, the 2 s timeout; the "no clipboard" note once per image). `om:status` runs on the image too (work package 6, [lisp-port-status.md](lisp-port-status.md)): Go's report through `host/notify`, with the code section redefined for the Lisp layer. |
 
 ### The trigger (`hooks.maybeTriggerCompactionV2`)
 
@@ -171,11 +171,8 @@ compaction slot free (`runtime.TryStartCompact`):
   `fileOps` and `settings.reserveTokens`, the branch entries, the reason and the custom
   instructions.
 - **Refusals, before any side effect.** In this order: the harness hook point (a session model
-  with a store, see below). Level 1 is no longer refused: it runs on the image
-  ([lisp-port-level1.md](lisp-port-level1.md)). (Before work package 5 it was refused when it would
-  run, that is consolidation on, not passive, not the extension's own compaction, not an overflow,
-  and a session model. Level 1 was a later work
-  package, so the Go engine ran that compaction whole.)
+  with a store whose layer declares a format, see below). Level 1 is no longer refused: it runs on
+  the image ([lisp-port-level1.md](lisp-port-level1.md)).
 - **Level 0.** Under the connection's extraction mutex, W5's `build-compaction` over the host:
   level 0 over the unextracted cut range (a fresh `host/getBranch`), the host summary, the budget
   with the session model's context window and output cap, PiG's `reserveTokens` and
@@ -198,9 +195,10 @@ compaction slot free (`runtime.TryStartCompact`):
 goes, filled by the evidence work package ([lisp-port-evidence.md](lisp-port-evidence.md)):
 
 - `compaction-harness-refusal` runs before the compaction's first side effect. For a session
-  model with a store it refuses only a store with rules written before the layer and a model
-  whose profile may not be the default (a v2 decode event, a code event on the summary or an
-  active switch-codec rule in its ledger: the profile is not ported).
+  model with a store it migrates rules written before the layer (`rules.migrate`), computes the
+  model's profile (`harness.ComputeWith`, `ApplyRules`), which `build-compaction` applies (the
+  budget, layout and codec), and refuses only a layer that declares a format (work package 6,
+  [lisp-port-status.md](lisp-port-status.md)).
 - `harness-hook-host` takes the layer's snapshot and gives the hook's host the harness
   detectors, so the cut range's extraction runs `detectV2` and records it on a fresh branch.
 - `after-compaction` runs once the answer is built, before it is sent, unless the request was
@@ -223,18 +221,20 @@ goes, filled by the evidence work package ([lisp-port-evidence.md](lisp-port-evi
   - `TestLispBeforeCompactCancellation`: level 1 on; since work package 5 the image makes the
     level-1 request and the cancel crosses to its `models/streamResult`; the answer equals the
     in-process path's.
-  - `TestLispCommandsAndRendering`: `/om:status` falls back; the section and four `/om:view`
-    calls run on the image, with the in-process path's notifications.
+  - `TestLispCommandsAndRendering`: `/om:status` (since work package 6), the section and four
+    `/om:view` calls run on the image, with the in-process path's report and notifications and
+    no fallback.
   - `TestLispTriggerMatchesInProcess`: over the threshold, "Nothing to compact", the backoff at
     the same tip, then a new tip: the same compact calls and notifications as the in-process path.
 
 ## Left
 
-- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's) and `/om:status`
-  (level 1 is work package 5's, [lisp-port-level1.md](lisp-port-level1.md)). The harness's part of a compaction runs
-  at the hook point above (docs/lisp-port-evidence.md), but for a profile that may not be the
-  default, which is refused.
-- A session start under a lowered kernel floor with layer data to read (docs/lisp-port-migration.md).
+- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's). The harness's part of
+  a compaction runs at the hook point above (docs/lisp-port-evidence.md), the profile applied, but
+  for a layer that declares a format, which is refused. Level 1 is work package 5's
+  ([lisp-port-level1.md](lisp-port-level1.md)).
+- `/om:status`, the profile, rule migration and the lowered kernel floor are work package 6's
+  ([lisp-port-status.md](lisp-port-status.md)).
 - A failed append inside the compaction is dropped, and the appends after it are still made; Go
   stops the extraction's appends at the first failure.
 - The `$/acted` notice for the image's direct store writes (the curated settle writes the store
