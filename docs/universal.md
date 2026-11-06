@@ -27,7 +27,8 @@ image yet: `om` carries the Lisp sources and, the first time it needs the image,
 on `PATH` into `~/.om/engine/<build id>/`, detached ([lisp-build.md](lisp-build.md)). That event and any
 other the image cannot take before it acted (no `sbcl`, a build still running or failed, an image that
 does not start, a method it has not ported) run on the Go engine, each one line in `~/.om/engine.log`
-with its reason. The variables:
+with its reason, and `om status` counts them (the image's own status also counts the refusals it
+answered). `OM_ENGINE=go` is the kill switch. The variables:
 
 | Variable | Setting in `~/.om/settings.json` | Meaning |
 |---|---|---|

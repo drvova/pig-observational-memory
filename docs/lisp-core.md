@@ -53,9 +53,10 @@ The owner then accepted these, from the next-steps research (kept outside the re
 - **The PiG adapter** (`extensions/observational-memory`): PiG loads only Go extensions. It talks to the
   image with the host RPC from [engine-rpc.md](engine-rpc.md) (the `engine: "process"` path),
   connecting to the user's image instead of starting `om serve`.
-- **The Go engine** stays until the Lisp image reaches parity, as the reference that the golden corpus
-  (`contracts/golden`) and the parity harness (`memory/selection/lispparity_test.go`) compare against.
-  It is removed only after the switch.
+- **The Go engine** stays as the reference that the golden corpus (`contracts/golden`) and the parity
+  harness (`memory/selection/lispparity_test.go`) compare against, as the fallback for what the image
+  cannot take, and as the kill switch. It is deleted in the release after the first one that ships the
+  image as the default ([The switch](#the-switch)).
 
 ## The image
 
@@ -152,7 +153,49 @@ W1 to W4 run in parallel; W5 joins them. W1 to W5 are merged or in review; each 
 in its `docs/lisp-port-*.md` (memory-model, readers-store, image-client, tool-layer, hooks, peer, evidence, migration, level1, status); the memory
 tool in a child SBCL (decisions 9 and 10) is in lisp-port-tool-layer.md. The switch comes when the golden corpus and every hook test pass
 against the image. At that point `om` routes to the image by default, the PiG adapter defaults to it,
-and the Go engine is removed a release later.
+and the Go engine is removed a release later. That point is reached: see [The switch](#the-switch).
+
+## The switch
+
+All five work packages are merged, and the image is now the default engine of `om` and of the PiG
+adapter. What the switch consists of:
+
+| Stage | State |
+|---|---|
+| W1 to W5, the status port, peer, evidence, migration, level 1 | done (each `docs/lisp-port-*.md`) |
+| Default selection | done: `om` runs the image unless `OM_ENGINE=go` or `"engine": "go"` in `~/.om/settings.json` (`lispimage.Select`); the PiG adapter's `engine` defaults to `"lisp"`, with `"go"` (also `"in-process"`) and `"process"` still accepted (`config.ReadEngine`) |
+| Platforms | done: where the image has no unix socket and `flock` (`config.LispSupported`, false on Windows) the default stays Go and nothing is built |
+| First-use build | done: the Lisp sources are embedded (`memory/lispimage/sources`, `go:embed`) and built on first use with the `sbcl` on `PATH` into `~/.om/engine/<build id>/`, detached, under a build lock, bounded, pruned to two builds ([lisp-build.md](lisp-build.md)); `OM_LISP_IMAGE` and `lispImage` override it |
+| Fallback | done: failover only (the image refused before it acted, or could not be started or reached), on by default, every one logged (`~/.om/engine.log` for `om`, the extension's stderr for PiG); `OM_LISP_FALLBACK=0` turns it off |
+| Status | done: the image's `/om:status` counts the refusals it answered (`lisp/src/server/status.lisp`); `om status` and the adapter's `/om:status` add one line counting the events that ran on Go, which covers those the image never saw |
+| Switch gate | passed (below) |
+| Deleting the Go engine | planned for the release after the first one that ships the image as the default |
+
+**The kill switch.** `OM_ENGINE=go`, or `"engine": "go"` (PiG's global settings, or `~/.om/settings.json`
+for `om`), runs the Go engine and never opens the image's socket. `OM_ENGINE` wins over the setting. Any
+value other than `lisp` and `process` is the Go engine, so a typo never turns the image on.
+
+**The switch gate.** With `sbcl` on `PATH` (Ubuntu's 2.2.9; the pin is 2.6.10, built in CI) and an image
+built from this tree, the whole `memory/cli` suite and the `memory/enginerpc` suite, its e2e tests
+included, pass with `OM_ENGINE=lisp OM_LISP_FALLBACK=0` (no fallback allowed):
+
+```
+cd memory
+OM_ENGINE=lisp OM_LISP_FALLBACK=0 OM_LISP_IMAGE=<built image> go test -count=1 -p 1 ./cli
+OM_ENGINE=lisp OM_LISP_FALLBACK=0 OM_LISP_PARITY=1 go test -count=1 -p 1 ./enginerpc
+```
+
+Without the image the first command fails 17 tests, so the suite does run on it. What is still not the
+image's, and so a fallback or a Go step when it occurs (none occurs in those suites):
+
+- the Go layer definitions the image does not read whole (formats, schemas, summaries, detectors): an
+  event or status over them is refused as not ported ([lisp-port-status.md](lisp-port-status.md));
+- transcript formats the readers have not ported ([lisp-port-readers-store.md](lisp-port-readers-store.md));
+- the steps the image hands back as `remaining`, which `om` runs on Go after the image's answer: the
+  curated settle after a turn end that hands nothing, and the session-start steps before the layer is
+  migrated ([lisp-port-hooks.md](lisp-port-hooks.md));
+- Windows (named pipes, `LockFileEx`) and macOS (a signed image) are not built or measured; Windows stays
+  on Go, and macOS takes the default with an untested build.
 
 ## Open questions
 
