@@ -3,6 +3,7 @@ package memeval
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/config"
@@ -56,6 +57,9 @@ func TurnEntries(t Turn, i int) []session.Entry {
 		return map[string]any{"timestamp": TurnTime(i).Add(time.Duration(step) * time.Second).Format("2006-01-02T15:04:05.000Z")}
 	}
 	out := []session.Entry{testfix.RawMessage(UserID(i), t.User, at(0))}
+	for j, text := range t.Custom {
+		out = append(out, testfix.TextCustomMessage(fmt.Sprintf("c%03d-%d", i, j), text, at(0)))
+	}
 	for j, c := range t.Calls {
 		callID := fmt.Sprintf("call-%03d-%d", i, j)
 		content := []any{}
@@ -77,24 +81,63 @@ func UserID(i int) string { return fmt.Sprintf("u%03d", i) }
 // Simulate runs script through the engine at level 0, a turn end after every turn and a
 // compaction whenever the context passes the threshold, until maxCompactions or the script ends.
 func Simulate(ctx context.Context, script Script, w Window, maxCompactions int) (Run, error) {
+	return SimulateWith(ctx, script, w, maxCompactions, Sim{})
+}
+
+// Sim is what a simulated session runs with besides its script and window: Tier 0 leaves it
+// empty (no store, level 0 only); the forgetting and sharing suites give it a store, a project and
+// scripted level-1 replies.
+type Sim struct {
+	// Home is PiG's config root, where the curated store and the usage ledger live; "" is none.
+	Home string
+	// Cwd is the session's project directory; Session its id.
+	Cwd, Session string
+	// Level1 is the scripted level-1 reply for compaction n (1-based) over the branch the hook is
+	// handed; nil keeps level 0 only (ConsolidateOff). The fake host serves it: no model is
+	// called, but the engine logs the request as it logs any.
+	Level1 func(n int, branch []session.Entry) map[string]any
+	// Between runs after turn i's entries are on the branch, before its turn end (another
+	// writer's change, an injected write the model makes).
+	Between func(i int, branch []session.Entry)
+	// Host, when set, is the fake host to run on (its entries are the branch); nil makes one.
+	Host *testfix.FakeHost
+}
+
+// scriptedServed counts the scripted level-1 replies fake hosts served, process-wide: the
+// requests the engine logs for them are the only requests a suite may log.
+var scriptedServed atomic.Int64
+
+// SimulateWith is Simulate with sim.
+func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions int, sim Sim) (run Run, err error) {
 	cfg := config.Defaults
-	cfg.ConsolidateOff = true
+	cfg.ConsolidateOff = sim.Level1 == nil
 	if w.SummaryMaxTokens > 0 {
 		cfg.CompactionSummaryMaxTokens = w.SummaryMaxTokens
 	}
 	rt := runtime.New()
 	rt.SetConfig(cfg)
-	h := testfix.NewFakeHost()
+	h := sim.Host
+	if h == nil {
+		h = testfix.NewFakeHost()
+	}
 	h.UI = false
+	h.Home, h.ID = sim.Home, sim.Session
+	if sim.Cwd != "" {
+		h.WorkDir = sim.Cwd
+	}
 	h.Model = testfix.Model("eval", "session", map[string]any{"contextWindow": w.Context, "maxTokens": w.MaxOutput})
 	h.ModelsFake.Add(h.Model, testfix.KeyAuth("none"))
-	run := Run{Script: script, Window: w}
+	defer func() { scriptedServed.Add(int64(h.ModelsFake.Streams.Calls())) }()
+	run = Run{Script: script, Window: w}
 	summary := ""
 	for i, t := range script.Turns {
 		if ctx.Err() != nil {
 			return run, ctx.Err()
 		}
 		h.Entries = append(h.Entries, TurnEntries(t, i)...)
+		if sim.Between != nil {
+			sim.Between(i, h.Entries)
+		}
 		hooks.OnTurnEnd(rt, h)
 		used := w.Overhead + tokens.EstimateStringTokens(summary) + activeTokens(h.Entries)
 		if used <= w.Context-w.Reserve {
@@ -107,6 +150,12 @@ func Simulate(ctx context.Context, script Script, w Window, maxCompactions int) 
 			BranchEntries:    before,
 			Reason:           "threshold",
 			Preparation:      hooks.CompactionPreparation{Settings: hooks.CompactionSettings{Enabled: true, ReserveTokens: w.Reserve, KeepRecentTokens: w.Context / 10}},
+		}
+		if sim.Level1 != nil {
+			h.ModelsFake.Streams.Replies = nil
+			if reply := sim.Level1(len(run.Snapshots)+1, before); reply != nil {
+				h.ModelsFake.Streams.Replies = []map[string]any{reply}
+			}
 		}
 		outcome := hooks.HandleBeforeCompact(ctx, rt, h, event)
 		if outcome.Compaction == nil {

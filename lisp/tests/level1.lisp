@@ -162,6 +162,29 @@
         (check (count "consolidate.stream_error" events :key #'car :test #'equal) 1 "a failed response logs its stream_error event")
         (check (length (l1host-requests l)) 4 "one request per compaction")))))
 
+(deftest level1-merge-redacts-secrets-in-details
+  ;; A merge whose text repeats a secret is redacted in the appended entry and in the projection
+  ;; the compaction's details carry (hooks.TestV2Level1MergeRedactsSecretsInDetails).
+  (let* ((value (concatenate 'string "Hb1Jc5Fd0Ge8" "QaT2Zq8Vt2" "Lm4"))
+         (branch (concatenate 'simple-vector (pig-turn "p" "Deploy on port 8080 from the Makefile.")
+                              (pig-turn "r" "Staging deploys use port 8080 and the Makefile too.") (pig-turn "q" "Now the saver.")))
+         (h (make-phost :branch branch :model (jobject "provider" "p" "id" "m" "contextWindow" 200000 "maxTokens" 32000)))
+         (l (make-l1host :phost h)))
+    (with-pig (stream dir)
+      (write-file* (format nil "~Asettings.json" dir) "{}")
+      (setf (l1host-reply l)
+            (lambda (request)
+              (let ((ids (l1-candidate-ids request)))
+                (tool-call-message (jobject "merges" (vector (jobject "ids" (vector (first ids) (second ids)) "subject" "deploy"
+                                                                      "content" (cat "Staging deploys use port 8080 and the Makefile, with api_key=" value))))))))
+      (let* ((c (l1-compact stream 1 dir l branch))
+             (details (with-output-to-string (out) (write-json (jget c "details") out)))
+             (appended (with-output-to-string (out) (dolist (a (phost-appended h)) (write-json (cdr a) out)))))
+        (check (jget (jget (jget c "details") "consolidation") "merges") 1d0 "the merge is accepted")
+        (check (search value details) nil "no value in the details")
+        (check (search value appended) nil "no value appended")
+        (check (and (search "[redacted:" details) t) t)))))
+
 (deftest level1-offer-hold-and-settle
   (let* ((branch (l1-branch))
          (h (make-phost :branch branch :model (jobject "provider" "p" "id" "m" "contextWindow" 200000 "maxTokens" 32000)))

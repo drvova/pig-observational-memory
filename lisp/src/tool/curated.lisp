@@ -253,7 +253,8 @@ session staged."
                    (member* "time" (format-rfc3339 (now)) nil)
                    (member* "name" name)
                    (member* "event" event)
-                   (when (and quote (string/= quote "")) (member* "quote" quote))
+                   ;; The ledger keeps a quote redacted (contracts/secrets.md).
+                   (when (and quote (string/= quote "")) (member* "quote" (om::redact-secrets quote)))
                    (when user (write-string ",\"user\":true" out))
                    (when (and record (string/= record "")) (member* "record" record))
                    (when (and session (string/= session "")) (member* "session" session))
@@ -358,9 +359,10 @@ legacy definitions directory."
   (append-usage dir name "forget-staged" :session session))
 
 (defun quoted-forgets (dir quote)
-  "Store.QuotedForgets."
-  (count-if (lambda (l) (and (string= (ul-event l) "forget") (ul-user l) (string= (ul-quote l) quote)))
-            (read-usage-lines dir)))
+  "Store.QuotedForgets: compared as the ledger keeps quotes (redacted)."
+  (let ((quote (om::redact-secrets quote)))
+    (count-if (lambda (l) (and (string= (ul-event l) "forget") (ul-user l) (string= (ul-quote l) quote)))
+              (read-usage-lines dir))))
 
 (defparameter +max-forgets-per-quote+ 3 "curated.MaxForgetsPerQuote.")
 

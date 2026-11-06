@@ -257,7 +257,8 @@ error is :aborted (the request's cancel), or a message."
                      queue))
     (loop for (type . data) in queue for n from 0
           do (funcall (om::hhost-append h) type data)
-          collect (om::synthetic-entry (format nil "om-v2-level1-~D" n) type data))))
+          ;; The entry the compaction folds is the one appended, redacted (contracts/secrets.md).
+          collect (om::synthetic-entry (format nil "om-v2-level1-~D" n) type (om::redact-json-text data)))))
 
 ;;; The curated input and the citations (curatedInput, recordCitations)
 

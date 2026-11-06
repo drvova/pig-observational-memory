@@ -19,6 +19,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/rules"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/session"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
 )
@@ -370,7 +371,9 @@ func appendLevel1(ctx context.Context, h host.Host, result consolidate.Result, d
 		if err := appendEntry(h, p.customType, p.data); err != nil {
 			debuglog.Log(ctx, "compaction.v2.level1.append_failed", map[string]any{"customType": p.customType, "errorMessage": err.Error()})
 		}
-		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-level1-%d", n), CustomType: p.customType, Data: jsonValue(p.data)})
+		// The entry the compaction folds is the one appended, redacted: the projection in its
+		// details holds no value the model's output repeated (contracts/secrets.md).
+		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-level1-%d", n), CustomType: p.customType, Data: jsonValue(secrets.RedactData(p.data))})
 	}
 	return out
 }

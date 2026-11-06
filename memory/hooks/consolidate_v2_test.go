@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -116,6 +117,31 @@ func TestV2Level1MakesExactlyOneRequest(t *testing.T) {
 	system, _ := request["systemPrompt"].(string)
 	if !strings.Contains(system, "consolidate_memory") || request["maxTokens"] != 32_000 {
 		t.Fatalf("request %v", request)
+	}
+}
+
+// A merge whose text repeats a secret is redacted in the entry level 1 appends and in the
+// projection the compaction's details carry, which fold the same entry (the Tier 0b residue
+// suite, docs/brain-memory-baseline.md, found the details holding it).
+func TestV2Level1MergeRedactsSecretsInDetails(t *testing.T) {
+	value := strings.Join([]string{"Hb1Jc5Fd0Ge8", "QaT2Zq8Vt2", "Lm4"}, "")
+	rt, h, entries := level1Setup(t, mergeReply("Staging deploys run from the Makefile on port 8080 with api_key="+value))
+	c := level1CompactionOf(t, runV2Hook(rt, h, v2Event(entries, "u2", 20_000, "threshold")))
+	if c.Details.Consolidation.Merges != 1 {
+		t.Fatalf("report %+v", c.Details.Consolidation)
+	}
+	details, err := json.Marshal(c.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended, _ := json.Marshal(h.Appended)
+	for what, text := range map[string]string{"details": string(details), "appended entries": string(appended), "summary": c.Summary} {
+		if strings.Contains(text, value) {
+			t.Errorf("the %s hold the secret", what)
+		}
+	}
+	if !strings.Contains(string(details), "[redacted:") {
+		t.Fatalf("the merge is gone from the details:\n%s", details)
 	}
 }
 

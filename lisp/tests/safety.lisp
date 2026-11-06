@@ -90,6 +90,26 @@
       (apply #'run-ok third "save" save)
       (om::check (curated-settle dir "/repo" '()) '(("push-to-main" . "the same save staged in another session"))))))
 
+
+;; The usage ledger keeps a quote redacted (a feedback's, a forget's), and a forget's quote
+;; still counts against the most one quote forgets (curated.TestUsageLedgerRedactsQuotes).
+(om::deftest safety-usage-ledger-redacts-quotes
+  (let* ((dir (test-dir "safety-usage-quotes"))
+         (value (concatenate 'string "Hb1Jc5Fd0Ge8" "QaT2Zq8Vt2"))
+         (quote (concatenate 'string "forget the deploy notes, api_key=" value " is revoked"))
+         (helped (concatenate 'string "yes, token=" value " was the one"))
+         (user (list "remember the deploy notes" quote helped)))
+    (at-time ("2026-11-01T10:00:00Z")
+      (loop for i from 0 to 3
+            for name = (format nil "note-~D" i)
+            do (run-ok (safety-call dir "s1" :user user) "save" "name" name "type" "project" "description" "A deploy note." "quote" "remember the deploy notes")
+               (when (= i 0) (run-ok (safety-call dir "s1" :user user) "feedback" "name" name "outcome" "helped" "quote" helped))
+               (om::check (and (search "Forgot memory" (run-ok (safety-call dir "s2" :user user) "forget" "name" name "quote" quote)) t) (< i 3)
+                          (format nil "forget ~D" i))))
+    (let ((text (read-file (usage-path dir))))
+      (om::check (search value text) nil "no value in the ledger")
+      (om::check (and (search "[redacted:" text) t) t))))
+
 (in-package "OM")
 
 ;; Origin through level-1 merges: a record replacing others is held to the least of them.
