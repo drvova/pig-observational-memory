@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
@@ -170,13 +172,48 @@ func KodeSessionPath(cwd, sessionID string) string {
 		}
 		root = filepath.Join(home, ".kode")
 	}
-	slug := []byte(cwd)
-	for i, c := range slug {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
-			slug[i] = '-'
+	return filepath.Join(root, "projects", JSSlug(cwd), sessionID+".jsonl")
+}
+
+// JSSlug is s with every character that is not an ASCII letter or digit as -, the way
+// JavaScript's s.replace(/[^a-zA-Z0-9]/g, "-") does it: one - per UTF-16 code unit, so a
+// character outside the Basic Multilingual Plane (an emoji) becomes two and any other non-ASCII
+// character one. Claude Code and Kode name a project's folder so.
+func JSSlug(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			b.WriteString("--")
+		default:
+			b.WriteByte('-')
 		}
 	}
-	return filepath.Join(root, "projects", string(slug), sessionID+".jsonl")
+	return b.String()
+}
+
+// claudeProjectMax is the longest folder name Claude Code keeps whole.
+const claudeProjectMax = 200
+
+// ClaudeProjectDir is the name of Claude Code's projects folder for cwd (its sanitizePath): the
+// cwd as JSSlug, and when that is longer than 200 characters its first 200, a -, and the base-36
+// absolute value of the cwd's 32-bit string hash (h = h*31 + unit over its UTF-16 code units).
+func ClaudeProjectDir(cwd string) string {
+	slug := JSSlug(cwd)
+	if len(slug) <= claudeProjectMax {
+		return slug
+	}
+	var h int32
+	for _, u := range utf16.Encode([]rune(cwd)) {
+		h = h*31 + int32(u)
+	}
+	n := int64(h)
+	if n < 0 {
+		n = -n
+	}
+	return slug[:claudeProjectMax] + "-" + strconv.FormatInt(n, 36)
 }
 
 // splicePreserved puts each compaction's preserved segment (compactMetadata.preservedSegment

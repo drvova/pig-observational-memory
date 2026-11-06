@@ -191,6 +191,28 @@ repeated compactions, which rendering from records avoids.
     tombstoned only on unambiguous evidence (a delete tool, or an exact literal path in a successful
     `rm`, `git rm` or `git mv`), and shown as `reverted` after a successful `git checkout -- path` or
     `git restore path`; `fileOps` adds only an unordered set of touched paths at compaction;
+  - a file tool's call gives its path's state only when its result did not fail. Tool names match
+    whatever their case, underscores and hyphens (`extract.toolKey`), so `Read`, `read_file` and
+    `ReadFile` are one tool; the path is the `path`, `file_path`, `filePath` or `notebook_path`
+    argument. Read: `read`, `read_file`, `read_files` (Kiro), `view`; written: `write`, `write_file`,
+    `create_file`, `Create` (Droid); edited: `edit`, `edit_file`, `MultiEdit`, `NotebookEdit`
+    (Claude Code), `replace` (Gemini), and Kiro's `write` whose `command` is `strReplace`; deleted:
+    `delete`, `delete_file`, `remove`, `remove_file`. Confirmed by the readers' fixtures
+    (`memory/transcript/testdata/real`) for Cursor (`Read`), Droid, Qoder (`Write`), Cortex, Gemini,
+    Kimi (`ReadFile`, `WriteFile`), Kiro, Copilot and Pi, and by Claude Code's tool inputs for its
+    own;
+  - Codex's `apply_patch` (`extract/patch.go`): the patch is the custom tool's arguments (or its
+    `input`), or a shell call running `apply_patch` on it (argv `["apply_patch", patch]`,
+    `["bash", "-lc", script]`, or a `command`/`cmd` script starting with `apply_patch`). Each path
+    between `*** Begin Patch` and `*** End Patch` gets its state in the patch's order: `Add File`
+    written, `Update File` edited, `Delete File` deleted, and an `Update File` followed by
+    `Move to` moves the old path to the new one. Only a result holding apply_patch's own
+    `Success. Updated the following files:` applies it; any other result makes the call failed;
+  - not covered, since no fixture or reader shows their shape: Cline and Roo (`write_to_file`,
+    `replace_in_file`, `apply_diff`), Goose's `text_editor` (its `command`), Kimi's
+    `StrReplaceFile`, Qwen's and OpenCode's or Crush's edit tools beyond the names above (they match
+    if they use them), and Codex's `exec_command`/`shell` failures other than apply_patch's (a
+    Codex shell result reports `Process exited with code N`, which is not read as a failure);
   - commits, as the `git commit` subject plus the hash from its result;
   - `attempt` records whose outcome code sets: `failed` on `isError` or a nonzero exit; `worked` when
     the identical command, or the same tool on the same path, later succeeds; `open` otherwise.

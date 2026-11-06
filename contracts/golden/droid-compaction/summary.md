@@ -18,3 +18,7 @@ intent[2]{which,content,source}:
 notes[2]{id,when,kind,status,scope,content,superseded_by,source}:
   37e6d012f49a,2026-07-28,assistant,,,HaystackBench is a Python benchmark suite for testing LLM long-context retrieval and reasoning with “needle in a haystack” tasks.,,fb711a04-81bb-488d-846d-78bb37987e3e
   9557aa58f32b,2026-07-28,assistant,,,"It includes 8 task types, multi-provider support, a CLI, a SvelteKit web UI, YAML configs, charts/reports, caching, resume support, and local-only execution.",,fb711a04-81bb-488d-846d-78bb37987e3e
+
+---
+
+files: /home/marmutapp/needlehaystack/README.md read (9356e848-20b1-4cb0-9fd4-6a0157aa9861)

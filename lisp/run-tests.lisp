@@ -60,6 +60,9 @@
 ;; Level 1 on the image (docs/lisp-port-level1.md).
 (load (merge-pathnames "tests/level1.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Level 0's file tools across harnesses and the JavaScript project slug.
+(load (merge-pathnames "tests/filetools.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

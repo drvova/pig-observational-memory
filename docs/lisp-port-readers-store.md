@@ -55,3 +55,12 @@ matched on its first run. The spike's harness (`memory/selection`, `TestLispPari
 - **Inherited from the spike:** invalid UTF-8 becomes U+FFFD per malformed sequence (Go: per byte), and
   SBCL 2.2.9's Unicode tables are older than Go's. No fixture has either.
 - **Windows.** The store lock is `flock(2)`; the `LockFileEx` lock of Go's Windows build is not ported.
+
+## Level 0 file tools and the project slug
+
+`lisp/src/extract.lisp` ports `extract.toolKey`, `fileToolState` and `extract/patch.go` (`tool-key`,
+`file-tool-state`, `patch-of`, `patch-path-events`; a call keeps its raw arguments in `tcall-raw`, since
+Codex's apply_patch gives a string), and `lisp/src/readers/paths.lisp` ports `transcript.JSSlug`
+(`js-slug`, used by `kode-session-path`). `transcript.ClaudeProjectDir` is not ported: only the Go CLI
+discovers a Claude Code transcript. Tests: `lisp/tests/filetools.lisp`; the golden corpus covers the
+real Codex, Droid, Gemini, Kimi, Kiro and Qoder samples byte for byte.

@@ -124,7 +124,8 @@ writes and reads its hooks (`flat`, `topLevel`, `toml`, `key`, `timeoutMS`, `tim
 - **`transcriptFrom`** finds the transcript from the payload's cwd and session: a list of candidates, the
   first that yields a path wins. A candidate is a `path` template, only on `os` when set, where `${cwd}`
   and `${session}` are the payload's, `${md5(cwd)}` is its hex MD5, `${slug(cwd)}` is the cwd with every
-  byte that is not an ASCII letter or digit as `-`, and `${VAR}` without a default is the environment's;
+  character that is not an ASCII letter or digit as `-`, one per UTF-16 code unit as JavaScript's
+  `replace(/[^a-zA-Z0-9]/g, "-")` writes it (`é` is one `-`, an emoji two), and `${VAR}` without a default is the environment's;
   an empty payload value or unset variable skips the candidate, and payload values are never expanded
   again. Or it is a named `resolver`: `kiro-session` (a glob over Kiro's workspace buckets) and `crush-db`
   (the nearest `.crush` directory up to the repository root).

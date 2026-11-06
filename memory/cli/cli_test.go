@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -136,6 +137,17 @@ func TestDiscoverClaudeCode(t *testing.T) {
 	s, ok := session(filepath.Join(home, "root"), "claude-code", proj)
 	if !ok || s.ID != "abc" || s.Format != "claude-code" {
 		t.Fatalf("discovered %+v %v", s, ok)
+	}
+	// Claude Code writes every character but an ASCII letter or digit as -, one per UTF-16 code
+	// unit: an underscore, a space, an accented letter, an emoji (two).
+	homeSlug := regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(home, "-")
+	for _, c := range []struct{ dir, folder string }{
+		{"my_proj", "-my-proj"}, {"my proj", "-my-proj"}, {"café", "-caf-"}, {"日本😀x", "-----x"},
+	} {
+		claudeTranscript(t, filepath.Join(home, ".claude", "projects", homeSlug+c.folder, c.dir+".jsonl"), 3)
+		if s, ok := session(filepath.Join(home, "root"), "claude-code", filepath.Join(home, c.dir)); !ok || s.ID != c.dir {
+			t.Errorf("%q: discovered %+v %v", c.dir, s, ok)
+		}
 	}
 }
 

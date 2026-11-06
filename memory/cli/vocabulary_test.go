@@ -69,6 +69,7 @@ func TestTranscriptTemplate(t *testing.T) {
 		{"~/x/${session}.jsonl", "/w", "$HOME", filepath.Join(home, "x", "$HOME.jsonl")},
 		{"${OM_T_SET}/${md5(cwd)}", "/w", "s", filepath.Join("/set", hex.EncodeToString(sum[:]))},
 		{"${OM_T_UNSET:-~/d}/${slug(cwd)}", "/w/a.b c", "s", filepath.Join(home, "d", "-w-a-b-c")},
+		{"~/d/${slug(cwd)}", "/w/my_app/café/😀", "s", filepath.Join(home, "d", "-w-my-app-caf----")},
 		{"${OM_T_SET:-~/d}/x", "", "", "/set/x"},
 		{"${OM_T_UNSET}/x", "/w", "s", ""},
 		{"~/${session}", "/w", "", ""},

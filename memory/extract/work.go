@@ -26,16 +26,45 @@ const (
 )
 
 // fileTools are the tools whose path argument names a file, with the state a successful call
-// leaves it in. A delete tool is the one unambiguous tombstone a tool gives.
+// leaves it in, keyed by toolKey so one entry covers every harness's spelling of a name (Claude
+// Code's Read and MultiEdit, Kimi's ReadFile, Gemini's read_file). Each name is one a transcript
+// reader's fixture or its harness's source shows with a path argument (docs/memory-v2.md, "Work
+// facts"). A delete tool is the one unambiguous tombstone a tool gives.
 var fileTools = map[string]string{
-	"read": stateRead, "read_file": stateRead, "view": stateRead,
-	"write": stateWritten, "write_file": stateWritten, "create_file": stateWritten,
-	"edit": stateEdited, "edit_file": stateEdited, "multiedit": stateEdited,
-	"delete": stateDeleted, "delete_file": stateDeleted, "remove": stateDeleted, "remove_file": stateDeleted,
+	"read": stateRead, "readfile": stateRead, "readfiles": stateRead, "view": stateRead,
+	"write": stateWritten, "writefile": stateWritten, "createfile": stateWritten, "create": stateWritten,
+	"edit": stateEdited, "editfile": stateEdited, "multiedit": stateEdited, "notebookedit": stateEdited, "replace": stateEdited,
+	"delete": stateDeleted, "deletefile": stateDeleted, "remove": stateDeleted, "removefile": stateDeleted,
 }
 
-// pathArgs are the arguments that hold a call's path, most common first.
-var pathArgs = []string{"path", "file_path", "filePath"}
+// toolKey is the name a tool is looked up by: ASCII lower case, without underscores or hyphens.
+func toolKey(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case c == '_' || c == '-':
+		case c >= 'A' && c <= 'Z':
+			b.WriteByte(c + 'a' - 'A')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// fileToolState is the state a successful call leaves its path in, "" when its tool names no
+// file. Kiro's write replacing a string (its command strReplace) edits the file.
+func fileToolState(call toolCall) string {
+	key := toolKey(call.name)
+	if key == "write" && call.args["command"] == "strReplace" {
+		return stateEdited
+	}
+	return fileTools[key]
+}
+
+// pathArgs are the arguments that hold a call's path, most common first (notebook_path is Claude
+// Code's NotebookEdit's).
+var pathArgs = []string{"path", "file_path", "filePath", "notebook_path"}
 
 // exitCode reads "Command exited with code N" from a shell result.
 var exitCode = regexp.MustCompile(`Command exited with code (\d+)`)
@@ -44,6 +73,8 @@ var exitCode = regexp.MustCompile(`Command exited with code (\d+)`)
 type toolCall struct {
 	id, name string
 	args     map[string]any
+	// raw is the call's arguments as the entry holds them: Codex's apply_patch gives a string.
+	raw any
 }
 
 // toolResult is the result answering a call, found on the branch after it.
@@ -91,7 +122,7 @@ func (x *extraction) assistant(i int) {
 			id, _ := block["id"].(string)
 			name, _ := block["name"].(string)
 			args, _ := block["arguments"].(map[string]any)
-			calls = append(calls, toolCall{id: id, name: name, args: args})
+			calls = append(calls, toolCall{id: id, name: name, args: args, raw: block["arguments"]})
 		}
 	}
 	words := oneLine(strings.Join(before, "\n"))
@@ -187,6 +218,17 @@ func (x *extraction) callTarget(call toolCall) (key, display string) {
 			return x.pathKey(p), x.pathDisplay(p)
 		}
 	}
+	if patch, ok := patchOf(call); ok {
+		keys, shown := []string{}, []string{}
+		for _, e := range patchPathEvents(patch) {
+			if e.state != stateMovedFrom {
+				keys, shown = append(keys, x.pathKey(e.path)), append(shown, x.pathDisplay(e.path))
+			}
+		}
+		if len(keys) > 0 {
+			return strings.Join(keys, " "), strings.Join(shown, " ")
+		}
+	}
 	args := serialize.JSONStringify(call.args)
 	return args, args
 }
@@ -209,6 +251,11 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 	case !result.present:
 		outcome = ledger.OutcomeOpen
 	case result.failed:
+		outcome = ledger.OutcomeFailed
+	}
+	// A patch applied only when apply_patch says so; any other result is its error.
+	patch, isPatch := patchOf(call)
+	if isPatch && outcome == ledger.OutcomeWorked && !strings.Contains(result.text, applyPatchSuccess) {
 		outcome = ledger.OutcomeFailed
 	}
 	akey := attemptKey(call.name, key)
@@ -250,7 +297,12 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 	if outcome != ledger.OutcomeWorked {
 		return
 	}
-	if state, ok := fileTools[call.name]; ok {
+	if isPatch {
+		for _, event := range patchPathEvents(patch) {
+			x.fileEvent(event.path, event.state, event.other, sources)
+		}
+	}
+	if state := fileToolState(call); state != "" {
 		for _, arg := range pathArgs {
 			if p, ok := call.args[arg].(string); ok && strings.TrimSpace(p) != "" {
 				x.fileEvent(p, state, "", sources)

@@ -22,3 +22,7 @@ next[3]{id,when,kind,status,scope,content,superseded_by,source}:
 notes[2]{id,when,kind,status,scope,content,superseded_by,source}:
   587bec7bf0c1,2026-05-13,assistant,,,"The app skeleton is in place: React/Vite, unified feed, filters, detail pane, and local source management.",,cx000051
   c7e879bcd043,2026-05-13,assistant,,,"Unified feed with filters for RSS, YouTube, newsletters, unread, saved, and priority Search across sources, titles, summaries, and topics Reader/detail pane for selected items Source manager with add/pause controls Local persistence via `localStorage` Responsive layout for desktop and mobile",,cx000090
+
+---
+
+files: package.json written (cx000039), index.html written (cx000039), src/main.jsx written (cx000039), src/styles.css written (cx000039)

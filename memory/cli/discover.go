@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/memory/transcript"
 )
 
 // session is the harness's current session in dir: the one the hooks recorded (remember), else
@@ -22,13 +24,14 @@ func session(root, harnessName, dir string) (Session, bool) {
 }
 
 // discover finds the newest transcript of dir: Claude Code's under
-// ~/.claude/projects/<dir with every / and . as ->, Codex's the newest rollout whose
+// ~/.claude/projects/<transcript.ClaudeProjectDir(dir)> (every character but an ASCII letter
+// or digit as -, a long name cut and hashed as Claude Code does), Codex's the newest rollout whose
 // session_meta names dir.
 func discover(harnessName, dir string) (Session, bool) {
 	dir = filepath.Clean(dir)
 	switch harnessName {
 	case "claude-code":
-		project := strings.NewReplacer("/", "-", ".", "-", "\\", "-", ":", "-").Replace(dir)
+		project := transcript.ClaudeProjectDir(dir)
 		path, ok := newest(filepath.Join(homeDir("CLAUDE_CONFIG_DIR", ".claude"), "projects", project), func(string) bool { return true })
 		if !ok {
 			return Session{}, false

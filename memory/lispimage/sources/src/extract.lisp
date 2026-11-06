@@ -605,15 +605,92 @@ subject and scope."
 
 ;;; work.go
 
+;; fileTools, keyed by tool-key: one entry covers every harness's spelling of a name.
 (defparameter +file-tools+
-  '(("read" . "read") ("read_file" . "read") ("view" . "read")
-    ("write" . "written") ("write_file" . "written") ("create_file" . "written")
-    ("edit" . "edited") ("edit_file" . "edited") ("multiedit" . "edited")
-    ("delete" . "deleted") ("delete_file" . "deleted") ("remove" . "deleted") ("remove_file" . "deleted")))
-(defparameter +path-args+ '("path" "file_path" "filePath"))
+  '(("read" . "read") ("readfile" . "read") ("readfiles" . "read") ("view" . "read")
+    ("write" . "written") ("writefile" . "written") ("createfile" . "written") ("create" . "written")
+    ("edit" . "edited") ("editfile" . "edited") ("multiedit" . "edited") ("notebookedit" . "edited") ("replace" . "edited")
+    ("delete" . "deleted") ("deletefile" . "deleted") ("remove" . "deleted") ("removefile" . "deleted")))
+(defparameter +path-args+ '("path" "file_path" "filePath" "notebook_path"))
 (defregex +exit-code+ #r§Command exited with code (\d+)§)
 
-(defstruct tcall (id "") (name "") args)
+(defun tool-key (name)
+  "toolKey: ASCII lower case, without underscores or hyphens."
+  (with-output-to-string (out)
+    (loop for c across name
+          do (cond ((find c "_-"))
+                   ((char<= #\A c #\Z) (write-char (char-downcase c) out))
+                   (t (write-char c out))))))
+
+(defstruct tcall (id "") (name "") args raw)
+
+(defun file-tool-state (call)
+  "fileToolState: the state a successful call leaves its path in, nil when its tool names no file.
+Kiro's write replacing a string (its command strReplace) edits the file."
+  (let ((key (tool-key (tcall-name call))))
+    (if (and (string= key "write") (equal (jget (tcall-args call) "command") "strReplace"))
+        "edited"
+        (cdr (assoc key +file-tools+ :test #'string=)))))
+
+;;; patch.go
+
+(defparameter +apply-patch-success+ "Success. Updated the following files:")
+
+(defun apply-patch-word-p (w) (or (string= w "apply_patch") (string= w "applypatch")))
+
+(defun path-base-name (p)
+  "path.Base for a command word."
+  (let* ((p (trim-right p "/")) (slash (position #\/ p :from-end t)))
+    (cond ((string= p "") "/") (slash (subseq p (1+ slash))) (t p))))
+
+(defun patch-of (call)
+  "patchOf: (values patch t) for a call that hands Codex's apply_patch a patch, else (values \"\" nil)."
+  (let ((args (tcall-args call)))
+    (when (string= (tool-key (tcall-name call)) "applypatch")
+      (let ((raw (tcall-raw call)))
+        (return-from patch-of
+          (values (cond ((stringp raw) raw) ((stringp (jget args "input")) (jget args "input")) (t "")) t))))
+    (let ((script "") (command (jget args "command")))
+      (cond ((stringp command) (setf script command))
+            ((vectorp command)
+             (unless (every #'stringp command) (return-from patch-of (values "" nil)))
+             (let ((argv (coerce command 'list)))
+               (cond ((and (= (length argv) 2) (apply-patch-word-p (first argv)))
+                      (return-from patch-of (values (second argv) t)))
+                     ((and (= (length argv) 3) (string= (path-base-name (first argv)) "bash")
+                           (member-str (second argv) '("-lc" "-c")))
+                      (setf script (third argv)))))))
+      (when (string= script "")
+        (let ((cmd (jget args "cmd"))) (when (stringp cmd) (setf script cmd))))
+      (let ((words (fields (first (split script (string #\Newline))))))
+        (if (and words (apply-patch-word-p (first words)) (contains script "*** Begin Patch"))
+            (values script t)
+            (values "" nil))))))
+
+(defun patch-path-events (patch)
+  "patchPathEvents: the (path state other) a patch touches, in its order."
+  (let ((events (make-array 0 :adjustable t :fill-pointer t)) (in nil) (update -1))
+    (dolist (raw (split patch (string #\Newline)))
+      (let ((line (trim-right raw (coerce '(#\Space #\Tab #\Return) 'string))))
+        (flet ((marker (prefix)
+                 (when (has-prefix line prefix)
+                   (let ((p (trim-space (subseq line (length prefix)))))
+                     (and (string/= p "") p)))))
+          (cond ((string= line "*** Begin Patch") (setf in t update -1))
+                ((not in))
+                (t (let ((moved update) p)
+                     (setf update -1)
+                     (cond ((string= line "*** End Patch") (setf in nil))
+                           ((setf p (marker "*** Add File: ")) (vector-push-extend (list p "written" "") events))
+                           ((setf p (marker "*** Delete File: ")) (vector-push-extend (list p "deleted" "") events))
+                           ((setf p (marker "*** Update File: "))
+                            (setf update (length events))
+                            (vector-push-extend (list p "edited" "") events))
+                           ((and (setf p (marker "*** Move to: ")) (>= moved 0))
+                            (let ((from (first (aref events moved))))
+                              (setf (aref events moved) (list from "moved to" p))
+                              (vector-push-extend (list p "moved from" from) events))))))))))
+    (coerce events 'list)))
 (defstruct tresult (index 0) (text "") failed present details)
 (defstruct fevent state other display sources)
 
@@ -633,7 +710,8 @@ subject and scope."
                               (if (null calls) (push-end text before) (push-end text after))))
                            ((equal type "toolCall")
                             (push-end (make-tcall :id (str (jget b "id")) :name (str (jget b "name"))
-                                                  :args (let ((a (jget b "arguments"))) (and (hash-table-p a) a)))
+                                                  :args (let ((a (jget b "arguments"))) (and (hash-table-p a) a))
+                                                  :raw (jget b "arguments"))
                                       calls)))))))
       (let ((words (one-line (join before (string #\Newline))))
             (first (position-if-not (lambda (c) (skipped-tool-p x (tcall-name c))) calls)))
@@ -697,6 +775,14 @@ subject and scope."
     (let ((p (arg-string (tcall-args call) arg)))
       (when (and p (string/= (trim-space p) ""))
         (return-from call-target (values (path-key x p) (path-display x p))))))
+  (multiple-value-bind (patch patch-p) (patch-of call)
+    (when patch-p
+      (let ((keys '()) (shown '()))
+        (dolist (ev (patch-path-events patch))
+          (unless (string= (second ev) "moved from")
+            (push-end (path-key x (first ev)) keys)
+            (push-end (path-display x (first ev)) shown)))
+        (when keys (return-from call-target (values (join keys " ") (join shown " ")))))))
   ;; JSONStringify of the call's arguments map: a nil map is boxed, so it encodes as null.
   (let ((args (if (tcall-args call) (json-string (tcall-args call) :escape-html nil) "null")))
     (values args args)))
@@ -717,7 +803,13 @@ subject and scope."
 (defun x-call (x i call result words)
   (let ((sources (if (and (tresult-present result) (/= (tresult-index result) i)) (list i (tresult-index result)) (list i))))
     (multiple-value-bind (key display) (call-target x call)
-      (let* ((outcome (cond ((not (tresult-present result)) "open") ((tresult-failed result) "failed") (t "worked")))
+      (let* ((patch-p (nth-value 1 (patch-of call)))
+             (patch (and patch-p (patch-of call)))
+             (outcome (cond ((not (tresult-present result)) "open")
+                            ((tresult-failed result) "failed")
+                            ;; A patch applied only when apply_patch says so; any other result is its error.
+                            ((and patch-p (not (contains (tresult-text result) +apply-patch-success+))) "failed")
+                            (t "worked")))
              (akey (attempt-key (tcall-name call) key))
              (earlier (gethash akey (x-unresolved x))))
         (when (or (string/= outcome "worked") (string/= words "") earlier)
@@ -739,7 +831,10 @@ subject and scope."
                          (remhash akey (x-unresolved x)))
                   (push-end (obs-id (rec-obs r)) (gethash akey (x-unresolved x)))))))
         (unless (string= outcome "worked") (return-from x-call))
-        (let ((state (cdr (assoc (tcall-name call) +file-tools+ :test #'string=))))
+        (when patch-p
+          (dolist (ev (patch-path-events patch))
+            (x-file-event x (first ev) (second ev) (third ev) sources)))
+        (let ((state (file-tool-state call)))
           (when state
             (dolist (arg +path-args+)
               (let ((p (arg-string (tcall-args call) arg)))
