@@ -55,11 +55,12 @@ events, so it stays held; `/om:status` lists it from Go.
 
 `event/turnEnd` with a store and a session model runs `harness-detect` over what the extraction
 read: the two kernel detectors, the keep-head rule's notes (origin `code`) placed in the batches of
-their cut-point segments, and the detect event recorded once the extraction landed. The turn end is
-refused (not ported, before any write) for a store with rules written before the layer (Go migrates
-those first), and for a branch with a memory call in the removed query language, a call of a defined
-query the skip list holds included (`memory/legacyquery` is not ported). Retired defined tools are
-read at the session start (docs/lisp-port-migration.md).
+their cut-point segments, and the detect event recorded once the extraction landed. Since work package 6
+([lisp-port-status.md](lisp-port-status.md)) rules written before the layer are migrated first
+(`rules.migrate`), and a memory call in the removed query language, or a call of a defined query the
+skip list holds, is read with the frozen recognizer (`memory/legacyquery`, ported): what it asked
+for counts toward dropped-then-queried, and a legacy save or edit is a note. Retired defined tools
+are read at the session start (docs/lisp-port-migration.md).
 
 ## The retire rule (decision 6)
 
@@ -96,8 +97,8 @@ snapshot before the compaction and gives the hook's host the detectors (so `extr
 of `extractCutV2`, runs `harness-detect` and records the run only for a range measured on a fresh
 branch), `after-compaction` calls `record-compaction-evidence` once the answer is built and tells
 the user each notice through `host/notify`, and `compaction-harness-refusal` refuses a store with
-rules written before the layer and a model whose profile may not be the default (a v2 decode event,
-a code event on the summary, or an active switch-codec rule: `harness.ComputeWith` is not ported).
+rules written before the layer, which it now migrates, and, since work package 6, applies the
+model's profile, refusing only a layer that declares a format.
 Level 1 is still refused by the compaction event itself, so `counts` are nil there. The om path
 calls it from `neutral-compaction`; the neutral host has no session model
 (`neutral.Host.SessionModel` is nil in Go too), so nothing is recorded there.
@@ -122,14 +123,13 @@ calls it from `neutral-compaction`; the neutral host has no session model
 
 ## Gaps
 
-- **Legacy rule migration** (`<store>/rules/*.rows`): not ported; the turn end refuses, and
-  `after-pass` records the pass and skips evaluation.
-- **The legacy query language** in memory calls and calls of defined queries: refused at a turn end.
+- **Legacy rule migration** (`<store>/rules/*.rows`) and **the legacy query language** in memory
+  calls and calls of defined queries: ported in work package 6 (lisp-port-status.md).
 - **The Go layer's held definitions** (`settleDefinitionsV2`, `layer.ClaimHeld`): not settled by the
   image. Level 1 offers text only (decision 5), so the image holds none; ones Go held are settled by
   Go. Only held remedies are credited in `ranHeld`, the one Go kind the image applies.
-- **The profile** (`harness.Compute`, `ApplySummary`): Go reads the Lisp ledger identically; the
-  image does not compute it, and refuses a compaction whose profile may not be the default.
+- **The profile** (`harness.Compute`, `ApplySummary`): ported in work package 6 and applied at a
+  PiG compaction; a layer that declares a format is still refused.
 - **The reader** is narrower than Go's: rows files edited by hand into forms Go still accepts are
   skipped, and a ledger line Go's decoder refuses for a non-integer number written as `1.0` is kept.
 - **The kernel floor's name check** is not run on rule names (a hash, never kernel-owned).
