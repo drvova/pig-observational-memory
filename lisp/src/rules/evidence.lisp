@@ -294,3 +294,5 @@ retired definitions). Without a store or a model nothing is recorded."
     (let ((out '()))
       (maphash (lambda (k v) (push (cons k (cdr v)) out)) (interval-settled (interval-of (current-session) model)))
       (sort out #'string< :key #'car))))
+
+(export (quote (take-snapshot record-compaction-evidence harness-detect legacy-memory-call)))

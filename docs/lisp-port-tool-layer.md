@@ -352,9 +352,9 @@ variable, or without `sbcl`, they are skipped.
 - **Adaptable functions.** Only `rank-notes` and `phrase-note` exist. W5 wires in the ones the design
   names for the summary's budget choice, which turns extraction looks at, and detectors, using
   `define-adaptable`.
-- **Evidence records.** Recording the compaction pass event (`ranHeld`, the failure counts) and calling
-  `layer-settle` after it are the compaction hook's work (W5). This package provides
-  `layer-take-evidence` and `layer-settle`.
+- **Evidence records.** The compaction pass event, `layer-settle` on it and the retire rule are in
+  [lisp-port-evidence.md](lisp-port-evidence.md) (`record-compaction-evidence`). A held definition's
+  evidence is now the compaction's snapshot of the layer, and its failures are kept per session.
 - **Level-1 proposals.** Proposing a definition inside the level-1 request is W5's. The memory tool's
   `define` holds one now.
 - **Go-stored definitions.** Definitions stored as Go are not run here. The image's layer is a separate
@@ -365,8 +365,8 @@ variable, or without `sbcl`, they are skipped.
   memory-tool programs in a child SBCL, where a timeout is a process kill, is the owner's decision
   (it narrows decision 2). Heap limits stay image-wide: SBCL has no per-thread quota, and a heap
   exhausted inside GC is fatal.
-- **Settled failures.** A settled definition that later fails falls back on each call and is counted, but
-  nothing retires it. The Go harness has no retirement of written definitions either.
+- **Settled failures.** A settled definition that keeps failing is reverted by the retire rule
+  ([lisp-port-evidence.md](lisp-port-evidence.md)); the Go harness retires no written definition.
 
 ## The curated index (1b)
 

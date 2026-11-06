@@ -79,9 +79,11 @@ the in-process Go engine runs it instead.
 - **`event/turnEnd`.** It runs `EnsureConfig`. When passive it does nothing. Otherwise it runs
   level 0 over `host/getBranch` and appends through `host/appendEntry` (`appendExtraction`,
   stopping at the first append that fails), then answers `{"thinning": bool}`.
-  - **`detectV2` and keep-head are not ported.** With a store and a session model, Go runs the
-    harness detectors inside the extraction (detect events, keep-head notes), so that turn end
-    is refused before anything is appended.
+  - **`detectV2` and keep-head run in the image** (docs/lisp-port-evidence.md). With a store and
+    a session model the harness detectors run over what the extraction read, the keep-head
+    rule's notes ride in its batches, and the detect event is recorded once the extraction
+    landed. A store with retired defined tools or rules written before the layer, and a branch
+    with a memory call in the removed query language, are refused before anything is appended.
   - An extraction that fails before its first append is refused too.
 - **`event/context`.** It follows Go's rules:
   - `seq`/`base`/`reuse`, with `-32001` for a base the image does not hold;
@@ -124,6 +126,6 @@ in-process path.
 `sessionCompact`, `sessionShutdown`, `tool/*` and `command/run` are not ported yet. Also not
 ported:
 
-- the store cases of the three events (detect, curated settle, layer migration, retired names);
+- the store cases of `sessionStart` (curated settle, layer migration, retired names);
 - the `$/acted` notice for the image's direct store writes, which none of these events makes;
 - Windows.
