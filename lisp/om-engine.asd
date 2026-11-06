@@ -59,7 +59,9 @@
                              (:file "layer/store")
                              (:file "layer/adaptable")
                              (:file "tool/reads")
-                             (:file "layer/lock")))
+                             (:file "layer/lock")
+                             ;; 1b, the curated ranked index (docs/lisp-port-tool-layer.md)
+                             (:file "tool/curated-index")))
                ;; W5, hooks (docs/lisp-port-hooks.md)
                (:module "w5"
                 :pathname "src"

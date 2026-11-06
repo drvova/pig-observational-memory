@@ -14,14 +14,29 @@ changes").
 | `lisp/src/hooks/compaction.lisp` | `hooks/compaction_v2.go` (`buildCompactionV2`, `v2CutRange`, `v2SplitTurnRequest`, `v2Intent`, `v2PreviousSummary`, `v2Details`), `hooks/extract_v2.go` (`extractCutV2`, `appendExtraction`, `appendHostSummaryV2`, `dropByRule`), `extract.HostSummary`, `config.ResolveV2SummaryBudget`, `consolidateV2`'s skip reasons, `neutral/compact.go` (`Compaction`, `CompactionAt`, `tokensBefore`, `LatestSummary`) | The compaction on the harness's exact cut. It runs level 0 over the unextracted cut range, then `selection.Render` with the code-built intent and next sections, else the minimal brief. It stores the drops by rule and writes the `om.folded` details in `MemoryDetails`' field order. |
 | `lisp/src/hooks/thin.lisp` | `thin` (`DayHeaders`, `Compute`, `Apply`, `Text`), `extract.CallLine`, `hooks/thin_v2.go` (`OnContext`) | Day headers and the thinning of aged tool results |
 | `lisp/src/hooks/view.lisp` | `commands/view.go` (`ViewOutput`, `NothingVisibleNote`), `jsfmt.Locale` | The text of `/om:view` |
-| `lisp/src/server/hooks.lisp` | `cli/hook.go`, `cli/app.go` (`startContext`, `summaryToHand`), `engine.SectionText`, `curated.EmptyIndex`, `omtool.PromptSnippet` and `PromptGuidelines` | The methods `session-start`, `compact`, `before-compact`, `prompt` (with the summary), `context` and `view` |
+| `lisp/src/server/hooks.lisp` | `cli/hook.go`, `cli/app.go` (`startContext`, `summaryToHand`), `engine.SectionText`, `engine.Index`, `engine.SettleCurated`, `omtool.PromptSnippet` and `PromptGuidelines` | The methods `session-start`, `compact`, `before-compact`, `prompt` (with the summary), `context` and `view` |
 | `lisp/src/server/engine.lisp` (edited) | | `turn-end` reads every format in W2's registry (`ported-formats`), file and database, and runs after a compaction |
 | `lisp/src/json.lisp` (one addition) | `json.RawMessage` | `raw-json`, so an answer carries the details in struct order |
 
 The image's dispatch table now answers every event of [protocol.md](protocol.md). Each one gives
-the same output the Go engine gives, with two exceptions. A curated store that holds a memory
-file makes `session-start` and a summary-handing `prompt` answer "not ported" (the ranked index
-is not ported, see W4). The MCP methods and `call` are W4's and are still not ported.
+the same output the Go engine gives, curated memories included (1b, below). The MCP methods and
+`call` are W4's and are still not ported.
+
+## The curated index at a session start (1b)
+
+`session-start` runs `engine.SessionStart`'s curated part in Go's order: it resets the
+conversation's pin, settles the curated store (`curated-settle` over the branch's corrections,
+in the project `project-root` finds from `cwd`), then renders the index through the pin within
+`curatedMemoryIndexTokens` (the root settings, else 2,000). A summary-handing `prompt` does the
+same after level 0, when it runs level 0, and resets the pin first, since a summary to hand
+follows a compaction. Without a hand, `prompt` and `turn-end` still return `settle-curated` for
+the Go client, which runs it after the answer, as Go's order allows there.
+
+What the settle would tell the user comes back as `notices` (an array of strings, omitted when
+empty). The client writes each one to om's log, as `neutral.Host.Notify` writes an info message
+(`memory/cli/lisp.go`). `session-start` now returns only `remaining: ["migrate-layer"]`: the
+migration writes only the layer's files, so running it after the settle changes nothing the
+answer read.
 
 ## Parity
 
@@ -44,6 +59,13 @@ cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts 
   `pi-compactions.jsonl`: `session-start`, `turn-end`, and `before-compact` on Pi's cut. From
   the view on it runs with `OM_LISP_FALLBACK=0`, so the image answers every one of these events.
   The output and the stores equal the Go engine's: 686 normalized lines, up from 335.
+  1b adds a generic session start over a curated store (still with `OM_LISP_FALLBACK=0`):
+  twenty memories (live, project-scoped, another project's, pinned, two staged, one the
+  validator refuses), usage lines, a 90-token budget in the settings, and a level-0 batch of two
+  user corrections on the branch. The image promotes the memory staged in two sessions, flags
+  the one a correction names (not the pinned one), hands the ranked index with an `also:` line,
+  and logs the same two notices; the curated store's files after it are identical. 920
+  normalized lines.
 - **Lisp tests.** `lisp/tests/hooks.lisp` has 9 tests. They cover the minimal
   brief (the cases from `brief_test.go`), the token estimates, the budget, the compaction over an
   in-memory host, the host summary, day headers, thinning, the view, and the server's methods.
@@ -53,9 +75,8 @@ cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts 
 
 - `memory/cli/lisp.go`: `lispResult.Compaction` is a `json.RawMessage`. Without it, the client
   would re-encode the details with sorted keys, which differs from the Go engine's output.
-  `runRemaining` has a `migrate-layer` step (`engine.MigrateLayer`). `session-start` returns it
-  with `settle-curated`, since `engine.SessionStart` runs both. Neither one changes an empty
-  index, so running them after the image answers keeps the output the same.
+  `runRemaining` has a `migrate-layer` step (`engine.MigrateLayer`), which `session-start`
+  returns. `lispResult.Notices` (1b) are written to om's log.
 - `memory/cli/cli.go`, `memory/commands/view.go`: in Lisp mode, `om view` asks the image for the
   text (method `view`, `{"text", "notice"}`). The clipboard step and the notice stay in Go:
   `commands.ShowView` is split out of `RunView`, and its behavior is unchanged.

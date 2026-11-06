@@ -31,7 +31,9 @@ reach. Run the image only where you would run the model's own tools.
 | `lisp/src/layer/adaptable.lisp` | `define-adaptable`, reading a definition, dispatch, fallback, and the evidence a compaction records. |
 | `lisp/src/tool/reads.lisp` | `om.tool`: notes, history, recall, saved, the curated writes, and the layer calls. It also defines the two adaptable functions the reads use. |
 | `lisp/src/layer/lock.lisp` | Locks `OM.TOOL` once its API is defined. |
+| `lisp/src/tool/curated-index.lisp` | The ranked index and its evidence check (1b): the usage ledger read back, `Usage`, `UsageEventsByName`, `Rank`, `Flagged`, `RenderIndex`, `Pin`, `IndexFor`, `Settle` with `promotionEvidence`, `SubjectMatches` and `promote`, `harness.Corrections`, `harness.NotifySettled`'s texts and `harness.ProjectRoot`. |
 | `lisp/tests/tool-layer.lisp` | 16 tests. |
+| `lisp/tests/curated-index.lisp` | 9 tests (one a cleanup) of the index, the pin, the usage fold, `Settle`, the corrections and the project root. |
 | `lisp/tool-parity.lisp`, `memory/contracts/lisptool_test.go` | The Go parity checks. |
 | `contracts/schemas/lisp-layer-generation.schema.json` | The layer manifest's line. |
 
@@ -244,10 +246,9 @@ variable, or without `sbcl`, they are skipped.
     `Contains`, `SortBy`, `ByEvent` and `AsOf` are not ported. Neither are the next-page snippets, the
     `Partial` notice, `Reflections`, `Files`, `Commits`, `Attempts`, `Dropped`, `Subjects`, `Info` and
     `CitedBy`.
-- **Curated memory.** Not ported: `Settle` (promotion on evidence and correction flags), the ranked index,
-  `saved`'s index order (here it is name order), and the retired defined queries. Those are only
-  detected: a name one holds is refused for a save, and forgetting or giving feedback on one is refused
-  rather than handled.
+- **Curated memory.** Not ported: the retired defined queries. They are only detected: a name one holds
+  is refused for a save, and forgetting or giving feedback on one is refused rather than handled. The
+  ranked index and `Settle` are ported (see "The curated index" below).
 - **Adaptable functions.** Only `rank-notes` and `phrase-note` exist. W5 wires in the ones the design
   names for the summary's budget choice, which turns extraction looks at, and detectors, using
   `define-adaptable`.
@@ -260,3 +261,45 @@ variable, or without `sbcl`, they are skipped.
   directory from the Go layer (`<store>/harness`).
 - **Settled failures.** A settled definition that later fails falls back on each call and is counted, but
   nothing retires it. The Go harness has no retirement of written definitions either.
+
+## The curated index (1b)
+
+`lisp/src/tool/curated-index.lisp` ports the rest of `memory/curated` that the start context needs:
+
+- **The usage fold.** `read-usage-lines` is `readUsageLines`: every complete line of `usage.jsonl` that
+  decodes into Go's `usageLine` and has a name. A member of the wrong JSON type skips the whole line, and
+  keys match ignoring case, as `encoding/json` matches them. A last line with no newline yet is left out.
+  `curated-usage` is `Store.Usage` (views, helped, harmed, edits, corrected since the last save or edit,
+  everything cleared by a forget, the latest time). `usage-events-by-name` is `UsageEventsByName`.
+- **Rank and render.** `curated-rank` is `Rank`, a stable sort with Go's comparator: flagged last unless
+  pinned, then user and feedback memories, then 3·helped + views − 3·harmed, then the type, then the
+  newest update, then the name. `render-index` is `RenderIndex` (UTF-16 token estimates, half the budget
+  for described lines, an `also:` line, an "N more" line with `jsfmt.Locale`), and `index-for` is
+  `IndexFor`, which leaves staged memories out and answers `EmptyIndex` when none is left.
+- **Pin.** `make-pin`, `pin-get`, `pin-shown-names` and `pin-reset` are `curated.Pin`. The image keeps one
+  pin per conversation (harness and session id, `lisp/src/server/hooks.lisp`) and resets it at
+  `session-start` and before a summary is handed, which follows a compaction.
+- **Settle.** `curated-settle` is `Store.Settle`: a staged memory is promoted on a user's quoted helped
+  feedback, a citation, or a second staging session, counting only events since it was saved and after
+  its last save or edit. A correction whose subject names a memory that applies in the project, made
+  after its last update, records one `corrected` event per correction id. Pinned memories are never
+  flagged. `branch-corrections` is `harness.Corrections` over the branch (W1's fold), with each
+  correction timed by its first source entry to the nanosecond. `settled-notices` are
+  `harness.NotifySettled`'s two messages.
+- **The project.** `project-root` is `harness.ProjectRoot`: `filepath.Clean`, symlinks resolved, then the
+  nearest ancestor holding `.git`.
+- **`saved`.** `om.tool:saved` now ranks the memories as the index does, as `omhost`'s `saved` does.
+
+`TestLispCuratedParity` now runs 387 steps. The fixed part adds 51 steps that save memories of every
+type, record views, feedback and citations, append usage lines Go's decoder skips or matches ignoring
+case (and a partial line the next append completes), render the index at budgets from 0 to 2,000, pin
+and reset it, stage memories promoted on each kind of evidence, settle corrections (repeated ids,
+corrections before the last update, a sub-millisecond time), pin a memory by hand and edit a flagged one.
+The random part also draws `record`, `index`, `rank`, `settle`, `pin` and `usage` steps with random
+corrections. Every line, the usage fold, the rank with its flags, every rendered index with the names it
+shows, and every file both stores wrote are identical: 18 indexes with an `also:` line, 8 with names left
+out, 2 settles promoting and 7 flagging. The test fails if the script stops reaching any of those.
+
+Gaps: `promote` treats a memory that became unreadable between the listing and the promotion as not
+promoted, where Go's `Settle` stops with the error. The image does not cache the usage ledger between
+reads (`appendCache`); it reads the whole file each time, with the same result.

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -171,6 +172,15 @@ func lispFlow(t *testing.T, image string) string {
 	section("generic session start", om(t, string(p), "hook", "generic", "session-start"))
 	section("generic store after the second compact", store("mine", "g1"))
 
+	// A curated store with memories (1b): the session start settles it (a staged memory
+	// promoted, a correction on the branch flagging a memory) and hands the ranked index within
+	// the budget the settings give it, on the image with no fallback.
+	fixtureLines := curatedFixture(t, root, home, filepath.Join(root, "sessions", "mine", "g1.jsonl"))
+	text, log := omLog(t, string(p), "hook", "generic", "session-start")
+	section("generic session start with memories", text)
+	section("its notices", log)
+	section("the curated store after it", curatedStore(t, root, fixtureLines))
+
 	// Pi's protocol: a session file with Pi's own compactions, compacted on Pi's cut and not
 	// stored (the harness keeps it), its summary record stored once.
 	data, err := os.ReadFile(filepath.Join("..", "transcript", "testdata", "real", "pi-compactions.jsonl"))
@@ -189,8 +199,126 @@ func lispFlow(t *testing.T, image string) string {
 	return normalizeFlow(out.String(), root, home)
 }
 
+// curatedFixture writes a curated store under root for a session in home and appends to the
+// session's store a level-0 batch of two user corrections whose subjects name memories; it
+// returns how many usage lines it wrote. It also caps the index's budget in the settings.
+func curatedFixture(t *testing.T, root, home, sessionStore string) int {
+	t.Helper()
+	dir := filepath.Join(root, "observational-memory", "memories")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	project, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := func(name, front string) {
+		text := "---\n" + front + "created: 2026-04-01T09:00:00Z\nupdated: 2026-04-01T09:00:00Z\n---\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memory("port-plan", "type: user\ndescription: Ports move in May\n")
+	memory("green-tea", "type: user\ndescription: Drinks green tea\n")
+	memory("make-build", "type: project\ndescription: Builds with make all\nproject: "+project+"\n")
+	memory("other-project", "type: project\ndescription: Not this project\nproject: /elsewhere\n")
+	memory("pinned-one", "type: feedback\ndescription: Pinned by the user\npinned: true\n")
+	memory("staged-twice", "type: reference\ndescription: Staged in two sessions\nstaged: true\nstaged-by: s1, s2\n")
+	memory("staged-solo", "type: lesson\ndescription: Staged once\nstaged: true\nstaged-by: s1\n")
+	memory("broken", "type: lesson\ndescription: Has a field no memory takes\ncolor: blue\n")
+	for i := range 12 {
+		memory(fmt.Sprintf("note-%02d", i), fmt.Sprintf("type: lesson\ndescription: Lesson %d about hosts and the ports they serve\n", i))
+	}
+	usage := []string{
+		`{"time":"2026-04-02T09:00:00Z","name":"green-tea","event":"view"}`,
+		`{"time":"2026-04-02T09:00:00Z","name":"make-build","event":"helped","quote":"the build runs with make"}`,
+		`{"time":"2026-04-02T09:00:00Z","name":"note-07","event":"view"}`,
+		`{"time":"2026-04-02T09:00:00Z","name":"note-07","event":"view"}`,
+		`{"time":"2026-04-02T09:00:00Z","name":"note-03","event":"harmed","quote":"that was wrong"}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir, "usage.jsonl"), []byte(strings.Join(usage, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "settings.json"), []byte(`{"observational-memory":{"curatedMemoryIndexTokens":90}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(sessionStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	var last struct {
+		Entry struct {
+			ID string `json:"id"`
+		} `json:"entry"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatal(err)
+	}
+	tip := last.Entry.ID
+	observation := func(id, subject string) map[string]any {
+		return map[string]any{"id": id, "content": "Actually, the " + subject + " changed.", "timestamp": "2026-05-02 10:00", "relevance": "high",
+			"sourceEntryIds": []string{"m45"}, "tokenCount": 6, "kind": "correction", "subject": subject, "origin": "code"}
+	}
+	line, _ := json.Marshal(map[string]any{"after": tip, "entry": map[string]any{
+		"type": "custom", "customType": "om.observations.recorded", "id": "fixture01", "parentId": tip, "timestamp": "2026-05-02T10:00:06.000Z",
+		"data": map[string]any{"observations": []any{observation("cccccccccc01", "port plan"), observation("cccccccccc02", "pinned one")}, "coversUpToId": "r45"},
+	}})
+	f, err := os.OpenFile(sessionStore, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	return len(usage)
+}
+
+// curatedStore prints the curated store's files in name order, with the time of each usage line
+// after the fixture's first ones (written now) blanked.
+func curatedStore(t *testing.T, root string, fixtureLines int) string {
+	t.Helper()
+	dir := filepath.Join(root, "observational-memory", "memories")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == ".lock" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(data)
+		if e.Name() == "usage.jsonl" {
+			lines := strings.Split(text, "\n")
+			for i := fixtureLines; i < len(lines); i++ {
+				lines[i] = usageTimePattern.ReplaceAllString(lines[i], `"time":"<now>"`)
+			}
+			text = strings.Join(lines, "\n")
+		}
+		fmt.Fprintf(&out, "-- %s\n%s", e.Name(), text)
+	}
+	return out.String()
+}
+
+// omLog is om with what it printed and what it logged.
+func omLog(t *testing.T, stdin string, args ...string) (string, string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	if code := Run(args, strings.NewReader(stdin), &out, &errOut); code != 0 {
+		t.Fatalf("om %v: exit %d: %s", args, code, errOut.String())
+	}
+	return out.String(), errOut.String()
+}
+
 var (
-	flowIDPattern = regexp.MustCompile(`om[0-9a-f]{8}`)
+	usageTimePattern = regexp.MustCompile(`"time":"[^"]*"`)
+	flowIDPattern    = regexp.MustCompile(`om[0-9a-f]{8}`)
 	// flowStampPattern is an entry's append time: neutral.Host stamps entries with the time in
 	// milliseconds, and the fixtures' own times are in May.
 	flowStampPattern = regexp.MustCompile(`"timestamp":"2026-(0[6-9]|1[0-2])-\d\dT\d\d:\d\d:\d\d\.\d{3}Z"`)
