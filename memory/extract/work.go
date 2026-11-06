@@ -139,6 +139,12 @@ func (x *extraction) assistant(i int) {
 	if first < 0 {
 		x.reply(i, strings.Join(append(before, after...), "\n"))
 	} else {
+		// The words before a call disagreeing with the user's claim are its pushback, as a reply's
+		// would be; they still go on the call.
+		anchor, hasAnchor := anchorTime(x.in.Entries[i])
+		for _, sentence := range sentences(words) {
+			x.pushbackAt(i, sentence, anchor, hasAnchor)
+		}
 		x.reply(i, strings.Join(after, "\n"))
 	}
 	for n, call := range calls {

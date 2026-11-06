@@ -152,7 +152,7 @@ column gives that result.
 | 21 | prose does not close a plan | skip, phase 3 | passes: the plan stays proposed |
 | 22 | fresh requirement marks a plan "may be stale" | skip, phase 3 | fails |
 | 23 | quality trigger on a 1M window | skip, phase 3 | no body yet |
-| 24 | an opinion with pushback is not a rule | skip, phase 2 | fails: recorded as a preference |
+| 24 | an opinion with pushback is not a rule | **pass** (phase 2, episodes and pushback) | |
 | 25 | insecure preference held, not in the index | skip, phase 1 | fails: in the index |
 | 26 | project record stale against HEAD | skip, phase 4 | no body yet |
 
@@ -248,6 +248,49 @@ at N = 16 and 20 were 91% and 27% shown where the branch without tool output gav
 "probes per class" moves by a few at N = 2 and 8 because summary sizes change when a run reaches
 its 30th compaction; the renamed-ids control therefore compares the cells both runs scored
 (`TestTier0RenamedIDs`, 1,403 compared and 3 scored in one run only on 2 seeds).
+
+## Phase 2: episodes and pushback
+
+Episodes and pushback (`claude/phase2-episodes`; contracts/encoding.md, "Episode" and "Pushback")
+change no summary the generator's sessions give: their replies never disagree with a claim, so no
+record is a pushback or contested, and the claim instructions line is printed only in a summary
+showing one; records gain only `episode`, which no id and no rendered line includes. Measured on
+`origin/claude/lisp-core` d57e2d0 plus this work, 20 seeds, default window, 600 compactions, 1,557
+snippets run (none failed), 0 model requests, all four invariants kept on every compaction: the
+default-window table is the part B table above cell for cell (identifier 98 / 2 / 0 at N = 1 and
+35 / 65 / 0 at N = 20; error text 98 / 3 / 0 and 0 / 100 / 0; constraint, scope exclusion and
+superseded 100 / 0 / 0 at every N; decision 88 / 13 / 0 and 0 / 100 / 0; intention 98 / 3 / 0
+and 23 / 77 / 0). With the summary capped at 1,200 tokens (3,812 snippets, none failed, invariants
+kept):
+
+| class | 1 | 2 | 4 | 5 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| identifier | 10 / 90 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| error text | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 96 / 4 / 0 | 100 / 0 / 0 | 2 / 98 / 0 | 0 / 100 / 0 |
+| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 22 / 78 / 0 | 0 / 100 / 0 |
+| decision | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | 21 / 79 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 29 / 71 / 0 | 0 / 100 / 0 |
+| probes per class | 168 | 160 | 160 | 143 | 140 | 120 | 89 | 61 |
+
+No class is lost at any N in either run. The capped table is the first one taken with parts A, B
+and C all merged, so it is the reference for the cap from here on; the change in this section
+moves none of its cells, since no summary of these sessions changes.
+
+**Episodes** (`TestEpisodeBoundariesAgainstEvenBaseline`): on the generator's 20 sessions of 200
+turns (31,160 entries), level 0 places 4,000 boundaries, exactly one per request the person typed,
+and none at a tool result or a failing test run. An evenly spaced segmenter with one boundary per
+8 entries (a filler turn's length) places 3,900: the ratio is 1.03. With an acknowledgement turn
+("ok, thanks") after every fifth turn (32,760 entries) the count stays 4,000 against 4,100 (0.98).
+An evenly spaced segmenter placing as many boundaries as there are requests (the periodic baseline
+at matched density) puts 14% of them on a request, 10% with the acknowledgements. The generator has
+one request per turn, so the count says only that the rule follows requests; whether a request is
+the right unit for recall is for a Tier 1 run once something reads episodes.
+
+**Scenario 24** passes (`TestScenario24OpinionWithPushbackNotARule`): the opinion renders as kind
+`claim` with `(contested by <id>)` beside its pushback in the same table, never as a preference,
+and the user restating it with the same key makes it a preference again.
 
 ## Re-running it
 

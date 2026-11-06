@@ -115,6 +115,8 @@ func (l *layout) sectionLine(group string) string {
 const (
 	extraEvidence = "line:evidence"
 	extraValues   = "line:values"
+	extraContest  = "line:contested"
+	ContestedLine = "- claim: a notes row of kind claim is the user's preference or correction the assistant pushed back on: a claim, not a rule; (contested by <id>) names the pushback, a row of kind pushback ending with (responds to <id>), and (contested) alone one not shown. The user restating it makes it a rule again.\n"
 	EvidenceLine  = "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.\n"
 	ValuesLine    = "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.\n"
 )
@@ -126,6 +128,8 @@ func extraLine(extra string) string {
 		return EvidenceLine
 	case extraValues:
 		return ValuesLine
+	case extraContest:
+		return ContestedLine
 	}
 	return ""
 }
@@ -301,9 +305,9 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		if it.links != "" {
 			shown += " " + it.links
 		}
-		it.cells = []string{o.ID, it.from, string(o.Kind), it.status, scope, shown, replacedBy, source}
+		it.cells = []string{o.ID, it.from, it.shownKind(), it.status, scope, shown, replacedBy, source}
 		line := "[" + o.ID + "]"
-		for _, part := range []string{it.from, string(o.Kind), it.status} {
+		for _, part := range []string{it.from, it.shownKind(), it.status} {
 			if part != "" {
 				line += " " + part
 			}
@@ -499,7 +503,7 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	for _, b := range blocks {
 		lines += l.sectionLine(b.group)
 	}
-	for _, extra := range []string{extraEvidence, extraValues} {
+	for _, extra := range []string{extraEvidence, extraContest, extraValues} {
 		if p.opened[extra] > 0 {
 			lines += extraLine(extra)
 		}

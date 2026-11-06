@@ -120,6 +120,9 @@ type record struct {
 	// undated marks a merged record whose parts named different event dates, or a part naming
 	// dates but no one date (ledger.NamesNoOneDate).
 	undated bool
+	// answers is a pushback record's exchange: the branch index of the user message whose
+	// claims it answers (resolvePushbacks); -1 for any other record.
+	answers int
 }
 
 // extraction is one Extract call's state.
@@ -156,6 +159,8 @@ type extraction struct {
 	// user texts.
 	exchange      int
 	exchangeTexts []string
+	// episodes are the episode ids by branch index (Episodes), "" before the first request.
+	episodes []string
 }
 
 // Extract reads the source entries of in.Entries[in.Start:in.End] and returns the records
@@ -227,6 +232,8 @@ func Extract(in Input) Result {
 	// A phrase retraction that withdrew nothing became the correction it would have been.
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil && r.correction == r.fallback })
 	x.linkRecords()
+	x.resolvePushbacks()
+	x.episodes = Episodes(in.Entries, in.End, in.Writer.Session)
 	x.encode()
 	result := Result{Batches: x.batches(cite)}
 	if last >= 0 {
@@ -301,7 +308,7 @@ func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
 	if obs.Origin == "" {
 		obs.Origin = ledger.OriginCode
 	}
-	r := &record{obs: obs, anchor: anchor, first: first, exchange: x.exchange}
+	r := &record{obs: obs, anchor: anchor, first: first, exchange: x.exchange, answers: -1}
 	x.records = append(x.records, r)
 	return r
 }

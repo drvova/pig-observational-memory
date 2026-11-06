@@ -66,6 +66,7 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"synthetic-generic", "generic", synthetic("generic.jsonl"), "/home/dev/app", mode, budgets},
 			parityCase{"synthetic-conversation", "generic", synthetic("conversation.jsonl"), "", mode, budgets},
 			parityCase{"synthetic-rules", "generic", synthetic("rules.jsonl"), "/home/dev/billing", mode, budgets},
+			parityCase{"synthetic-pushback", "generic", synthetic("pushback.jsonl"), "/home/dev/app", mode, budgets},
 			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
 			parityCase{"synthetic-safety", "generic", safety, "/srv/app", mode, budgets},
 			parityCase{"synthetic-tooloutput", "generic", synthetic("tooloutput.jsonl"), "/srv/app", mode, budgets},
@@ -85,6 +86,7 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"synthetic-claude-code", "claude-code", synthetic("claude-code.jsonl"), "/home/dev/shop", mode, budgets},
 			parityCase{"synthetic-generic", "generic", synthetic("generic.jsonl"), "/home/dev/app", mode, budgets},
 			parityCase{"synthetic-conversation", "generic", synthetic("conversation.jsonl"), "", mode, budgets},
+			parityCase{"synthetic-pushback", "generic", synthetic("pushback.jsonl"), "/home/dev/app", mode, budgets},
 			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
 			parityCase{"synthetic-tooloutput", "generic", synthetic("tooloutput.jsonl"), "/srv/app", mode, budgets},
 		)

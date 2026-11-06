@@ -28,6 +28,8 @@
   (possibly-updates '() :type list)
   (conflicts '() :type list)
   (replaces '() :type list)
+  ;; responds-to: the claims a pushback record answers (Observation.RespondsTo).
+  (responds-to '() :type list)
   ;; The encoding fields (ledger-encoding.lisp): keys, frame and writer are alists in write order.
   (source "" :type string)
   (authority "" :type string)
@@ -43,7 +45,7 @@
 (defparameter +status-retracted+ "retracted")
 (defparameter +status-values+ '("proposed" "hypothetical" "retracted"))
 (defparameter +observation-kinds+ '("fact" "event" "preference" "plan" "correction" "assistant"))
-(defparameter +code-kinds+ '("attempt" "file" "commit" "note" "decision" "convention" "evidence" "value"))
+(defparameter +code-kinds+ '("attempt" "file" "commit" "note" "decision" "convention" "evidence" "value" "pushback"))
 (defparameter +relevance-values+ '("low" "medium" "high" "critical"))
 
 (defun write-obs-json (o out)
@@ -79,6 +81,7 @@
     (when (obs-possibly-updates o) (field "possiblyUpdates" (strings (obs-possibly-updates o))))
     (when (obs-conflicts o) (field "conflicts" (strings (obs-conflicts o))))
     (when (obs-replaces o) (field "replaces" (strings (obs-replaces o))))
+    (when (obs-responds-to o) (field "respondsTo" (strings (obs-responds-to o))))
     (unless (string= (obs-source o) "") (field "source" (obs-source o)))
     (unless (string= (obs-authority o) "") (field "authority" (obs-authority o)))
     (unless (string= (obs-hedge o) "") (field "hedge" (obs-hedge o)))
@@ -152,6 +155,7 @@
           (setf (obs-possibly-updates o) (link-ids (jget m "possiblyUpdates") (obs-id o))
                 (obs-conflicts o) (link-ids (jget m "conflicts") (obs-id o))
                 (obs-replaces o) (link-ids (jget m "replaces") (obs-id o))
+                (obs-responds-to o) (link-ids (jget m "respondsTo") (obs-id o))
                 (obs-supersedes o) (link-ids (jget m "supersedes") (obs-id o)))
           ;; Observation.readEncoding.
           (let ((s (jget m "source"))) (when (member s +source-values+ :test #'equal) (setf (obs-source o) s)))

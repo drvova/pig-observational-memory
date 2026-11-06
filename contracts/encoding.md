@@ -29,9 +29,9 @@ before.
 |---|---|---|
 | `source` | `user-said`, `tool-observed`, `assistant-claim`, `model-inferred`, `host-summary`, `harness-memory`, `other-session`, `external-untrusted` | The record's kind, else the role of its first source entry (below) |
 | `authority` | `user`, `repo-file`, `tool`, `model` (highest first) | The source (below); level 1 only lowers it |
-| `hedge` | `stated`, `hedged`, `unverified` | The lexicon over the record's own sentence |
+| `hedge` | `stated`, `hedged`, `unverified`, `contested` | The lexicon over the record's own sentence; `contested` for a claim a pushback answers (below) |
 | `timeHint` | `after:<date>`, `before:<date>` | A plan, or a reported past event with no event date |
-| `episode` | an episode id | Nothing yet: segmentation is a later step; the member loads and is kept |
+| `episode` | an episode id (12 hex) | The request the person typed that opened the record's episode (below) |
 | `keys` | `{paths, symbols, commands, tests, errors, config, versions}`, each a list of strings | What level 0 knows (below); extractors add more through `ledger.Keys.Add` (`keys-add`) |
 | `frame` | `{repoId, branch, head, path, symbol, bodyHash}` | The adapter's repository (below) and the record's one path |
 | `writer` | `{harness, session, model, engine}` | The host: its harness name, the session id, the session model's key (`provider/id`), and `go` or `lisp` |
@@ -90,8 +90,10 @@ marker matches, else `stated`.
 The sentence is the record's content, except that a file or commit record (a label code wrote) is
 `stated`, and an attempt's is the model's words it carries before its `[tool "target" outcome]`
 line, so an error message is never read as the model hedging. A level-1 merge takes the most hedged
-of its text's hedge and its sources' (`unverified` above `hedged` above `stated`): consolidation
-never states hearsay more surely than it was said.
+of its text's hedge and its sources' (`contested` above `unverified` above `hedged` above
+`stated`): consolidation never states hearsay more surely than it was said, nor a contested claim
+as settled. The lexicon never gives `contested`; level 0 sets it on a claim it records a pushback
+for ("Pushback").
 
 ### Time hint
 
@@ -133,6 +135,63 @@ directory and the latest compaction entry), so git runs at most once between two
 Each new level-0 record then carries `repoId`, `branch` and `head`, and `path`: its one `paths` key
 relative to the work-tree root when inside it. `symbol` and `bodyHash` stay empty in this phase. A
 level-1 merge keeps the frame its sources share, else none.
+
+### Episode
+
+A new episode starts only at a request the person typed: a branch entry of type `message` and role
+`user` (never a custom message, a tool result or a user's shell command) that has a sentence,
+harness markup removed, which is neither a bare acknowledgement ("ok", "thanks", "yes"; the ack
+words of level 0) nor markup. A record's episode is the one open at its newest source entry; a
+record before the first request has none. The id is the first 12 hex characters of the SHA-256 of
+`episode\0<session>\0<entry id>`, the session being the writer's session id ("" when the host names
+none), so the same range read in one extraction or in two gives the same ids. Test outcomes, file
+changes and commits are never boundaries; they stay fields and records. A level-1 merge keeps the
+episode its sources share, else none.
+
+### Pushback
+
+A **claim** is a record of `source: user-said` and kind `preference` (rules included) or
+`correction`, not retracted. A sentence of the first assistant message after a user message (its
+reply text, or its words before a tool call) is a **pushback** when that message made a claim, the
+sentence is not a question or a bare acknowledgement, and it holds a pushback marker, matched as
+hedge markers are:
+
+- i'd push back, i would push back, let me push back, pushing back, push back on, i disagree,
+  i don't agree, i do not agree, i'm not sure i agree, i am not sure i agree, that's not quite
+  right, that is not quite right, not quite right, that's not right, that is not right, that isn't
+  right, that's not correct, that is not correct, that isn't correct, however, this would,
+  however, that would, however, this could, however, that could, however, doing so, that could
+  break, this could break, that would break, this would break, that will break, this will break,
+  it could break, it would break, i'd advise against, i would advise against, i'd recommend
+  against, i would recommend against, i'd caution against, i would caution against, i'd argue
+  against, i would argue against, i wouldn't recommend, i would not recommend, i'd suggest not,
+  i would suggest not, not a good idea, that's a bad idea, that is a bad idea, that's risky, this
+  is risky;
+- or `actually,` when no self-correction matches: actually, let me, actually, let's, actually,
+  i'll, actually, i will, actually, i'm going to, actually, i am going to, actually, looking,
+  actually, i see, actually, i need, actually, i should, actually, i think, actually, i found,
+  actually, wait.
+
+The sentence is recorded verbatim as kind `pushback` (status none, source `assistant-claim`,
+authority `model`), with `respondsTo` holding the ids of the message's claims: those of the same
+extraction, then the ledger's active claims citing the message. Each claim of the same extraction
+gets hedge `contested`; a claim already in the ledger keeps its bytes. A pushback never
+supersedes, links, retracts or closes anything.
+
+A claim **stands contested** (`ledger.Contested`, `contested`), read over the ledger in order, from
+a pushback answering it or its own hedge `contested`, until a later user record **restates** it: a
+record of `source: user-said` and kind `fact`, `preference`, `correction` or `decision`, not
+retracted, holding no concession marker (you're right, you are right, good point, fair point, fair
+enough, makes sense, agreed, point taken, you've convinced me, you convinced me) that names every
+key the claim quotes (`ledger.RecordKeys`), or, for a claim with no key, carries every specific of
+a claim that has some, with no negation conflict between the two. A pushback after that contests it
+again. A user sentence restating a contested claim is a record (a fact) even when it gives no
+specific. The summary shows a claim standing contested with kind `claim`, never in the user-rule
+class, beside its pushback.
+
+`contracts/encoding.jsonl` holds the marker, concession, restatement and episode-id cases, and
+`contracts/conversation.jsonl` the records of pushback and episode branches, which both engines
+check.
 
 ### Writer
 

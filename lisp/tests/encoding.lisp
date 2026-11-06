@@ -27,6 +27,14 @@
                  (check (time-hint-of o) want name)))
               ((string= kind "authority") (check (authority-of input) want name))
               ((string= kind "customSource") (check (source-of-custom-type input) want name))
+              ((string= kind "pushback") (check (if (pushback-p input) "true" "false") want name))
+              ((string= kind "concedes") (check (if (concedes-p input) "true" "false") want name))
+              ((string= kind "restates")
+               (let ((m (json-parse input)))
+                 (check (if (restates-claim-p (make-obs :content (jget m "restatement")) (make-obs :content (jget m "claim"))) "true" "false")
+                        want name)))
+              ((string= kind "episode")
+               (let ((m (json-parse input))) (check (episode-id (jget m "session") (jget m "entry")) want name)))
               (t (check kind "a known kind" name)))))))
 
 (deftest encoding-keys-alist

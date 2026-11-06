@@ -9,7 +9,7 @@
   '("user-said" "tool-observed" "assistant-claim" "model-inferred" "host-summary" "harness-memory"
     "other-session" "external-untrusted"))
 (defparameter +authority-values+ '("user" "repo-file" "tool" "model"))
-(defparameter +hedge-values+ '("stated" "hedged" "unverified"))
+(defparameter +hedge-values+ '("stated" "hedged" "unverified" "contested"))
 (defparameter +key-kinds+ '("paths" "symbols" "commands" "tests" "errors" "config" "versions"))
 (defparameter +frame-members+ '("repoId" "branch" "head" "path" "symbol" "bodyHash"))
 (defparameter +writer-members+ '("harness" "session" "model" "engine"))
@@ -92,7 +92,7 @@ the old one unchanged, in +key-kinds+ order."
 (defun least-authority (a b) (if (< (authority-rank b) (authority-rank a)) b a))
 
 (defun hedge-rank (h)
-  (cond ((string= h "unverified") 2) ((string= h "hedged") 1) ((string= h "stated") 0) (t -1)))
+  (cond ((string= h "contested") 3) ((string= h "unverified") 2) ((string= h "hedged") 1) ((string= h "stated") 0) (t -1)))
 
 (defun strongest-hedge (a b) (if (> (hedge-rank b) (hedge-rank a)) b a))
 
@@ -194,3 +194,42 @@ the old one unchanged, in +key-kinds+ order."
                    (version-name-p (subseq tok 0 at)) (version-value-p (subseq tok (1+ at)))
                    (not (member-str tok out)))
           (setf out (append out (list tok))))))))
+
+;;; Episodes and pushback (memory/ledger/contest.go; contracts/encoding.md, "Episode" and "Pushback")
+
+(defun episode-id (session entry-id)
+  "EpisodeID."
+  (hash-id (cat "episode" (string (code-char 0)) session (string (code-char 0)) entry-id)))
+
+(defparameter +pushback-markers+
+  '("i'd push back" "i would push back" "let me push back" "pushing back" "push back on"
+    "i disagree" "i don't agree" "i do not agree" "i'm not sure i agree" "i am not sure i agree"
+    "that's not quite right" "that is not quite right" "not quite right"
+    "that's not right" "that is not right" "that isn't right"
+    "that's not correct" "that is not correct" "that isn't correct"
+    "however, this would" "however, that would" "however, this could" "however, that could" "however, doing so"
+    "that could break" "this could break" "that would break" "this would break"
+    "that will break" "this will break" "it could break" "it would break"
+    "i'd advise against" "i would advise against" "i'd recommend against" "i would recommend against"
+    "i'd caution against" "i would caution against" "i'd argue against" "i would argue against"
+    "i wouldn't recommend" "i would not recommend" "i'd suggest not" "i would suggest not"
+    "not a good idea" "that's a bad idea" "that is a bad idea" "that's risky" "this is risky"))
+
+(defparameter +actually-marker+ '("actually,"))
+
+(defparameter +self-corrections+
+  '("actually, let me" "actually, let's" "actually, i'll" "actually, i will" "actually, i'm going to"
+    "actually, i am going to" "actually, looking" "actually, i see" "actually, i need" "actually, i should"
+    "actually, i think" "actually, i found" "actually, wait"))
+
+(defparameter +concession-markers+
+  '("you're right" "you are right" "good point" "fair point" "fair enough" "makes sense"
+    "agreed" "point taken" "you've convinced me" "you convinced me"))
+
+(defun pushback-p (text)
+  "IsPushback."
+  (let ((tx (lexicon-text text)))
+    (or (has-marker-p tx +pushback-markers+)
+        (and (has-marker-p tx +actually-marker+) (not (has-marker-p tx +self-corrections+))))))
+
+(defun concedes-p (text) "Concedes." (has-marker-p (lexicon-text text) +concession-markers+))

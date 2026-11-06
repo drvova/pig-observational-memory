@@ -59,19 +59,53 @@ func TestScenario23QualityTriggerOnLargeWindow(t *testing.T) {
 }
 
 // Scenario 24: a user's opinion the assistant pushed back on is kept as the claim with the
-// pushback beside it, never as a rule.
+// pushback beside it, never as a rule; a later user quote restating the claim lifts the contest.
 func TestScenario24OpinionWithPushbackNotARule(t *testing.T) {
-	later(t, "phase 2: assistant pushback kept beside user claims; a hedge for opinions")
-	entries, cut := turnsBranch(Turn{User: "I think global variables are fine in `internal/cfg`, always use them there.",
-		Reply: "Global state in `internal/cfg` makes the parallel tests flaky; I would keep the config injected."})
-	c, _ := compactOnce(t, entries, cut)
+	opinion := Turn{User: "I think global variables are fine in `internal/cfg`, always use them there.",
+		Reply: "I'd push back: global state in `internal/cfg` makes the parallel tests flaky, so I would keep the config injected."}
+	entries, cut := turnsBranch(opinion)
+	c, after := compactOnce(t, entries, cut)
+	var claim, pushback *Row
 	for _, r := range rowsFrom(c.Summary, 0) {
-		if r.Cells["kind"] == "preference" {
+		switch {
+		case r.Cells["kind"] == "preference":
 			t.Fatalf("the opinion is a rule: %+v", r)
+		case r.Cells["kind"] == "claim":
+			claim = &r
+		case r.Cells["kind"] == "pushback":
+			pushback = &r
 		}
 	}
-	if !strings.Contains(c.Summary, "flaky") {
-		t.Fatalf("the pushback is gone:\n%s", c.Summary)
+	if claim == nil || pushback == nil || !strings.Contains(pushback.Text, "flaky") || claim.Table != pushback.Table {
+		t.Fatalf("claim %+v, pushback %+v:\n%s", claim, pushback, c.Summary)
+	}
+	if !strings.Contains(claim.Cells["content"], "(contested by "+pushback.Cells["id"]+")") || !strings.Contains(pushback.Cells["content"], "(responds to "+claim.Cells["id"]+")") {
+		t.Fatalf("claim %q, pushback %q", claim.Cells["content"], pushback.Cells["content"])
+	}
+	// The ledger keeps both: the claim hedged contested, the pushback the assistant's words
+	// citing it, with model authority.
+	folded := ledger.FoldLedger(after, "")
+	for _, o := range folded.ActiveObservations {
+		switch {
+		case o.ID == claim.Cells["id"] && (o.Hedge != ledger.HedgeContested || o.Kind != "preference"):
+			t.Fatalf("claim %+v", o)
+		case o.ID == pushback.Cells["id"] && (o.Kind != ledger.KindPushback || o.Source != ledger.SourceAssistantClaim || o.Authority != ledger.AuthorityModel || len(o.RespondsTo) != 1 || o.RespondsTo[0] != claim.Cells["id"]):
+			t.Fatalf("pushback %+v", o)
+		}
+	}
+
+	// The user restating the claim after the pushback lifts the contest: it is a rule again.
+	entries, cut = turnsBranch(opinion, say("No, keep the globals in `internal/cfg`; it is a small tool."))
+	c, _ = compactOnce(t, entries, cut)
+	lifted := false
+	for _, r := range rowsFrom(c.Summary, 0) {
+		if r.Cells["kind"] == "claim" {
+			t.Fatalf("the restated claim is still contested: %+v\n%s", r, c.Summary)
+		}
+		lifted = lifted || r.Cells["kind"] == "preference"
+	}
+	if !lifted {
+		t.Fatalf("the restated claim is gone:\n%s", c.Summary)
 	}
 }
 

@@ -137,6 +137,10 @@ type item struct {
 	// status is the record's status as shown (statusOf); links the pointers its line ends
 	// with before its source (linksOf).
 	status, links string
+	// contested marks a user claim standing contested (ledger.Contested), contestedBy the
+	// pushback records answering it: it is shown as a claim, never as a rule.
+	contested   bool
+	contestedBy []string
 	// extra is the instructions line the item's kind adds once to the summary that shows one
 	// (extraLine), "" for none.
 	extra string
@@ -328,6 +332,7 @@ func newState(in Input) *state {
 			it.status = statusOf(it.obs, retracted)
 		}
 	}
+	s.contest(all)
 	s.markNext()
 	s.link()
 	supersededBy := map[string][]string{}
@@ -360,6 +365,38 @@ func newState(in Input) *state {
 		s.intent = append(s.intent, it)
 	}
 	return s
+}
+
+// contest marks the user claims standing contested (ledger.Contested over every record of the
+// ledger), and puts each pushback in the table of the first claim it answers, so it is shown
+// beside it.
+func (s *state) contest(all []ledger.Observation) {
+	for id, by := range ledger.Contested(all) {
+		if it := s.byID[id]; it != nil && it.role == roleNote {
+			it.contested, it.contestedBy, it.extra = true, by, extraContest
+		}
+	}
+	for _, it := range s.items {
+		if it.role != roleNote || it.obs.Kind != ledger.KindPushback {
+			continue
+		}
+		it.extra = extraContest
+		for _, id := range it.obs.RespondsTo {
+			if claim := s.byID[id]; claim != nil && claim.role == roleNote {
+				it.group = claim.group
+				break
+			}
+		}
+	}
+}
+
+// shownKind is the kind a note's line shows: a contested claim is a "claim", never the
+// preference or correction it would be as a rule.
+func (it *item) shownKind() string {
+	if it.contested {
+		return "claim"
+	}
+	return string(it.obs.Kind)
 }
 
 // markNext moves the next steps into the next section (docs/memory-v2.md, "Selection"): the
@@ -447,6 +484,18 @@ func (s *state) link() {
 		}
 		pointer("may update", it.obs.PossiblyUpdates, func(other *item) bool { return !s.superseded[other.obs.ID] })
 		pointer("conflicts", it.obs.Conflicts, func(*item) bool { return true })
+		// A contested claim names the pushback answering it, and the pushback the claims it
+		// answers (ledger.Contested, Observation.RespondsTo).
+		if it.contested {
+			n := len(parts)
+			pointer("contested by", it.contestedBy, func(*item) bool { return true })
+			if len(parts) == n {
+				parts = append(parts, "(contested)")
+			}
+		}
+		if it.obs.Kind == ledger.KindPushback {
+			pointer("responds to", it.obs.RespondsTo, func(*item) bool { return true })
+		}
 		it.links = strings.Join(parts, " ")
 	}
 	for id, items := range s.partners {
@@ -619,7 +668,7 @@ func (s *state) choose(budget int) *selected {
 	newestFirst(func(it *item) bool { return slices.Contains(fallen, it) }, roleNote)
 	// 2. Unsuperseded user corrections and preferences.
 	newestFirst(func(it *item) bool {
-		return ledger.UserPriority(it.obs) && !s.superseded[it.obs.ID] && it.status != ledger.StatusRetracted
+		return ledger.UserPriority(it.obs) && !it.contested && !s.superseded[it.obs.ID] && it.status != ledger.StatusRetracted
 	}, observations...)
 	// 3. Open and failed attempts not resolved by a later one.
 	newestFirst(func(it *item) bool {

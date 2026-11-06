@@ -69,12 +69,17 @@ const (
 	// its sources are its first and latest sighting, its content counts the results that
 	// printed it).
 	KindValue ObservationKind = "value"
+	// KindPushback is the assistant's disagreement with a claim the user just made (a
+	// preference, rule or correction), in fixed wording (IsPushback; contracts/encoding.md,
+	// "Pushback"): the assistant's words, kept beside the claim it answers (RespondsTo), never a
+	// rule and never closing anything.
+	KindPushback ObservationKind = "pushback"
 )
 
 // CodeKindValues are the kinds level-0 extraction writes beside ObservationKindValues. They
 // are read back from the ledger (ObservationFrom) but are not kinds a worker or a note schema
 // may write, so v1's prompts and validation are unchanged.
-var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote, KindDecision, KindConvention, KindEvidence, KindValue}
+var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote, KindDecision, KindConvention, KindEvidence, KindValue, KindPushback}
 
 // The origins of a record (Observation.Origin).
 const (
@@ -157,6 +162,10 @@ type Observation struct {
 	// settled possible update's one record, a merge's sources. Links to those records are read
 	// as links to this one (Standing). Code sets it; none for every other record.
 	Replaces []string `json:"replaces,omitempty"`
+	// RespondsTo are the ids of the user's claims a pushback record answers (KindPushback):
+	// the preferences, rules and corrections of the exchange its reply belongs to. Code sets it;
+	// none for every other record.
+	RespondsTo []string `json:"respondsTo,omitempty"`
 	// The encoding fields (docs/brain-memory.md, "Encoding"; contracts/encoding.md) are set by
 	// code at write time and are not part of the record's id, so a record keeps its id whichever
 	// engine or session wrote it. Every one is "" or zero, and omitted, for a record written
@@ -173,7 +182,8 @@ type Observation struct {
 	// TimeHint is "after:<date>" for a plan and "before:<date>" for a reported past event with no
 	// event date, the date being the one the record was said on (TimeHintOf).
 	TimeHint string `json:"timeHint,omitempty"`
-	// Episode is the id of the episode the record belongs to; segmentation comes later.
+	// Episode is the id of the episode the record belongs to (EpisodeID): the one the newest
+	// request the person typed at or before the record's newest source entry opened.
 	Episode string `json:"episode,omitempty"`
 	// Keys are the exact strings the record can be looked up by (Keys.Add).
 	Keys Keys `json:"keys,omitzero"`
@@ -515,6 +525,7 @@ func ObservationFrom(v any) (Observation, bool) {
 	observation.PossiblyUpdates = observation.linkIDs(m["possiblyUpdates"])
 	observation.Conflicts = observation.linkIDs(m["conflicts"])
 	observation.Replaces = observation.linkIDs(m["replaces"])
+	observation.RespondsTo = observation.linkIDs(m["respondsTo"])
 	observation.readEncoding(m)
 	// Each supersedes element is checked on its own, so one bad element drops
 	// only itself.

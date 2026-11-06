@@ -102,7 +102,9 @@
   (named-words "")
   fallback
   (fallback-status "")
-  undated)
+  undated
+  ;; answers: a pushback record's exchange (resolve-pushbacks, contest.lisp); -1 for any other.
+  (answers -1))
 
 (defstruct (xstate (:conc-name x-))
   entries
@@ -130,7 +132,9 @@
   known-given
   (known (make-set))
   (exchange -1)
-  (exchange-texts '()))
+  (exchange-texts '())
+  ;; episodes: the episode ids by branch index (episodes-of, contest.lisp).
+  (episodes #()))
 
 (defstruct batch observations covers)
 
@@ -466,7 +470,7 @@
                         (retraction (setf kind "correction" status +status-retracted+))
                         ((or (preference-p sentence) (rule-p sentence)) (setf kind "preference"))
                         ((decision-p sentence) (setf kind "decision" status (status-of-sentence sentence)))
-                        ((or (has-specifics-p sentence) (self-statement-p sentence))
+                        ((or (has-specifics-p sentence) (self-statement-p sentence) (x-restates-contested-p x sentence))
                          (setf kind "fact" status (status-of-sentence sentence)))
                         (t (return-from next)))
                   (let ((r (x-add x (let ((o (conversation-record x sentence kind status day)))
@@ -499,6 +503,8 @@
   (let* ((e (entry-at x i)) (day (anchor-day e)) (exchange (new-given (x-exchange-texts x))))
     (flet ((keep (statement)
              (unless (bare-ack-p statement)
+               ;; A statement disagreeing with a claim the user made in the exchange is its pushback.
+               (when (x-pushback-at x i statement day) (return-from keep))
                (let ((given (list exchange (x-known-given x))))
                  (dolist (r (x-records x))
                    (when (= (rec-exchange r) (x-exchange x))
@@ -738,7 +744,11 @@ Kiro's write replacing a string (its command strReplace) edits the file."
             (first (position-if-not (lambda (c) (skipped-tool-p x (tcall-name c))) calls)))
         (if (null first)
             (x-reply x i (join (append before after) (string #\Newline)))
-            (x-reply x i (join after (string #\Newline))))
+            (progn
+              ;; The words before a call disagreeing with the user's claim are its pushback too.
+              (let ((day (anchor-day (entry-at x i))))
+                (dolist (s (sentences words)) (x-pushback-at x i s day)))
+              (x-reply x i (join after (string #\Newline)))))
         (loop for call in calls for n from 0
               do (let ((result (result-of x i (tcall-id call))))
                    (cond ((string= (tcall-name call) +memory-tool+)
@@ -1163,6 +1173,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
       (resolve-retractions x)
       (resolve-corrections x (lambda (r) (and (rec-correction r) (eq (rec-correction r) (rec-fallback r)))))
       (link-records x)
+      (x-resolve-pushbacks x)
       (x-encode x)
       (values (x-batches x cite) (if (>= last 0) (entry-id (aref entries last)) "")))))
 
@@ -1257,5 +1268,9 @@ bound by the caller that knows the session and its repository; nil writes neithe
           (t (entry-source (entry-at x (rec-first r)))))))
 
 (defun x-encode (x)
+  (setf (x-episodes x) (episodes-of (x-entries x) (x-end x) (alist-member (getf *encoding* :writer) "session")))
   (dolist (r (x-records x))
+    (let ((o (rec-obs r)) (at (rec-anchor r)))
+      (when (and (string= (obs-episode o) "") (>= at 0) (< at (length (x-episodes x))))
+        (setf (obs-episode o) (aref (x-episodes x) at))))
     (encode-record (rec-obs r) (x-source-of x r))))

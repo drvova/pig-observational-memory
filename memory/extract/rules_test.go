@@ -121,6 +121,56 @@ func encodingCases() []encodingCase {
 			user("u1", "Set up the repository."),
 			assistant("a1", "Don't touch `migrations/` while the release is out."),
 		}, nil},
+		{"pushback on a preference", []session.Entry{
+			user("u1", "Always use global variables in `internal/cfg`."),
+			assistant("a1", "I'd push back: global state in `internal/cfg` makes the parallel tests flaky."),
+		}, []string{"preference", "pushback"}},
+		{"pushback on a correction", []session.Entry{
+			user("u1", "Actually, the proxy port is 8080, not 9090."),
+			assistant("a1", "That's not quite right: the proxy binds 9090 in `deploy/app.yaml`."),
+		}, []string{"correction", "pushback"}},
+		{"pushback before a tool call", []session.Entry{
+			user("u1", "Never run `go test ./...` here; always use `make test` instead."),
+			assistant("a1", "I disagree: `make test` skips the race detector.", bash("c1", "make test")),
+			result("r1", "c1", "bash", "ok", false),
+		}, []string{"preference", "pushback", "attempt"}},
+		{"disagreement without a claim", []session.Entry{
+			user("u1", "Look at the flaky test."),
+			assistant("a1", "Actually, the test is fine; the clock in `internal/api/clock.go` is wrong."),
+		}, nil},
+		{"pushback in a later message", []session.Entry{
+			user("u1", "Always use global variables in `internal/cfg`."),
+			assistant("a1", "Reading it first.", bash("c1", "ls internal/cfg")),
+			result("r1", "c1", "bash", "cfg.go", false),
+			assistant("a2", "I'd push back: global state in `internal/cfg` makes the parallel tests flaky."),
+		}, []string{"preference", "attempt"}},
+		{"self-correction", []session.Entry{
+			user("u1", "Always use global variables in `internal/cfg`."),
+			assistant("a1", "Actually, let me check `internal/cfg/load.go` first."),
+		}, []string{"preference"}},
+		{"question", []session.Entry{
+			user("u1", "Always use global variables in `internal/cfg`."),
+			assistant("a1", "Actually, are the globals in `internal/cfg/load.go` too?"),
+		}, []string{"preference"}},
+		{"restated after the pushback", []session.Entry{
+			user("u1", "Always use global variables in `internal/cfg`."),
+			assistant("a1", "I'd push back: global state in `internal/cfg` makes the parallel tests flaky."),
+			user("u2", "No, keep the globals in `internal/cfg`; it is a small tool."),
+		}, []string{"preference", "pushback", "fact"}},
+		{"conceded after the pushback", []session.Entry{
+			user("u1", "Always use global variables in `internal/cfg`."),
+			assistant("a1", "I'd push back: global state in `internal/cfg` makes the parallel tests flaky."),
+			user("u2", "You're right, inject the config in `internal/cfg`."),
+		}, []string{"preference", "pushback"}},
+		{"episodes", []session.Entry{
+			user("u1", "Add a retry helper with 5 attempts in `internal/net/retry.go`."),
+			assistant("a1", "Reading it.", bash("c1", "go test ./internal/net/...")),
+			result("r1", "c1", "bash", "--- FAIL: TestRetry (0.01s)\nFAIL", true),
+			user("u2", "ok thanks"),
+			assistant("a2", "Added the helper with 5 attempts and a 250ms base."),
+			user("u3", "Now set the proxy port to 8080."),
+			assistant("a3", "Set the proxy port to 8080 in `deploy/app.yaml`."),
+		}, []string{"fact", "attempt", "evidence", "value", "assistant", "fact"}},
 		{"lockfile", reads("package-lock.json", "{\n  \"lockfileVersion\": 3\n}", false), []string{"convention", "file"}},
 		{"lockfile read failed", reads("pnpm-lock.yaml", "ENOENT: no such file", true), []string{"attempt"}},
 		{"go.mod", reads("/work/app/go.mod", "module example.com/app\n\ngo 1.26\n", false), []string{"convention", "file"}},

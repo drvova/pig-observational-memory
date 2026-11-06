@@ -167,6 +167,28 @@ repeated compactions, which rendering from records avoids.
   "since", "so that") is kept as its own `assistant` record even when it gives no new specific,
   unless the exchange already holds the user's decision; it never takes the user's kind. Tool
   output never makes a decision.
+- **Pushback** (kind `pushback`, a code kind level 1 never merges or relabels;
+  `memory/extract/episode.go`, `ledger/contest.go`, `lisp/src/contest.lisp`; contracts/encoding.md,
+  "Pushback"): when the user makes a claim level 0 records (a preference, a rule or a correction)
+  and the first assistant message after it disagrees in fixed wording ("I'd push back", "that's not
+  quite right", "I disagree", "however, this would", "that could break", "actually," unless it
+  opens a self-correction such as "actually, let me"), the disagreeing sentence is kept verbatim as
+  its own record, with `respondsTo` naming the exchange's claims, source `assistant-claim` and
+  authority `model`; the claims written in the same extraction get hedge `contested`. A question,
+  a later turn of the exchange or an exchange with no claim gives none, and the words before a tool
+  call count as the reply's would. The pushback supersedes, links, retracts and closes nothing and
+  is never a rule. A later user record that restates the claim (it names every key the claim
+  quotes, or carries every specific of a claim without keys, with no negation conflict and no
+  concession such as "you're right") lifts the contest; such a sentence is recorded even when it
+  gives no specific. Selection reads the contest from the ledger (`ledger.Contested`), since a
+  restatement comes after the claim was written.
+- **Episodes** (`extract.Episodes`; contracts/encoding.md, "Episode"): every new record's
+  `episode` is the id of the episode its newest source entry is in. An episode starts only at a
+  request the person typed: a `user` message one of whose sentences is neither a bare
+  acknowledgement nor harness markup. A custom message, a tool result or a test outcome never
+  starts one (test outcomes stay on the records), and the id is `ledger.EpisodeID` of the session
+  and the request's entry id, so two extractions of one range give the same ids. Nothing reads
+  episodes yet; no id includes them.
 - **Repository conventions** (kind `convention`, `memory/extract/convention.go`): from a read
   tool's successful result only (never the disk, never a shell `cat`): a lockfile's package
   manager (package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, Cargo.lock, go.sum, poetry.lock,
@@ -413,7 +435,12 @@ one record of a `conflicts` pair is taken, the other is tried next in the same c
 still not fit. The status is a field of its own (a column in the tables format, a word after the
 kind in the lines format); the links are pointers after the record's text, never inside it:
 `(was <id>)` for every record it supersedes, `(may update <id>)` while the target is active and
-unsuperseded, and `(conflicts <id>)` while the other record is active. They depend only on the
+unsuperseded, and `(conflicts <id>)` while the other record is active. A user claim standing
+contested (`ledger.Contested`) is shown with kind `claim`, never as the preference or correction it
+would be as a rule, is not in class 2, and ends with `(contested by <id>)` naming its pushback (or
+`(contested)` when no pushback record is in the input); the pushback is put in the claim's table,
+ends with `(responds to <id>)`, and each is tried next when the other is taken. Their
+instructions line is printed only in a summary showing one. They depend only on the
 ledger, so a line's cost does not change with the choice. Every rendered line ends with its first
 source entry id when that id is on the current branch. What does not fit becomes `omitted` spans with date range,
 count and first id.

@@ -3,6 +3,7 @@ package ledger
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,6 +67,22 @@ func TestEncodingContractCases(t *testing.T) {
 			got = AuthorityOf(c.Input)
 		case "customSource":
 			got = SourceOfCustomType(c.Input)
+		case "pushback":
+			got = fmt.Sprint(IsPushback(c.Input))
+		case "concedes":
+			got = fmt.Sprint(Concedes(c.Input))
+		case "restates":
+			var m map[string]string
+			if err := json.Unmarshal([]byte(c.Input), &m); err != nil {
+				t.Fatal(err)
+			}
+			got = fmt.Sprint(RestatesClaim(Observation{Content: m["restatement"]}, Observation{Content: m["claim"]}))
+		case "episode":
+			var m map[string]string
+			if err := json.Unmarshal([]byte(c.Input), &m); err != nil {
+				t.Fatal(err)
+			}
+			got = EpisodeID(m["session"], m["entry"])
 		default:
 			t.Fatalf("%s: unknown kind %q", c.Name, c.Kind)
 		}

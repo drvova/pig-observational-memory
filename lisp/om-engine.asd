@@ -38,6 +38,8 @@
                              (:file "output")
                              ;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0.
                              (:file "conversation")
+                             ;; Phase 2: episodes and assistant pushback beside user claims.
+                             (:file "contest")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")

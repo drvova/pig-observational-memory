@@ -58,3 +58,27 @@
 {"name":"source of origin:task-notification","kind":"customSource","input":"origin:task-notification","want":"tool-observed"}
 {"name":"source of origin:other","kind":"customSource","input":"origin:other","want":"external-untrusted"}
 {"name":"source of note","kind":"customSource","input":"note","want":""}
+{"kind":"pushback","name":"i'd push back","input":"I'd push back: global state makes the tests flaky.","want":"true"}
+{"kind":"pushback","name":"i disagree","input":"I disagree, the cache is needed.","want":"true"}
+{"kind":"pushback","name":"not quite right","input":"That's not quite right; the port is 9090.","want":"true"}
+{"kind":"pushback","name":"curly apostrophe","input":"That’s not correct.","want":"true"}
+{"kind":"pushback","name":"however this would","input":"However, this would break the parallel tests.","want":"true"}
+{"kind":"pushback","name":"could break","input":"That could break the release build.","want":"true"}
+{"kind":"pushback","name":"advise against","input":"I would advise against vendoring it.","want":"true"}
+{"kind":"pushback","name":"actually, a disagreement","input":"Actually, the flag was removed in v2.","want":"true"}
+{"kind":"pushback","name":"actually, a self-correction","input":"Actually, let me check the config first.","want":"false"}
+{"kind":"pushback","name":"actually inside a word list","input":"It actually works.","want":"false"}
+{"kind":"pushback","name":"agreement","input":"Sounds good, I will use the make target.","want":"false"}
+{"kind":"pushback","name":"whole words: pushbacks","input":"The pushbacks were logged.","want":"false"}
+{"kind":"pushback","name":"upper case","input":"I DISAGREE.","want":"true"}
+{"kind":"pushback","name":"not a good idea","input":"It is not a good idea to skip the tests.","want":"true"}
+{"kind":"concedes","name":"you're right","input":"You're right, inject it.","want":"true"}
+{"kind":"concedes","name":"fair enough","input":"Fair enough.","want":"true"}
+{"kind":"concedes","name":"restating","input":"No, keep the globals.","want":"false"}
+{"kind":"restates","name":"same keys","input":"{\"claim\":\"Always use globals in `internal/cfg`.\",\"restatement\":\"No, keep the globals in `internal/cfg`.\"}","want":"true"}
+{"kind":"restates","name":"missing key","input":"{\"claim\":\"Always use globals in `internal/cfg` and `cmd/`.\",\"restatement\":\"Keep the globals in `internal/cfg`.\"}","want":"false"}
+{"kind":"restates","name":"negated","input":"{\"claim\":\"Use port 8080 for the proxy.\",\"restatement\":\"Do not use port 8080 for the proxy.\"}","want":"false"}
+{"kind":"restates","name":"specifics without keys","input":"{\"claim\":\"Use port 8080 for the proxy.\",\"restatement\":\"No, port 8080 is what I want.\"}","want":"true"}
+{"kind":"restates","name":"no keys and no specifics","input":"{\"claim\":\"Always use tabs.\",\"restatement\":\"Always use tabs, really.\"}","want":"false"}
+{"kind":"episode","name":"with session","input":"{\"session\":\"s1\",\"entry\":\"u1\"}","want":"4959a3a20621"}
+{"kind":"episode","name":"empty session","input":"{\"session\":\"\",\"entry\":\"u1\"}","want":"cd5ade7c9262"}

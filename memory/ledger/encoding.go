@@ -55,10 +55,14 @@ const (
 	// HedgeUnverified is hearsay: a sentence that reports what someone else said or what
 	// apparently holds ("apparently", "I heard").
 	HedgeUnverified = "unverified"
+	// HedgeContested is a user's claim the assistant pushed back on in its reply (a pushback
+	// record responds to it; Contested). The lexicon never gives it: code sets it on the claim
+	// when it records the pushback.
+	HedgeContested = "contested"
 )
 
 // HedgeValues are the valid hedges.
-var HedgeValues = []string{HedgeStated, HedgeHedged, HedgeUnverified}
+var HedgeValues = []string{HedgeStated, HedgeHedged, HedgeUnverified, HedgeContested}
 
 // The engines that write records (Writer.Engine).
 const (
@@ -225,9 +229,11 @@ func LeastAuthority(a, b string) string {
 	return a
 }
 
-// HedgeRank orders hedges, unverified highest; an empty one ranks lowest.
+// HedgeRank orders hedges, contested highest, then unverified; an empty one ranks lowest.
 func HedgeRank(hedge string) int {
 	switch hedge {
+	case HedgeContested:
+		return 3
 	case HedgeUnverified:
 		return 2
 	case HedgeHedged:

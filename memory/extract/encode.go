@@ -15,6 +15,9 @@ import (
 // id, so a record keeps the id an engine without them gives it.
 func (x *extraction) encode() {
 	for _, r := range x.records {
+		if r.obs.Episode == "" && r.anchor >= 0 && r.anchor < len(x.episodes) {
+			r.obs.Episode = x.episodes[r.anchor]
+		}
 		Encode(&r.obs, x.sourceOf(r), x.in.Writer, x.in.Frame, x.in.RepoRoot)
 	}
 }

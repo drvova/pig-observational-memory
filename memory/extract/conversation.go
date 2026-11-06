@@ -258,7 +258,7 @@ func (x *extraction) user(i int) {
 			kind = "preference"
 		case isDecision(sentence):
 			kind, status = ledger.KindDecision, statusOf(sentence)
-		case ledger.HasSpecifics(sentence), isSelfStatement(sentence):
+		case ledger.HasSpecifics(sentence), isSelfStatement(sentence), x.restatesContested(sentence):
 			kind, status = "fact", statusOf(sentence)
 		default:
 			continue
@@ -311,6 +311,11 @@ func (x *extraction) reply(i int, text string) {
 			if r.exchange == x.exchange {
 				given = append(given, ledger.NewGiven([]string{r.obs.Content}))
 			}
+		}
+		// A statement disagreeing with a claim the user made in the exchange is that claim's
+		// pushback, kept whatever specifics it gives (contracts/encoding.md, "Pushback").
+		if x.pushbackAt(i, statement, anchor, hasAnchor) {
+			return
 		}
 		// A decision stated with its reason is kept though it gives no new specific, unless the
 		// exchange already holds one (the user's, which the reply restates).

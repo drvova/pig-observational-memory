@@ -148,6 +148,23 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
   only `records.jsonl` and `compaction.jsonl` of the golden corpus gained the fields. The Tier 0
   baseline is unchanged ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 2 part A").
 
+### Phase 2 status: episodes and pushback
+
+- **Episodes: built** (contracts/encoding.md, "Episode"). Level 0 sets every new record's `episode`
+  from the newest request the person typed at or before it (never an acknowledgement, a custom
+  message, a tool result or a test outcome), as `ledger.EpisodeID` of the session and the request.
+  On the generator's 20 sessions there is exactly one boundary per request: 4,000 against 3,900
+  for an evenly spaced window of 8 entries (ratio 1.03), and an acknowledgement after every fifth
+  turn adds none (ratio 0.98); an evenly spaced segmenter placing as many boundaries puts 14% of
+  them on a request ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 2: episodes and
+  pushback"). Nothing reads episodes yet.
+- **Pushback: built** (scenario 24, decision 18; contracts/encoding.md, "Pushback"). The first
+  assistant message after a user claim that disagrees in fixed wording is kept as a `pushback`
+  record citing the claim (`respondsTo`), and the claim gets hedge `contested`. A claim standing
+  contested renders as kind `claim` beside its pushback and never in the user-rule class; a later
+  user quote restating it lifts the contest. Assistant prose still never makes a rule or closes
+  anything. Scenario 24 passes.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (26 in all). The full catalogue, with its evidence, is in the
@@ -178,6 +195,6 @@ report.
 | 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt |
 | 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale" |
 | 23 | Compaction comes late on a 1M window | The quality trigger fires; nothing below the floor is consolidated |
-| 24 | A stored opinion becomes a rule (sycophancy) | The record keeps the claim and the pushback and is not a rule |
+| 24 | A stored opinion becomes a rule (sycophancy) | The record keeps the claim and the pushback and is not a rule (passes, phase 2) |
 | 25 | An insecure preference is stored and applied | Held, listed in `/om:status`, never in the index |
 | 26 | A project record goes stale against HEAD | Printed "gone at <sha>"; no structure line in the ledger |

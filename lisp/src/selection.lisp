@@ -70,6 +70,9 @@
 ;; extra, a key no group has): evidence rows, and the values lists after the tables.
 (defparameter +extra-evidence+ "line:evidence")
 (defparameter +extra-values+ "line:values")
+(defparameter +extra-contest+ "line:contested")
+(defparameter +contested-line+
+  (cat "- claim: a notes row of kind claim is the user's preference or correction the assistant pushed back on: a claim, not a rule; (contested by <id>) names the pushback, a row of kind pushback ending with (responds to <id>), and (contested) alone one not shown. The user restating it makes it a rule again." (string #\Newline)))
 (defparameter +evidence-line+
   (cat "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call." (string #\Newline)))
 (defparameter +values-line+
@@ -187,7 +190,10 @@
   role index obs ref (text "") (group "") (which "") (note-group "")
   (anchor-id "") (anchor -1) anchored (from "") (to "") (status "") (links "")
   (extra "") (value "") (value-kind "") (count 0) (last -1)
-  (cost 0) cells (line ""))
+  (cost 0) cells (line "")
+  ;; contested: a user claim standing contested (contested, contest.lisp); contested-by the
+  ;; pushback records answering it.
+  contested (contested-by '()))
 
 (defun item-source (it) (if (item-anchored it) (item-anchor-id it) ""))
 
@@ -233,6 +239,7 @@
 (defun extra-line (extra)
   (cond ((string= extra +extra-evidence+) +evidence-line+)
         ((string= extra +extra-values+) +values-line+)
+        ((string= extra +extra-contest+) +contested-line+)
         (t "")))
 
 (defun extra-cost (extra) (estimate-tokens (extra-line extra)))
@@ -307,9 +314,9 @@
               (scope (canonical-scope (obs-scope o) (canonical-of (sstate-canonical s) (obs-subject o))))
               (replaced-by (join (gethash (obs-id o) (sstate-superseded-by s)) " "))
               (shown (if (string/= (item-links it) "") (cat content " " (item-links it)) content)))
-         (setf (item-cells it) (list (obs-id o) (item-from it) (obs-kind o) (item-status it) scope shown replaced-by source))
+         (setf (item-cells it) (list (obs-id o) (item-from it) (shown-kind it) (item-status it) scope shown replaced-by source))
          (let ((line (cat "[" (obs-id o) "]")))
-           (dolist (part (list (item-from it) (obs-kind o) (item-status it)))
+           (dolist (part (list (item-from it) (shown-kind it) (item-status it)))
              (when (string/= part "") (setf line (cat line " " part))))
            (when (string/= scope "") (setf line (cat line " (" scope ")")))
            (setf line (cat line " " content))
@@ -380,6 +387,7 @@ codec's tables instructions without a state)."
         (dolist (it (sstate-items s))
           (when (eq (item-role it) :note)
             (setf (item-status it) (if (gethash (obs-id (item-obs it)) retracted) +status-retracted+ (obs-status (item-obs it)))))))
+      (contest-items s all)
       (mark-next s)
       (link-items s)
       (dolist (o all)
@@ -403,6 +411,26 @@ codec's tables instructions without a state)."
                 (price s it)
                 (push-end it (sstate-intent s))))))))
     s))
+
+(defun contest-items (s all)
+  "state.contest: the contested claims, and each pushback in its first claim's table."
+  (maphash (lambda (id by)
+             (let ((it (gethash id (sstate-by-id s))))
+               (when (and it (eq (item-role it) :note))
+                 (setf (item-contested it) t (item-contested-by it) by (item-extra it) +extra-contest+))))
+           (contested all))
+  (dolist (it (sstate-items s))
+    (when (and (eq (item-role it) :note) (string= (obs-kind (item-obs it)) "pushback"))
+      (setf (item-extra it) +extra-contest+)
+      (dolist (id (obs-responds-to (item-obs it)))
+        (let ((claim (gethash id (sstate-by-id s))))
+          (when (and claim (eq (item-role claim) :note))
+            (setf (item-group it) (item-group claim))
+            (return)))))))
+
+(defun shown-kind (it)
+  "item.shownKind."
+  (if (item-contested it) "claim" (obs-kind (item-obs it))))
 
 (defun mark-next (s)
   (let ((start -1) (ids '()))
@@ -443,7 +471,13 @@ codec's tables instructions without a state)."
                      (when shown (push-end (cat "(" label " " (join shown " ") ")") parts)))))
             (pointer "may update" (obs-possibly-updates o)
                      (lambda (other) (not (gethash (obs-id (item-obs other)) (sstate-superseded s)))))
-            (pointer "conflicts" (obs-conflicts o) (lambda (other) (declare (ignore other)) t)))
+            (pointer "conflicts" (obs-conflicts o) (lambda (other) (declare (ignore other)) t))
+            (when (item-contested it)
+              (let ((n (length parts)))
+                (pointer "contested by" (item-contested-by it) (lambda (other) (declare (ignore other)) t))
+                (when (= (length parts) n) (push-end "(contested)" parts))))
+            (when (string= (obs-kind o) "pushback")
+              (pointer "responds to" (obs-responds-to o) (lambda (other) (declare (ignore other)) t))))
           (setf (item-links it) (join parts " ")))))
     (maphash (lambda (id items)
                (setf (gethash id (sstate-partners s)) (stable-sort (copy-list items) #'< :key #'item-index)))
@@ -564,7 +598,7 @@ codec's tables instructions without a state)."
               (price s it)
               (push it fallen)))
           (newest-first (lambda (it) (member it fallen :test #'eq)) '(:note)))
-        (newest-first (lambda (it) (and (user-priority-p (item-obs it)) (not (gethash (obs-id (item-obs it)) (sstate-superseded s)))
+        (newest-first (lambda (it) (and (user-priority-p (item-obs it)) (not (item-contested it)) (not (gethash (obs-id (item-obs it)) (sstate-superseded s)))
                                         (string/= (item-status it) +status-retracted+)))
                       observations)
         (newest-first (lambda (it) (let ((o (item-obs it)))
@@ -892,7 +926,7 @@ codec's tables instructions without a state)."
           (when parts (push-end (cat group ": " (join parts ", ")) lists))))
       (let ((text (layout-intro l))
             (lines (apply #'cat (mapcar (lambda (b) (section-line l (car b))) blocks))))
-        (dolist (extra (list +extra-evidence+ +extra-values+))
+        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-values+))
           (when (> (opened p extra) 0)
             (setf lines (cat lines (extra-line extra)))))
         (when (string/= lines "")
