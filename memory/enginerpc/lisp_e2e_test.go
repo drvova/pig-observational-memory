@@ -235,13 +235,19 @@ func TestLispCommandsAndRendering(t *testing.T) {
 	if len(h.Messages()) != 1 || !strings.Contains(h.Messages()[0], "emory") {
 		t.Fatalf("status %q", h.Messages())
 	}
+	// /om:status runs on the image (docs/lisp-port-status.md): every line before its own code
+	// section is the in-process report's.
+	inProcess, err := commands.StatusLines(runtime.New(), newHost(codingTurn("p", "fix the loader")))
+	must(t, err)
+	if got, want := withoutCodeSection(h.Messages()[0]), strings.Join(inProcess, "\n"); got != want {
+		t.Fatalf("status:\nlisp: %s\ngo:   %s", got, want)
+	}
 	sections, err := client.BeforeAgentStart(h)
 	must(t, err)
 	if sections[enginerpc.MemorySection] != engine.ToolNoteLine {
 		t.Fatalf("sections %v", sections)
 	}
-	lines := log.lines()
-	if len(lines) != 1 || !strings.Contains(lines[0], enginerpc.MethodCommand+": not ported") {
+	if lines := log.lines(); len(lines) != 0 {
 		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
 	}
 	view := func(run func(h *testfix.FakeHost, args string)) []testfix.Notification {
@@ -258,9 +264,18 @@ func TestLispCommandsAndRendering(t *testing.T) {
 	if len(want) != 4 || !reflect.DeepEqual(want, got) {
 		t.Fatalf("view: in-process %q, lisp %q", want, got)
 	}
-	if len(log.lines()) != 1 {
+	if len(log.lines()) != 0 {
 		t.Fatalf("the view fell back:\n%s", strings.Join(log.lines(), "\n"))
 	}
+}
+
+// withoutCodeSection is a status report without its code section, which the image redefines for
+// the Lisp layer (docs/lisp-port-status.md); everything before it is compared with Go's.
+func withoutCodeSection(report string) string {
+	if i := strings.Index(report, "\n\n── Code ──"); i >= 0 {
+		return report[:i]
+	}
+	return report
 }
 
 // TestLispTriggerMatchesInProcess runs the compaction trigger at agent_settled with PiG's

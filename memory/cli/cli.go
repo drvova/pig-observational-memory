@@ -148,6 +148,15 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			}
 		}
 		if args[0] == "status" {
+			// The image answers the report's text (lisp/src/server/status.lisp); showing it
+			// stays here.
+			res, handled, err := a.viaLisp("om-status", s, nil)
+			if handled {
+				if err == nil {
+					h.Notify(res.Text, "info")
+				}
+				return err
+			}
 			return commands.RunStatus(a.rt, h)
 		}
 		return commands.RunView(a.rt, h, strings.Join(fs.Args(), " "), nil)
