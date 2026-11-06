@@ -56,8 +56,9 @@ removed query language, is refused (not ported), so the Go engine reads the turn
       (multiple-value-bind (batches covers)
           (handler-case (let* ((start (om::extraction-start-index branch)) (folded (om::fold-ledger branch)))
                           (multiple-value-bind (batches covers)
-                              (om::extract branch start (length branch) folded :skip-tools (conn-skip-tools c)
-                                                                                :cwd (scope-cwd))
+                              (let ((om::*encoding* (session-encoding c branch)))
+                                (om::extract branch start (length branch) folded :skip-tools (conn-skip-tools c)
+                                                                                  :cwd (scope-cwd)))
                             (multiple-value-bind (batches thunk)
                                 (om.layer::harness-detect store model branch start (length branch) folded batches covers
                                                           :defined (and store (string/= covers "") (defined-queries c store)))

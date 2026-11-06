@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/gitrepo"
 	"github.com/drvova/pig-observational-memory/memory/hostinfo"
 	"github.com/drvova/pig-observational-memory/memory/neutral"
 	"github.com/drvova/pig-observational-memory/memory/transcript"
@@ -72,6 +73,9 @@ func (s Session) Host(root string, log io.Writer) (*neutral.Host, error) {
 		Transcript: source,
 		Store:      neutral.StoreFor(root, s.Harness, s.ID),
 		Log:        log,
+		// The adapter side reads the repository, so the engine never runs git itself.
+		HarnessName: s.Harness,
+		ReadRepo:    gitrepo.Read,
 	}, nil
 }
 

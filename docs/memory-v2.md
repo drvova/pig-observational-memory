@@ -133,7 +133,7 @@ repeated compactions, which rendering from records avoids.
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is
   reused by code for every later line.
-- **Standing rules and scope exclusions** (`memory/extract/encoding.go`, from the user's own turns
+- **Standing rules and scope exclusions** (`memory/extract/rules.go`, from the user's own turns
   only), recorded verbatim as `preference`, so they take selection's class 2 like any user rule:
   always/never with the rule verbs the preference list lacks (touch, edit, modify, change, import,
   install, bump, upgrade, delete, rename, commit, push, deploy, run); scope exclusions ("don't/do
@@ -145,7 +145,11 @@ repeated compactions, which rendering from records avoids.
   posed under the speaker's own condition ("if we", "if I", "suppose", "what if"; "if you change
   the schema, run …" is a rule addressed to the agent and counts) and a retraction are not rules,
   and a later retraction never withdraws one (`ledger.MaySupersede`); only a correction replaces it.
-  Assistant text never makes a rule. A sentence naming a phrase with specifics ("use ruff, not
+  Assistant text never makes a rule. A rule, preference or decision from the user's turn is set
+  `source: user-said` and `authority: user` by its extractor, with its keys (`ledger.RecordKeys`)
+  in `keys.paths` (a key with a slash or a file name) or `keys.commands` (any other); consecutive
+  rules that merge hold both keys. No rule sets `scope`: level 0 widens no scope yet
+  (`contracts/encoding.md`), so a scope exclusion's path stays in its keys. A sentence naming a phrase with specifics ("use ruff, not
   flake8") stays the correction it reads as.
 - **Keys.** A rule's or a decision's keys (`ledger.RecordKeys`) are the code spans it quotes and the
   bare paths it names: "Don't touch `migrations/`" carries no specific but has the key
@@ -173,8 +177,10 @@ repeated compactions, which rendering from records avoids.
   Makefile's targets. The record is an observation of the file, never an instruction: "CI runs
   `go test ./...` (repo file `.github/workflows/ci.yml`, sha256 <12 hex>)", with the path as its
   target, the read tool as its tool and the SHA-256 prefix of what was read. A later read with the
-  same content adds nothing; one with other content supersedes it. Until the record carries an
-  `authority` field, "repo file" in its text stands for `authority: repo-file`.
+  same content adds nothing; one with other content supersedes it. Its encoding fields
+  (`contracts/encoding.md`) are `source: tool-observed` (a read tool showed it) and
+  `authority: repo-file`, with the file in `keys.config` and a workflow's run lines in
+  `keys.commands`.
 - **Event dates** (after past.dev's temporal anchors and `occurredAt`). A record whose text
   `ledger.ResolveRelativeDates` resolves to one absolute date ("yesterday", "on Friday", a deadline
   "by the 31st") carries it as `event_date`, a field separate from the entry time it was said at;

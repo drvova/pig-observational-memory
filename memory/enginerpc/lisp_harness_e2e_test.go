@@ -112,12 +112,12 @@ func TestLispHarnessDetectMatchesInProcess(t *testing.T) {
 	if !strings.Contains(string(encoded), `"origin":"code"`) || len(wantLedger) != 3 || !strings.Contains(wantLedger[2], `"kind":"pass"`) || !strings.Contains(strings.Join(wantLedger, ""), rules.DetectUncitedAssistantSpecifics) {
 		t.Fatalf("the scenario tests nothing:\n%s\n%s", encoded, strings.Join(wantLedger, "\n"))
 	}
-	if !reflect.DeepEqual(wantAppended, gotAppended) {
+	if !reflect.DeepEqual(asGo(wantAppended), asGo(gotAppended)) {
 		a, _ := json.MarshalIndent(wantAppended, "", " ")
 		b, _ := json.MarshalIndent(gotAppended, "", " ")
 		t.Errorf("appended differ:\nin-process %s\nlisp       %s", clip(a), clip(b))
 	}
-	if !reflect.DeepEqual(wantLedger, gotLedger) {
+	if !reflect.DeepEqual(asGo(wantLedger), asGo(gotLedger)) {
 		t.Errorf("ledgers differ:\nin-process %s\nlisp       %s", strings.Join(wantLedger, "\n"), strings.Join(gotLedger, "\n"))
 	}
 	if lines := log.lines(); len(lines) != 0 {

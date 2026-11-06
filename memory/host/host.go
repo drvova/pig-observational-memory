@@ -268,3 +268,36 @@ type ToolHost interface {
 	Host
 	Tools
 }
+
+// Repo is the git repository a session runs in, as the adapter reads it by running git in the
+// session's working directory (memory/gitrepo; docs/brain-memory.md, "Project identity"). The
+// engine never runs git itself: level 0 stays a pure function of what the host hands it.
+type Repo struct {
+	// ID is the repository's identity (gitrepo.ID): the hash of the normalized remote URL and the
+	// root commit, else of the root commit, else of the common git directory.
+	ID string `json:"repoId"`
+	// Root is the canonical real path of the work tree's root.
+	Root string `json:"root"`
+	// CommonDir is the canonical git common directory, shared by every worktree of one clone.
+	CommonDir string `json:"commonDir"`
+	// Remote is the normalized URL of the origin remote (else the first remote), "" for none.
+	Remote string `json:"remote"`
+	// RootCommit is the hash of the oldest root commit of HEAD, "" before the first commit.
+	RootCommit string `json:"rootCommit"`
+	// Branch is the checked-out branch, "" for a detached HEAD.
+	Branch string `json:"branch"`
+	// Head is HEAD's commit hash, "" before the first commit.
+	Head string `json:"head"`
+}
+
+// RepoReader is a host that knows the session's git repository. ok is false outside one (or
+// when git is missing); an error is a failed read, which callers treat as none.
+type RepoReader interface {
+	Repo() (repo Repo, ok bool, err error)
+}
+
+// HarnessNamer is a host that names its harness ("pig", or the om registry's harness name), which
+// records carry as their writer.
+type HarnessNamer interface {
+	Harness() string
+}

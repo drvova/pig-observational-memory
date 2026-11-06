@@ -43,7 +43,9 @@
 (defstruct vinput
   "consolidate.Input: what the prompt showed, the folded ledger, the subjects, the links and
 curated memories listed, the branch, and the offer (nil refuses every definition)."
-  candidates active reflections folded subjects links curated branch offer)
+  candidates active reflections folded subjects links curated branch offer
+  ;; writer is Input.Writer: who writes the new records (an alist, nil for none).
+  (writer '()))
 
 (defstruct vresult
   "consolidate.Result. replaced is an equal hash table id -> replacing id; refusals are
@@ -189,7 +191,11 @@ and stands for the user only when every source does."
         (when (< (origin-rank (obs-origin o)) (origin-rank (obs-origin record)))
           (setf (obs-origin record) (obs-origin o)))
         (unless (or (obs-from-user o) (user-priority-p o))
-          (setf (obs-from-user record) nil))))))
+          (setf (obs-from-user record) nil))
+        (setf (obs-authority record) (least-authority (obs-authority record) (obs-authority o))
+              (obs-hedge record) (strongest-hedge (obs-hedge record) (obs-hedge o))))))
+  (let ((writer (and (vinput-p (v-in v)) (vinput-writer (v-in v)))))
+    (when writer (setf (obs-writer record) writer))))
 
 (defun v-accept (v record sources)
   (v-least-provenance v record sources)
@@ -286,6 +292,15 @@ and stands for the user only when every source does."
           (dolist (id (obs-source-ids o))
             (unless (member-str id (obs-source-ids record))
               (setf (obs-source-ids record) (append (obs-source-ids record) (list id))))))
+        ;; The text is level 1's: its authority starts at the top and is lowered to the least
+        ;; source's (v-least-provenance), its hedge never below the text's or a source's.
+        (setf (obs-source record) "model-inferred" (obs-authority record) "user"
+              (obs-hedge record) (hedge-of content)
+              (obs-frame record) (if (every (lambda (o) (equal (obs-frame o) (obs-frame (first sources)))) (rest sources))
+                                     (obs-frame (first sources)) '())
+              (obs-time-hint record) (common-field sources #'obs-time-hint)
+              (obs-episode record) (common-field sources #'obs-episode))
+        (dolist (o sources) (setf (obs-keys record) (keys-union (obs-keys record) (obs-keys o))))
         (v-apply-labels record item nil)
         (setf (obs-from-user record)
               (and (null (added-specifics content (mapcar #'obs-content sources)))
@@ -322,7 +337,8 @@ and stands for the user only when every source does."
         (incf (vresult-unchanged (v-result v)))
         (return-from v-label))
       (when (string/= (obs-kind record) (obs-kind candidate))
-        (setf (obs-origin record) "model" (obs-from-user record) nil))
+        (setf (obs-origin record) "model" (obs-from-user record) nil
+              (obs-source record) "model-inferred" (obs-authority record) (least-authority (obs-authority record) "model")))
       (v-accept v record (list id)))))
 
 (defun v-links (v items)

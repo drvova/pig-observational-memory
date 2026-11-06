@@ -86,7 +86,14 @@ func (x *extraction) toolResult(i int) {
 			return
 		}
 	}
-	obs := ledger.Observation{Content: content, Kind: ledger.KindConvention, Tool: call.name, Target: display}
+	// A repository file read through a tool: what a tool showed, with the authority of a
+	// repository file (contracts/encoding.md), keyed by the file and the commands it runs.
+	obs := ledger.Observation{Content: content, Kind: ledger.KindConvention, Tool: call.name, Target: display,
+		Source: ledger.SourceToolObserved, Authority: ledger.AuthorityRepoFile}
+	obs.Keys.Add(ledger.KeyConfig, display)
+	for _, c := range conventionCommands(display, text) {
+		obs.Keys.Add(ledger.KeyCommands, c)
+	}
 	for _, c := range earlier {
 		obs.Supersedes = append(obs.Supersedes, c.id)
 		x.superseded[c.id] = true
@@ -135,10 +142,7 @@ func (x *extraction) callOf(i int, id string) (toolCall, int, bool) {
 // workflow's run lines, a Makefile's targets.
 func conventionOf(path, text string) string {
 	base := path[strings.LastIndex(path, "/")+1:]
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	for n, line := range lines {
-		lines[n] = conventionLineNumber.ReplaceAllString(line, "")
-	}
+	lines := conventionLines(text)
 	switch {
 	case conventionManagers[base] != "":
 		return "package manager " + conventionManagers[base]
@@ -169,7 +173,7 @@ func conventionOf(path, text string) string {
 			}
 		}
 		return strings.Join(parts, "; ")
-	case strings.Contains("/"+path, "/.github/workflows/") && (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")):
+	case isWorkflow(path):
 		commands := ciCommands(lines)
 		if len(commands) == 0 {
 			return ""
@@ -228,4 +232,27 @@ func ciCommands(lines []string) []string {
 		}
 	}
 	return out
+}
+
+// conventionLines are text's lines without the line numbers a read tool may print.
+func conventionLines(text string) []string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for n, line := range lines {
+		lines[n] = conventionLineNumber.ReplaceAllString(line, "")
+	}
+	return lines
+}
+
+// isWorkflow reports a GitHub workflow file.
+func isWorkflow(path string) bool {
+	base := path[strings.LastIndex(path, "/")+1:]
+	return strings.Contains("/"+path, "/.github/workflows/") && (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml"))
+}
+
+// conventionCommands are the commands a convention file runs, its keys: a workflow's run lines.
+func conventionCommands(path, text string) []string {
+	if !isWorkflow(path) {
+		return nil
+	}
+	return ciCommands(conventionLines(text))
 }

@@ -140,7 +140,7 @@ func TestLispSessionStartMigratesLayer(t *testing.T) {
 		strings.Contains(string(encoded), "zebra-retired") || !strings.Contains(string(encoded), "deploy.yaml") {
 		t.Fatalf("the scenario tests nothing:\n%s", encoded)
 	}
-	if !reflect.DeepEqual(want, got) {
+	if !reflect.DeepEqual(asGo(want), asGo(got)) {
 		a, _ := json.MarshalIndent(want, "", " ")
 		b, _ := json.MarshalIndent(got, "", " ")
 		t.Errorf("differ:\nin-process %s\nlisp       %s", a, b)

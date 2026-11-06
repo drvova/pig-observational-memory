@@ -46,6 +46,7 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 	}
 	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
+	writer, frame, root := encodingOf(rt, h, entries)
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
 		Start:     start,
@@ -53,6 +54,9 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 		SkipTools: harness.MemoryToolNames(rt),
 		Ledger:    folded,
 		Cwd:       h.Cwd(),
+		Writer:    writer,
+		Frame:     frame,
+		RepoRoot:  root,
 	})
 	result, record := detectV2(ctx, rt, h, "turn_end", entries, start, len(entries), folded, result)
 	appended, err := appendExtraction(h, result, true)
@@ -107,6 +111,7 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 	}
 	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
+	writer, frame, root := encodingOf(rt, h, entries)
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
 		Start:     start,
@@ -115,6 +120,9 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 		Ledger:    folded,
 		Cwd:       h.Cwd(),
 		FileOps:   extract.FileOps{Ops: ops, From: rangeStart},
+		Writer:    writer,
+		Frame:     frame,
+		RepoRoot:  root,
 	})
 	result, record := detectV2(ctx, rt, h, "compaction", entries, start, cut, folded, result)
 	appended, err := appendExtraction(h, result, true)
@@ -131,6 +139,36 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 		return entries
 	}
 	return append(append(make([]ledger.Entry, 0, len(entries)+len(appended)), entries...), appended...)
+}
+
+// encodingOf is who writes this session's records and the repository it runs in (extract.Input's
+// Writer, Frame and RepoRoot): the host's harness (host.HarnessNamer), the session id, the
+// session model's key and this engine, and the host's repository read once per compaction
+// (Runtime.CachedRepo).
+func encodingOf(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) (ledger.Writer, ledger.Frame, string) {
+	writer := writerOf(h)
+	key := h.Cwd() + "\x00"
+	if i := ledger.FindLastCompactionIndex(entries); i >= 0 {
+		key += entries[i].ID
+	}
+	repo, ok := rt.CachedRepo(key, h)
+	if !ok {
+		return writer, ledger.Frame{}, ""
+	}
+	return writer, ledger.Frame{RepoID: repo.ID, Branch: repo.Branch, Head: repo.Head}, repo.Root
+}
+
+// writerOf is who writes this session's records (ledger.Writer): the host's harness
+// (host.HarnessNamer), the session id, the session model's key (harness.ModelKey) and this engine.
+func writerOf(h host.Host) ledger.Writer {
+	writer := ledger.Writer{Session: h.SessionID(), Engine: ledger.EngineGo}
+	if namer, ok := h.(host.HarnessNamer); ok {
+		writer.Harness = namer.Harness()
+	}
+	if model := h.SessionModel(); model != nil {
+		writer.Model = harness.ModelKey(model)
+	}
+	return writer
 }
 
 // appendHostSummaryV2 stores the latest compaction's summary as one record when the ledger does

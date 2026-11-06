@@ -10,14 +10,14 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 )
 
-// The encoding transcript (testdata/lispparity/encoding.jsonl, also a Lisp parity case) records
+// The rules transcript (testdata/lispparity/rules.jsonl, also a Lisp parity case) records
 // the user's scope exclusions and standing rules as preferences, the user's decision as a
 // decision, the assistant's as its own record, the repository files it read as conventions (a
 // changed lockfile superseding the first read, a failed read none), and none of the question;
 // a retraction withdraws only the decision stated as a plan.
 func TestEncodingTranscriptRecords(t *testing.T) {
 	for _, mode := range []string{"turns", "whole"} {
-		lines := goPipeline(t, parityCase{"synthetic-encoding", "generic", filepath.Join("testdata", "lispparity", "encoding.jsonl"), "/home/dev/billing", mode, nil})
+		lines := goPipeline(t, parityCase{"synthetic-rules", "generic", filepath.Join("testdata", "lispparity", "rules.jsonl"), "/home/dev/billing", mode, nil})
 		var got []string
 		for _, line := range lines {
 			raw, ok := strings.CutPrefix(line, "record ")

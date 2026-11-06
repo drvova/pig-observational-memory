@@ -263,7 +263,11 @@ func (x *extraction) user(i int) {
 		default:
 			continue
 		}
-		r := x.add(x.conversationRecord(sentence, kind, status, anchor, hasAnchor), i)
+		obs := x.conversationRecord(sentence, kind, status, anchor, hasAnchor)
+		if kind == "preference" || kind == ledger.KindDecision {
+			userRule(&obs)
+		}
+		r := x.add(obs, i)
 		if correction {
 			r.correction = &target
 		}

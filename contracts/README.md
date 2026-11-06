@@ -61,12 +61,18 @@ entropy test) and role-label escaping, which every engine applies byte for byte;
 and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secrets ./serialize
 -args -write`.
 
-## Level-0 encoding cases
+## Record encoding fields
 
-`encoding.jsonl` holds level 0's records for short branches that state rules, scope exclusions,
+[encoding.md](encoding.md) specifies the fields code sets on each record at write time (source,
+authority, hedge, time hint, keys, frame, writer), the hedge lexicon and the project identity;
+`encoding.jsonl` holds the cases both engines check.
+
+## Level-0 conversation cases
+
+`conversation.jsonl` holds level 0's records for short branches that state rules, scope exclusions,
 decisions and read repository files (`docs/memory-v2.md`, level 0): each line is a branch's entries,
 its working directory and the records Go writes, which every engine must write byte for byte
-(`lisp/tests/encoding.lisp`). Rewrite it with `cd memory && go test ./extract -run EncodingCases
+(`lisp/tests/conversation.lisp`). Rewrite it with `cd memory && go test ./extract -run ConversationCases
 -args -write` after a change to those rules.
 
 ## Preferences that weaken security

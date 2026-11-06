@@ -456,6 +456,12 @@ type FakeHost struct {
 	// Ctx is the request's cancellation RequestContext reports (a tool call's: PiG cancels it
 	// on the user's abort); nil never cancels.
 	Ctx context.Context
+	// HarnessName is Harness's answer; RepoInfo is the repository Repo reports (nil: none),
+	// RepoErr its failure, RepoCalls counts the reads.
+	HarnessName string
+	RepoInfo    *host.Repo
+	RepoErr     error
+	RepoCalls   int
 }
 
 // RequestContext is the cancellation of the request the host answers (Ctx).
@@ -596,6 +602,23 @@ func (h *FakeHost) AppendedTypes() []string {
 
 // ConfigHome is Home.
 func (h *FakeHost) ConfigHome() string { return h.Home }
+
+// Harness is HarnessName, the harness records name as their writer ("" for none).
+func (h *FakeHost) Harness() string { return h.HarnessName }
+
+// Repo is RepoInfo (none when nil), or RepoErr.
+func (h *FakeHost) Repo() (host.Repo, bool, error) {
+	h.mu.Lock()
+	h.RepoCalls++
+	h.mu.Unlock()
+	if h.RepoErr != nil {
+		return host.Repo{}, false, h.RepoErr
+	}
+	if h.RepoInfo == nil {
+		return host.Repo{}, false, nil
+	}
+	return *h.RepoInfo, true, nil
+}
 
 // AllTools lists Tools.
 func (h *FakeHost) AllTools() ([]host.ToolInfo, error) {

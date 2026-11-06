@@ -2,7 +2,7 @@
 ;;;; convention.go, memory/ledger/keys.go): standing rules and scope exclusions from the user's
 ;;;; turns, decisions in fixed wording, the keys a rule or a decision is about, and the
 ;;;; repository conventions a read tool's result shows. Byte for byte as Go
-;;;; (contracts/encoding.jsonl, lisp/tests/encoding.lisp).
+;;;; (contracts/conversation.jsonl, lisp/tests/conversation.lisp).
 
 (in-package "OM.ENGINE")
 
@@ -105,6 +105,14 @@
   "isAssistantDecision: a decision stated with its reason."
   (and (decision-p statement) (regex-match-p +decision-reason+ statement) t))
 
+(defregex +key-file+ #r§^[A-Za-z0-9_.-]*[A-Za-z0-9_-]\.[A-Za-z][A-Za-z0-9]{0,7}$§)
+
+(defun user-rule (o)
+  "userRule: a user rule's or decision's source and authority, and its keys as paths or commands."
+  (setf (obs-source o) "user-said" (obs-authority o) "user")
+  (dolist (k (record-keys (obs-content o)) o)
+    (setf (obs-keys o) (keys-add (obs-keys o) (if (or (contains k "/") (regex-match-p +key-file+ k)) "paths" "commands") k))))
+
 (defun exchange-has-decision-p (x)
   "exchangeHasDecision."
   (some (lambda (r) (and (= (rec-exchange r) (x-exchange x)) (string= (obs-kind (rec-obs r)) "decision")))
@@ -186,11 +194,24 @@
                    (incf n)))))
     out))
 
+(defun convention-lines (text)
+  "conventionLines: text's lines without a read tool's line numbers."
+  (mapcar (lambda (l) (regex-replace-all +convention-line-number+ l ""))
+          (split (replace-all text (coerce '(#\Return #\Newline) 'string) (string #\Newline)) (string #\Newline))))
+
+(defun workflow-p (path)
+  "isWorkflow."
+  (let ((base (convention-base path)))
+    (and (contains (cat "/" path) "/.github/workflows/") (or (has-suffix base ".yml") (has-suffix base ".yaml")))))
+
+(defun convention-commands (path text)
+  "conventionCommands: a workflow's run lines."
+  (and (workflow-p path) (ci-commands (convention-lines text))))
+
 (defun convention-of (path text)
   "conventionOf: what a repository file at path sets, \"\" when none."
   (let* ((base (convention-base path))
-         (lines (mapcar (lambda (l) (regex-replace-all +convention-line-number+ l ""))
-                        (split (replace-all text (coerce '(#\Return #\Newline) 'string) (string #\Newline)) (string #\Newline))))
+         (lines (convention-lines text))
          (manager (cdr (assoc base +convention-managers+ :test #'string=)))
          (tool (cdr (assoc base +convention-tools+ :test #'string=))))
     (cond (manager (cat "package manager " manager))
@@ -211,7 +232,7 @@
                    (let ((part (if (string= (second m) "black") "formatter black" "linter ruff")))
                      (unless (member-str part parts) (push-end part parts))))))
              (join parts "; ")))
-          ((and (contains (cat "/" path) "/.github/workflows/") (or (has-suffix base ".yml") (has-suffix base ".yaml")))
+          ((workflow-p path)
            (let ((commands (ci-commands lines)))
              (if commands (cat "CI runs `" (join commands "`; `") "`") "")))
           ((or (member-str base '("Makefile" "makefile" "GNUmakefile")) (has-suffix base ".mk"))
@@ -242,7 +263,11 @@
           (let ((content (cat what " (repo file `" display "`, sha256 " (hash-id text) ")"))
                 (earlier (gethash display (x-conventions x))))
             (when (find content earlier :key #'cdr :test #'string=) (return-from x-tool-result))
-            (let ((o (make-obs :content content :kind "convention" :tool (tcall-name call) :target display)))
+            (let ((o (make-obs :content content :kind "convention" :tool (tcall-name call) :target display
+                               :source "tool-observed" :authority "repo-file")))
+              (setf (obs-keys o) (keys-add (obs-keys o) "config" display))
+              (dolist (c (convention-commands display text))
+                (setf (obs-keys o) (keys-add (obs-keys o) "commands" c)))
               (dolist (c earlier)
                 (push-end (car c) (obs-supersedes o))
                 (setf (gethash (car c) (x-superseded x)) t))

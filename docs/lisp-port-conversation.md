@@ -1,6 +1,6 @@
 # Lisp port: level 0's conversation encoding (phase 2C)
 
-`lisp/src/encoding.lisp` (package `OM.ENGINE`, loaded after `extract`) ports Go's
+`lisp/src/conversation.lisp` (package `OM.ENGINE`, loaded after `extract`) ports Go's
 `memory/extract/encoding.go`, `memory/extract/convention.go` and `memory/ledger/keys.go`:
 
 - the standing-rule, scope-exclusion and decision patterns (`rule-p`, `decision-p`,
@@ -14,8 +14,8 @@
 The kinds `decision` and `convention` join `+code-kinds+`, and the summary's and level 1's fixed
 texts name them, in both engines.
 
-Parity: `contracts/encoding.jsonl` is Go's records for 45 short branches, which
-`lisp/tests/encoding.lisp` checks byte for byte (`obs-json`), and the selection parity harness runs
-`memory/selection/testdata/lispparity/encoding.jsonl` (rules, decisions, a retraction, five
+Parity: `contracts/conversation.jsonl` is Go's records for 45 short branches, which
+`lisp/tests/conversation.lisp` checks byte for byte (`obs-json`), and the selection parity harness runs
+`memory/selection/testdata/lispparity/rules.jsonl` (rules, decisions, a retraction, five
 repository files, a failed read and a changed lockfile) in every mode and summary format against
 the image. Nothing is left unmatched.

@@ -163,6 +163,16 @@ Nine passed at the baseline: 1, 2 (constraint), 3, 4, 5, 6, 9 (session), 15 and 
 today's APIs. A body may need adjusting to the API its phase adds. Scenarios 10 and 11 already
 pass with the inputs given; the phase that owns them may strengthen the inputs.
 
+## Phase 2 part A
+
+The encoding fields (`claude/phase2-fields`, [contracts/encoding.md](../contracts/encoding.md))
+change no summary byte and no record id, so the Tier 0 run is the same: `go run ./cmd/memeval
+-seeds 20` gave the default-window table above cell for cell (20 seeds, 600 compactions, 1,449
+snippets, none failing, 0 model requests), with all four invariants kept on all 600 compactions.
+Error text, scope exclusions and decisions are still lost: the fields give records keys and
+provenance, while recording those classes is the work of the tool-output and conversation
+extractors of phase 2.
+
 ## After phase 2C: conversation encoding
 
 Phase 2C (`claude/phase2-conversation`, `docs/memory-v2.md` "Standing rules and scope

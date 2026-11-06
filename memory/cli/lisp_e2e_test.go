@@ -414,8 +414,11 @@ var (
 )
 
 // normalizeFlow names the random entry ids by order of first appearance, blanks the append
-// times, and replaces the run's own directories.
+// times, replaces the run's own directories, and names the writer's engine (the one member the
+// engines write differently by design, contracts/encoding.md) as one.
 func normalizeFlow(s, root, home string) string {
+	s = strings.ReplaceAll(s, `"engine":"lisp"`, `"engine":"<engine>"`)
+	s = strings.ReplaceAll(s, `"engine":"go"`, `"engine":"<engine>"`)
 	s = strings.ReplaceAll(s, root, "<root>")
 	s = strings.ReplaceAll(s, home, "<home>")
 	s = flowStampPattern.ReplaceAllString(s, `"timestamp":"<now>"`)

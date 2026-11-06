@@ -212,7 +212,7 @@ func TestLispBeforeCompactCancellation(t *testing.T) {
 	client := startLispEngine(t, image, agentDir, log)
 	want := cancelledCompaction(t, "in-process", newInProcess())
 	got := cancelledCompaction(t, "lisp", overRPC{t: t, c: client})
-	if !reflect.DeepEqual(want, got) {
+	if !reflect.DeepEqual(asGo(want), asGo(got)) {
 		t.Fatalf("in-process %v, lisp %v", want, got)
 	}
 	if lines := log.lines(); len(lines) != 0 {
@@ -260,7 +260,7 @@ func TestLispCommandsAndRendering(t *testing.T) {
 	rt := runtime.New()
 	want := view(func(h *testfix.FakeHost, args string) { must(t, commands.RunView(rt, h, args, nil)) })
 	got := view(func(h *testfix.FakeHost, args string) { must(t, client.Command(h, enginerpc.CommandView, args)) })
-	if len(want) != 4 || !reflect.DeepEqual(want, got) {
+	if len(want) != 4 || !reflect.DeepEqual(asGo(want), asGo(got)) {
 		t.Fatalf("view: in-process %q, lisp %q", want, got)
 	}
 	if len(log.lines()) != 0 {
@@ -326,7 +326,7 @@ func TestLispTriggerMatchesInProcess(t *testing.T) {
 	}
 	wantCalls, want := run(inProcess)
 	gotCalls, got := run(overLisp)
-	if wantCalls != 2 || gotCalls != wantCalls || !reflect.DeepEqual(want, got) {
+	if wantCalls != 2 || gotCalls != wantCalls || !reflect.DeepEqual(asGo(want), asGo(got)) {
 		t.Fatalf("in-process %d %q, lisp %d %q", wantCalls, want, gotCalls, got)
 	}
 	if len(log.lines()) != 0 {

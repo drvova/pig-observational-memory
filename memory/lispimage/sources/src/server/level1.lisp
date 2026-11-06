@@ -402,7 +402,8 @@ reports the request and its usage (spent)."
                                                       :reflections (om::prompt-reflections prompt) :folded folded
                                                       :subjects (om::subjects-of (om::projection-observations projection))
                                                       :links (om::prompt-links prompt) :curated (om::prompt-curated prompt)
-                                                      :branch entries :offer shown-offer))
+                                                      :branch entries :offer shown-offer
+                                                      :writer (getf om::*encoding* :writer)))
                                  (result (om::validate-level1 (l1answer-arguments a) in)))
                             (setf (report-refused rep) (length (om::vresult-refusals result)) (l1-answered out) t)
                             (when (om::vresult-refusals result)

@@ -15,11 +15,16 @@ import (
 	tf "github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
-var writeEncoding = flag.Bool("write", false, "rewrite contracts/encoding.jsonl")
+// writeConversation reports -write, which rewrites contracts/conversation.jsonl (the flag is
+// defined once for the test binary, in encode_test.go).
+func writeConversation() bool {
+	f := flag.Lookup("write")
+	return f != nil && f.Value.String() == "true"
+}
 
-// encodingCasesPath holds the encoding cases with Go's records, which the engine image must
-// equal byte for byte (lisp/tests/encoding.lisp).
-var encodingCasesPath = filepath.Join("..", "..", "contracts", "encoding.jsonl")
+// conversationCasesPath holds the conversation cases with Go's records, which the engine image must
+// equal byte for byte (lisp/tests/conversation.lisp).
+var conversationCasesPath = filepath.Join("..", "..", "contracts", "conversation.jsonl")
 
 // encodingCase is one branch and what level 0 must record from it: the kinds of its records in
 // order ("kind" or "kind/status"), "" for none.
@@ -156,9 +161,9 @@ func kindsOf(r Result) []string {
 	return out
 }
 
-// The encoding cases record what they should, and contracts/encoding.jsonl holds Go's records
+// The conversation cases record what they should, and contracts/conversation.jsonl holds Go's records
 // for each (rewritten with -args -write).
-func TestEncodingCases(t *testing.T) {
+func TestConversationCases(t *testing.T) {
 	var b bytes.Buffer
 	for _, c := range encodingCases() {
 		r := run(c.entries)
@@ -184,15 +189,15 @@ func TestEncodingCases(t *testing.T) {
 		b.Write(line)
 		b.WriteByte('\n')
 	}
-	if *writeEncoding {
-		if err := os.WriteFile(encodingCasesPath, b.Bytes(), 0o644); err != nil {
+	if writeConversation() {
+		if err := os.WriteFile(conversationCasesPath, b.Bytes(), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
-	want, err := os.ReadFile(encodingCasesPath)
+	want, err := os.ReadFile(conversationCasesPath)
 	if err != nil || !bytes.Equal(want, b.Bytes()) {
-		t.Fatalf("contracts/encoding.jsonl is stale; rerun with -args -write and review the diff (%v)", err)
+		t.Fatalf("contracts/conversation.jsonl is stale; rerun with -args -write and review the diff (%v)", err)
 	}
 }
 

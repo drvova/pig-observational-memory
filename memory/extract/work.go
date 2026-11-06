@@ -281,6 +281,7 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 	if outcome != ledger.OutcomeWorked || words != "" || len(earlier) > 0 {
 		line := attemptLine(call.name, display, outcome, result.text)
 		obs := ledger.Observation{Kind: ledger.KindAttempt, Outcome: outcome, Tool: call.name, Target: key}
+		x.callKeys(&obs.Keys, call, outcome, result.text)
 		// Only a success resolves the attempts it continues; each failure keeps its own record,
 		// since its reason is a specific of what was tried. The success carries the model's
 		// words from the attempts it resolves, so dropping them loses none.
@@ -336,6 +337,35 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 			x.add(ledger.Observation{Content: "commit " + hash + " " + subject, Kind: ledger.KindCommit, Target: hash}, sources...)
 		}
 	}
+}
+
+// callKeys adds the keys level 0 knows of a call (contracts/encoding.md): its shell command, else
+// the paths it names (resolved, as Target holds them), and a failure's first line.
+func (x *extraction) callKeys(keys *ledger.Keys, call toolCall, outcome, resultText string) {
+	if command, ok := shellCommand(call.args); ok && strings.TrimSpace(command) != "" {
+		keys.Add(ledger.KeyCommands, strings.TrimSpace(command))
+	} else if p, ok := callPath(call); ok {
+		keys.Add(ledger.KeyPaths, x.pathKey(p))
+	} else if patch, ok := patchOf(call); ok {
+		for _, e := range patchPathEvents(patch) {
+			if e.state != stateMovedFrom {
+				keys.Add(ledger.KeyPaths, x.pathKey(e.path))
+			}
+		}
+	}
+	if outcome == ledger.OutcomeFailed {
+		keys.Add(ledger.KeyErrors, clip(failureLine(resultText), serialize.BriefKeyArgRunes))
+	}
+}
+
+// callPath is a call's path argument (pathArgs), the first non-blank one.
+func callPath(call toolCall) (string, bool) {
+	for _, arg := range pathArgs {
+		if p, ok := call.args[arg].(string); ok && strings.TrimSpace(p) != "" {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // attemptLine is an attempt record's line: the tool, what it acted on and the outcome, with
@@ -526,6 +556,7 @@ func (x *extraction) emitFiles() {
 			content += " " + event.other
 		}
 		obs := ledger.Observation{Content: content, Kind: ledger.KindFile, Target: key}
+		obs.Keys.Add(ledger.KeyPaths, key)
 		for _, id := range x.files[key] {
 			if !slices.Contains(obs.Supersedes, id) {
 				obs.Supersedes = append(obs.Supersedes, id)

@@ -111,3 +111,22 @@ func isDecision(sentence string) bool {
 func isAssistantDecision(statement string) bool {
 	return isDecision(statement) && decisionReason.MatchString(statement)
 }
+
+// keyFile is a key that names a file by itself: a name with an extension ("go.sum").
+var keyFile = regexp.MustCompile(`^[A-Za-z0-9_.-]*[A-Za-z0-9_-]\.[A-Za-z][A-Za-z0-9]{0,7}$`)
+
+// userRule sets what code knows of a rule, preference or decision read from the user's own
+// turn (contracts/encoding.md): its source is the user's words and its authority the user's,
+// and its keys (ledger.RecordKeys) are filed as paths when they name a path or a file and as
+// commands otherwise. Level 0's Encode fills only what is left empty. No scope is set: level 0
+// widens no scope yet (contracts/encoding.md, "Fields").
+func userRule(o *ledger.Observation) {
+	o.Source, o.Authority = ledger.SourceUserSaid, ledger.AuthorityUser
+	for _, k := range ledger.RecordKeys(o.Content) {
+		kind := ledger.KeyCommands
+		if strings.Contains(k, "/") || keyFile.MatchString(k) {
+			kind = ledger.KeyPaths
+		}
+		o.Keys.Add(kind, k)
+	}
+}

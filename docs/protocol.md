@@ -53,7 +53,7 @@ at once) and records the session as current for its directory (`<root>/current/<
 | `session_id` | all | exists | Required. The store file is the id with `/`, `\` and NUL made `_` and a leading dot dropped |
 | `transcript_path` | all | exists | The harness's transcript, read and never written |
 | `format` | all | exists | The reader: `generic`, `claude-code`, `codex`, `pi`, `gemini`, `qwen`, `kimi`, `droid`, `copilot`, `deepagents`, `cursor`, `qoder`, `cline`, `neovate`, `iflow`, `cortex`, `auggie` (`transcript.Formats`), or a database reader (`crush`, `goose`, …, `transcript.DBFormats`; the path is the database, the session id its row key). Default `generic` |
-| `cwd` | all | exists | The project directory: file targets resolve against it, and the current-session pointer and the code store are keyed by it |
+| `cwd` | all | exists | The project directory: file targets resolve against it, and the current-session pointer and the code store are keyed by it. om reads its git repository itself (`memory/gitrepo`) for records' frames ([contracts/encoding.md](../contracts/encoding.md)); the harness sends nothing for it |
 | `reason` | `compact`, `before-compact` | exists | The harness's reason (`manual`, `auto`, `threshold`, …), stored in the cut marker; free text |
 | `first_kept_entry_id` | `before-compact` | exists (pi) | The harness's cut: the first transcript entry it keeps. It must be a cut point (a user or assistant message, never a tool result). Empty means compact at the tip, as `compact` does |
 | `tokens_before` | `before-compact` | exists (pi) | The harness's count of what it removes; `0` lets the engine estimate it from the removed entries |
