@@ -66,6 +66,9 @@
 ;; The layer store across processes and crashes (docs/lisp-port-tool-layer.md).
 (load (merge-pathnames "tests/layer-store.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; The secret scanner and role-label escaping (contracts/secrets.md).
+(load (merge-pathnames "tests/secrets.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

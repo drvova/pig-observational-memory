@@ -284,7 +284,9 @@ func jsString(v any) string {
 // tools named in skipTools (the memory tools) and the results answering them
 // are left out too, as HistoryText leaves them out: memory plumbing is not
 // conversation to remember, and observing it would feed memory back into
-// itself. An assistant message holding nothing else renders nothing.
+// itself. An assistant message holding nothing else renders nothing. Role-like labels in
+// everything but the user's own text are escaped (EscapeRoleLabels), so tool text never reads as
+// a turn of the conversation.
 func SerializeConversation(messages []map[string]any, skipTools ...string) string {
 	blocks := []string{}
 	for _, msg := range messages {
@@ -300,17 +302,17 @@ func SerializeConversation(messages []map[string]any, skipTools ...string) strin
 			if body == "" {
 				continue
 			}
-			blocks = append(blocks, "[Assistant @ "+timestamp+"]: "+body)
+			blocks = append(blocks, "[Assistant @ "+timestamp+"]: "+EscapeRoleLabels(body))
 		case "bashExecution":
 			if bashExcludedFromContext(msg) {
 				continue
 			}
-			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+BashExecutionText(msg))
+			blocks = append(blocks, "[Bash @ "+timestamp+"]: "+EscapeRoleLabels(BashExecutionText(msg)))
 		default:
 			if skippedToolResult(msg, skipTools) {
 				continue
 			}
-			blocks = append(blocks, "[Tool result for "+jsString(msg["toolName"])+" @ "+timestamp+"]: "+textOnly(msg["content"]))
+			blocks = append(blocks, "[Tool result for "+jsString(msg["toolName"])+" @ "+timestamp+"]: "+EscapeRoleLabels(textOnly(msg["content"])))
 		}
 	}
 	return strings.Join(blocks, "\n\n")
@@ -377,7 +379,7 @@ func renderCustomMessage(entry session.Entry, recallFormat bool) string {
 	if entry.CustomType != "" {
 		tag = "Custom (" + entry.CustomType + ")"
 	}
-	return "[" + tag + " @ " + timestamp + "]: " + text
+	return "[" + tag + " @ " + timestamp + "]: " + EscapeRoleLabels(text)
 }
 
 func entryTimestamp(entry session.Entry) any {
@@ -404,7 +406,7 @@ func SerializeBranchEntries(entries []session.Entry, skipTools ...string) string
 			blocks = append(blocks, renderCustomMessage(entry, false))
 		case "branch_summary":
 			if summary, ok := entry.Summary.(string); ok {
-				blocks = append(blocks, "[Branch summary @ "+FormatTimestamp(entryTimestamp(entry))+"]: "+summary)
+				blocks = append(blocks, "[Branch summary @ "+FormatTimestamp(entryTimestamp(entry))+"]: "+EscapeRoleLabels(summary))
 			}
 		}
 	}
