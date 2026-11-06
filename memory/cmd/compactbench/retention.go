@@ -73,11 +73,14 @@ type RetentionResult struct {
 	Half string `json:"half"`
 	// Values counts the ledger's active value records (tool output's exact values); ValueAtoms
 	// those whose value is one of the session's atoms, ValueHolds those whose value holds one.
-	Values     int    `json:"values"`
-	ValueAtoms int    `json:"value_atoms"`
-	ValueHolds int    `json:"value_holds"`
-	Error      string `json:"error,omitempty"`
-	S          string `json:"S,omitempty"`
+	Values     int `json:"values"`
+	ValueAtoms int `json:"value_atoms"`
+	ValueHolds int `json:"value_holds"`
+	// ValueKinds counts, per value kind, the value records, those that are atoms and those that
+	// hold one.
+	ValueKinds map[string][3]int `json:"value_kinds,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	S          string            `json:"S,omitempty"`
 }
 
 // replaySession runs the engine's compaction of the whole history, as a harness that
@@ -155,18 +158,24 @@ func replaySession(root string, s Session, budget int, keepSummary bool) Retenti
 		}
 		res.Places[place] = c
 	}
+	res.ValueKinds = map[string][3]int{}
 	for _, o := range folded.ActiveObservations {
-		if _, value, _, ok := extract.ValueParts(o); ok {
+		if kind, value, _, ok := extract.ValueParts(o); ok {
+			k := res.ValueKinds[kind]
+			k[0]++
 			res.Values++
 			if atomValues[value] {
 				res.ValueAtoms++
+				k[1]++
 			}
 			for _, a := range s.Atoms {
 				if strings.Contains(value, a.Value) {
 					res.ValueHolds++
+					k[2]++
 					break
 				}
 			}
+			res.ValueKinds[kind] = k
 		}
 	}
 	inS, inLedger, inSource, inBoth := 0, 0, 0, 0

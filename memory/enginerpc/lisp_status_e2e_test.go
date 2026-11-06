@@ -155,7 +155,7 @@ func TestLispStatusMatchesInProcess(t *testing.T) {
 		}
 	}
 	for _, line := range []string{"Kernel floor: LOWERED by the owner", "Removed settings, ignored: observeAfterTokens", "Rules: 2 active",
-		"codec → jsonl", "layout → lines", "Project settings ignored", "Records: 4 recorded", "summary → 1/2 of the room", "Retired defined queries (2;", "Code calls: 2 (1 errors, 1 queries"} {
+		"codec → jsonl", "layout → lines", "Project settings ignored", "Records: 6 recorded", "summary → 1/2 of the room", "Retired defined queries (2;", "Code calls: 2 (1 errors, 1 queries"} {
 		if !strings.Contains(want, line) {
 			t.Errorf("the report lacks %q:\n%s", line, want)
 		}

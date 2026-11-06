@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The records level 0 reads from tool output",
+  "description": "The two record kinds level 0 writes from a tool's result (docs/memory-v2.md, \"Tool output\"), as members of a records list (defs.schema.json#/$defs/observation). Source: memory/extract/output.go (outputRecords, emitValues, valueContent, ValueParts), lisp/src/output.lisp.",
+  "$defs": {
+    "valueRecord": {
+      "description": "One exact value tool output printed (ledger.KindValue): target is kind:value, the kind one of extract.ValueKinds and the value its raw spelling; content is the kind, a space and the value, with \" (seen N times)\" when N results printed it; sourceEntryIds are the entry it was first seen in and, when another, the latest; it supersedes the value's earlier record.",
+      "type": "object",
+      "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount", "kind", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/recordId" },
+        "content": { "type": "string", "pattern": "^(path|error|sha|url|kv|ip|issue|test|branch|symbol|version) [^\\r\\n]+$" },
+        "timestamp": { "type": "string", "minLength": 1 },
+        "relevance": { "const": "medium" },
+        "sourceEntryIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "defs.schema.json#/$defs/entryId" }
+        },
+        "tokenCount": { "type": "integer", "minimum": 0 },
+        "kind": { "const": "value" },
+        "target": { "type": "string", "pattern": "^(path|error|sha|url|kv|ip|issue|test|branch|symbol|version):[^\\r\\n]+$" },
+        "origin": { "const": "code" },
+        "supersedes": { "$ref": "defs.schema.json#/$defs/recordIds" }
+      }
+    },
+    "evidenceRecord": {
+      "description": "At most eight verbatim lines of a tool result that failed or matched a failure grammar (ledger.KindEvidence): content is the tool, its quoted target (clipped) and \" output: \" then the lines (each at most 160 characters) joined by \" ⏎ \"; tool and target are the call's, as its attempt's; sourceEntryIds are the call's entry and its result's.",
+      "type": "object",
+      "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount", "kind", "tool", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "defs.schema.json#/$defs/recordId" },
+        "content": { "type": "string", "pattern": "^[^\\r\\n]* output: [^\\r\\n]+$" },
+        "timestamp": { "type": "string", "minLength": 1 },
+        "relevance": { "const": "medium" },
+        "sourceEntryIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "defs.schema.json#/$defs/entryId" }
+        },
+        "tokenCount": { "type": "integer", "minimum": 0 },
+        "kind": { "const": "evidence" },
+        "tool": { "type": "string" },
+        "target": { "type": "string" },
+        "origin": { "const": "code" }
+      }
+    }
+  }
+}

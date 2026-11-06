@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/hostinfo"
 )
 
@@ -217,6 +218,25 @@ func retentionReport(n int, results []RetentionResult) string {
 				100*meanOf(g, func(r RetentionResult) float64 { return r.Recall }), len(g),
 				100*meanOf(g, func(r RetentionResult) float64 { return r.LedgerRecall }),
 				values, 100*float64(atoms)/float64(max(1, values)), 100*float64(holds)/float64(max(1, values)))
+		}
+	}
+	b.WriteString("\n## value precision by value kind (the last variant; test half)\n\n| value kind | values | is an atom | holds an atom |\n|---|---:|---:|---:|\n")
+	if len(order) > 0 {
+		pooled := map[string][3]int{}
+		for _, r := range byV[order[len(order)-1]] {
+			if r.Half != "test" {
+				continue
+			}
+			for k, c := range r.ValueKinds {
+				p := pooled[k]
+				p[0], p[1], p[2] = p[0]+c[0], p[1]+c[1], p[2]+c[2]
+				pooled[k] = p
+			}
+		}
+		for _, k := range extract.ValueKinds {
+			if p := pooled[k]; p[0] > 0 {
+				fmt.Fprintf(&b, "| %s | %d | %.1f%% | %.1f%% |\n", k, p[0], 100*float64(p[1])/float64(p[0]), 100*float64(p[2])/float64(p[0]))
+			}
 		}
 	}
 	b.WriteString("\n## first found in (atoms pooled over sessions; an atom counts at the first of user, assistant, tool call, tool output, system that holds it)\n\n| variant | half | place | in summary | atoms | share |\n|---|---|---|---:|---:|---:|\n")

@@ -22,7 +22,15 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
     },
     "observation": {
-      "description": "One record (ledger.Observation). The six kernel members are required (ObservationFrom refuses the record without them); the rest are optional and read leniently: a malformed optional member is cleared, not fatal. Writers emit no other member.",
+      "description": "One record (ledger.Observation): a value or evidence record level 0 reads from tool output (record-tool-output.schema.json), or a record of any other kind.",
+      "anyOf": [
+        { "$ref": "#/$defs/observationRecord" },
+        { "$ref": "record-tool-output.schema.json#/$defs/valueRecord" },
+        { "$ref": "record-tool-output.schema.json#/$defs/evidenceRecord" }
+      ]
+    },
+    "observationRecord": {
+      "description": "One record (ledger.Observation) of any kind but value and evidence. The six kernel members are required (ObservationFrom refuses the record without them); the rest are optional and read leniently: a malformed optional member is cleared, not fatal. Writers emit no other member.",
       "type": "object",
       "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount"],
       "additionalProperties": false,
@@ -42,8 +50,8 @@
         },
         "tokenCount": { "type": "integer", "minimum": 0 },
         "kind": {
-          "description": "ObservationKindValues and CodeKindValues.",
-          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note", "evidence", "value"]
+          "description": "ObservationKindValues and CodeKindValues but value and evidence (record-tool-output.schema.json).",
+          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note"]
         },
         "subject": { "type": "string" },
         "scope": { "type": "string" },

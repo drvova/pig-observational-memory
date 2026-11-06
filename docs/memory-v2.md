@@ -222,6 +222,45 @@ repeated compactions, which rendering from records avoids.
   The summary renders the files as a line of its own, so the list stays readable by the session model,
   after an uninstall, and after a later native PiG compaction (which drops a hook compaction's
   `details` file lists).
+- **Tool output** (`extract/output.go`, `lisp/src/output.lisp`): a tool's result is read by code
+  into two record kinds, anchored to the result's entry so they fall into its cut-point segment's
+  batch. Measured and designed in `docs/bench-results.md` ("Tool output values").
+  - **Values** (`kind: value`): one record per value kind and raw spelling per session, `target`
+    `kind:value`, content `kind value` with ` (seen N times)` when N results printed it, citing the
+    entry it was first seen in and the latest; a later sighting appends a record that supersedes the
+    earlier one (`extract.ValueParts` reads it back). The kinds, in the summary's order: `path`,
+    `error` (an identifier ending in Error, Exception, Denied, Timeout or Overflow, or Go's
+    `ErrName`), `sha` (7 to 40 lower-case hex characters with a letter and a digit, accepted only in
+    git's output or a git-shaped line, else at 40), `url` (http and https, cut at 120 characters,
+    without trailing punctuation or a bracket it did not open), `kv` (`KEY=value`, the name two or
+    more of `[A-Z0-9_]`), `ip` (IPv4, octets at most 255, optional port), `issue` (`#` and one to six
+    digits), `test` (a failing test's id), `branch`, `symbol` (the identifier a search looked for,
+    when its result holds it) and `version` (`name@1.2.3`, `v1.2`). A value's spelling is kept as
+    printed, but backslashes in a path become one slash. At most 20 new values per result.
+  - **Evidence** (`kind: evidence`): at most 8 lines of a result, each at most 160 characters, with
+    durations, timestamps and `[ 52%]` counters removed, lines equal but for their digits collapsed,
+    and role-like labels quoted (`serialize.EscapeRoleLabels`), joined by ` ⏎ ` after
+    `<tool> "<target>" output: `; its `tool` and `target` are the call's attempt key. It is written
+    only when the result failed or a failure grammar matched, so it keeps what an attempt's first
+    line does not.
+  - The extractors run in order, each adding values and lines: test runners (go test, pytest, jest
+    and vitest, cargo test, JUnit through maven and gradle: the failing ids, their lines, the first
+    assertions, the tally), compiler and linter diagnostics (an `error:` line, tsc's `error TS`,
+    rustc's `error[E…]` and its `-->`, eslint's stylish line; severity-less ones in a failed build),
+    search (the symbol), git (status paths without a slash too, branches, conflicts and errors),
+    stack traces (Python, Go, JS and Node, Java, Rust: the error line and the outer and inner
+    frames), failure markers (`error:`, `fatal:`, `panic:`, `npm ERR!`, `command not found`, ...),
+    then the generic value scan of every line. A failed result no grammar matched keeps its first
+    line, its lines holding a failure word and its last line. The class of a call (test, build,
+    search, git) comes from its tool name and its commands' program words; a file read and a search
+    give values only, a lockfile read and a write or edit tool's result give nothing.
+  - Noise: ANSI escapes are stripped, a line keeps the text after its last carriage return, and
+    progress, download, transfer-rate and binary lines are dropped. Secrets: a value the scanner
+    would redact is never indexed, nor a `KEY=value` whose name looks secret (SECRET, TOKEN, PASSW,
+    API_KEY, PRIVATE, CREDENTIAL, AUTH) or whose value is 40 or more key-like characters.
+  The scanners are hand-written over ASCII character classes (a byte of 0x80 or more is one class),
+  so the Lisp port is a transliteration; the parity harness diffs both engines on
+  `selection/testdata/lispparity/tooloutput.jsonl`.
 - **Compression.** Echoes and bare acknowledgements are not records; a record keeps the sentence
   carrying its specifics, not the whole message; consecutive records on one subject from one exchange
   merge. A list in one message (numbered or bulleted items, markers removed; a code fence inside an
@@ -292,6 +331,12 @@ skipped and selection continues:
    (the history cell bound), each clipped further to fit, its source reading it whole; one that is
    the split turn's request is not quoted again. It renders at the top, under the request;
 4. records carrying specifics no already-selected line carries (`ledger.MissingSpecifics`);
+4b. the values tool output printed, each kind's ranked by recurrence (count, then latest seen, then
+   value), at most one per 200 tokens of the budget and 40 of a kind (20 at 4,096 tokens), taken a
+   rank at a time across the kinds so a tight budget shows the top of each; they render after the
+   tables as one `values.<kind>` line per kind (`value ×N (first entry)`), and the rest are listed by
+   one `values: +N more, all M` tail whose om snippet (``om.Notes(om.Kind(`value`))``, chunked by
+   position past `om.MaxLimit`) lists every value;
 5. rendered reflections, which drop the records they cite;
 6. everything else.
 
