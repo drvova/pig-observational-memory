@@ -44,6 +44,10 @@
                              (:file "locks")
                              (:file "sessions")
                              (:file "engine")
+                             ;; W6: the two-way peer, the connection's state, the build id.
+                             (:file "peer")
+                             (:file "connection")
+                             (:file "build")
                              (:file "server")
                              (:file "methods")))
                ;; W4, tool and layer (docs/lisp-port-tool-layer.md)
@@ -68,4 +72,9 @@
                              (:file "hooks/compaction")
                              (:file "hooks/thin")
                              (:file "hooks/view")
-                             (:file "server/hooks")))))
+                             (:file "server/hooks")))
+               ;; W6, the first PiG events over engine-rpc (docs/lisp-port-peer.md)
+               (:module "w6"
+                :pathname "src"
+                :serial t
+                :components ((:file "server/events")))))

@@ -16,5 +16,9 @@
   (format t "build-image: ~A (heap ~D MB~:[~;, compressed~])~%" output
           (floor (sb-ext:dynamic-space-size) (* 1024 1024)) compress)
   (finish-output)
+  ;; The build id beside the image (<output>.build), which a client compares with initialize's
+  ;; answer to refuse a stale image (memory/lispimage ExpectedBuild).
+  (with-open-file (out (concatenate 'string output ".build") :direction :output :if-exists :supersede)
+    (write-line om.server::*build-id* out))
   (sb-ext:save-lisp-and-die output :executable t :toplevel #'om.server:main
                                    :save-runtime-options t :compression compress))

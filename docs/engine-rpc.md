@@ -11,12 +11,18 @@ an adapter in any language can drive it.
 * Engine side: `om serve` (`memory/cli/serve.go`), `enginerpc.Server`.
 * Client side: `enginerpc.Client` (Go). The PiG adapter uses it when the user's global settings
   say `"engine": "process"` ([configuration.md](configuration.md)); the default stays in-process.
+* The Lisp image speaks the same protocol over its unix socket (`enginerpc.SocketDialer`,
+  `"engine": "lisp"`), with the Go engine answering every event it refuses before acting
+  ([lisp-port-peer.md](lisp-port-peer.md)).
 
 ## Transport
 
 JSON-RPC 2.0 over the engine's stdin (adapter → engine) and stdout (engine → adapter), one
 message per line (UTF-8 JSON, no embedded newlines; `\n` terminates). The engine writes nothing
-else to stdout (its stray output goes to stderr); its stderr is the adapter's to log.
+else to stdout (its stray output goes to stderr); its stderr is the adapter's to log. The Lisp
+image carries the same lines over one unix-socket connection per client (`SocketDialer`, which
+starts the image through `memory/lispimage` when none listens; closing the connection never
+stops the image).
 
 Both ends send requests. Each end answers every request it receives, in any order, and runs
 them concurrently: a host call arrives while the adapter waits for the event that caused it,
@@ -63,15 +69,24 @@ the last 256 scopes; a call naming an older one is answered with the most recent
 | `protocolVersion` | `1`; another version is refused. |
 | `agentDir` | The harness's global settings directory (`memory/hostinfo.AgentDir`), optional. |
 | `configDirName` | Its per-project configuration directory name (`.pig`), optional. |
+| `env` | The adapter's environment the engine reads (`PI_OBSERVATIONAL_MEMORY_PASSIVE`), optional: for an engine that is not the adapter's child (the Lisp image); `om serve` reads its own. |
 
 With neither, the engine uses om's root (`$OM_HOME`, default `~/.om`), like every other `om`
 command. Result: `{"protocolVersion": 1, "name": "om", "version": string, "tool": ToolSpec}`,
 where `ToolSpec` is the memory tool's fixed `name`, `label`, `description`, `promptSnippet`,
 `promptGuidelines` and JSON-schema `parameters` (`memory/omtool`), for an adapter that registers
-it from the engine.
+it from the engine. The Lisp image also answers `buildId`, the hash of the sources it was built
+from; a client that knows the id it wants (`<image>.build`) refuses another (`Client.RequireBuild`).
 
 `shutdown` (adapter → engine), params `{}`, result `{}`: stops the engine's children; closing
-stdin then ends the process.
+stdin then ends the process. On the Lisp image it ends that connection's state only (the image
+is shared); `image/stop` stops the image itself.
+
+A Lisp image answers an event, or one case of it, that it has not ported with `-32004` before any
+side effect. A client with a fallback (`Client.SetFallback`) then runs the event on the Go engine,
+logging one line, unless the image already made a host write for it (`host/appendEntry`,
+`models/stream`, `host/compact`, `host/notify`): after one the image's error stands, and the
+adapter's `session_before_compact` answers with the minimal compaction.
 
 ## Adapter → engine: events, the tool, commands
 

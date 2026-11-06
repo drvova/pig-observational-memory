@@ -7,14 +7,13 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/engine"
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 )
 
 // The Lisp engine's client mode (docs/lisp-port-image-client.md): with OM_ENGINE=lisp, om
@@ -25,22 +24,23 @@ const (
 	// EngineEnv selects the engine: "lisp" is the image; anything else is the Go engine.
 	EngineEnv = "OM_ENGINE"
 	// LispImageEnv is the image's executable (else the lispImage setting).
-	LispImageEnv = "OM_LISP_IMAGE"
+	LispImageEnv = lispimage.ImageEnv
 	// LispSocketEnv moves the socket (default <root>/engine.sock).
-	LispSocketEnv = "OM_ENGINE_SOCKET"
+	LispSocketEnv = lispimage.SocketEnv
 	// LispIdleEnv is how many seconds the image stays up with no client (else the
 	// lispIdleSeconds setting, else 900; 0 never exits).
-	LispIdleEnv = "OM_ENGINE_IDLE_SECONDS"
+	LispIdleEnv = lispimage.IdleEnv
 	// LispFallbackEnv set to 0 makes a method the image has not ported, or an image that cannot
 	// be started or reached, an error instead of a run of the Go engine.
-	LispFallbackEnv = "OM_LISP_FALLBACK"
+	LispFallbackEnv = lispimage.FallbackEnv
 )
+
+// retryWait bounds how long a retry after a lost connection waits for the failed image to exit
+// (lispimage.Launcher.WaitGone).
+var retryWait = 5 * time.Second
 
 // codeNotPorted is the image's error for a method whose engine work is not ported yet.
 const codeNotPorted = -32004
-
-// lispStartTimeout is how long om waits for an image it started to listen.
-var lispStartTimeout = 10 * time.Second
 
 // lispPassEnv are the client's environment variables the image reads per request (its own
 // environment is the first client's, not this hook's).
@@ -73,14 +73,14 @@ func isNotPorted(err error) bool {
 }
 
 // lispClient is one connection to the image, opened on first use and kept for the process
-// (the MCP server sends every message over one connection).
+// (the MCP server sends every message over one connection). The launcher (memory/lispimage)
+// finds and starts the image, as it does for the PiG adapter's socket dialer.
 type lispClient struct {
-	root, socket, image string
-	idle                int
-	fallback            bool
-	conn                net.Conn
-	r                   *bufio.Reader
-	id                  int
+	launcher *lispimage.Launcher
+	fallback bool
+	conn     net.Conn
+	r        *bufio.Reader
+	id       int
 }
 
 // newLispClient is the client of the image for root, or nil when om is not in Lisp mode.
@@ -88,29 +88,7 @@ func newLispClient(root string) *lispClient {
 	if os.Getenv(EngineEnv) != "lisp" {
 		return nil
 	}
-	c := &lispClient{root: root, socket: os.Getenv(LispSocketEnv), image: os.Getenv(LispImageEnv), idle: -1, fallback: os.Getenv(LispFallbackEnv) != "0"}
-	if c.socket == "" {
-		c.socket = filepath.Join(root, "engine.sock")
-	}
-	if n, err := strconv.Atoi(os.Getenv(LispIdleEnv)); err == nil && n >= 0 {
-		c.idle = n
-	}
-	if raw, err := os.ReadFile(filepath.Join(root, "settings.json")); err == nil {
-		var s map[string]map[string]any
-		if json.Unmarshal(raw, &s) == nil {
-			nested := s[config.SettingsKey]
-			if p, _ := nested["lispImage"].(string); c.image == "" && filepath.IsAbs(p) {
-				c.image = p
-			}
-			if n, ok := nested["lispIdleSeconds"].(float64); ok && c.idle < 0 && n >= 0 {
-				c.idle = int(n)
-			}
-		}
-	}
-	if c.idle < 0 {
-		c.idle = 900
-	}
-	return c
+	return &lispClient{launcher: lispimage.FromEnv(root), fallback: lispimage.FallbackOn()}
 }
 
 func (c *lispClient) close() {
@@ -120,54 +98,30 @@ func (c *lispClient) close() {
 	}
 }
 
+func (c *lispClient) use(conn net.Conn) {
+	c.conn, c.r = conn, bufio.NewReaderSize(conn, 64*1024)
+}
+
 func (c *lispClient) dial() error {
-	conn, err := net.DialTimeout("unix", c.socket, 2*time.Second)
+	conn, err := c.launcher.Dial()
 	if err != nil {
 		return err
 	}
-	c.conn, c.r = conn, bufio.NewReaderSize(conn, 64*1024)
+	c.use(conn)
 	return nil
 }
 
-// start runs the image detached (its output appended to <root>/engine.log) and waits for it to
-// listen. Another client may have started one at the same time: the loser exits on the image
-// lock, and the socket the winner listens on is what this waits for.
+// start runs the image and waits for it to listen (lispimage.Launcher.Start).
 func (c *lispClient) start() error {
-	if c.image == "" {
-		return fmt.Errorf("om: OM_ENGINE=lisp and no engine image listens on %s; set %s (or lispImage in %s)", c.socket, LispImageEnv, filepath.Join(c.root, "settings.json"))
-	}
-	if err := os.MkdirAll(c.root, 0o700); err != nil {
-		return err
-	}
-	log, err := os.OpenFile(filepath.Join(c.root, "engine.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	conn, err := c.launcher.Start()
 	if err != nil {
+		if c.launcher.Image == "" {
+			return fmt.Errorf("om: OM_ENGINE=lisp and no engine image listens on %s; set %s (or lispImage in %s)", c.launcher.Socket, LispImageEnv, filepath.Join(c.launcher.Root, "settings.json"))
+		}
 		return err
 	}
-	defer log.Close()
-	cmd := exec.Command(c.image, "--root", c.root, "--socket", c.socket, "--idle-seconds", strconv.Itoa(c.idle))
-	cmd.Stdout, cmd.Stderr = log, log
-	detach(cmd)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("om: starting the engine image %s: %w", c.image, err)
-	}
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
-	deadline := time.Now().Add(lispStartTimeout)
-	for time.Now().Before(deadline) {
-		if c.dial() == nil {
-			return nil
-		}
-		select {
-		case err := <-exited:
-			// Exit 3 is the image lock: another image is starting; keep waiting for its socket.
-			var exit *exec.ExitError
-			if !errors.As(err, &exit) || exit.ExitCode() != 3 {
-				return fmt.Errorf("om: the engine image exited before it listened (%v); see %s", err, filepath.Join(c.root, "engine.log"))
-			}
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("om: the engine image did not listen on %s within %s", c.socket, lispStartTimeout)
+	c.use(conn)
+	return nil
 }
 
 // roundTrip sends one request and reads its answer on the open connection.
@@ -224,8 +178,11 @@ func (c *lispClient) call(method string, params any, result any) error {
 		}
 		c.close()
 		if attempt > 0 {
-			return fmt.Errorf("om: the engine image on %s: %w", c.socket, transport)
+			return fmt.Errorf("om: the engine image on %s: %w", c.launcher.Socket, transport)
 		}
+		// The image that failed may still be exiting, its listen backlog still accepting: the
+		// retry waits until its lock is free, so it reaches a fresh image.
+		c.launcher.WaitGone(retryWait)
 	}
 }
 

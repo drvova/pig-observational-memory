@@ -80,6 +80,10 @@ type InitializeParams struct {
 	// engine's own (om's root).
 	AgentDir      string `json:"agentDir,omitempty"`
 	ConfigDirName string `json:"configDirName,omitempty"`
+	// Env is the adapter's environment the engine reads (config.PassiveEnv), for an engine
+	// that is not the adapter's child and so does not inherit it (the Lisp image). An `om
+	// serve` engine reads its own environment and ignores it.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // ToolSpec is the memory tool as the adapter registers it (memory/omtool).
@@ -98,6 +102,9 @@ type InitializeResult struct {
 	Name            string   `json:"name"`
 	Version         string   `json:"version"`
 	Tool            ToolSpec `json:"tool"`
+	// BuildID identifies the sources a Lisp image was built from (docs/lisp-port-peer.md); a
+	// client that knows the id it wants refuses another (Client.RequireBuild).
+	BuildID string `json:"buildId,omitempty"`
 }
 
 // EventParams are an event's params: its scope, and the payload where the event has one.

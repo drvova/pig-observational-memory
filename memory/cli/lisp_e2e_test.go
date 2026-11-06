@@ -81,8 +81,8 @@ func lispFlow(t *testing.T, image string) string {
 		t.Setenv(LispIdleEnv, "60")
 		t.Cleanup(func() {
 			c := newLispClient(root)
-			if err := c.call("shutdown", map[string]any{}, nil); err != nil {
-				t.Errorf("shutdown: %v", err)
+			if err := c.call("image/stop", map[string]any{}, nil); err != nil {
+				t.Errorf("image/stop: %v", err)
 			}
 			c.close()
 			for range 100 {

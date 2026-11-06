@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 )
 
 // fakeImageEnv makes the test binary, started as the engine image, serve as a fake one
@@ -37,7 +39,7 @@ type fakeRequest struct {
 type fakeAnswer func(method string, params map[string]any) (result any, code int, message string)
 
 // serveFake answers JSON-RPC lines on ln until it closes; requests are appended to *log.
-// stop, when set, is called after the reply to shutdown.
+// stop, when set, is called after the reply to image/stop.
 func serveFake(ln net.Listener, answer fakeAnswer, mu *sync.Mutex, log *[]fakeRequest, onRequest func(), stop func()) {
 	for {
 		conn, err := ln.Accept()
@@ -67,7 +69,7 @@ func serveFake(ln net.Listener, answer fakeAnswer, mu *sync.Mutex, log *[]fakeRe
 				*log = append(*log, fakeRequest{req.Method, req.Params})
 				mu.Unlock()
 				resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
-				if req.Method == "shutdown" {
+				if req.Method == "image/stop" {
 					resp["result"] = map[string]any{}
 				} else if result, code, message := answer(req.Method, req.Params); code != 0 {
 					resp["error"] = map[string]any{"code": code, "message": message}
@@ -78,7 +80,7 @@ func serveFake(ln net.Listener, answer fakeAnswer, mu *sync.Mutex, log *[]fakeRe
 				if _, err := conn.Write(append(out, '\n')); err != nil {
 					return
 				}
-				if req.Method == "shutdown" && stop != nil {
+				if req.Method == "image/stop" && stop != nil {
 					stop()
 					return
 				}
@@ -127,6 +129,10 @@ func runFakeImage(args []string) int {
 			crash = true
 		}
 	}
+	// The real image's lock beside the socket: held for the process's life, exit 3 when taken.
+	if _, ok := lispimage.TryLock((&lispimage.Launcher{Socket: socket}).LockPath()); !ok {
+		return 3
+	}
 	os.Remove(socket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
@@ -147,7 +153,7 @@ func runFakeImage(args []string) int {
 		}
 	}
 	go serveFake(ln, defaultFakeAnswer, &mu, &log, onRequest, stop)
-	// The fake never outlives its test: shutdown, or ten seconds.
+	// The fake never outlives its test: image/stop, or ten seconds.
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -343,7 +349,7 @@ func TestLispStartsImage(t *testing.T) {
 				t.Fatal(err)
 			}
 			c := newLispClient(root)
-			if err := c.call("shutdown", map[string]any{}, nil); err != nil {
+			if err := c.call("image/stop", map[string]any{}, nil); err != nil {
 				t.Fatal(err)
 			}
 			c.close()

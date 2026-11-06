@@ -268,6 +268,13 @@ func TestProcessEngineMatchesInProcess(t *testing.T) {
 	agentDir := settingsDir(t)
 	want := scenario(t, newInProcess())
 	got := scenario(t, overRPC{t: t, c: startEngine(t, agentDir)})
+	compareTranscripts(t, "process", want, got)
+}
+
+// compareTranscripts fails t for every field of the scenario's transcript that differs
+// between the in-process path (want) and the path named name (got).
+func compareTranscripts(t *testing.T, name string, want, got transcript) {
+	t.Helper()
 	if len(want.Appended.([]any)) == 0 {
 		t.Fatal("level 0 appended nothing: the scenario tests nothing")
 	}
@@ -288,7 +295,7 @@ func TestProcessEngineMatchesInProcess(t *testing.T) {
 		if !reflect.DeepEqual(field.want, field.got) {
 			a, _ := json.MarshalIndent(field.want, "", " ")
 			b, _ := json.MarshalIndent(field.got, "", " ")
-			t.Errorf("%s differ:\nin-process %s\nprocess    %s", field.name, clip(a), clip(b))
+			t.Errorf("%s differ:\nin-process %s\n%-10s %s", field.name, clip(a), name, clip(b))
 		}
 	}
 }

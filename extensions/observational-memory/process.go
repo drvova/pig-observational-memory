@@ -14,12 +14,22 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/enginerpc"
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/hostinfo"
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
 )
 
 // engineDialer starts the engine process for the om binary at path (tests replace it).
 var engineDialer = func(path string) enginerpc.Dialer { return enginerpc.ProcessDialer(path, os.Stderr) }
+
+// lispDialer reaches the Lisp engine image l names (tests replace it).
+var lispDialer = func(l *lispimage.Launcher) enginerpc.Dialer { return enginerpc.SocketDialer(l) }
+
+// goEngineDialer is the Go engine the "lisp" mode falls back to: a Server in this process,
+// over pipes, so a refused event runs on the same engine functions the in-process path runs.
+var goEngineDialer = func() enginerpc.Dialer {
+	return enginerpc.PipeDialer(func(r io.Reader, w io.Writer) error { return enginerpc.NewServer().Serve(r, w) })
+}
 
 // engineLog is where process-mode failures are reported: the extension's stderr, never the
 // model's context.
@@ -30,6 +40,9 @@ var engineLog io.Writer = os.Stderr
 // cannot run leaves the extension on the in-process engine; nil otherwise.
 func processEngine() *enginerpc.Client {
 	setting := config.ReadEngine(config.DefaultPaths())
+	if setting.Lisp() {
+		return lispEngine(setting)
+	}
 	if !setting.Process() {
 		return nil
 	}
@@ -42,6 +55,16 @@ func processEngine() *enginerpc.Client {
 		}
 		path = found
 	}
+	client := enginerpc.NewClient(engineDialer(path), initializeParams())
+	if _, err := client.Start(); err != nil {
+		fmt.Fprintf(engineLog, "observational-memory: engine \"process\": %v; using the in-process engine\n", err)
+		return nil
+	}
+	return client
+}
+
+// initializeParams name PiG's directories to the engine.
+func initializeParams() enginerpc.InitializeParams {
 	params := enginerpc.InitializeParams{}
 	if dir, err := hostinfo.AgentDir(); err == nil {
 		params.AgentDir = dir
@@ -49,10 +72,43 @@ func processEngine() *enginerpc.Client {
 	if name, err := hostinfo.ConfigDirName(); err == nil {
 		params.ConfigDirName = name
 	}
-	client := enginerpc.NewClient(engineDialer(path), params)
-	if _, err := client.Start(); err != nil {
-		fmt.Fprintf(engineLog, "observational-memory: engine \"process\": %v; using the in-process engine\n", err)
+	return params
+}
+
+// lispEngine is the client of the user's Lisp engine image ("engine": "lisp",
+// docs/lisp-port-peer.md): the image's socket under the om root ($OM_HOME, else ~/.om), the
+// image to start from OM_LISP_IMAGE, else lispImage in PiG's or the om root's settings, the
+// build id written beside the image required. Each event the image refuses before acting runs
+// on the Go engine, logged once per event; OM_LISP_FALLBACK=0 turns that off. An image that
+// cannot be started now leaves the extension on the in-process engine (with falling back off,
+// the client is kept and every event fails until the image starts).
+func lispEngine(setting config.EngineSetting) *enginerpc.Client {
+	root, err := lispimage.DefaultRoot()
+	if err != nil {
+		fmt.Fprintf(engineLog, "observational-memory: engine \"lisp\": %v; using the in-process engine\n", err)
 		return nil
+	}
+	l := lispimage.FromEnv(root)
+	if os.Getenv(lispimage.ImageEnv) == "" && setting.Image != "" {
+		l.Image = setting.Image
+	}
+	params := initializeParams()
+	// The image is no child of this process: it reads the client's passive switch from here.
+	if v, ok := os.LookupEnv(config.PassiveEnv); ok {
+		params.Env = map[string]string{config.PassiveEnv: v}
+	}
+	client := enginerpc.NewClient(lispDialer(l), params)
+	client.RequireBuild(l.ExpectedBuild())
+	fallback := lispimage.FallbackOn()
+	if fallback {
+		client.SetFallback(enginerpc.NewClient(goEngineDialer(), params), engineLog)
+	}
+	if _, err := client.Start(); err != nil {
+		if fallback {
+			fmt.Fprintf(engineLog, "observational-memory: engine \"lisp\": %v; using the in-process engine\n", err)
+			return nil
+		}
+		fmt.Fprintf(engineLog, "observational-memory: engine \"lisp\": %v; falling back is off (%s=0)\n", err, lispimage.FallbackEnv)
 	}
 	return client
 }

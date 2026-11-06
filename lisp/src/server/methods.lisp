@@ -8,10 +8,18 @@
 (in-package "OM.SERVER")
 
 (define-method "initialize" (params)
+  ;; Also engine-rpc's initialize (docs/engine-rpc.md): it opens the connection's state
+  ;; (connection.lisp; agentDir, configDirName and the client's env) and answers the memory
+  ;; tool's spec and the image's build id, so a client can refuse a stale image.
   (let ((version (om::jget params "protocolVersion")))
     (when (and version (not (eql version 1d0)) (not (eql version 1)))
       (rpc-fail +invalid-params+ "om engine: protocol version ~A is not supported (1)" version)))
-  (let ((out (om::jobject "protocolVersion" 1 "name" "om" "engine" "lisp")))
+  (when *peer*
+    (let ((old (peer-conn *peer*)))
+      (when old (conn-end old)))
+    (setf (peer-conn *peer*) (make-conn params)))
+  (let ((out (om::jobject "protocolVersion" 1 "name" "om" "engine" "lisp" "version" *build-id*
+                          "buildId" *build-id* "tool" (om::raw-json *tool-spec-json*))))
     (maphash (lambda (k v) (setf (gethash k out) v)) *server-info*)
     out))
 
@@ -23,6 +31,15 @@
     out))
 
 (define-method "shutdown" (params)
+  ;; Ends this connection's state only: one client's exit never stops an image other clients
+  ;; share. image/stop stops the image.
+  (when (and *peer* (peer-conn *peer*))
+    (conn-end (peer-conn *peer*))
+    (setf (peer-conn *peer*) nil))
+  (om::jobject))
+
+(define-method "image/stop" (params)
+  ;; Stops the whole image (every connection) within a quarter second, after this answer.
   (request-stop)
   (om::jobject))
 

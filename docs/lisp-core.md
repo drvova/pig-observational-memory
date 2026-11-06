@@ -52,7 +52,11 @@ harness hook / MCP / PiG
 - **Protocol:** JSON-RPC 2.0, one message per line, both ways. Requests carry the event names of
   [protocol.md](protocol.md) (session-start, turn-end, compact, prompt, before-compact, context) and
   the MCP calls. Host calls go back to the client when the harness can answer them (PiG); otherwise the
-  image reads the transcript itself, as `om` does today.
+  image reads the transcript itself, as `om` does today. Each connection is a two-way peer
+  (`lisp/src/server/peer.lisp`, [lisp-port-peer.md](lisp-port-peer.md)): a reader thread that routes,
+  a worker per engine-rpc request, outgoing host calls by id, cooperative cancellation. PiG reaches it
+  through `enginerpc.SocketDialer` with `"engine": "lisp"`, whose per-connection state stands in for
+  Go's per-process runtime.
 - **Sessions:** the image keeps per-session state (branch cache, the extraction lock, the per-session
   engine lock) keyed by harness and session id. Stores on disk keep the formats in `contracts/schemas`,
   so the Go engine and the image read each other's data.

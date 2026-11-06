@@ -29,6 +29,10 @@ const (
 	// CodeRequestCancelled answers a request the caller cancelled before it finished
 	// (the LSP code).
 	CodeRequestCancelled = -32800
+	// CodeNotPorted is the Lisp image's refusal of a method, or of one case of it, whose engine
+	// work it has not ported: it answers so before any side effect, and a client with a
+	// fallback engine runs the request there (docs/lisp-port-peer.md).
+	CodeNotPorted = -32004
 )
 
 // CancelMethod is the notification that cancels a request in flight, in either direction:

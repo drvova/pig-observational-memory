@@ -41,7 +41,8 @@ lisp/build-image.sh /path/om-engine     # OM_LISP_HEAP (default 512MB), OM_IMAGE
   crashed image, so it is removed. A clean exit removes the socket and the pid file.
 - **Idle exit.** The image exits after `--idle-seconds` with no connected client. The default is
   `$OM_ENGINE_IDLE_SECONDS`, else 900. 0 never exits. The client passes its own setting at start.
-- **Threads.** Each connection gets its own thread and handles one request at a time. Different
+- **Threads.** Each connection gets a reader thread (the peer, [lisp-port-peer.md](lisp-port-peer.md));
+  the om methods below run one at a time on the connection's serial worker, in arrival order. Different
   sessions run concurrently. Within one session, events are serialized by the session's mutex and
   by its engine lock file, `<store>.engine.lock`. That is the file the Go engine locks, so a Go `om`
   process and the image never work on one session at once.
@@ -82,12 +83,12 @@ only the protocol's events.
 
 | Method | State |
 |---|---|
-| `initialize`, `ping`, `status`, `shutdown` | ported |
+| `initialize`, `ping`, `status`, `shutdown` | ported; `shutdown` ends the connection's state only, and `image/stop` stops the image |
 | `turn-end` | level 0 ported (`hooks.OnTurnEnd` on a neutral host: passive, the store, `neutral.Branch`, `ExtractionStartIndex`, `extract.Extract`, `appendExtraction`); `remaining: ["settle-curated"]` |
 | `prompt`, `session-start`, `compact`, `before-compact`, `context`, `view`, and `turn-end` after a compaction and in every format | ported by W5 ([lisp-port-hooks.md](lisp-port-hooks.md)); a curated store holding memories is still not ported |
 | `mcp` (`{"message": …}` → `{"message": answer}`) | MCP `ping` ported; every other MCP method is not ported (W4) |
 | `call` | not ported (W4) |
-| the engine-rpc methods (`event/*`, `tool/*`, `command/run`) | listed, not ported |
+| the engine-rpc methods (`event/*`, `tool/*`, `command/run`) | `event/sessionStart`, `event/turnEnd` and `event/context` ported by W6 ([lisp-port-peer.md](lisp-port-peer.md)); the rest listed, not ported |
 
 To extend the table, another work package calls `define-method` (or `define-mcp-method`) in its
 own file, loaded after `methods.lisp`. That replaces the not-ported entry.

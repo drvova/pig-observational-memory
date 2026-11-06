@@ -5,7 +5,8 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (require :sb-bsd-sockets)
-  (require :sb-posix))
+  (require :sb-posix)
+  (require :sb-concurrency))
 
 (defpackage "OM.SERVER"
   (:use "COMMON-LISP")

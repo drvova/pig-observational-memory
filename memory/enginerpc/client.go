@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
 
@@ -43,6 +44,15 @@ type Client struct {
 	latest     host.Host
 	nextStream int64
 	streams    map[string]host.ModelStream
+	// acted holds the scopes whose event made a host write (actingMethods), until the event's
+	// answer arrives: a refusal after one is never run again elsewhere.
+	acted map[string]bool
+
+	// fallback answers what the engine could not (SetFallback); requireBuild is the build id
+	// the engine must report (RequireBuild).
+	fallback     *Client
+	fallbackLog  io.Writer
+	requireBuild string
 
 	// ctxMu serializes context requests; ctxPrev is the last one's encoded messages, sent as
 	// request ctxPrevSeq.
@@ -56,8 +66,47 @@ type Client struct {
 // (ProtocolVersion is filled in).
 func NewClient(dial Dialer, params InitializeParams) *Client {
 	params.ProtocolVersion = ProtocolVersion
-	return &Client{dial: dial, params: params, scopes: map[string]host.Host{}, streams: map[string]host.ModelStream{}}
+	return &Client{dial: dial, params: params, scopes: map[string]host.Host{}, streams: map[string]host.ModelStream{}, acted: map[string]bool{}}
 }
+
+// SetFallback makes fallback answer each event the engine could not, before it acted: when the
+// engine cannot be started, reached or initialized, or refuses the event as not ported
+// (CodeNotPorted) without having made a host write for it (host/appendEntry, models/stream,
+// host/compact, host/notify). After a host write nothing is run again: the engine's error is
+// the event's. Each fallback writes one line with its reason to log (nil writes none). The
+// PiG adapter's "engine": "lisp" mode runs the Lisp image with the Go engine as its fallback
+// (docs/lisp-port-peer.md).
+func (c *Client) SetFallback(fallback *Client, log io.Writer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fallback, c.fallbackLog = fallback, log
+}
+
+// RequireBuild makes the connection refuse an engine whose initialize reports another build id
+// (InitializeResult.BuildID): a stale image is a failure to start, never a conversation across
+// versions. "" accepts any.
+func (c *Client) RequireBuild(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requireBuild = id
+}
+
+// FailoverError is an event the engine failed before it acted: it could not be started,
+// reached or initialized, or it refused the event as not ported before any host write. Its
+// message is the underlying error's.
+type FailoverError struct {
+	// Reason says why, in a few words.
+	Reason string
+	Err    error
+}
+
+func (e *FailoverError) Error() string { return e.Err.Error() }
+func (e *FailoverError) Unwrap() error { return e.Err }
+
+// actingMethods are the host calls that change what the harness holds or shows, or start a
+// model request: once the engine has made one for an event, the event is never run again by a
+// fallback engine (a second level-0 batch, coverage marker or model request).
+var actingMethods = map[string]bool{MethodAppendEntry: true, MethodModelsStream: true, MethodCompact: true, MethodNotify: true}
 
 // ProcessDialer starts `<path> serve` as a child process speaking on its stdin and stdout;
 // its stderr goes to stderr (os.Stderr when nil).
@@ -117,6 +166,25 @@ func PipeDialer(serve func(r io.Reader, w io.Writer) error) Dialer {
 	}
 }
 
+// SocketDialer connects to the user's Lisp engine image on its unix socket, starting the image
+// when the socket is absent or refuses (memory/lispimage, the launcher the om CLI's Lisp mode
+// uses too). stop closes this connection only: the image serves other clients and outlives it.
+func SocketDialer(l *lispimage.Launcher) Dialer {
+	return func() (io.Reader, io.Writer, func() error, error) {
+		conn, err := l.Connect()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		var once sync.Once
+		var closeErr error
+		stop := func() error {
+			once.Do(func() { closeErr = conn.Close() })
+			return closeErr
+		}
+		return conn, conn, stop, nil
+	}
+}
+
 // Start connects now (otherwise the first event does) and returns the memory tool's spec
 // the engine reports.
 func (c *Client) Start() (ToolSpec, error) {
@@ -154,6 +222,11 @@ func (c *Client) connection() (*Peer, error) {
 		_ = stop()
 		<-peer.Done()
 		return nil, fmt.Errorf("enginerpc: initialize: %w", err)
+	}
+	if c.requireBuild != "" && result.BuildID != c.requireBuild {
+		_ = stop()
+		<-peer.Done()
+		return nil, fmt.Errorf("enginerpc: the engine reports build %q, not %q: a stale image (stop it with image/stop; the next event starts the current one)", result.BuildID, c.requireBuild)
 	}
 	c.peer, c.stop, c.tool = peer, stop, result.Tool
 	return peer, nil
@@ -197,6 +270,7 @@ func (c *Client) scope(h host.Host) Scope {
 	c.order = append(c.order, id)
 	if len(c.order) > scopeRetention {
 		delete(c.scopes, c.order[0])
+		delete(c.acted, c.order[0])
 		c.order = c.order[1:]
 	}
 	c.latest = h
@@ -215,13 +289,52 @@ func (c *Client) hostOf(id string) (host.Host, error) {
 	return nil, errors.New("enginerpc: no host for scope " + id)
 }
 
-// event sends one event under h's request cancellation.
+// event sends one event under h's request cancellation, and runs it on the fallback engine
+// when the engine failed it before acting (SetFallback).
 func (c *Client) event(h host.Host, method string, params func(Scope) any, result any) error {
+	err := c.send(h, method, params, result)
+	if fallback, ok := c.failover(method, err); ok {
+		return fallback.event(h, method, params, result)
+	}
+	return err
+}
+
+// send sends one event; an error from before the engine acted is a *FailoverError.
+func (c *Client) send(h host.Host, method string, params func(Scope) any, result any) error {
 	peer, err := c.connection()
 	if err != nil {
-		return err
+		return &FailoverError{Reason: "the engine is unreachable", Err: err}
 	}
-	return peer.Call(requestContext(h), method, params(c.scope(h)), result)
+	scope := c.scope(h)
+	err = peer.Call(requestContext(h), method, params(scope), result)
+	c.mu.Lock()
+	acted := c.acted[scope.ID]
+	delete(c.acted, scope.ID)
+	c.mu.Unlock()
+	var rpcErr *Error
+	if err != nil && !acted && errors.As(err, &rpcErr) && rpcErr.Code == CodeNotPorted {
+		return &FailoverError{Reason: "not ported", Err: err}
+	}
+	return err
+}
+
+// failover is the fallback client for err, after logging why, when err is a failover and a
+// fallback is set.
+func (c *Client) failover(method string, err error) (*Client, bool) {
+	var fo *FailoverError
+	if err == nil || !errors.As(err, &fo) {
+		return nil, false
+	}
+	c.mu.Lock()
+	fallback, log := c.fallback, c.fallbackLog
+	c.mu.Unlock()
+	if fallback == nil {
+		return nil, false
+	}
+	if log != nil {
+		fmt.Fprintf(log, "observational-memory: %s: %s (%v); running it on the Go engine\n", method, fo.Reason, fo.Err)
+	}
+	return fallback, true
 }
 
 func eventParams(scope Scope) any { return EventParams{Scope: scope} }
@@ -323,15 +436,19 @@ func (c *Client) Context(h host.Host, messages []map[string]any) error {
 		reuse = 0
 	}
 	var out ContextResult
-	err := c.event(h, MethodContext, func(scope Scope) any {
+	err := c.send(h, MethodContext, func(scope Scope) any {
 		return ContextParams{Scope: scope, Seq: seq, Base: base, Reuse: reuse, Messages: raw[reuse:]}
 	}, &out)
 	var rpcErr *Error
 	if errors.As(err, &rpcErr) && rpcErr.Code == CodeStaleContext {
-		err = c.event(h, MethodContext, func(scope Scope) any { return ContextParams{Scope: scope, Seq: seq, Messages: raw} }, &out)
+		err = c.send(h, MethodContext, func(scope Scope) any { return ContextParams{Scope: scope, Seq: seq, Messages: raw} }, &out)
 	}
 	if err != nil {
 		c.ctxPrev, c.ctxPrevSeq = nil, 0
+		// The fallback keeps its own previous request: the list is sent to it as it stands.
+		if fallback, ok := c.failover(MethodContext, err); ok {
+			return fallback.Context(h, messages)
+		}
 		return err
 	}
 	c.ctxPrev, c.ctxPrevSeq = raw, seq
@@ -375,6 +492,11 @@ func (c *Client) handle(ctx context.Context, method string, params json.RawMessa
 	h, err := c.hostOf(head.Scope)
 	if err != nil {
 		return nil, err
+	}
+	if actingMethods[method] {
+		c.mu.Lock()
+		c.acted[head.Scope] = true
+		c.mu.Unlock()
 	}
 	switch method {
 	case MethodGetBranch:

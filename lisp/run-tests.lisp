@@ -38,6 +38,9 @@
 ;; W5: the hooks.
 (load (merge-pathnames "tests/hooks.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; W6: the two-way peer.
+(load (merge-pathnames "tests/peer.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

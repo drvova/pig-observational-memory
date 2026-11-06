@@ -51,30 +51,42 @@ in their own files, or redefine a not-ported one)."
   "The message as one line of JSON, without the newline: strings escape their newlines."
   (om::json-string message))
 
+(define-condition request-cancelled (error) ()
+  (:report "om engine: the request was cancelled"))
+
+(defparameter +request-cancelled+ -32800)
+
 (defun handle-line (line)
   "The answer to one received line, as a decoded object, or nil for a notification (a request
 without an id), which is run and not answered."
   (let ((request (handler-case (om::json-parse (coerce line 'simple-string))
                    (error () (return-from handle-line
                                (error-response :null +parse-error+ "parse error"))))))
-    (multiple-value-bind (id has-id) (if (hash-table-p request) (gethash "id" request) (values nil nil))
-      (let ((id (if has-id id :null))
-            (method (om::jget request "method"))
-            (params (om::jget request "params")))
-        (cond ((or (not (hash-table-p request)) (not (equal (om::jget request "jsonrpc") "2.0"))
-                   (not (stringp method)))
-               (error-response id +invalid-request+ "invalid request"))
-              ((not (or (null params) (eq params :null) (hash-table-p params)))
-               (and has-id (error-response id +invalid-params+ "params must be an object")))
-              (t
-               (let ((handler (gethash method *methods*))
-                     (params (if (hash-table-p params) params (om::jobject))))
-                 (if (null handler)
-                     (and has-id (error-response id +method-not-found+ (format nil "method not found: ~A" method)))
-                     (handler-case (let ((result (funcall handler params)))
-                                     (and has-id (response id result)))
-                       (rpc-error (e)
-                         (and has-id (error-response id (rpc-error-code e) (rpc-error-message e))))
-                       (error (e)
-                         (and has-id (error-response id +internal-error+
-                                                     (format nil "internal error: ~A" e)))))))))))))
+    (handle-message request)))
+
+(defun handle-message (request)
+  "The answer to one decoded request (handle-line's, after the parse), or nil for a
+notification. A handler that finds its request cancelled (check-cancelled) answers -32800."
+  (multiple-value-bind (id has-id) (if (hash-table-p request) (gethash "id" request) (values nil nil))
+    (let ((id (if has-id id :null))
+          (method (om::jget request "method"))
+          (params (om::jget request "params")))
+      (cond ((or (not (hash-table-p request)) (not (equal (om::jget request "jsonrpc") "2.0"))
+                 (not (stringp method)))
+             (error-response id +invalid-request+ "invalid request"))
+            ((not (or (null params) (eq params :null) (hash-table-p params)))
+             (and has-id (error-response id +invalid-params+ "params must be an object")))
+            (t
+             (let ((handler (gethash method *methods*))
+                   (params (if (hash-table-p params) params (om::jobject))))
+               (if (null handler)
+                   (and has-id (error-response id +method-not-found+ (format nil "method not found: ~A" method)))
+                   (handler-case (let ((result (funcall handler params)))
+                                   (and has-id (response id result)))
+                     (request-cancelled (e)
+                       (and has-id (error-response id +request-cancelled+ (princ-to-string e))))
+                     (rpc-error (e)
+                       (and has-id (error-response id (rpc-error-code e) (rpc-error-message e))))
+                     (error (e)
+                       (and has-id (error-response id +internal-error+
+                                                   (format nil "internal error: ~A" e))))))))))))

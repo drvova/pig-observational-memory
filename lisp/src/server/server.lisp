@@ -1,7 +1,7 @@
 ;;;; The image's lifecycle: one image per store root, serving every harness and session over a
 ;;;; unix socket (<root>/engine.sock, or $OM_ENGINE_SOCKET). It takes a file lock beside the
-;;;; socket so only one image runs, writes a pid file there, answers each connection in a thread
-;;;; of its own (one request at a time per connection, one message per line), and exits after a
+;;;; socket so only one image runs, writes a pid file there, serves each connection with a peer
+;;;; of its own (peer.lisp: requests both ways, one message per line), and exits after a
 ;;;; period with no client (the idle setting). A crash loses only in-memory caches: the next om
 ;;;; client finds the socket refusing and starts a new image, which removes the stale socket.
 
@@ -80,21 +80,13 @@
     (rename-file tmp path)))
 
 (defun serve-connection (s socket)
-  (let ((stream (sb-bsd-sockets:socket-make-stream socket :input t :output t :element-type 'character
-                                                          :external-format :utf-8 :buffering :full)))
+  "Serves one connection: this thread is the peer's reader (peer.lisp), which hands each
+request to a worker and each reply to the call waiting for it."
+  (let* ((stream (sb-bsd-sockets:socket-make-stream socket :input t :output t :element-type 'character
+                                                           :external-format :utf-8 :buffering :full))
+         (p (%make-peer stream)))
     (unwind-protect
-         (handler-case
-             (loop for line = (read-line stream nil nil)
-                   while line
-                   do (touch s)
-                      (unless (string= (string-trim '(#\Space #\Tab #\Return) line) "")
-                        (let ((answer (handle-line line)))
-                          (when answer
-                            (write-string (encode-message answer) stream)
-                            (write-char #\Newline stream)
-                            (finish-output stream))))
-                   until (server-stopping s))
-           (error (e) (unless (server-stopping s) (log-line "connection: ~A" e))))
+         (peer-run p :on-line (lambda () (touch s)) :stop-p (lambda () (server-stopping s)))
       (ignore-errors (close stream :abort t))
       (ignore-errors (sb-bsd-sockets:socket-close socket))
       (sb-thread:with-mutex ((server-mutex s))
