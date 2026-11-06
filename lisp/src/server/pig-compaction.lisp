@@ -303,10 +303,16 @@ session model. Such a compaction is not ported (level 1 is a later work package)
           (handler-case
               (multiple-value-bind (result entries cut)
                   (sb-thread:with-mutex ((conn-extract-mutex c))
-                    (om::build-compaction (harness-hook-host ch (pig-hook-host c)) event (pig-hook-config cfg)
-                                          :model model :own-trigger own
-                                          :context-window (model-int model "contextWindow")
-                                          :max-output (model-max-tokens model)))
+                    ;; The session model's profile (harness.Ledger.ProfileWith), applied to the render.
+                    (let ((om::*summary-profile* (ch-profile ch))
+                          (om::*kernel-floor-lowered* (conn-floor-lowered-p c store)))
+                      ;; runtime.Snapshot's CompactHookInFlight, which /om:status shows.
+                      (call-with-hook-in-flight
+                       c (lambda ()
+                           (om::build-compaction (harness-hook-host ch (pig-hook-host c)) event (pig-hook-config cfg)
+                                                 :model model :own-trigger own
+                                                 :context-window (model-int model "contextWindow")
+                                                 :max-output (model-max-tokens model))))))
                 (check-cancelled)
                 (setf (ch-result ch) result (ch-entries ch) entries (ch-cut ch) cut)
                 (handler-case (after-compaction ch)

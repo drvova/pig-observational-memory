@@ -113,4 +113,16 @@
                 :pathname "src"
                 :serial t
                 :components ((:file "layer/go-layer")
-                             (:file "server/migration")))))
+                             (:file "server/migration")))
+               ;; /om:status and the remaining harness reads (docs/lisp-port-status.md)
+               (:module "status"
+                :pathname "src"
+                :serial t
+                :components ((:file "legacy/legacyquery")
+                             (:file "legacy/notes")
+                             (:file "harness/rule-migration")
+                             (:file "harness/profile")
+                             (:file "harness/floor")
+                             (:file "harness/retired")
+                             (:file "harness/layer-status")
+                             (:file "server/status")))))

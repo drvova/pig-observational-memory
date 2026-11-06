@@ -182,12 +182,18 @@ agent directory dir (settings.json there)."
                (ledger (format nil "~A/observational-memory/memories/models/p_2fm.jsonl" (string-right-trim "/" dir))))
           (check (and (jget (jget r "result") "result") t) t "the harness runs at the compaction")
           (check (om.layer::ev-string (car (last (om.layer::read-model-events ledger))) "kind") "pass" "the pass event")
-          ;; A model whose profile may not be the default is refused before any write.
+          ;; The model's profile is applied (docs/lisp-port-status.md): a decode vote changes
+          ;; nothing yet, and the compaction is the image's.
           (om.layer::append-line ledger "{\"time\":\"2026-11-02T09:00:00Z\",\"model\":\"p/m\",\"kind\":\"decode\",\"outcome\":\"error\",\"codec\":\"rows\",\"engine\":\"v2\"}")
-          (setf (phost-appended h) '())
           (let ((r (peer-exchange stream 6 "event/sessionBeforeCompact"
                                   (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h))))
-            (check (jget (jget r "error") "code") -32004d0 "the profile is not ported")
+            (check (and (jget (jget r "result") "result") t) t "the profile is applied"))
+          ;; A layer that declares a format is still refused before any write.
+          (write-file* (format nil "~A/observational-memory/memories/harness/p_2fm/format/mine.rows" (string-right-trim "/" dir)) "x")
+          (setf (phost-appended h) '())
+          (let ((r (peer-exchange stream 7 "event/sessionBeforeCompact"
+                                  (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h))))
+            (check (jget (jget r "error") "code") -32004d0 "a declared format is not ported")
             (check (phost-appended h) '() "nothing appended")))))))
 
 (deftest pig-before-compact-cancel
@@ -277,5 +283,7 @@ agent directory dir (settings.json there)."
         (setf (phost-notices h) '())
         (peer-exchange stream 2 "command/run" (jobject "scope" scope "name" "om:view" "args" "bogus") :host (phost-fn h))
         (check (phost-notices h) '(("info" . "Usage: /om:view [full]")) "the usage line")
-        (check (jget (jget (peer-exchange stream 3 "command/run" (jobject "scope" scope "name" "om:status") :host (phost-fn h)) "error") "code")
-               -32004d0 "status is not ported")))))
+        (setf (phost-notices h) '())
+        (check (json-string (jget (peer-exchange stream 3 "command/run" (jobject "scope" scope "name" "om:status") :host (phost-fn h)) "result"))
+               "{}" "status runs on the image")
+        (check (and (search "── Memory ──" (cdr (first (phost-notices h)))) t) t "the status report")))))

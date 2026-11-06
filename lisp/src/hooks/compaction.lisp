@@ -236,12 +236,14 @@ own-trigger is runtime.CompactInFlight: the extension's own compaction."
           (json-string (subject-alias-to a))
           (and (string/= (subject-alias-reason a) "") (json-string (subject-alias-reason a)))))
 
-(defun details-json (observations reflections aliases first-kept consolidation shown)
-  "v2Details' om.folded details with the report and the shown ids, in MemoryDetails' order."
+(defun details-json (observations reflections aliases first-kept consolidation shown &optional summary-codec)
+  "v2Details' om.folded details with the report and the shown ids, in MemoryDetails' order;
+summary-codec the summary's codec when it is not rows."
   (with-output-to-string (out)
     (format out "{\"type\":\"om.folded\",\"version\":1,\"fullFold\":true,\"observations\":[~{~A~^,~}],\"reflections\":[~{~A~^,~}]"
             (mapcar #'obs-json observations) (mapcar #'refl-json reflections))
     (when (string/= first-kept "") (format out ",\"foldThroughEntryId\":~A" (json-string first-kept)))
+    (when summary-codec (format out ",\"summaryCodec\":~A" (json-string summary-codec)))
     (when aliases (format out ",\"aliases\":[~{~A~^,~}]" (mapcar #'alias-json aliases)))
     (write-string ",\"engine\":\"v2\"" out)
     (when consolidation (format out ",\"consolidation\":~A" consolidation))
@@ -249,6 +251,15 @@ own-trigger is runtime.CompactInFlight: the extension's own compaction."
     (write-string "}" out)))
 
 ;;; The hook
+
+;; The session model's profile (src/harness/profile.lisp), bound by the PiG compaction: nil is
+;; harness.Default (the whole room, tables, rows). profile-budget, profile-format, profile-codec
+;; and profile-summary-codec read it.
+(defvar *summary-profile* nil)
+
+;; Whether the kernel floor of the store the event reads is lowered (src/harness/floor.lisp): the Go
+;; layer's kernel check (src/layer/go-layer.lisp) then admits every definition, as kernel.Floor.Check.
+(defvar *kernel-floor-lowered* nil)
 
 (defun build-compaction (h event cfg &key model own-trigger (context-window 0) (max-output 0))
   "buildCompactionV2 at level 0: a cresult on the event's exact cut, then the branch it folded
@@ -258,10 +269,11 @@ are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
          (entries (extract-cut h event))
          (previous (previous-summary entries event))
          (removed (+ (source-tokens cut) (estimate-tokens previous)))
-         (budget (resolve-summary-budget cfg :reserve (cevent-reserve event) :tokens-before (cevent-tokens-before event)
-                                             :removed removed :context-window context-window :max-output max-output
-                                             :headroom (next-run-headroom entries)))
-         (fmt (if (string= (hconfig-memory-format cfg) "lines") "lines" "tables"))
+         (budget (profile-budget
+                  (resolve-summary-budget cfg :reserve (cevent-reserve event) :tokens-before (cevent-tokens-before event)
+                                              :removed removed :context-window context-window :max-output max-output
+                                              :headroom (next-run-headroom entries))))
+         (fmt (profile-format (hconfig-memory-format cfg)))
          (instructions (trim-space (cevent-custom-instructions event)))
          (iblock (if (string/= instructions "") (cat (string #\Newline) (string #\Newline) "---" (string #\Newline) (string #\Newline) instructions) ""))
          (memory-budget (if (and (string/= iblock "") (> (- budget (estimate-tokens iblock)) 0))
@@ -277,7 +289,7 @@ are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
              (request (split-turn-request cut event))
              (r (render-summary observations folded entries memory-budget
                                 :reflections reflections :request request :intent (v2-intent entries cut request)
-                                :format fmt :codec :rows :aliases (projection-aliases projection)
+                                :format fmt :codec (profile-codec fmt) :aliases (projection-aliases projection)
                                 :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded)))))
         (when (and (string/= (summary-text r) "") (<= (estimate-tokens (summary-text r)) memory-budget))
           (setf summary (summary-text r) kind "records"
@@ -293,7 +305,8 @@ are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
     (values (make-cresult :summary summary :first-kept (cevent-first-kept event) :tokens-before (cevent-tokens-before event)
                           :kind kind
                           :details-json (details-json observations reflections (projection-aliases projection)
-                                                      (cevent-first-kept event) (consolidation-json reason) shown))
+                                                      (cevent-first-kept event) (consolidation-json reason) shown
+                                                      (and (string= kind "records") (profile-summary-codec fmt))))
             entries cut)))
 
 (defun cresult-map-json (c)

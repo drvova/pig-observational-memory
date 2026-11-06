@@ -6,9 +6,9 @@
 ;;;; ledger once the extraction is appended.
 ;;;;
 ;;;; A memory call written in the removed query language (a memory tool call with a query and no
-;;;; code, or a call of a retired defined tool) needs the frozen query parser (memory/legacyquery),
-;;;; which is not ported: detection over such a call signals legacy-memory-call, and the callers
-;;;; refuse the event before anything is appended, so the Go engine reads it.
+;;;; code, or a call of a retired defined tool) is read with the frozen query parser
+;;;; (src/legacy/legacyquery.lisp, memory-asks in src/legacy/notes.lisp). legacy-memory-call is
+;;;; kept for callers that still name it; nothing signals it now.
 
 (in-package "OM.LAYER")
 
@@ -46,7 +46,7 @@
 (defun memory-result-p (e defined)
   (and (role-p e "toolResult")
        (let ((name (om::jget (msg-of e) "toolName")))
-         (or (equal name "memory") (and (stringp name) (string/= name "") (str-member name defined))))))
+         (or (equal name "memory") (and (stringp name) (string/= name "") (assoc name defined :test #'string=) t)))))
 
 (defun turn-carriers (history at defined)
   (loop for i from (1- at) downto 0
@@ -93,25 +93,8 @@ cites whose text adds specifics its turn and memory did not give. branch and cov
             (if (and ok1 ok2) (values recalled searches t) (values nil nil nil))))
         (values nil nil nil))))
 
-(defun memory-asks (e defined results)
-  "MemoryAsks: a list of (recalled . searches), one per memory call of the assistant entry that
-asked for anything. Signals legacy-memory-call for a call in the removed query language."
-  (unless (role-p e "assistant") (return-from memory-asks '()))
-  (let ((blocks (om::jget (msg-of e) "content")) (out '()))
-    (when (and (vectorp blocks) (not (stringp blocks)))
-      (loop for b across blocks
-            when (and (hash-table-p b) (equal (om::jget b "type") "toolCall"))
-              do (let* ((name (om::jget b "name")) (args (om::jget b "arguments")))
-                   (cond ((equal name "memory")
-                          (if (stringp (om::jget args "code"))
-                              (multiple-value-bind (recalled searches ok) (code-details-asks (gethash (om::str (om::jget b "id")) results))
-                                (when (and ok (or recalled searches)) (push (cons recalled searches) out)))
-                              (let ((query (om::jget args "query")))
-                                (when (and (stringp query) (string/= (om::trim-space query) ""))
-                                  (error 'legacy-memory-call :entry (om::entry-id e))))))
-                         ((and (stringp name) (str-member name defined))
-                          (error 'legacy-memory-call :entry (om::entry-id e)))))))
-    (nreverse out)))
+;; memory-asks (rules.MemoryAsks) is src/legacy/notes.lisp's: it reads old calls with the frozen
+;; query parser (legacyquery.lisp). defined is harness.DefinedQueries, an alist (name . query).
 
 (defun dropped-then-queried (branch covered defined)
   "DroppedThenQueried: the dropped records the memory calls in covered asked for."
