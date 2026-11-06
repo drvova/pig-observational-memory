@@ -18,7 +18,9 @@ import (
 // message.id) are one assistant entry, under the first line's uuid; a user line's tool_result
 // blocks are toolResult entries. Subagent (isSidechain), meta and transcript-only lines, the
 // harness's own compaction summary (isCompactSummary), attachments and API errors are not the
-// conversation and are left out. A compaction that keeps recent messages (a compact_boundary's
+// conversation and are left out. A user line whose origin.kind is set and is not "human" (a
+// background subagent's result, a message from another session) is not the person's words: it
+// is a custom_message (originMessage), never a user entry. A compaction that keeps recent messages (a compact_boundary's
 // compactMetadata.preservedSegment, head to tail) leaves them on a side chain that Claude Code
 // relinks after the anchor; they are read there.
 func ClaudeCode(lines []map[string]any) []session.Entry {
@@ -115,7 +117,11 @@ func ClaudeCode(lines []map[string]any) []session.Entry {
 				}
 			}
 			if len(content) > 0 && n == 0 {
-				out = append(out, message(id, ts, map[string]any{"role": "user", "content": content}, nil))
+				if kind := originKind(l); kind != "" {
+					out = append(out, originMessage(id, ts, kind, content))
+				} else {
+					out = append(out, message(id, ts, map[string]any{"role": "user", "content": content}, nil))
+				}
 			}
 		}
 	}
@@ -137,6 +143,29 @@ func skipClaudeLine(l map[string]any) bool {
 	}
 	t := str(l["type"])
 	return t != "user" && t != "assistant"
+}
+
+// OriginCustomPrefix starts the customType of the custom_message the reader makes of a user
+// line that is not the person's words (originKind).
+const OriginCustomPrefix = "origin:"
+
+// originKind is the origin.kind of a user line Claude Code wrote for someone other than the
+// person ("task-notification" for a background subagent's result, "peer" for a message from
+// another session); "" for the person's own turn (origin.kind "human") and for a line with no
+// origin.kind (older versions, and the Claude Code-shaped readers that write none).
+func originKind(l map[string]any) string {
+	origin, _ := l["origin"].(map[string]any)
+	if kind := str(origin["kind"]); kind != "human" {
+		return kind
+	}
+	return ""
+}
+
+// originMessage is such a line as a custom_message ("origin:<kind>"): a source entry, so it is
+// kept, recalled and shown to level 1 as a custom message, but never a user entry, so level 0
+// gives it no user authority (no request, quote, save, forget or rule).
+func originMessage(id, timestamp, kind string, content []any) session.Entry {
+	return session.FromMap(map[string]any{"type": "custom_message", "id": id, "timestamp": timestamp, "customType": OriginCustomPrefix + kind, "content": content, "display": true})
 }
 
 // blocks is a content value as a block list: a string is one text block.

@@ -77,7 +77,12 @@ source (`hookformats_test.go`).
 The real files caught these gaps, now fixed:
 - **Gemini CLI:** tool results kept on the call itself, its legacy and `$set`/`$patch` formats.
 - **Claude Code:** messages kept through a compaction on a side chain, and local command output echoed as
-  a user message.
+  a user message. A user-typed line whose `origin.kind` is set and is not `human` (a background
+  subagent's result, `task-notification`; a message from another session, `peer`) is read as a
+  `custom_message` with `customType` `origin:<kind>`, never as the user's words: level 0 extracts nothing
+  from it and no quote can cite it as the user, but it stays in the transcript, recall and level 1's
+  input. Its meta lines are still left out, and a line with no `origin.kind` (older versions) is unchanged
+  (a synthetic sample, `testdata/synthetic/claude-code-origin.jsonl`, since no real fixture has one).
 - **Factory Droid:** context it injects as user messages (`visibility: llm_only`) and interface-only
   notices.
 - **Goose:** its legacy tool-result shape, and the turn context it injects as a user message the user
