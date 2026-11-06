@@ -28,9 +28,11 @@ their tests fail on a diff or an undocumented om export. The language-neutral co
 refuses one there); the `om` binary for other harnesses is `memory/cmd/om` (`memory/cli`, `docs/universal.md`):
 it runs the engine over `memory/neutral` (the engine's entries in `~/.om` beside a transcript `memory/transcript` reads,
 never writing the harness's files) and makes no model request; its harness registry is data only (`memory/cli/assets/harnesses.json`, schema `contracts/schemas/registry.schema.json`, vocabulary in `docs/universal.md`; a harness is one entry, code only for a new named resolver, mapper or install kind, and `docs/harnesses.md` is generated from it with `go test ./cli -run HarnessDoc -args -write`); `memory/engine` is the session setup both adapters share. Building the PiG checkout itself needs `GOFLAGS` unset (it is a Go workspace).
-`lisp/` is the SBCL memory core being ported from the Go engine, one image per user with each model's memory live in it (`docs/lisp-core.md` is the design and the port plan; `docs/lisp-spike.md` the first slice), outside CI: `sbcl --non-interactive
---load lisp/run-tests.lisp`, and `cd memory && OM_LISP_PARITY=1 go test ./selection -run TestLispParity` diffs it
-against Go byte for byte (skipped without the variable or `sbcl`).
+`lisp/` is the SBCL memory core being ported from the Go engine, one image per user with each model's memory live in it (`docs/lisp-core.md` is the design and the port plan; `docs/lisp-spike.md` the first slice, `docs/lisp-port-*.md` each work package's state), outside CI: `sbcl --non-interactive
+--load lisp/run-tests.lisp`, and `cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts ./cli -run Lisp`
+diffs it against Go byte for byte (summaries, readers and store, curated and `SettleV2`, the image end to end; skipped
+without the variable or `sbcl`). Lisp packages load in `lisp/om-engine.asd` order: a file added to `om.base`/`om.kernel`/
+`om.engine` loads before that group's `end-*` file. `OM_ENGINE=lisp` routes `om` to the image (`docs/lisp-port-image-client.md`).
 
 ## README animations
 
