@@ -31,8 +31,8 @@ const (
 	// LispIdleEnv is how many seconds the image stays up with no client (else the
 	// lispIdleSeconds setting, else 900; 0 never exits).
 	LispIdleEnv = "OM_ENGINE_IDLE_SECONDS"
-	// LispFallbackEnv set to 0 makes a method the image has not ported an error instead of a
-	// run of the Go engine.
+	// LispFallbackEnv set to 0 makes a method the image has not ported, or an image that cannot
+	// be started or reached, an error instead of a run of the Go engine.
 	LispFallbackEnv = "OM_LISP_FALLBACK"
 )
 
@@ -53,6 +53,19 @@ type lispError struct {
 }
 
 func (e *lispError) Error() string { return e.Message }
+
+// unreachableError is a failure to start or reach the image before any request was written:
+// nothing ran, so the Go engine can run the event instead without doing anything twice. A
+// failure after a request was written is not one, since the image may have acted on it.
+type unreachableError struct{ err error }
+
+func (e *unreachableError) Error() string { return e.err.Error() }
+func (e *unreachableError) Unwrap() error { return e.err }
+
+func isUnreachable(err error) bool {
+	var ue *unreachableError
+	return errors.As(err, &ue)
+}
 
 func isNotPorted(err error) bool {
 	var le *lispError
@@ -198,6 +211,9 @@ func (c *lispClient) call(method string, params any, result any) error {
 		if c.conn == nil {
 			if err := c.dial(); err != nil {
 				if err := c.start(); err != nil {
+					if attempt == 0 {
+						return &unreachableError{err}
+					}
 					return err
 				}
 			}
@@ -252,13 +268,29 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 		return res, true, err
 	}
 	err = a.lisp.call(event, a.sessionParams(s, extra), &res)
-	if isNotPorted(err) && a.lisp.fallback {
+	if a.fallsBack(err) {
 		return res, false, nil
 	}
 	if err != nil {
 		return res, true, err
 	}
 	return res, true, a.runRemaining(s, res.Remaining)
+}
+
+// fallsBack reports whether the Go engine runs instead of the image: falling back is on and the
+// image has not ported the method, or could not be started or reached before the request was
+// written. An unreachable image is noted in om's log, since every event then runs on Go.
+func (a *app) fallsBack(err error) bool {
+	if !a.lisp.fallback {
+		return false
+	}
+	if isUnreachable(err) {
+		if a.log != nil {
+			fmt.Fprintf(a.log, "om: the engine image is unreachable, running the Go engine: %v\n", err)
+		}
+		return true
+	}
+	return isNotPorted(err)
 }
 
 // runRemaining runs the Go steps the image named as not ported, under the session's engine
@@ -297,7 +329,7 @@ func (a *app) mcpViaLisp(harnessName, dir string, raw []byte) (answer json.RawMe
 		Message json.RawMessage `json:"message"`
 	}
 	err = a.lisp.call("mcp", map[string]any{"root": a.root, "harness": harnessName, "cwd": dir, "message": json.RawMessage(raw)}, &res)
-	if isNotPorted(err) && a.lisp.fallback {
+	if a.fallsBack(err) {
 		return nil, false, nil
 	}
 	return res.Message, true, err
@@ -309,7 +341,7 @@ func (a *app) callViaLisp(harnessName, dir string, arguments map[string]any) (re
 		return nil, false, nil
 	}
 	err = a.lisp.call("call", map[string]any{"root": a.root, "harness": harnessName, "cwd": dir, "arguments": arguments}, &res)
-	if isNotPorted(err) && a.lisp.fallback {
+	if a.fallsBack(err) {
 		return nil, false, nil
 	}
 	return res, true, err
