@@ -156,7 +156,7 @@ whatever the UI). An unreadable branch settles nothing."
     (multiple-value-bind (dir project cfg) (curated-call c)
       (let ((text (if dir
                       (section-text (values (om.layer::pin-get (conn-pin* c)
-                                                               (lambda () (om.layer::index-for dir project (rcfg-index-tokens cfg)))))
+                                                               (lambda () (om.layer::index-as dir project (host-string "host/sessionId") (rcfg-index-tokens cfg)))))
                                     t)
                       (section-text "" nil))))
         (om::jobject "sections" (om::jobject +memory-section+ text))))))

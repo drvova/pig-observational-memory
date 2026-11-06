@@ -797,7 +797,7 @@ helpers into `omhost` (see "Order of work").
 type SaveOpt struct{ /* unexported */ }
 func Body(text string) SaveOpt
 func Scope(scope string) SaveOpt      // "global" or "project"
-func Quoting(text string) SaveOpt     // a user's words that confirm it
+func Quoting(text string) SaveOpt     // a user's words that confirm it (or, for ForgetMemory, ask to forget it)
 
 type EditOpt struct{ /* unexported */ }
 func SetType(typ string) EditOpt
@@ -806,7 +806,7 @@ func SetBody(text string) EditOpt
 
 func Save(name, typ, description string, opts ...SaveOpt) (string, error) // staged unless Quoting is a user's words in the conversation
 func Edit(name string, opts ...EditOpt) (string, error)                   // never sets Pinned
-func ForgetMemory(name string) (string, error)                            // retires a curated memory
+func ForgetMemory(name string, opts ...SaveOpt) (string, error)           // only Quoting: see "The forget gate" below
 func Feedback(name, outcome, quote string) (string, error)                // helped or harmed; the quote must be in a user or assistant message
 
 func LayerForget(kind, name string) (string, error) // forgets one definition from the session model's layer; never a rule
@@ -823,6 +823,24 @@ count as the memory tool's own call. A quote the model wrote into its own code n
 anything (tested). Save and edit notify the user, and forget and feedback notify on a state change,
 as `notifyChanges` does today. The curated forget is `ForgetMemory`, so the namespace's
 `forget(name)` stays the one for kept definitions.
+
+**The forget gate** (`docs/brain-memory.md`, decision 2). A memory other sessions see is retired
+for every session only on a user's words: ``om.ForgetMemory(`<name>`, om.Quoting(`<quote>`))``
+whose quote (at least 8 characters, whitespace collapsed, case ignored) is in a user message on
+the branch, checked as `Save`'s is. Any other forget, with no quote, or quoting tool output, a file
+or the model's own words, hides the memory in this session at once (`om.Saved`, `om.Recall` and the
+next index render of this session leave it out, and level 1 does not list it) and is recorded as a
+staged forget (a `forget-staged` usage line naming the session); the memory stays shared, and a
+later forget with the user's words confirms it. One quote forgets at most
+`curated.MaxForgetsPerQuote` (3) memories: a forget of more needs the user's words for each, and a
+further forget with the same quote is staged. A memory only its own session staged reaches no other
+session, so its forget needs no quote. Code evidence (a scanner rule, a path gone) retires through
+`curated.Store.Forget` directly. `ForgetMemory` with `Body` or `Scope` is refused. A save quoting
+tool output (not a user's words) is staged citing that content: its usage line records the
+session and `curated.SourceDigest` of the tool result holding the quote (the memory tool's own
+results left out), and the same save staged in two sessions is promotion evidence only when the
+digests differ (decision 7): two sessions that read the same README are not independent, and a
+staging that cites nothing is no evidence.
 
 `LayerForget` and `LayerRollback` reach `harness.layerWriter`, the code the memory tool's `harness
 forget` and `rollback` writes run today: they act on the session model's layer through `layer.Store`,

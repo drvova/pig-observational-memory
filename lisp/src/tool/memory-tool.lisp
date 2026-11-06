@@ -40,7 +40,10 @@ memory-name memory-type memory-description memory-body
 (save name type description &key body scope quoting)
   Saves a memory, staged unless quoting gives the user's confirming words. type: user, feedback,
   project, reference or lesson.
-(edit name &key type description body)   (forget-memory name)   (feedback name outcome quote)
+(edit name &key type description body)   (feedback name outcome quote)
+(forget-memory name &key quoting)
+  Forgets a memory for every session when quoting gives the user's words asking for it;
+  without them it hides the memory in this session only and stages the forget.
 
 ── Your layer ──
 (adaptables)                    The functions a definition may replace.

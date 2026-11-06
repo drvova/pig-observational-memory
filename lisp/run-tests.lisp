@@ -66,6 +66,9 @@
 ;; The layer store across processes and crashes (docs/lisp-port-tool-layer.md).
 (load (merge-pathnames "tests/layer-store.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Phase 1's safety gates: the forget gate, staging independence, level-1 provenance.
+(load (merge-pathnames "tests/safety.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

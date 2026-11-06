@@ -611,3 +611,19 @@ image, its start contexts compared with Go's after the Lisp texts are put back).
 - `tool/renderCall` and `tool/renderResult` are still Go's: the Lisp details render with Go's
   header.
 - The image's own memory-call time (folding the branch per call) counts toward the program's 30 s.
+
+## The forget gate and staging independence (brain-memory phase 1)
+
+Ported with the Go change (`docs/brain-memory.md`, decisions 2 and 7; `docs/code-tool.md`, "The
+forget gate"): `(forget-memory name &key quoting)` retires a memory other sessions see only on a
+user's words, at most three per quote, and otherwise hides it in its session (`hidden-in-p`,
+`list-as`, `index-as`, used by `saved`, recall, the PiG and `om` index renders and level 1's
+curated input) with a `forget-staged` usage line; a save quoting tool output is staged with the
+`source-digest` of the tool result (the memory tool's own results left out, `tool-texts`), and
+`independent-stagings-p` counts two sessions only when their digests differ. Level 1's
+`v-least-provenance` holds a replacing record's origin and `fromUser` to the least of its sources.
+`TestLispCuratedParity` (its `safetyScript` and the random part's forgets, quotes and tool output)
+and `TestLispLevel1MatchesInProcess` ("mixed merge") check both engines byte for byte;
+`lisp/tests/safety.lisp` holds the Lisp tests. One limit: the image's `history-text` approximates
+`serialize.HistoryText`, so a tool result whose text the two engines extract differently would get
+two digests, and a Go and a Lisp session reading the same file could then count as independent.

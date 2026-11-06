@@ -8,9 +8,11 @@
   "properties": {
     "time": { "description": "RFC 3339, UTC, whole seconds.", "type": "string" },
     "name": { "type": "string", "minLength": 1 },
-    "event": { "enum": ["view", "save", "edit", "forget", "helped", "harmed", "indexed", "staged", "cited", "corrected", "promoted"] },
-    "quote": { "description": "A helped or harmed event's evidence.", "type": "string" },
-    "user": { "description": "A helped event whose quote is a user's words.", "type": "boolean" },
-    "record": { "description": "The record a corrected, cited or promoted event names.", "type": "string" }
+    "event": { "enum": ["view", "save", "edit", "forget", "helped", "harmed", "indexed", "staged", "cited", "corrected", "promoted", "forget-staged"] },
+    "quote": { "description": "A helped or harmed event's evidence, or the user's words a forget retired the memory on.", "type": "string" },
+    "user": { "description": "A helped or forget event whose quote is a user's words.", "type": "boolean" },
+    "record": { "description": "The record a corrected, cited or promoted event names.", "type": "string" },
+    "session": { "description": "The session of a staging (the save or staged event of a staged memory) or of a forget-staged event, which hides the memory in that session only.", "type": "string" },
+    "source": { "description": "A staging's source digest: sha256 hex of the tool output its quote comes from, whitespace collapsed (curated.SourceDigest); two sessions' stagings are independent evidence only when their digests differ.", "type": "string" }
   }
 }

@@ -143,7 +143,7 @@ An unreadable branch settles nothing, as GetBranch's error does."
   (if (curated-on-p)
       (values (om.layer::pin-get (session-pin session)
                                  (lambda ()
-                                   (om.layer::index-for (curated-dir) (om.layer::project-root (param-string params "cwd"))
+                                   (om.layer::index-as (curated-dir) (om.layer::project-root (param-string params "cwd")) (session-id session)
                                                         (curated-index-tokens)))))
       ""))
 

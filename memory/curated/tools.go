@@ -29,9 +29,19 @@ type Call struct {
 	// UserEvidence reports whether a quote (normalized) is a user's words in the conversation:
 	// a save quoting one is live at once, any other save is staged,
 	// and a helped feedback quoting one is evidence for a staged memory (Store.Settle). Nil
-	// finds no user quote.
+	// finds no user quote. A forget quoting one retires a memory for every session.
 	UserEvidence func(quote string) bool
+	// SourceOf is the SourceDigest of the tool output holding a quote (normalized) that is no
+	// user's words, "" when none does: a save quoting it is staged citing that content, the
+	// evidence of independence between sessions (Store.Settle). Nil finds none, and such a save
+	// is refused.
+	SourceOf func(quote string) string
 }
+
+// MaxForgetsPerQuote is how many memories one quote of the user's words forgets for every
+// session (docs/brain-memory.md, decision 2): a forget of more items needs the user's words for
+// each, and a further forget with the same quote is staged.
+const MaxForgetsPerQuote = 3
 
 // userQuoted reports whether quote is a user's words (UserEvidence).
 func (c Call) userQuoted(quote string) bool {
@@ -76,25 +86,42 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		default:
 			return "", fmt.Errorf("scope %q must be global or project", scope)
 		}
+		digest := ""
 		if quote, given := args["quote"]; given {
 			normalized, err := NormalizeQuote(quote)
 			if err != nil {
 				return "", errors.New(strings.Replace(err.Error(), "feedback needs", "save's quote needs", 1))
 			}
 			if !c.userQuoted(normalized) {
-				return "", errors.New("the quote is not a user's words in this conversation: copy words verbatim from a user message that confirm the memory, or save without quote to stage it")
+				if c.SourceOf != nil {
+					digest = c.SourceOf(normalized)
+				}
+				if digest == "" {
+					return "", errors.New("the quote is not a user's words in this conversation: copy words verbatim from a user message that confirm the memory, or save without quote to stage it")
+				}
+				// Words from tool output never confirm a memory: the save is staged, citing
+				// the content they come from.
+				m.Staged = true
 			}
 		} else {
 			m.Staged = true
 		}
-		saved, err := c.Store.Save(m, c.Source)
+		saved, err := c.Store.SaveCiting(m, c.Source, digest)
 		if err != nil {
 			return "", err
 		}
 		if saved.Staged {
-			text := fmt.Sprintf("Staged memory %s [%s]%s: %s. It shows in saved in this session and stays out of the memory index until evidence confirms it: a user's words (feedback name=%s outcome=helped quote=\"...\"), a compaction citing it, or the same save in another session.", saved.Name, saved.Type, scopeNote(saved), saved.Description, saved.Name)
+			text := fmt.Sprintf("Staged memory %s [%s]%s: %s. It shows in saved in this session and stays out of the memory index until evidence confirms it: a user's words (feedback name=%s outcome=helped quote=\"...\"), a compaction citing it, or the same save in another session quoting other tool output it rests on.", saved.Name, saved.Type, scopeNote(saved), saved.Description, saved.Name)
 			if len(saved.StagedBy) > 1 {
-				text = fmt.Sprintf("Staged memory %s [%s]%s: %s. Another session staged the same memory, which is the evidence to make it live: it enters the memory index at its next render.", saved.Name, saved.Type, scopeNote(saved), saved.Description)
+				events, err := c.Store.UsageEvents(saved.Name)
+				if err != nil {
+					return "", err
+				}
+				if independentStagings(saved, events) {
+					text = fmt.Sprintf("Staged memory %s [%s]%s: %s. Another session staged the same memory from other source content, which is the evidence to make it live: it enters the memory index at its next render.", saved.Name, saved.Type, scopeNote(saved), saved.Description)
+				} else {
+					text = fmt.Sprintf("Staged memory %s [%s]%s: %s. Another session staged the same memory, but not from other source content it quotes, so it is no independent evidence: it stays staged until a user's words (feedback name=%s outcome=helped quote=\"...\"), a compaction citing it, or a session quoting other tool output confirms it.", saved.Name, saved.Type, scopeNote(saved), saved.Description, saved.Name)
+				}
 			}
 			return text, nil
 		}
@@ -121,12 +148,25 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		}
 		return fmt.Sprintf("Updated memory %s [%s]: %s", m.Name, m.Type, m.Description), nil
 	case OpForget:
-		var err error
-		if m, getErr := c.Store.readIn(name, c.Project); getErr == nil && !SeenBy(m, c.Source) {
+		quote, quoted := args["quote"]
+		if quoted {
+			normalized, err := NormalizeQuote(quote)
+			if err != nil {
+				return "", errors.New(strings.Replace(err.Error(), "feedback needs", "forget's quote needs", 1))
+			}
+			quote = normalized
+		}
+		m, err := c.Store.readIn(name, c.Project)
+		switch {
+		case err == nil && !SeenBy(m, c.Source):
 			// A memory another session staged is not this session's to forget.
 			err = ErrNotFound
-		} else {
+		case err == nil && m.Staged && len(m.StagedBy) == 1:
+			// Only this session sees a memory it alone staged: forgetting it reaches no
+			// other session.
 			err = c.Store.Forget(name, c.Project)
+		case err == nil:
+			return c.forgetShared(m, quote, quoted)
 		}
 		if errors.Is(err, ErrNotFound) {
 			// A defined query is forgotten by the same write when no memory
@@ -172,6 +212,35 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		return text, nil
 	}
 	return "", fmt.Errorf("unknown memory write %q", op)
+}
+
+// forgetShared is the forget of memory m that other sessions see (docs/brain-memory.md, decision
+// 2): retired for every session on a user's words asking for it (quote, normalized), at most
+// MaxForgetsPerQuote memories per quote; any other forget, a quote-less one and one quoting tool
+// output or the model's own words among them, hides m in this session at once and is staged
+// (Store.StageForget), which a later forget with the user's words confirms.
+func (c Call) forgetShared(m Memory, quote string, quoted bool) (string, error) {
+	reason := "no user's words ask for it"
+	if quoted {
+		reason = "the quote is not a user's words in this conversation"
+		if c.userQuoted(quote) {
+			n, err := c.Store.QuotedForgets(quote)
+			if err != nil {
+				return "", err
+			}
+			if n < MaxForgetsPerQuote {
+				if err := c.Store.ForgetQuoted(m.Name, c.Project, quote); err != nil {
+					return "", err
+				}
+				return "Forgot memory " + m.Name + ".", nil
+			}
+			reason = fmt.Sprintf("the quote already forgot %d memories, the most one quote forgets; a forget of more needs the user's words for each", MaxForgetsPerQuote)
+		}
+	}
+	if err := c.Store.StageForget(m.Name, c.Project, c.Source); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Hid memory %s in this session and staged its forget: %s, so other sessions still see it. Forgetting it for every session needs words copied verbatim from a user message asking for it, quoted with the forget.", m.Name, reason), nil
 }
 
 func scopeNote(m Memory) string {

@@ -317,10 +317,18 @@ func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (
 		return c.curatedWrite(ctx, curated.OpEdit, args, w)
 	case omwire.MForgetMemory:
 		var name string
-		if err := decode(method, raw, &name); err != nil {
+		var o omwire.SaveOptions
+		if err := decode(method, raw, &name, &o); err != nil {
 			return nil, err
 		}
-		return c.curatedWrite(ctx, curated.OpForget, map[string]string{"name": name}, Write{Op: WriteForgetMemory, Name: name})
+		if o.Body != nil || o.Scope != nil {
+			return nil, errors.New("om.ForgetMemory takes only om.Quoting: the user's words asking to forget the memory")
+		}
+		args := map[string]string{"name": name}
+		if o.Quoting != nil {
+			args["quote"] = *o.Quoting
+		}
+		return c.curatedWrite(ctx, curated.OpForget, args, Write{Op: WriteForgetMemory, Name: name})
 	case omwire.MFeedback:
 		var name, outcome, quote string
 		if err := decode(method, raw, &name, &outcome, &quote); err != nil {
@@ -416,6 +424,9 @@ func (c *Call) curatedWrite(ctx context.Context, op string, args map[string]stri
 	}
 	if call.UserEvidence == nil {
 		call.UserEvidence = func(quote string) bool { return QuotedByUser(c.Entries, quote, c.Skip) }
+	}
+	if call.SourceOf == nil {
+		call.SourceOf = func(quote string) string { return QuotedSource(c.Entries, quote, c.Skip) }
 	}
 	if op == curated.OpForget || op == curated.OpFeedback {
 		// The retired defined queries stay stored (an earlier release may share the store), and

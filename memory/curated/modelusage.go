@@ -231,6 +231,9 @@ type UsageEvent struct {
 	// record a corrected, cited or promoted event names.
 	User   bool
 	Record string
+	// Session and Source are a staging's session and source digest, and a staged forget's
+	// session.
+	Session, Source string
 }
 
 // UsageEventsByName reads the whole usage ledger once and groups its events by
@@ -264,5 +267,5 @@ func (s Store) UsageEvents(name string) ([]UsageEvent, error) {
 
 func (line usageLine) event() UsageEvent {
 	t, _ := time.Parse(time.RFC3339, line.Time)
-	return UsageEvent{Time: t, Name: line.Name, Event: line.Event, Quote: line.Quote, User: line.User, Record: line.Record}
+	return UsageEvent{Time: t, Name: line.Name, Event: line.Event, Quote: line.Quote, User: line.User, Record: line.Record, Session: line.Session, Source: line.Source}
 }
