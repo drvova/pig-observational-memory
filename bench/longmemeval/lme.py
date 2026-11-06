@@ -3,8 +3,10 @@
 
 Python 3 standard library only. Subcommands:
 
-  lme.py run    --data longmemeval_s.json --out DIR [selection] [--workers N]
-  lme.py report --out DIR
+  lme.py run     --data longmemeval_s.json --out DIR [selection] [--workers N]
+  lme.py report  --out DIR
+  lme.py judge   --out DIR --judge-model M --judge-family F --answer-family G
+  lme.py compare --base DIR --cand DIR --judge LABEL [--control-ids FILE]
 """
 
 import argparse
@@ -16,6 +18,7 @@ import os
 import queue
 import random
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -23,6 +26,8 @@ import sys
 import threading
 import time
 import uuid
+
+import judging
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -935,40 +940,8 @@ class Question:
             return done
         prompt = judge_prompt(self.q, ans["hypothesis"])
         t0 = time.time()
-        args = [self.cfg["pig"], "-p", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
-                "--model", self.cfg["model"], "--thinking", self.cfg["judge_thinking"], "--system-prompt", self.cfg["judge_system"]] + COMMON_FLAGS
-        if len(prompt.encode()) < 100000:
-            args += ["--no-stdin", "--", prompt]
-            data = None
-        else:
-            data = prompt
-        reply, usage, err, attempts = "", {}, "", []
-        for attempt in range(3):
-            io = {"input": data} if data is not None else {"stdin": subprocess.DEVNULL}
-            p = subprocess.run(args, cwd=os.path.join(out, "judge-cwd"), env=pig_env(judge_home, self.agent_dir),
-                               capture_output=True, text=True, timeout=self.cfg["judge_timeout"], **io)
-            sent, reply = None, ""
-            for line in p.stdout.splitlines():
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                m = e.get("message") or {}
-                if e.get("type") == "message_end" and m.get("role") == "user":
-                    sent = "".join(b.get("text", "") for b in m.get("content") or [] if b.get("type") == "text")
-                if e.get("type") == "message_end" and m.get("role") == "assistant":
-                    reply = "".join(b.get("text", "") for b in m.get("content") or [] if b.get("type") == "text")
-                    usage = m.get("usage") or {}
-            err = p.stderr[-2000:]
-            attempts.append({"returncode": p.returncode, "replyChars": len(reply), "promptSeen": sent is not None})
-            if sent is None:
-                raise PigError("the judge's json stream has no user message, so its prompt cannot be checked (exit %d): %s" % (p.returncode, err[-300:]))
-            if sent != prompt:
-                raise PigError("the judge prompt PiG sent differs from the official prompt")
-            if reply.strip() and p.returncode == 0:
-                break
-        if not reply.strip() or p.returncode != 0:
-            raise PigError("no judge verdict after %d attempts (exit %d): %s" % (len(attempts), p.returncode, err))
+        reply, usage, attempts = pig_ask(self.cfg["pig"], self.cfg["model"], self.cfg["judge_thinking"], self.cfg["judge_system"],
+                                         judge_home, self.agent_dir, os.path.join(out, "judge-cwd"), self.cfg["judge_timeout"], prompt)
         low = reply.strip().lower()
         res = {"prompt": prompt, "reply": reply, "correct": "yes" in low,
                "strict": low == "yes" or low.startswith("yes."), "usage": usage, "attempts": attempts,
@@ -994,6 +967,46 @@ class Question:
             for sub in ("cache", "state", "docs"):
                 shutil.rmtree(os.path.join(self.home, sub), ignore_errors=True)
         return result
+
+
+def pig_ask(pig, model, thinking, system, home, agent_dir, cwd, timeout, prompt):
+    """One judge prompt through `pig -p` with no tools, extensions or session: the reply, its usage
+    and every attempt's exit code. The prompt PiG sent must be exactly the prompt given."""
+    args = [pig, "-p", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
+            "--model", model, "--thinking", thinking, "--system-prompt", system] + COMMON_FLAGS
+    if len(prompt.encode()) < 100000:
+        args += ["--no-stdin", "--", prompt]
+        data = None
+    else:
+        data = prompt
+    reply, usage, err, attempts = "", {}, "", []
+    for attempt in range(3):
+        io = {"input": data} if data is not None else {"stdin": subprocess.DEVNULL}
+        p = subprocess.run(args, cwd=cwd, env=pig_env(home, agent_dir),
+                           capture_output=True, text=True, timeout=timeout, **io)
+        sent, reply = None, ""
+        for line in p.stdout.splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            m = e.get("message") or {}
+            if e.get("type") == "message_end" and m.get("role") == "user":
+                sent = "".join(b.get("text", "") for b in m.get("content") or [] if b.get("type") == "text")
+            if e.get("type") == "message_end" and m.get("role") == "assistant":
+                reply = "".join(b.get("text", "") for b in m.get("content") or [] if b.get("type") == "text")
+                usage = m.get("usage") or {}
+        err = p.stderr[-2000:]
+        attempts.append({"returncode": p.returncode, "replyChars": len(reply), "promptSeen": sent is not None})
+        if sent is None:
+            raise PigError("the judge's json stream has no user message, so its prompt cannot be checked (exit %d): %s" % (p.returncode, err[-300:]))
+        if sent != prompt:
+            raise PigError("the judge prompt PiG sent differs from the official prompt")
+        if reply.strip() and p.returncode == 0:
+            break
+    if not reply.strip() or p.returncode != 0:
+        raise PigError("no judge verdict after %d attempts (exit %d): %s" % (len(attempts), p.returncode, err))
+    return reply, usage, attempts
 
 
 def compact_line(rec):
@@ -1441,6 +1454,225 @@ def cmd_report(args):
     return 0
 
 
+# ─── judge (decision 21) ──────────────────────────────────────────────────────
+
+def safe_label(text):
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_") or "judge"
+
+
+def run_questions(out):
+    """The run's selected questions with their answers: done questions from result.json; a failed
+    or missing one has no hypothesis and counts as incorrect in every arm."""
+    run = read_json(os.path.join(out, "run.json"), {})
+    dirs = run.get("dirs") or {}
+    done, absent = [], []
+    for qid in run.get("selected") or []:
+        r = read_json(os.path.join(out, "questions", dirs.get(qid, qid), "result.json"))
+        if r:
+            done.append({"question_id": qid, "question_type": r["question_type"], "question": r["question"],
+                         "answer": r["answer"], "hypothesis": r["hypothesis"], "self_judge": r["correct"]})
+        else:
+            absent.append(qid)
+    return run, done, absent
+
+
+class CachedJudge:
+    """The configured judge behind a reply cache keyed by prompt digest and run index, so a pass is
+    resumable and re-scoring stored replies never asks again."""
+
+    def __init__(self, path, backend):
+        self.path, self.backend, self.lock = path, backend, threading.Lock()
+        self.cache = {}
+        for rec in read_jsonl(path) if os.path.exists(path) else []:
+            self.cache[(rec["key"], rec["rep"])] = rec["reply"]
+        self.asked = 0
+
+    def __call__(self, prompt, rep):
+        key = judging.prompt_key(prompt)
+        with self.lock:
+            if (key, rep) in self.cache:
+                return self.cache[(key, rep)]
+        reply = self.backend(prompt)
+        with self.lock:
+            self.cache[(key, rep)] = reply
+            self.asked += 1
+            with open(self.path, "a") as f:
+                f.write(json.dumps({"key": key, "rep": rep, "reply": reply}) + "\n")
+        return reply
+
+
+def command_backend(command, timeout):
+    """A judge run as a command: the prompt on stdin, the reply on stdout. Keys reach it only
+    through its environment."""
+    argv = shlex.split(command)
+
+    def ask(prompt):
+        p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=timeout)
+        if p.returncode != 0 or not p.stdout.strip():
+            raise PigError("judge command failed (exit %d): %s" % (p.returncode, p.stderr[-300:]))
+        return p.stdout
+    return ask
+
+
+def cmd_judge(args):
+    out = os.path.abspath(args.out)
+    run, done, absent = run_questions(out)
+    if not run:
+        raise SystemExit("%s has no run.json" % out)
+    answer_model = (run.get("settings") or {}).get("model")
+    model, family, answer_family = args.judge_model, args.judge_family, args.answer_family
+    if not (model or args.judge_command):
+        raise SystemExit("set --judge-model (or LME_JUDGE_MODEL) or --judge-command")
+    if not family or not answer_family:
+        raise SystemExit("set --judge-family and --answer-family (or LME_JUDGE_FAMILY, LME_ANSWER_FAMILY): "
+                         "the judge must be from another model family than the answering model")
+    if family.strip().lower() == answer_family.strip().lower():
+        raise SystemExit("the judge family %r is the answering model's family; decision 21 needs a judge from another family" % family)
+    if model and model == answer_model:
+        raise SystemExit("the judge model is the run's answering model")
+    label = safe_label(args.label or model or args.judge_command)
+    jdir = os.path.join(out, "judges", label)
+    os.makedirs(jdir, exist_ok=True)
+    settings = {"label": label, "judge_model": model, "judge_command": args.judge_command, "judge_family": family,
+                "answer_family": answer_family, "answer_model": answer_model, "judge_thinking": args.judge_thinking,
+                "judge_system": JUDGE_SYSTEM, "runs": args.runs, "seed": args.seed,
+                "templates": judging.prompt_key(JUDGE_DEFAULT + JUDGE_TEMPORAL + JUDGE_KNOWLEDGE_UPDATE + JUDGE_PREFERENCE + JUDGE_ABSTENTION),
+                "controls": judging.prompt_key(json.dumps(judging.SCENARIOS, sort_keys=True)),
+                "matchers": args.matchers and os.path.abspath(args.matchers)}
+    prev = read_json(os.path.join(jdir, "judge.json"))
+    if prev and not args.force_settings:
+        for k, v in settings.items():
+            if prev.get(k) != v:
+                raise SystemExit("%s was judged with %s=%r; this pass has %r (pass --force-settings, or use another --label)" % (jdir, k, prev.get(k), v))
+    write_json(os.path.join(jdir, "judge.json"), settings)
+    if args.judge_command:
+        backend = command_backend(args.judge_command, args.judge_timeout)
+    else:
+        cfg = run["settings"]
+        agent_dir = os.path.join(out, "agent")
+        home = os.path.join(out, "judge-home")
+        cwd = os.path.join(out, "judge-cwd")
+        for d in (home, cwd):
+            os.makedirs(d, exist_ok=True)
+        status = auth_status(dict(cfg, model=model), home, agent_dir)
+        if status != "ready":
+            raise SystemExit("judge auth is not ready (%s)" % status)
+
+        def backend(prompt):
+            return pig_ask(cfg["pig"], model, args.judge_thinking, JUDGE_SYSTEM, home, agent_dir, cwd, args.judge_timeout, prompt)[0]
+    matchers = read_json(args.matchers, {}) if args.matchers else {}
+    ask = CachedJudge(os.path.join(jdir, "cache.jsonl"), backend)
+    result = judging.run_pass(done, ask, judge_prompt, runs=args.runs, matchers=matchers, seed=args.seed, workers=args.workers)
+    with open(os.path.join(jdir, "verdicts.jsonl"), "w") as f:
+        for q in done:
+            v = result["verdicts"][q["question_id"]]
+            f.write(json.dumps({"question_id": q["question_id"], "question_type": q["question_type"],
+                                "method": v["method"], "votes": v["votes"], "correct": v["verdict"],
+                                "self_judge": q["self_judge"]}) + "\n")
+        for qid in absent:
+            f.write(json.dumps({"question_id": qid, "question_type": (run.get("types") or {}).get(qid), "method": "absent",
+                                "votes": None, "correct": False, "self_judge": False}) + "\n")
+    write_json(os.path.join(jdir, "controls.json"), {"validity": result["validity"], "controls": result["controls"]})
+    summary = judge_summary(run, done, absent, result, settings, ask.asked)
+    write_json(os.path.join(jdir, "summary.json"), summary)
+    text = judge_markdown(summary)
+    with open(os.path.join(jdir, "report.md"), "w") as f:
+        f.write(text)
+    print(text)
+    return 3 if result["validity"]["void"] else 0
+
+
+def judge_summary(run, done, absent, result, settings, asked):
+    by_type = {}
+    for q in done:
+        t = by_type.setdefault(q["question_type"], [0, 0])
+        t[1] += 1
+        t[0] += bool(result["verdicts"][q["question_id"]]["verdict"])
+    for qid in absent:
+        t = by_type.setdefault((run.get("types") or {}).get(qid, "?"), [0, 0])
+        t[1] += 1
+    n = len(done) + len(absent)
+    correct = sum(v[0] for v in by_type.values())
+    flips = [q["question_id"] for q in done if bool(result["verdicts"][q["question_id"]]["verdict"]) != bool(q["self_judge"])]
+    return {"settings": settings, "n": n, "absent": len(absent), "correct": correct,
+            "accuracy": correct / n if n else 0.0,
+            "task_averaged": mean(c / t for c, t in by_type.values() if t),
+            "by_type": by_type, "counts": result["counts"], "validity": result["validity"],
+            "differs_from_self_judge": flips, "asked": asked}
+
+
+def judge_markdown(s):
+    st, c, v = s["settings"], s["counts"], s["validity"]
+    lines = ["# Judge pass `%s`" % st["label"], "",
+             "- Judge family %s, answering family %s, %d runs per prompt, majority vote." % (st["judge_family"], st["answer_family"], st["runs"]),
+             "- Pass: **%s**%s" % ("void" if v["void"] else "valid", (" (" + "; ".join(v["reasons"]) + ")") if v["void"] else ""),
+             "- Accuracy %.1f%% (%d/%d), task-averaged %.1f%%; %d questions absent (failed or missing, counted wrong)." % (
+                 100 * s["accuracy"], s["correct"], s["n"], 100 * s["task_averaged"], s["absent"]),
+             "- Scored by code: %d exact, %d regex; judged: %d (%d unanimous)." % (c["exact"], c["regex"], c["judge"], c["unanimous"]),
+             "- Verdicts that differ from the run's self-judge: %d." % len(s["differs_from_self_judge"]),
+             "- Judge prompts asked in this invocation (cache misses): %d." % s["asked"], "",
+             "| Question type | Correct |", "|---|---|"]
+    for t in sorted(s["by_type"]):
+        ok, n = s["by_type"][t]
+        lines.append("| %s | %.1f%% (%d/%d) |" % (t, 100 * ok / n if n else 0, ok, n))
+    lines += ["", "Controls and decoys: items accepted per run (of %d)." % judging.CONTROL_GROUP, "",
+              "| Class | Expect | %s |" % " | ".join("run %d" % (i + 1) for i in range(st["runs"])),
+              "|---|---|%s" % ("---|" * st["runs"])]
+    for cls in judging.CONTROL_CLASSES:
+        lines.append("| %s | %s | %s |" % (cls, "accept" if cls == judging.POSITIVE else "reject",
+                                           " | ".join(str(x) for x in v["accepted"][cls])))
+    return "\n".join(lines) + "\n"
+
+
+def judge_verdicts(out, label):
+    jdir = os.path.join(out, "judges", label)
+    summary = read_json(os.path.join(jdir, "summary.json"))
+    if not summary:
+        raise SystemExit("%s has no judge pass %r (run lme.py judge first)" % (out, label))
+    return {r["question_id"]: bool(r["correct"]) for r in read_jsonl(os.path.join(jdir, "verdicts.jsonl"))}, summary
+
+
+def cmd_compare(args):
+    base, bsum = judge_verdicts(os.path.abspath(args.base), args.judge)
+    cand, csum = judge_verdicts(os.path.abspath(args.cand), args.cand_judge or args.judge)
+    for k in ("judge_model", "judge_command", "judge_thinking", "runs", "templates", "controls"):
+        if bsum["settings"].get(k) != csum["settings"].get(k):
+            raise SystemExit("the two arms were judged with different %s; pin one judge for both" % k)
+    control = None
+    if args.control_ids:
+        control = read_json(args.control_ids)
+        control = control.get("ids") if isinstance(control, dict) else control
+    stats = judging.paired(base, cand, control, resamples=args.resamples, seed=args.seed)
+    rule = judging.ship_rule(stats, bsum["validity"], csum["validity"])
+    if args.write_control_ids:
+        write_json(args.write_control_ids, {"ids": stats["both_passed"], "base": args.base, "cand": args.cand, "judge": args.judge})
+    text = compare_markdown(args, stats, rule)
+    if args.report:
+        with open(args.report, "w") as f:
+            f.write(text)
+    print(text)
+    return 0
+
+
+def compare_markdown(args, s, rule):
+    lines = ["# Paired comparison", "",
+             "- Base `%s`, candidate `%s`, judge `%s`." % (args.base, args.cand, args.judge),
+             "- %d paired questions: base %d correct, candidate %d; **%d gained, %d lost, net %+d**." % (
+                 s["n"], s["base_correct"], s["cand_correct"], len(s["gained"]), len(s["lost"]), s["net"]),
+             "- Accuracy difference %+.1f points, paired-bootstrap 95%% CI [%.1f, %.1f]; McNemar exact p = %.3g." % (
+                 100 * s["diff"], 100 * s["ci95"][0], 100 * s["ci95"][1], s["mcnemar_p"]),
+             "- Both passed here: %d questions%s." % (len(s["both_passed"]), (" (written to %s)" % args.write_control_ids) if args.write_control_ids else "")]
+    if "control" in s:
+        lines.append("- Both-passed control set: %d questions, candidate lost %d%s." % (
+            s["control"]["n"], len(s["control"]["lost"]), (", %d not in the candidate" % s["control"]["missing"]) if s["control"]["missing"] else ""))
+    lines += ["", "Ship rule: **%s**" % rule["verdict"], "", "| Rule | Holds | Value |", "|---|---|---|"]
+    for c in rule["checks"]:
+        lines.append("| %s | %s | %s |" % (c["rule"], "yes" if c["ok"] else "no", c["value"]))
+    lines += ["", "Not measured by this bench: %s." % ", ".join(rule["not_measured"]), "",
+              "Gained: %s" % (", ".join(s["gained"]) or "none"), "", "Lost: %s" % (", ".join(s["lost"]) or "none")]
+    return "\n".join(lines) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1472,8 +1704,34 @@ def main():
                    help="open the question with the extension's day header for its question date (for an extension that writes day headers)")
     rp = sub.add_parser("report", help="rebuild report.md and summary.json")
     rp.add_argument("--out", required=True)
+    j = sub.add_parser("judge", help="re-judge a run's answers with a pinned judge from another model family, with controls and decoys")
+    j.add_argument("--out", required=True, help="the run directory")
+    j.add_argument("--judge-model", default=os.environ.get("LME_JUDGE_MODEL", ""), help="the judge, as PiG's --model names it")
+    j.add_argument("--judge-command", default=os.environ.get("LME_JUDGE_COMMAND", ""),
+                   help="instead of PiG: a command that reads the prompt on stdin and prints the reply")
+    j.add_argument("--judge-family", default=os.environ.get("LME_JUDGE_FAMILY", ""), help="the judge's model family (a label you choose)")
+    j.add_argument("--answer-family", default=os.environ.get("LME_ANSWER_FAMILY", ""),
+                   help="the answering model's family; must differ from --judge-family")
+    j.add_argument("--judge-thinking", default="medium")
+    j.add_argument("--judge-timeout", type=int, default=300)
+    j.add_argument("--label", default="", help="the pass's directory under <out>/judges (default: from the judge)")
+    j.add_argument("--runs", type=int, default=judging.RUNS)
+    j.add_argument("--seed", type=int, default=0)
+    j.add_argument("--workers", type=int, default=1)
+    j.add_argument("--matchers", default="", help="JSON {question_id: {accept: regex, reject: regex}}")
+    j.add_argument("--force-settings", action="store_true")
+    c = sub.add_parser("compare", help="paired gained/lost questions between two judged runs, with the ship rule")
+    c.add_argument("--base", required=True)
+    c.add_argument("--cand", required=True)
+    c.add_argument("--judge", required=True, help="the judge pass label in both runs")
+    c.add_argument("--cand-judge", default="", help="the candidate's label when it differs")
+    c.add_argument("--control-ids", default="", help="JSON list (or {ids: [...]}) of questions both arms passed before")
+    c.add_argument("--write-control-ids", default="", help="write the questions both pass here, for the next comparison")
+    c.add_argument("--resamples", type=int, default=10000)
+    c.add_argument("--seed", type=int, default=0)
+    c.add_argument("--report", default="")
     args = ap.parse_args()
-    sys.exit(cmd_run(args) if args.cmd == "run" else cmd_report(args))
+    sys.exit({"run": cmd_run, "report": cmd_report, "judge": cmd_judge, "compare": cmd_compare}[args.cmd](args))
 
 
 if __name__ == "__main__":
