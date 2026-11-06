@@ -85,6 +85,18 @@ object is read as one document."
       (let ((type (str (jget l "type"))))
         (not (or (string= type "user") (string= type "assistant"))))))
 
+(defun origin-kind (l)
+  "originKind: the origin.kind of a user line written for someone other than the person
+(task-notification, peer); \"\" for origin.kind human and for a line with none."
+  (let* ((origin (jget l "origin"))
+         (kind (if (hash-table-p origin) (str (jget origin "kind")) "")))
+    (if (string= kind "human") "" kind)))
+
+(defun origin-message (id timestamp kind blocks)
+  "originMessage: such a line as a custom_message (origin:<kind>), never a user entry."
+  (entry-from-map (jobject "type" "custom_message" "id" id "timestamp" timestamp
+                           "customType" (cat "origin:" kind) "content" blocks "display" :true)))
+
 (defun splice-preserved (chain by-id)
   "Each compaction's preserved segment (compactMetadata.preservedSegment), relinked into the
 walked chain after its anchor."
@@ -193,8 +205,12 @@ boundaries, with the preserved segments spliced in."
                                 (push (text-block (str (jget b "text"))) content))))
                            ((string= type "image") (push (jobject "type" "image") content)))))
                      (when (and content (= n 0))
-                       (push (make-message id ts (jobject "role" "user" "content" (coerce (reverse content) 'simple-vector)) nil)
-                             out))))))))
+                       (let ((kind (origin-kind l))
+                             (blocks (coerce (reverse content) 'simple-vector)))
+                         (push (if (string/= kind "")
+                                   (origin-message id ts kind blocks)
+                                   (make-message id ts (jobject "role" "user" "content" blocks) nil))
+                               out)))))))))
           (flush))
         (nreverse out)))))
 

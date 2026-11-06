@@ -37,6 +37,11 @@ Each entry is compared as `json.Marshal(entry.ToMap())`, so ids, aliases, timest
 milliseconds), block order, `null` against `[]`, float formatting and HTML escapes all count. Every case
 matched on its first run. The spike's harness (`memory/selection`, `TestLispParity`) still passes.
 
+`TestLispReadersParity` also reads `memory/transcript/testdata/synthetic` in every format: shapes no
+real fixture holds. `claude-code-origin.jsonl` has Claude Code's user-typed lines that are not the
+person's (`origin.kind` `task-notification` and `peer`, meta and not), which both engines read as
+`custom_message` entries (`originMessage`, `origin-message`); identical: 24 entries over 18 formats.
+
 ## Not ported, and differences
 
 - **Every format is ported.** The 18 file formats and the 3 database formats all read identically on the

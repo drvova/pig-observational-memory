@@ -92,6 +92,12 @@ func realFixtures(t *testing.T) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The synthetic shapes no real fixture holds (Claude Code's origin.kind lines).
+	synthetic, err := filepath.Glob(filepath.Join("testdata", "synthetic", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths = append(paths, synthetic...)
 	var out []string
 	for _, p := range paths {
 		if ext := filepath.Ext(p); ext == ".jsonl" || ext == ".json" {
