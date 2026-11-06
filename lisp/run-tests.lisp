@@ -13,7 +13,7 @@
 (defvar *current* nil)
 
 (defmacro deftest (name &body body)
-  `(progn (setf *tests* (append (remove ',name *tests* :key #'car) (list (cons ',name (lambda () ,@body)))))
+  `(progn (setf *tests* (append (remove ',name *tests* :key #'car) (list (cons ',name (lambda () (block ,name ,@body))))))
           ',name))
 
 (defun check (got want &optional (what ""))
@@ -24,7 +24,7 @@
   got)
 
 (let ((here (make-pathname :name nil :type nil :defaults *load-truename*)))
-  (dolist (file '("regex" "json" "ledger" "extract" "selection"))
+  (dolist (file '("regex" "json" "ledger" "extract" "selection" "server"))
     (load (merge-pathnames (format nil "tests/~A.lisp" file) here))))
 
 ;; W1, the memory model.

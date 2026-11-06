@@ -32,6 +32,8 @@ const usage = `om: observational memory for coding agents
   om version
 
 The store lives under $OM_HOME (default ~/.om); its settings.json holds the settings.
+OM_ENGINE=lisp forwards hook, mcp and call to the SBCL engine image over <root>/engine.sock,
+starting it from $OM_LISP_IMAGE (docs/lisp-port-image-client.md).
 `
 
 // Run is the om command over args (without the program name); it returns the exit status.
@@ -101,8 +103,15 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		if err := json.NewDecoder(stdin).Decode(&params); err != nil {
 			return fmt.Errorf("om call: the tool's arguments as JSON on stdin: %w", err)
 		}
+		a := newApp(root, stderr)
+		if res, ok, err := a.callViaLisp(*harnessName, *dir, params); ok {
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(stdout).Encode(map[string]any{"text": res["text"], "isError": res["isError"]})
+		}
 		raw, _ := json.Marshal(map[string]any{"name": omtool.ToolName, "arguments": params})
-		res := newApp(root, stderr).callTool(*harnessName, *dir, raw)
+		res := a.callTool(*harnessName, *dir, raw)
 		text := ""
 		if content, ok := res["content"].([]any); ok && len(content) > 0 {
 			text, _ = content[0].(map[string]any)["text"].(string)

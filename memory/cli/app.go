@@ -21,11 +21,13 @@ type app struct {
 	rt      *runtime.Runtime
 	manager *harness.Manager
 	pin     curated.Pin
+	// lisp is the engine image's client with OM_ENGINE=lisp, else nil (lisp.go).
+	lisp *lispClient
 }
 
 func newApp(root string, log io.Writer) *app {
 	useRoot(root)
-	a := &app{root: root, log: log, rt: runtime.New()}
+	a := &app{root: root, log: log, rt: runtime.New(), lisp: newLispClient(root)}
 	a.manager = engine.NewManager(a.rt, &a.pin)
 	return a
 }

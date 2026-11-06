@@ -54,6 +54,21 @@ func (a *app) mcp(harnessName, dir string, in io.Reader, out io.Writer) error {
 		if len(req.ID) == 0 {
 			continue // a notification (notifications/initialized, cancelled): no answer
 		}
+		if answer, ok, err := a.mcpViaLisp(harnessName, dir, scanner.Bytes()); ok {
+			// The image's answer is written as om writes its own (rpc's field order); when the
+			// image failed, the message gets an MCP error and the server goes on.
+			resp := rpc{JSONRPC: "2.0", ID: req.ID}
+			if err == nil {
+				err = json.Unmarshal(answer, &resp)
+			}
+			if err != nil {
+				resp = rpc{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32603, Message: err.Error()}}
+			}
+			if err := enc.Encode(resp); err != nil {
+				return err
+			}
+			continue
+		}
 		resp := rpc{JSONRPC: "2.0", ID: req.ID}
 		switch req.Method {
 		case "initialize":

@@ -174,11 +174,15 @@ holds at the end, and parent ids relinked to the merged order."
         (if (and (string/= target "") (not (gethash target placed)))
             (push e orphans)
             (setf (gethash target after) (append (gethash target after) (list e))))))
-    (labels ((emit (e)
-               (push e out)
-               (let ((children (gethash (entry-id e) after)))
-                 (remhash (entry-id e) after)
-                 (dolist (c children) (emit c)))))
+    (labels ((emit (root)
+               ;; Depth first, children in order, without recursion: a chain of stored entries
+               ;; (each after the previous) is as deep as the store is long.
+               (let ((stack (list root)))
+                 (loop while stack
+                       do (let* ((e (pop stack)) (children (gethash (entry-id e) after)))
+                            (push e out)
+                            (remhash (entry-id e) after)
+                            (setf stack (append children stack)))))))
       (let ((first (gethash "" after)))
         (dolist (c first) (emit c)))
       (remhash "" after)

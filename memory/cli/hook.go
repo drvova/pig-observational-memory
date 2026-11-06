@@ -85,6 +85,9 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		format = "generic"
 	}
 	s := Session{Harness: hs.Name, ID: p.SessionID, Transcript: p.TranscriptPath, Format: format, Cwd: p.Cwd}
+	if handled, err := a.familyViaLisp(hs, name, ev, p, s, out); handled {
+		return err
+	}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
 		return err
@@ -148,6 +151,39 @@ func writeContext(out io.Writer, hs Harness, name, context string) error {
 		return json.NewEncoder(out).Encode(map[string]any{field: context})
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": name, "additionalContext": context}})
+}
+
+// familyViaLisp runs a hook family's event on the engine image (lisp.go), with the decisions the
+// harness's registry entry makes passed as flags, and writes the answer in the harness's shape.
+// handled is false when the Go engine is to run it.
+func (a *app) familyViaLisp(hs Harness, name, ev string, p hookPayload, s Session, out io.Writer) (bool, error) {
+	_, turnEnd := hs.Hooks.Events[evTurnEnd]
+	method, extra := ev, map[string]any{}
+	switch ev {
+	case evSessionStart:
+		extra["with_summary"] = p.Source == "compact" || p.Source == "resume" || hs.Hooks.SummaryOnStart
+	case evPrompt:
+		extra["run_level0"], extra["summary_on_prompt"] = !turnEnd, hs.Hooks.SummaryOnPrompt
+	case evPreCompact:
+		method, extra["reason"] = "compact", p.Trigger
+	}
+	res, handled, err := a.viaLisp(method, s, extra)
+	if !handled || err != nil {
+		return handled, err
+	}
+	switch ev {
+	case evSessionStart:
+		return true, writeContext(out, hs, name, res.Text)
+	case evPrompt:
+		if res.Text != "" {
+			return true, writeContext(out, hs, name, res.Text)
+		}
+	case evPreCompact:
+		if hs.Hooks.SummaryAtPreCompact && res.Text != "" {
+			_, err = io.WriteString(out, res.Text+"\n")
+		}
+	}
+	return true, err
 }
 
 // summaryHanded marks the compaction whose summary a prompt hook has handed the model.
@@ -309,6 +345,9 @@ func (a *app) codexHook(event string, args []string) error {
 		return err
 	}
 	s := Session{Harness: "codex", ID: p.Thread, Transcript: rollout, Format: "codex", Cwd: p.Cwd}
+	if _, handled, err := a.viaLisp(evTurnEnd, s, nil); handled {
+		return err
+	}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
 		return err
@@ -394,6 +433,15 @@ func (a *app) genericHook(name string, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("om hook generic: payload: %w", err)
 	}
 	s := e.session("generic", "generic")
+	if name == "session-start" || name == "turn-end" || name == "compact" {
+		res, handled, err := a.viaLisp(name, s, map[string]any{"reason": e.Reason, "with_summary": true})
+		if handled {
+			if err == nil && name != "turn-end" {
+				_, err = io.WriteString(out, res.Text+"\n")
+			}
+			return err
+		}
+	}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
 		return err
@@ -436,6 +484,19 @@ func (a *app) piHook(name string, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("om hook pi: payload: %w", err)
 	}
 	s := e.session("pi", "pi")
+	if name == "session-start" || name == "turn-end" || name == "before-compact" {
+		res, handled, err := a.viaLisp(name, s, map[string]any{"reason": e.Reason, "with_summary": false, "first_kept_entry_id": e.FirstKeptEntryID, "tokens_before": e.TokensBefore})
+		if handled {
+			switch {
+			case err != nil:
+			case name == "session-start":
+				_, err = io.WriteString(out, res.Text+"\n")
+			case name == "before-compact":
+				err = json.NewEncoder(out).Encode(map[string]any{"compaction": res.Compaction})
+			}
+			return err
+		}
+	}
 	h, err := s.Host(a.root, a.log)
 	if err != nil {
 		return err

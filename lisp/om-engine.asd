@@ -34,4 +34,15 @@
                              (:file "readers/formats")
                              (:file "readers/sqlite")
                              (:file "readers/paths")
-                             (:file "store/neutral")))))
+                             (:file "store/neutral")))
+               ;; om.server: the image's socket, sessions and events (docs/lisp-port-image-client.md).
+               (:module "server"
+                :pathname "src/server/"
+                :serial t
+                :components ((:file "package")
+                             (:file "jsonrpc")
+                             (:file "locks")
+                             (:file "sessions")
+                             (:file "engine")
+                             (:file "server")
+                             (:file "methods")))))
