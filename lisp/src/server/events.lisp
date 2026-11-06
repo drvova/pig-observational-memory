@@ -1,5 +1,6 @@
 ;;;; W6: the first PiG events over engine-rpc (docs/lisp-port-peer.md; docs/engine-rpc.md):
-;;;; event/sessionStart, event/turnEnd (without the harness detectors) and event/context, with
+;;;; event/sessionStart, event/turnEnd (with the harness detectors, docs/lisp-port-evidence.md)
+;;;; and event/context, with
 ;;;; the host/* calls they make. Loaded after methods.lisp and server/hooks.lisp, so each
 ;;;; define-method here replaces a not-ported entry. Every other engine-rpc method stays not
 ;;;; ported, and a ported one refuses (not ported) what it cannot do the way Go does, always
@@ -46,33 +47,60 @@ first that fails. Returns how many landed."
           (log-line "turn end: append ~A: ~A" (car p) e)
           (return landed))))))
 
-(defun extract-turn (c)
-  "hooks.extractTurnV2 without detectV2: level 0 over the entries after the furthest
-extraction marker, appended through the host, under the session's extraction mutex. A branch
-that cannot be read appends nothing; an extraction that fails before its first append is
-refused (not ported), so the Go engine reads the turn instead."
+(defun store-dir (c)
+  "harness.StoreOf's store: <config home>/observational-memory/memories, nil without one."
+  (and (rcfg-curated-memory (conn-cfg c))
+       (let ((home (host-string "host/configHome")))
+         (and (string/= home "") (format nil "~A/observational-memory/memories" (string-right-trim "/" home))))))
+
+(defun check-harness-store (store)
+  "Refuses (not ported) a store whose harness data the image does not read the way Go does
+before anything is appended: retired defined tools (their names are memory plumbing and their
+calls memory queries) and rules written before the layer (which Go migrates first)."
+  (when (or (om.layer::dir-file-names (format nil "~A/harness/_2a/tool" store) ".rows")
+            (om.layer::dir-file-names (format nil "~A/definitions" store) ".rows"))
+    (not-ported "event/turnEnd with retired defined tools in the store"))
+  (when (om.layer::go-legacy-rules-p store)
+    (not-ported "event/turnEnd with rules written before the layer (rules.migrate)")))
+
+(defun extract-turn (c &key store model)
+  "hooks.extractTurnV2: level 0 over the entries after the furthest extraction marker, the
+harness detectors over what it read (detectV2: the keep-head rule's notes in its batches) when
+there is a store and a session model, appended through the host under the session's extraction
+mutex, and the detector run recorded once the extraction landed. A branch that cannot be read
+appends nothing; an extraction that fails before its first append, or reads a memory call in the
+removed query language, is refused (not ported), so the Go engine reads the turn instead."
   (sb-thread:with-mutex ((conn-extract-mutex c))
     (let ((branch (handler-case (get-branch c)
-                    (error (e) (log-line "turn end: getBranch: ~A" e) (return-from extract-turn 0)))))
+                    (error (e) (log-line "turn end: getBranch: ~A" e) (return-from extract-turn 0))))
+          (record nil))
       (multiple-value-bind (batches covers)
-          (handler-case (om::extract branch (om::extraction-start-index branch) (length branch)
-                                     (om::fold-ledger branch) :skip-tools (list om::+memory-tool+)
-                                     :cwd (scope-cwd))
+          (handler-case (let* ((start (om::extraction-start-index branch)) (folded (om::fold-ledger branch)))
+                          (multiple-value-bind (batches covers)
+                              (om::extract branch start (length branch) folded :skip-tools (list om::+memory-tool+)
+                                                                                :cwd (scope-cwd))
+                            (multiple-value-bind (batches thunk)
+                                (om.layer::harness-detect store model branch start (length branch) folded batches covers)
+                              (setf record thunk)
+                              (values batches covers))))
+            (om.layer::legacy-memory-call (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e)))
             (error (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e))))
         (check-cancelled)
-        (host-append-extraction batches covers)))))
+        (let ((landed (host-append-extraction batches covers)))
+          (when (and (plusp landed) record)
+            (handler-case (funcall record)
+              (error (e) (log-line "turn end: detect record: ~A" e))))
+          landed)))))
 
 (define-method "event/turnEnd" (params)
-  ;; hooks.OnTurnEnd: EnsureConfig, then level 0 unless passive. With a store and a session
-  ;; model Go runs the harness detectors inside the extraction (detectV2: detect events in the
-  ;; model's ledger, the keep-head remedy's notes in the batches), which are not ported, so that
-  ;; turn end is refused before anything is appended.
+  ;; hooks.OnTurnEnd: EnsureConfig, then level 0 unless passive, with the harness detectors when
+  ;; the host has a store and a session model (detectV2).
   (with-event (c params)
     (ensure-config c)
     (unless (rcfg-passive (conn-cfg c))
-      (when (and (store-on-p c) (string/= (session-model-key) ""))
-        (not-ported "event/turnEnd with the harness detectors (detectV2, keep-head)"))
-      (extract-turn c))
+      (let* ((store (store-dir c)) (model (if store (session-model-key) "")))
+        (when (and store (string/= model "")) (check-harness-store store))
+        (extract-turn c :store (and (string/= model "") store) :model model)))
     (thinning-result c)))
 
 ;;; Context

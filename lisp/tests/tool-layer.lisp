@@ -215,7 +215,9 @@
           (om::check (mapcar #'ldef-name (layer-settled model)) '("test-double") text)
           (layer-take-evidence model)
           (om::check (om.engine::test-double '(1 2)) '(2 4) text)
-          (om::check (layer-failures model) '(("adaptable-failed:test-double" . 1)) text))))))
+          ;; a settled definition's failure is its interval's run, for the retire rule
+          (om::check (layer-failures model) '() text)
+          (om::check (layer-settled-runs model) '(("test-double" 1 . 1)) text))))))
 
 (om::deftest layer-refuses-bad-definitions
   (let ((*layer-root* (test-dir "layer3")) (model "acme/refuse"))
@@ -366,7 +368,7 @@
         (layer-settle model (evidence-for model (list (ldef-held-id d))))
         (layer-take-evidence model)
         (om::check (text "(note-line (first (notes)))" :model model) "[fact] The billing job costs 40 USD a month. u1")
-        (om::check (layer-failures model) '(("adaptable-failed:phrase-note" . 1)))
+        (om::check (layer-settled-runs model) '(("phrase-note" 1 . 1)))
         (om::check (third *last-fallback*) "the line drops 40, usd")))))
 
 (om::deftest tool-curated-through-code

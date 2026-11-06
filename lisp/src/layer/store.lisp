@@ -50,7 +50,7 @@
   "The manifest's generation lines, in order; a line without an op is skipped."
   (remove-if-not (lambda (g) (stringp (om::jget g "op"))) (read-model-events (manifest-path model))))
 
-(defun append-generation (model op &key name digest reason target)
+(defun append-generation (model op &key name digest reason target settled)
   "Appends generation n+1 and returns n+1. Members in the schema's order."
   (let ((gen (1+ (length (read-manifest model)))))
     (append-line (manifest-path model)
@@ -64,6 +64,7 @@
                    (when digest (write-string ",\"digest\":" out) (om::write-json-string digest out))
                    (when target (format out ",\"target\":~D" target))
                    (when reason (write-string ",\"reason\":" out) (om::write-json-string reason out))
+                   (when settled (write-string ",\"settled\":true" out))
                    (write-char #\} out)))
     gen))
 
@@ -77,6 +78,11 @@
         (cond ((string= op "settle")
                (setf state (acons name digest (remove name state :key #'car :test #'equal))))
               ((string= op "forget")
+               (setf state (remove name state :key #'car :test #'equal)))
+              ;; A settled definition the retire rule reverted: its text no longer stands. A held
+              ;; one's revert (no settled member) changes nothing settled.
+              ((and (string= op "revert") (eq (om::jget g "settled") :true)
+                    (equal (cdr (assoc name state :test #'equal)) digest))
                (setf state (remove name state :key #'car :test #'equal)))
               ((string= op "rollback")
                (let ((target (om::jget g "target")))
@@ -139,9 +145,14 @@
 
 (defun load-layer (model)
   "The model's layer: settled and held definitions, each re-read and compiled (adaptable.lisp's
-compile-definition); one that no longer passes is left out and reported."
+compile-definition); one that no longer passes is left out and reported, and a settled one the
+checks refuse is reverted at once (the retire rule's veto, rules/evidence.lisp)."
   (or (sb-thread:with-mutex (*cache-lock*) (gethash model *layer-cache*))
-      (let ((l (load-layer-from-disk model)))
+      (multiple-value-bind (l refused) (load-layer-from-disk model)
+        (when refused
+          (loop for (name digest reason) in refused
+                do (revert-settled model name digest (format nil "the checks refuse it on load: ~A" reason)))
+          (setf l (load-layer-from-disk model)))
         (sb-thread:with-mutex (*cache-lock*) (setf (gethash model *layer-cache*) l))
         l)))
 
@@ -149,7 +160,7 @@ compile-definition); one that no longer passes is left out and reported."
   (let* ((manifest (read-manifest model))
          (states (replay manifest))
          (state (aref states (1- (length states))))
-         (settled '()) (held '()) (reports '()))
+         (settled '()) (held '()) (reports '()) (refused '()))
     (flet ((try (name digest text state-kind time)
              (if (null text)
                  (push (format nil "~A ~A: its text is missing" (string-downcase state-kind) name) reports)
@@ -157,6 +168,9 @@ compile-definition); one that no longer passes is left out and reported."
                      (let ((d (make-ldef :model model :name name :text text :digest digest :time time :state state-kind)))
                        (compile-definition d)
                        (if (eq state-kind :settled) (push d settled) (push d held)))
+                   (refused (e)
+                     (when (eq state-kind :settled) (push (list name digest (refused-reason e)) refused))
+                     (push (format nil "~(~A~) ~A: ~A" state-kind name e) reports))
                    (error (e) (push (format nil "~(~A~) ~A: ~A" state-kind name e) reports))))))
       (loop for (name . d) in state
             do (try name d (read-file (blob-path model d)) :settled nil))
@@ -167,7 +181,8 @@ compile-definition); one that no longer passes is left out and reported."
             (cond ((null want) (push (format nil "held ~A: untracked, never loaded" name) reports))
                   ((not (equal want (digest text))) (push (format nil "held ~A: changed outside the store, never loaded" name) reports))
                   (t (try name want text :held (hold-time manifest name want))))))))
-    (make-loaded :settled (nreverse settled) :held (nreverse held) :reports (nreverse reports))))
+    (values (make-loaded :settled (nreverse settled) :held (nreverse held) :reports (nreverse reports))
+            (nreverse refused))))
 
 (defun layer-settled (model) (loaded-settled (load-layer model)))
 
@@ -230,12 +245,15 @@ change, every default standing) and drops every held definition. Returns the new
     (invalidate model)
     gen))
 
-(defun layer-settle (model events)
+(defun layer-settle (model events &key (only nil only-p))
   "Settles model's held definitions on the usage ledger's events (settle-v2): each one decided
-is settled when clean and reverted otherwise; one with no evidence yet stays held. Returns the
-notices, (name written-p reason) each."
+is settled when clean and reverted otherwise; one with no evidence yet stays held. With only, a
+list of held ids (a compaction's snapshot), only those are settled, so a definition held during
+the compaction is never settled by it. Returns the notices, (name written-p reason) each."
   (let ((notices '()))
-    (dolist (d (layer-held model))
+    (dolist (d (if only-p
+                   (remove-if-not (lambda (d) (member (ldef-held-id d) only :test #'string=)) (layer-held model))
+                   (layer-held model)))
       (multiple-value-bind (decided clean reason)
           (settle-v2 events :kind +kind-adaptable+ :name (ldef-name d) :held-id (ldef-held-id d) :time (ldef-time d))
         (when decided

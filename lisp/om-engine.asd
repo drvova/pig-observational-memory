@@ -67,6 +67,15 @@
                              (:file "layer/lock")
                              ;; 1b, the curated ranked index (docs/lisp-port-tool-layer.md)
                              (:file "tool/curated-index")))
+               ;; W4 next steps, evidence and retirement (docs/lisp-port-evidence.md)
+               (:module "rules"
+                :pathname "src"
+                :serial t
+                :components ((:file "rules/rows")
+                             (:file "rules/golayer")
+                             (:file "rules/rules")
+                             (:file "rules/detect")
+                             (:file "rules/evidence")))
                ;; W5, hooks (docs/lisp-port-hooks.md)
                (:module "w5"
                 :pathname "src"
