@@ -255,6 +255,56 @@ the root, and tests use that. It holds:
 - **Forgetting and rollback.** Forgetting a definition, or rolling the layer back, invalidates the
   image's cache. The default stands on the next call, without a restart.
 
+### The layer across processes
+
+The layer is a file store, so another process can write a model's layer while this image serves it:
+a second image, a restart that overlaps the old one, or a tool child (which forwards every
+layer-dispatching call to the image, so its reads use the image's pin). `store.lisp` keeps two tables:
+
+- `*layer-cache*`, model -> the loaded layer, with the manifest's identity when it was read
+  (`manifest-identity`: the latest generation, the file's size, mtime and inode, and a digest of its
+  last line).
+- `*layer-pins*`, session NUL model -> the loaded layer that session's calls dispatch on.
+
+`layer-boundary` runs at a session's boundaries, the moments its request bytes may change anyway:
+`event/sessionStart`, and `event/sessionBeforeCompact` before the evidence snapshot
+(`layer-session-boundary` in `server/pig-session.lisp`). It re-reads the cached layer when the
+manifest's identity changed and pins it for that session. `load-layer`, which `call-adaptable` runs
+on every call, never looks at the disk while the session has a pin, so another process's settle
+reaches a session at its next compaction and never between two, and one session's boundary leaves
+the other sessions pinned. A change this image makes (`invalidate`) still drops the model's cache
+and pins, so it stands from the next call, as before; that call reads the disk, so an outside change
+made in the same interval comes with it. `event/sessionShutdown` drops the session's pins. The
+neutral host has no session model, so no adaptable dispatches there and it has no boundary.
+
+The Go layer's reader (`rules/golayer.lisp`, `layer/go-layer.lisp`) keeps no cache: it reads the
+files at each compaction (the profile, the active rules, the snapshot, the pass) and for
+`/om:status`, so it cannot serve a stale definition and is pinned by when it reads.
+
+### Durable appends
+
+Every append-only file the image writes takes its line through `om::append-jsonl`
+(`src/store/append.lisp`), as Go's writers take theirs through `memory/jsonl.Append`: the layer's
+`manifest.jsonl` and `units.jsonl`, the Go layer's manifests and `floor.jsonl`, the usage ledger
+`<store>/models/<model>.jsonl`, the curated `usage.jsonl`, and the neutral store. Under the lock its
+caller holds (a unit is now appended under the layer's lock), an append that finds a torn tail (a
+last byte other than a newline) writes a newline first, so the fragment stays one line every reader
+skips and a whole last line without its newline stays the line every reader read; nothing is
+truncated. Then the line goes in one write, the file is fsynced, and its directory too when the
+append created it. A false torn reading (a concurrent unlocked curated-usage append) adds only an
+empty line, which every reader skips.
+
+A Lisp layer generation's number is the `gen` its line records. `next-generation` numbers the next
+one after the highest gen the manifest records, a torn line's `{"gen":N` prefix included, so no
+number is written twice, even after a crash. A reader (`parse-manifest`) takes a line's recorded gen
+when it is above the line before it's, and that one's plus one otherwise, so a manifest the
+count-numbering writer wrote (where a torn line made the next writer reuse its number) reads as it
+always did. Replay indexes its states by gen, a torn number holding the state before it; a rollback
+target is 0 to the latest generation. The Go layer's manifest keeps Go's numbering
+(`layer.Store.Generations` numbers decoded lines by position), which both engines follow: with the
+tail ended and the append synced, a torn line was never decoded by any reader, nor returned to its
+writer's caller, so the next line taking its position takes no number anyone saw.
+
 ## The evidence rule
 
 `settle-v2` is `rules.SettleV2`, ported line for line, including its reason texts. One compaction is one
@@ -323,7 +373,13 @@ W4's tests cover the following:
 - refused definitions and tampered held files;
 - the layer through the memory tool;
 - the curated checks and writes;
-- the reads.
+- the reads;
+- the layer across processes and crashes (`tests/layer-store.lisp`): a torn tail ended and never
+  glued; a manifest torn mid-line, after which no generation number is reused and replay and
+  rollback number by gen; a count-numbered manifest that reused a number read as before; each
+  session pinned until its own boundary against an outside change; and a second SBCL on the same
+  layer root whose settle (numbered after a torn generation of the first) the first image sees at its
+  session's next compaction and not before.
 
 `cd memory && OM_LISP_PARITY=1 go test ./contracts -run TestLisp -v` runs three Go tests. Without the
 variable, or without `sbcl`, they are skipped.
@@ -339,6 +395,11 @@ variable, or without `sbcl`, they are skipped.
   identical, with 58 decided.
 - **`TestLispLayerFilesValidate`.** Checks the files the Lisp layer writes against
   `lisp-layer-generation` and `layer-held-index`.
+- **`TestLispAppendsAfterATornTail`** (`lispappend_test.go`, `lisp/append-parity.lisp`). Go and the
+  image append in turn to the Go layer's manifest, a usage ledger, the curated usage, the floor record
+  and the neutral store, with each file's last line torn between turns. Go's readers and the image's
+  read every file alike after each turn: only the torn lines are lost, the Go manifest numbers 1 to 4
+  with no number given twice, and each fragment is one line of its own.
 
 ## Gaps
 

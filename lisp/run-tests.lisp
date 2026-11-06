@@ -63,6 +63,9 @@
 ;; Level 0's file tools across harnesses and the JavaScript project slug.
 (load (merge-pathnames "tests/filetools.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; The layer store across processes and crashes (docs/lisp-port-tool-layer.md).
+(load (merge-pathnames "tests/layer-store.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

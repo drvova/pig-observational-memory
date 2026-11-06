@@ -6,7 +6,7 @@
   "required": ["gen", "time", "op"],
   "additionalProperties": false,
   "properties": {
-    "gen": { "description": "The generation number, from 1 in manifest order.", "type": "integer", "minimum": 1 },
+    "gen": { "description": "The generation number, from 1 and increasing in manifest order; the next is after the highest any line records, a line torn by a crash included, so no number is written twice.", "type": "integer", "minimum": 1 },
     "time": { "description": "RFC 3339 with nanoseconds.", "type": "string" },
     "op": { "enum": ["hold", "settle", "revert", "forget", "rollback"] },
     "kind": { "enum": ["adaptable"] },

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 )
 
@@ -165,12 +166,8 @@ func (s Store) RecordModelLocked(e ModelEvent) error {
 	if err := os.MkdirAll(s.modelsDir(), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.modelUsagePath(e.Model), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(line, '\n'))
+	// A torn tail is ended first and the line is synced (jsonl.Append).
+	_, err = jsonl.Append(s.modelUsagePath(e.Model), line)
 	return err
 }
 

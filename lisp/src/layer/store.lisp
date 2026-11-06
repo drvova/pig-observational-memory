@@ -46,13 +46,55 @@
 
 (defun manifest-path (model) (join-path (model-root model) "manifest.jsonl"))
 
+;;; A generation's number is the gen its line records. A writer numbers the next one after the
+;;; highest gen the manifest records, a torn line's included (the {"gen":N prefix of a line a crash
+;;; cut off, which no reader decodes), so no number is ever written twice, even after a crash; its
+;;; append ends a torn tail first and is fsynced (om::append-jsonl). A reader takes each decoded
+;;; line's recorded gen when it is an integer above the line before it's, and that one's plus one
+;;; otherwise, so a manifest a count-numbering writer wrote (gen = 1 + the lines it could decode)
+;;; reads as it always did.
+
+(defun torn-gen (line)
+  "The gen a line that does not decode claims: N of its {\"gen\":N prefix, or nil."
+  (let ((prefix "{\"gen\":"))
+    (when (om::has-prefix line prefix)
+      (let* ((start (length prefix))
+             (end (or (position-if-not #'digit-char-p line :start start) (length line))))
+        (and (> end start) (parse-integer line :start start :end end))))))
+
+(defun parse-manifest (text)
+  "(values generations claimed): the decoded generation lines in order, each one's \"gen\" its
+number as a reader takes it (an integer), and the highest gen any line claims, decoded or torn."
+  (let ((out '()) (prev 0) (claimed 0))
+    (when text
+      (dolist (line (om::split text (string #\Newline)))
+        (unless (string= (om::trim-space line) "")
+          (let ((g (handler-case (om::json-parse line) (error () nil))))
+            (if (and (hash-table-p g) (stringp (om::jget g "op")))
+                (let* ((rec (om::jget g "gen"))
+                       (n (if (and (realp rec) (= rec (truncate rec)) (> (truncate rec) prev)) (truncate rec) (1+ prev))))
+                  (setf (gethash "gen" g) n prev n claimed (max claimed n))
+                  (push g out))
+                (let ((n (and (not (hash-table-p g)) (torn-gen line))))
+                  (when n (setf claimed (max claimed n)))))))))
+    (values (nreverse out) claimed)))
+
 (defun read-manifest (model)
   "The manifest's generation lines, in order; a line without an op is skipped."
-  (remove-if-not (lambda (g) (stringp (om::jget g "op"))) (read-model-events (manifest-path model))))
+  (values (parse-manifest (read-file (manifest-path model)))))
+
+(defun manifest-generation (manifest)
+  "The latest generation's number: 0 for an empty manifest."
+  (let ((last (car (last manifest)))) (if last (om::jget last "gen") 0)))
+
+(defun next-generation (model)
+  (multiple-value-bind (gens claimed) (parse-manifest (read-file (manifest-path model)))
+    (1+ (max claimed (manifest-generation gens)))))
 
 (defun append-generation (model op &key name digest reason target settled)
-  "Appends generation n+1 and returns n+1. Members in the schema's order."
-  (let ((gen (1+ (length (read-manifest model)))))
+  "Appends the next generation (next-generation) and returns its number. Members in the
+schema's order. The caller holds the layer's lock."
+  (let ((gen (next-generation model)))
     (append-line (manifest-path model)
                  (with-output-to-string (out)
                    (format out "{\"gen\":~D,\"time\":" gen)
@@ -70,11 +112,14 @@
 
 (defun replay (manifest)
   "The settled state after each generation: a vector whose element g is an alist name -> digest
-(element 0 is before the first change)."
+(element 0 is before the first change; a number no line holds, a torn generation's, changed
+nothing, so it holds the state before it)."
   (let ((states (make-array 1 :adjustable t :fill-pointer t :initial-contents '(())))
         (state '()))
     (dolist (g manifest)
-      (let ((op (om::jget g "op")) (name (om::jget g "name")) (digest (om::jget g "digest")))
+      (let ((op (om::jget g "op")) (name (om::jget g "name")) (digest (om::jget g "digest"))
+            (n (om::jget g "gen")))
+        (loop while (< (length states) n) do (vector-push-extend state states))
         (cond ((string= op "settle")
                (setf state (acons name digest (remove name state :key #'car :test #'equal))))
               ((string= op "forget")
@@ -133,20 +178,49 @@
 (defmacro with-layer-lock ((model) &body body)
   `(with-store-lock ((model-root ,model)) ,@body))
 
-;;; The cache: each model's loaded layer, dropped by every change this image makes.
+;;; The cache. The image keeps each model's loaded layer (*layer-cache*), and each session's
+;;; calls dispatch on the one pinned for it (*layer-pins*, session NUL model) from its last
+;;; boundary, a session start or a compaction (layer-boundary), to its next: the moments the
+;;; request bytes may change anyway. A loaded layer records the manifest's identity when it was
+;;; read (manifest-identity: the generation, the file's size, modification time and inode, and a
+;;; digest of its last line), and a boundary re-reads the layer when the manifest's identity is
+;;; another, so a change another process made (another image, a restart overlap) is seen at this
+;;; session's next boundary and never between two. A change this image makes drops the model's
+;;; cache and pins (invalidate), so it stands from the next call, as the change's own call
+;;; reports it.
 
 (defvar *layer-cache* (make-hash-table :test 'equal))
+(defvar *layer-pins* (make-hash-table :test 'equal) "session NUL model -> the loaded layer its calls use.")
 (defvar *cache-lock* (sb-thread:make-mutex :name "om.layer cache"))
 
+(defun pin-key (session model) (concatenate 'string (or session "") (string #\Nul) (or model "")))
+
+(defun call-session-id () (if *call* (or (call-session *call*) "") ""))
+
 (defun invalidate (model)
-  (sb-thread:with-mutex (*cache-lock*) (remhash model *layer-cache*)))
+  (sb-thread:with-mutex (*cache-lock*)
+    (remhash model *layer-cache*)
+    (let ((suffix (concatenate 'string (string #\Nul) model)) (drop '()))
+      (maphash (lambda (k v) (declare (ignore v)) (when (om::has-suffix k suffix) (push k drop))) *layer-pins*)
+      (dolist (k drop) (remhash k *layer-pins*)))))
 
-(defstruct loaded settled held reports)
+(defstruct loaded settled held reports identity)
 
-(defun load-layer (model)
-  "The model's layer: settled and held definitions, each re-read and compiled (adaptable.lisp's
-compile-definition); one that no longer passes is left out and reported, and a settled one the
-checks refuse is reverted at once (the retire rule's veto, rules/evidence.lisp)."
+(defun manifest-identity (model)
+  "The manifest as a boundary compares it: (generation size mtime inode digest-of-its-last-line),
+nil when there is none."
+  (let ((path (manifest-path model)))
+    (handler-case
+        (let* ((st (sb-posix:stat path))
+               (text (or (read-file path) ""))
+               (end (length (string-right-trim '(#\Newline) text)))
+               (start (let ((p (position #\Newline text :end end :from-end t))) (if p (1+ p) 0))))
+          (list (manifest-generation (parse-manifest text)) (sb-posix:stat-size st) (sb-posix:stat-mtime st)
+                (sb-posix:stat-ino st) (digest (subseq text start end))))
+      (sb-posix:syscall-error () nil))))
+
+(defun cached-layer (model)
+  "The image's loaded layer of model, read from disk when it holds none."
   (or (sb-thread:with-mutex (*cache-lock*) (gethash model *layer-cache*))
       (multiple-value-bind (l refused) (load-layer-from-disk model)
         (when refused
@@ -156,8 +230,43 @@ checks refuse is reverted at once (the retire rule's veto, rules/evidence.lisp).
         (sb-thread:with-mutex (*cache-lock*) (setf (gethash model *layer-cache*) l))
         l)))
 
+(defun load-layer (model)
+  "The model's layer the current session's calls use: settled and held definitions, each re-read
+and compiled (adaptable.lisp's compile-definition); one that no longer passes is left out and
+reported, and a settled one the checks refuse is reverted at once (the retire rule's veto,
+rules/evidence.lisp). It is the layer pinned at the session's last boundary (layer-boundary), or,
+before its first or after a change this image made, the image's cached one, pinned from then on."
+  (let ((key (pin-key (call-session-id) model)))
+    (or (sb-thread:with-mutex (*cache-lock*) (gethash key *layer-pins*))
+        (let ((l (cached-layer model)))
+          (sb-thread:with-mutex (*cache-lock*)
+            (or (gethash key *layer-pins*) (setf (gethash key *layer-pins*) l)))))))
+
+(defun layer-boundary (model &optional (session (call-session-id)))
+  "A session start or a compaction of session with model: the image's cached layer re-read when
+the manifest's identity is no longer the one it was read at, and pinned for session until its
+next boundary. Returns the loaded layer."
+  (when (and model (string/= model ""))
+    (let ((id (manifest-identity model)))
+      (sb-thread:with-mutex (*cache-lock*)
+        (let ((c (gethash model *layer-cache*)))
+          (unless (and c (equal (loaded-identity c) id)) (remhash model *layer-cache*))))
+      (let ((l (cached-layer model)))
+        (sb-thread:with-mutex (*cache-lock*) (setf (gethash (pin-key session model) *layer-pins*) l))
+        l))))
+
+(defun forget-session-pins (session)
+  "Drops session's pins (its end), so the table never keeps a closed session's layers."
+  (sb-thread:with-mutex (*cache-lock*)
+    (let ((prefix (concatenate 'string (or session "") (string #\Nul))) (drop '()))
+      (maphash (lambda (k v) (declare (ignore v)) (when (om::has-prefix k prefix) (push k drop))) *layer-pins*)
+      (dolist (k drop) (remhash k *layer-pins*)))))
+
 (defun load-layer-from-disk (model)
-  (let* ((manifest (read-manifest model))
+  ;; The identity first: a change written while the files are read leaves an older identity,
+  ;; so the next boundary reads again.
+  (let* ((identity (manifest-identity model))
+         (manifest (read-manifest model))
          (states (replay manifest))
          (state (aref states (1- (length states))))
          (settled '()) (held '()) (reports '()) (refused '()))
@@ -181,7 +290,8 @@ checks refuse is reverted at once (the retire rule's veto, rules/evidence.lisp).
             (cond ((null want) (push (format nil "held ~A: untracked, never loaded" name) reports))
                   ((not (equal want (digest text))) (push (format nil "held ~A: changed outside the store, never loaded" name) reports))
                   (t (try name want text :held (hold-time manifest name want))))))))
-    (values (make-loaded :settled (nreverse settled) :held (nreverse held) :reports (nreverse reports))
+    (values (make-loaded :settled (nreverse settled) :held (nreverse held) :reports (nreverse reports)
+                         :identity identity)
             (nreverse refused))))
 
 (defun layer-settled (model) (loaded-settled (load-layer model)))
@@ -235,7 +345,7 @@ generation, or signals refused when the model's layer holds no definition of the
 change, every default standing) and drops every held definition. Returns the new generation."
   (let ((gen nil))
     (with-layer-lock (model)
-      (let ((n (length (read-manifest model))))
+      (let ((n (manifest-generation (read-manifest model))))
         (unless (and (integerp target) (<= 0 target n))
           (refuse "generation ~A is not one of ~A's layer: 0 to ~D" target model n)))
       (dolist (name (dir-file-names (join-path (model-root model) "held") ".lisp"))
@@ -267,4 +377,6 @@ the compaction is never settled by it. Returns the notices, (name written-p reas
     (invalidate model)
     (nreverse notices)))
 
-(defun layer-generations (model) (length (read-manifest model)))
+(defun layer-generations (model)
+  "The model's latest generation (0 before its first change)."
+  (manifest-generation (read-manifest model)))

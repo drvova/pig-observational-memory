@@ -72,10 +72,8 @@ A project's settings are never read (neutral.Host.ProjectTrusted is false)."
   (ensure-parent path)
   (with-file-lock ((concatenate 'string path ".lock"))
     (let ((new (not (probe-file path))))
-      (with-open-file (out path :direction :output :if-exists :append :if-does-not-exist :create
-                                :external-format :utf-8)
-        (write-string line out)
-        (write-char #\Newline out))
+      ;; A torn tail ended first, one write, fsync (src/store/append.lisp, as jsonl.Append).
+      (om::append-jsonl path line)
       (when new (sb-posix:chmod path #o600)))))
 
 (defun custom-entry-line (after custom-type data-json id parent stamp)

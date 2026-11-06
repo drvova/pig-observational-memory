@@ -292,6 +292,8 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
                                             :store-dir store :cfg cfg :event event)))
           (let ((refusal (compaction-harness-refusal ch)))
             (when refusal (not-ported refusal)))
+          ;; The session's boundary of its Lisp layer, before the snapshot (harness-hook-host).
+          (layer-session-boundary (ch-model-key ch))
           (handler-case
               (multiple-value-bind (result entries cut)
                   (sb-thread:with-mutex ((conn-extract-mutex c))

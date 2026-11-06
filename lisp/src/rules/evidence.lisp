@@ -187,15 +187,17 @@ failure, and a timeout toward the breaker (open after the second)."
         (setf out (truncate (om::jget g "gen")))))))
 
 (defun append-unit (model name digest outcome failures)
-  "One conclusive unit of name's settled text digest (schema lisp-layer-unit)."
-  (append-line (units-path model)
+  "One conclusive unit of name's settled text digest (schema lisp-layer-unit), under the layer's
+lock, so another process's unit never lands inside it."
+  (with-layer-lock (model)
+   (append-line (units-path model)
                (with-output-to-string (out)
                  (write-string "{\"time\":" out) (om::write-json-string (format-rfc3339-nano (now)) out)
                  (write-string ",\"name\":" out) (om::write-json-string name out)
                  (write-string ",\"digest\":" out) (om::write-json-string digest out)
                  (format out ",\"gen\":~D" (settle-generation model name digest))
                  (write-string ",\"outcome\":" out) (om::write-json-string outcome out)
-                 (format out ",\"failures\":~D}" failures))))
+                 (format out ",\"failures\":~D}" failures)))))
 
 (defun units-of (model name digest)
   "The conclusive units of name's settled text digest since the generation that settled it,
