@@ -160,15 +160,16 @@ agent directory dir (settings.json there)."
           (check (jget (jget (jget compaction "details") "consolidation") "reason") "consolidate is false")
           (check (jget r "thinning") :true)
           (check (mapcar #'car (reverse (phost-appended h))) '("om.observations.recorded" "om.extracted") "level 0 recorded the cut range"))
-        ;; Level 1 on with a session model: refused before anything is written.
+        ;; Level 1 on with a session model the host has no auth for: the image runs it, and
+        ;; skips the request with Go's reason (docs/lisp-port-level1.md).
         (write-file* (format nil "~Asettings.json" dir) "{}")
         (peer-exchange stream 2 "event/projectTrust" (jobject "scope" scope) :host (phost-fn h))
         (setf (phost-model h) (jobject "provider" "p" "id" "m") (phost-appended h) '())
         (let ((r (peer-exchange stream 3 "event/sessionBeforeCompact"
                                 (jobject "scope" scope "data" (before-compact-data branch "qu")) :host (phost-fn h))))
-          (check (jget (jget r "error") "code") -32004d0 "level 1 is not ported")
-          (check (and (search "level 1" (jget (jget r "error") "message")) t) t)
-          (check (phost-appended h) '() "nothing appended"))
+          (check (jget (jget (jget (jget (jget (jget r "result") "result") "compaction") "details") "consolidation") "reason")
+                 "the session model is unavailable: no API key or auth headers for provider \"p\"" "level 1 runs on the image")
+          (check (and (not (member "models/stream" (phost-calls h) :test #'equal)) t) t "no request"))
         ;; An overflow compaction runs level 0 only, so it is the image's.
         (let ((r (peer-exchange stream 4 "event/sessionBeforeCompact"
                                 (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h))))

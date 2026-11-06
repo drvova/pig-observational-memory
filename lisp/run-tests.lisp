@@ -57,6 +57,9 @@
 ;; The retired names and the v1 layer migration at a session start (docs/lisp-port-migration.md).
 (load (merge-pathnames "tests/migration.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Level 1 on the image (docs/lisp-port-level1.md).
+(load (merge-pathnames "tests/level1.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

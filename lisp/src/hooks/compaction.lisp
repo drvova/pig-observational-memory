@@ -32,7 +32,9 @@ memoryFormat."
   (messages-to-summarize '()) (turn-prefix '()) (split-turn nil) (previous-summary "")
   (file-ops '()) (reserve 0))
 
-(defstruct cresult summary (first-kept "") (tokens-before 0) (details-json "") (kind ""))
+(defstruct cresult summary (first-kept "") (tokens-before 0) (details-json "") (kind "")
+  ;; usage is the level-1 request's provider usage (CompactionResult.Usage), nil at level 0.
+  (usage nil))
 
 (defun hhost-branch (h) (coerce (funcall (hhost-read h)) 'simple-vector))
 
@@ -250,10 +252,13 @@ own-trigger is runtime.CompactInFlight: the extension's own compaction."
 
 ;;; The hook
 
-(defun build-compaction (h event cfg &key model own-trigger (context-window 0) (max-output 0))
-  "buildCompactionV2 at level 0: a cresult on the event's exact cut, then the branch it folded
-(level 0's batches after it) and the cut range's source entries. context-window and max-output
-are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
+(defun build-compaction (h event cfg &key model own-trigger (context-window 0) (max-output 0) level1)
+  "buildCompactionV2: a cresult on the event's exact cut, then the branch it folded (level 0's
+batches and level 1's appends after it) and the cut range's source entries. context-window and
+max-output are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown).
+level1, when given, is consolidateV2 (server/level1.lisp): a function of (entries cut
+memory-budget) returning (values appended-entries applied-p report-json usage); without it level 1
+is skipped with level1-skip-reason's report."
   (let* ((cut (source-entries (cut-range (cevent-branch event) event)))
          (entries (extract-cut h event))
          (previous (previous-summary entries event))
@@ -267,7 +272,15 @@ are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
          (memory-budget (if (and (string/= iblock "") (> (- budget (estimate-tokens iblock)) 0))
                             (- budget (estimate-tokens iblock))
                             budget))
-         (reason (level1-skip-reason cfg event entries cut :model model :own-trigger own-trigger))
+         ;; Level 1: at most one request; its appends are folded through PiG's cut, and when it
+         ;; applied, the instructions shaped it and the memory gets their room.
+         (level1-result (and level1 (multiple-value-list (funcall level1 entries cut memory-budget))))
+         (entries (if (first level1-result) (concatenate 'simple-vector entries (first level1-result)) entries))
+         (iblock (if (second level1-result) "" iblock))
+         (memory-budget (if (second level1-result) budget memory-budget))
+         (consolidation (if level1
+                            (third level1-result)
+                            (consolidation-json (level1-skip-reason cfg event entries cut :model model :own-trigger own-trigger))))
          (projection (full-projection* entries (cevent-first-kept event)))
          (observations (projection-observations projection))
          (reflections (active-reflections (projection-reflections projection)))
@@ -292,15 +305,16 @@ are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
       (setf summary (cat summary iblock)))
     (values (make-cresult :summary summary :first-kept (cevent-first-kept event) :tokens-before (cevent-tokens-before event)
                           :kind kind
+                          :usage (fourth level1-result)
                           :details-json (details-json observations reflections (projection-aliases projection)
-                                                      (cevent-first-kept event) (consolidation-json reason) shown))
+                                                      (cevent-first-kept event) consolidation shown))
             entries cut)))
 
 (defun cresult-map-json (c)
   "CompactionResult.ToMap's encoding: its keys sorted, details in MemoryDetails' order."
-  (format nil "{\"details\":~A,\"firstKeptEntryId\":~A,\"summary\":~A,\"tokensBefore\":~D}"
+  (format nil "{\"details\":~A,\"firstKeptEntryId\":~A,\"summary\":~A,\"tokensBefore\":~D~@[,\"usage\":~A~]}"
           (cresult-details-json c) (json-string (cresult-first-kept c)) (json-string (cresult-summary c))
-          (cresult-tokens-before c)))
+          (cresult-tokens-before c) (and (cresult-usage c) (json-string (cresult-usage c)))))
 
 ;;; neutral's compact.go
 

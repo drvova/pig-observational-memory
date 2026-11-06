@@ -113,4 +113,13 @@
                 :pathname "src"
                 :serial t
                 :components ((:file "layer/go-layer")
-                             (:file "server/migration")))))
+                             (:file "server/migration")))
+               ;; Level 1 on PiG (docs/lisp-port-level1.md)
+               (:module "level1"
+                :pathname "src"
+                :serial t
+                :components ((:file "consolidate/serialize")
+                             (:file "consolidate/prompt")
+                             (:file "consolidate/validate")
+                             (:file "consolidate/layer")
+                             (:file "server/level1")))))

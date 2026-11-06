@@ -19,7 +19,10 @@
 entries (the branch the compaction folded, level 0's batches included), cut (the cut range's
 source entries) and result (the om::cresult answered). snapshot is the layer's held definitions
 as they stood before the compaction ran (om.layer:take-snapshot)."
-  conn model (model-key "") (store-dir "") cfg event entries cut result snapshot)
+  conn model (model-key "") (store-dir "") cfg event entries cut result snapshot
+  ;; level1 is the compaction's level-1 result (server/level1.lisp's l1), nil when level 1 did not
+  ;; run; held-instructions the model's held consolidation instructions before level 1 ran.
+  level1 held-instructions)
 
 (defun ch-harness-p (ch) (and (string/= (ch-store-dir ch) "") (string/= (ch-model-key ch) "")))
 
@@ -50,6 +53,14 @@ a session model with a store, and the layer's snapshot taken (before level 1)."
   (when (ch-harness-p ch)
     (let ((store (ch-store-dir ch)) (model (ch-model-key ch)))
       (setf (ch-snapshot ch) (om.layer:take-snapshot store model))
+      ;; The held consolidation instructions level 1 runs with are credited too (decision 8).
+      (let ((held (level1-held-snapshot store model)))
+        (when held
+          (setf (ch-held-instructions ch) held
+                (om.layer::snapshot-ran-held (ch-snapshot ch))
+                (sort (append (om.layer::snapshot-ran-held (ch-snapshot ch))
+                              (mapcar #'level1-held-id held))
+                      #'string<))))
       (setf (om::hhost-detect h)
             (lambda (entries start end folded batches covers)
               (om.layer:harness-detect store model entries start end folded batches covers
@@ -65,7 +76,12 @@ before it is sent; an error here is logged and never changes the answer."
                     :store (ch-store-dir ch) :model (ch-model-key ch) :session (session-identity)
                     :entries (ch-entries ch)
                     :cut-ids (mapcar #'om::entry-id (coerce (ch-cut ch) 'list))
+                    :counts (and (ch-level1 ch) (l1-counts (ch-level1 ch)))
+                    :level1 (and (ch-level1 ch) (l1-answered (ch-level1 ch)))
                     :snapshot (ch-snapshot ch))))
+      ;; settleDefinitionsV2 for the held instructions the compaction ran with.
+      (dolist (n (settle-level1-held (ch-store-dir ch) (ch-model-key ch) (ch-held-instructions ch)))
+        (notify-ui n "info"))
       (dolist (n notices)
         (notify-ui (if (stringp n)
                        n

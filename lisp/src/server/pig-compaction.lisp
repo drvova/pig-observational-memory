@@ -236,7 +236,7 @@ stays empty)."
   (concatenate 'string "omitted: the compacted conversation; the memory tool searches it ("
                om::+snippet-history-search+ ")."))
 
-(defun recovered-compaction-json (event reason &optional (skip-tools (list om::+memory-tool+)))
+(defun recovered-compaction-json (event reason &optional (skip-tools (list om::+memory-tool+)) consolidation usage)
   "hooks.v2RecoveredCompaction with the report's reason: the minimal brief of the cut range in
 its pointer form, bounded by the range, else the fallback summary."
   (let ((summary +v2-fallback-summary+))
@@ -248,8 +248,9 @@ its pointer form, bounded by the range, else the fallback summary."
     (om::cresult-map-json
      (om::make-cresult :summary summary :first-kept (om::cevent-first-kept event)
                        :tokens-before (om::cevent-tokens-before event)
+                       :usage usage
                        :details-json (om::details-json '() '() '() (om::cevent-first-kept event)
-                                                       (om::consolidation-json reason) '())))))
+                                                       (or consolidation (om::consolidation-json reason)) '())))))
 
 (defun pig-hook-config (cfg)
   "The hook's settings (om::hconfig) from the connection's configuration."
@@ -298,15 +299,20 @@ session model. Such a compaction is not ported (level 1 is a later work package)
                                             :store-dir store :cfg cfg :event event)))
           (let ((refusal (compaction-harness-refusal ch)))
             (when refusal (not-ported refusal)))
-          (when (level1-would-run-p cfg event model own)
-            (not-ported "event/sessionBeforeCompact with level 1 (consolidation on and a session model)"))
           (handler-case
               (multiple-value-bind (result entries cut)
                   (sb-thread:with-mutex ((conn-extract-mutex c))
-                    (om::build-compaction (harness-hook-host ch (pig-hook-host c)) event (pig-hook-config cfg)
-                                          :model model :own-trigger own
-                                          :context-window (model-int model "contextWindow")
-                                          :max-output (model-max-tokens model)))
+                    (let ((hh (harness-hook-host ch (pig-hook-host c))))
+                      (om::build-compaction hh event (pig-hook-config cfg)
+                                            :model model :own-trigger own
+                                            :context-window (model-int model "contextWindow")
+                                            :max-output (model-max-tokens model)
+                                            :level1 (lambda (entries cut budget)
+                                                      (let ((r (consolidate-v2 c hh cfg event entries cut budget
+                                                                               :model model :store store :own own
+                                                                               :on-start (lambda (r) (setf (ch-level1 ch) r)))))
+                                                        (values (l1-entries r) (report-applied (l1-report r))
+                                                                (report-json (l1-report r)) (l1-usage r)))))))
                 (check-cancelled)
                 (setf (ch-result ch) result (ch-entries ch) entries (ch-cut ch) cut)
                 (handler-case (after-compaction ch)
@@ -316,5 +322,11 @@ session model. Such a compaction is not ported (level 1 is a later work package)
               (cond ((cancelled-p) (answer :null))
                     ((string= (om::cevent-first-kept event) "") (error e))
                     (t (log-line "compaction recovered: ~A" e)
-                       (answer (om::jobject "compaction"
-                                            (om::raw-json (recovered-compaction-json event (format nil "panic: ~A" e) (conn-skip-tools c)))))))))))))))
+                       ;; A request made before the error was paid for: the report and usage stand.
+                       (let* ((spent (ch-level1 ch)) (rep (and spent (l1-report spent))))
+                         (when (and rep (not (report-applied rep)) (string= (report-reason rep) ""))
+                           (setf (report-reason rep) (format nil "panic: ~A" e)))
+                         (answer (om::jobject "compaction"
+                                              (om::raw-json (recovered-compaction-json event (format nil "panic: ~A" e) (conn-skip-tools c)
+                                                                                       (and rep (report-json rep))
+                                                                                       (and spent (l1-usage spent)))))))))))))))))
