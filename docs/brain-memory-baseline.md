@@ -376,7 +376,7 @@ Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 rep
 
 | part | check | counts | result |
 |---|---|---|---|
-| a. independence | same evidence re-read in two sessions is not counted as two | 80 of 120 same-evidence pairs promoted on "the same save staged in another session" (the same bytes 0, other whitespace 0, line numbers (cat -n) 20, the first lines only (head) 20, one grep match 20, a tool header 20) | **fail** (phase 6: promotion gates over the quoted content, not the tool result's bytes) |
+| a. independence | same evidence re-read in two sessions is not counted as two | 80 of 120 same-evidence pairs promoted on "the same save staged in another session" (the same bytes 0, other whitespace 0, line numbers (cat -n) 20, the first lines only (head) 20, one grep match 20, a tool header 20) | **fail** (phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes) |
 | a. independence | control: another file quoting the line counts as a second source | 20 of 20 promoted | **pass** |
 | b. cross-project | a project-scoped value is not in the other repo's index | 0 of 20 | **pass** |
 | b. cross-project | a staged memory is not in the other repo's index | 0 of 20 | **pass** |

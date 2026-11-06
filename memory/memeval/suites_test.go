@@ -153,7 +153,7 @@ func TestLayerWriteHoldsNoSecret(t *testing.T) {
 // evidence when their tool results differ in bytes (line numbers, a header, a partial read), so
 // a staged save is promoted on its own copy.
 func TestSameEvidenceNotIndependent(t *testing.T) {
-	later(t, "phase 6: promotion gates over the quoted content, not the tool result's bytes")
+	later(t, "phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes")
 	var s Suite
 	if err := independenceRows(&s, DefaultSuiteConfig(1)); err != nil {
 		t.Fatal(err)

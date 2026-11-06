@@ -131,7 +131,7 @@ func independenceRows(s *Suite, cfg SuiteConfig) error {
 		total += counted[v.name]
 		detail = append(detail, fmt.Sprintf("%s %d", v.name, counted[v.name]))
 	}
-	s.add(part, "same evidence re-read in two sessions is not counted as two", verdict(total == 0), "phase 6: promotion gates over the quoted content, not the tool result's bytes", "%d of %d same-evidence pairs promoted on %q (%s)", total, pairs, curated.EvidenceSessions, strings.Join(detail, ", "))
+	s.add(part, "same evidence re-read in two sessions is not counted as two", verdict(total == 0), "phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes", "%d of %d same-evidence pairs promoted on %q (%s)", total, pairs, curated.EvidenceSessions, strings.Join(detail, ", "))
 	s.add(part, "control: another file quoting the line counts as a second source", verdict(controlPromoted == controls), "", "%d of %d promoted", controlPromoted, controls)
 	return nil
 }
