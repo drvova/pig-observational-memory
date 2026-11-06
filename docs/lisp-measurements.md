@@ -211,7 +211,10 @@ last-value rule than the Go one.
 
 - The other four targets and code signing (needs those machines).
 - jzon against `encoding/json` (needs a library download, which this phase did not do).
-- The trial over the rest of the roster and more tasks; `run_trial.py ask` takes the model as an
+- The trial over the rest of the roster and more tasks, now against the real Lisp tool: its 20
+  tasks are solvable with the image's API (`bench/lisp/trial/lisp-tool.json`, checked offline by
+  `child-trial-tasks-solvable` and `TestLispMemoryToolTrial`, docs/lisp-port-tool-layer.md), but the
+  models have not been asked against it; `run_trial.py ask` takes the model as an
   argument and caches every reply, so a run adds models without repeating calls.
 - The first-`Stop` cost of the Go engine on a large transcript (10.4 s for 10 MB) is outside the
   SBCL question but worth a separate look.

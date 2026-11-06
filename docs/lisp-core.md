@@ -149,7 +149,8 @@ shared, and adds Lisp tests to `lisp/run-tests.lisp`.
 | **W5 hooks** | turn-end extraction progress, the compaction hook with its cut, budget and intent/next sections, thinning and day headers, level 1 over the host's model stream, `/om:status` and `/om:view` | the golden corpus end to end, and the engine-rpc end-to-end test against the image |
 
 W1 to W4 run in parallel; W5 joins them. W1 to W5 are merged or in review; each one's state and remaining gaps are
-in its `docs/lisp-port-*.md` (memory-model, readers-store, image-client, tool-layer, hooks). The switch comes when the golden corpus and every hook test pass
+in its `docs/lisp-port-*.md` (memory-model, readers-store, image-client, tool-layer, hooks, peer); the memory tool in a child SBCL
+(decisions 9 and 10) is in lisp-port-tool-layer.md. The switch comes when the golden corpus and every hook test pass
 against the image. At that point `om` routes to the image by default, the PiG adapter defaults to it,
 and the Go engine is removed a release later.
 

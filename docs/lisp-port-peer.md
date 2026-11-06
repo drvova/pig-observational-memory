@@ -13,7 +13,7 @@ the in-process Go engine runs it instead.
 | `lisp/src/server/peer.lisp` | The peer, a port of `memory/enginerpc/peer.go` on Swank's pattern: reader, workers, outgoing calls, cancellation. |
 | `lisp/src/server/connection.lisp` | Per-connection state, host calls, the branch cache, and the configuration (`config.Load`, `EnsureConfig`). |
 | `lisp/src/server/build.lisp` | The build id and the memory tool's spec. |
-| `lisp/src/server/toolspec.json` | `enginerpc.MemoryToolSpec()`. It is generated: `cd memory && go test ./enginerpc -run LispToolSpec -args -write`, and the test fails when the file is stale. |
+| `lisp/src/server/toolspec.json` | `enginerpc.MemoryToolSpec()` (`go`) and `LispMemoryToolSpec()` (`lisp`, the one the image serves). It is generated: `cd memory && go test ./enginerpc -run LispToolSpec -args -write`, and the test fails when the file is stale. |
 | `lisp/src/server/events.lisp` | The three events. |
 | `lisp/tests/peer.lisp` | Five tests: concurrent requests, a host call mid-request, cancellation, connection loss, per-connection shutdown, and the events over a scripted host. |
 | `memory/lispimage` | The launcher, shared by `om`'s Lisp mode and the dialer: start, wait, exit-3 lock handling, `<image>.build`. |
@@ -63,7 +63,7 @@ the in-process Go engine runs it instead.
   - the thinning plan cache, keyed by session identity and compaction id;
   - the branch cache, with incremental `host/getBranch` from the anchor;
   - slots for the compaction trigger's in-flight flag and backoff, which no ported event uses yet.
-- **The `initialize` answer.** It also returns `tool` (Go's spec) and `buildId`: the first 16 hex
+- **The `initialize` answer.** It also returns `tool` (the Lisp spec, decision 10) and `buildId`: the first 16 hex
   digits of a SHA-256 over every `lisp/src` file, computed at load time and so carried into the
   dumped image. `lisp/build-image.sh` also writes the id to `<image>.build`. The adapter's client
   requires that id and treats a mismatch as a failure to start.
@@ -113,15 +113,18 @@ in-process path.
 - `OM_LISP_PARITY=1 go test ./enginerpc -run LispEngine` runs `TestLispEngineMatchesInProcess`, the
   e2e `scenario` against the real image over its socket with no store:
   - the session start, both turn ends and the context event run on the image;
-  - the compaction and the tool call fall back, and each is logged once;
-  - the appended entries, compaction, context edits and tool result equal the in-process path.
+  - the compaction falls back, logged once; the memory tool call runs on the image too
+    (work package 3, [lisp-port-tool-layer.md](lisp-port-tool-layer.md), "The memory tool in a child");
+  - the appended entries, compaction and context edits equal the in-process path; the tool
+    result is the Lisp tool's, checked on its own.
 - `TestFailoverBeforeTheEngineActed` checks the fallback rule against a fake engine.
 - `TestLispEngine*` in the adapter drive the lifecycle tests through the Lisp mode.
 
 ## Left
 
 `agentStart`, `projectTrust`, `beforeAgentStart`, `agentSettled` (the trigger), `sessionBeforeCompact`,
-`sessionCompact`, `sessionShutdown`, `tool/*` and `command/run` are not ported yet. Also not
+`sessionCompact`, `sessionShutdown`, `tool/renderCall`, `tool/renderResult` and `command/run` are not
+ported yet (`tool/call` is, in work package 3). Also not
 ported:
 
 - the store cases of the three events (detect, curated settle, layer migration, retired names);

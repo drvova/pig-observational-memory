@@ -37,6 +37,12 @@ the image's own stops safe for its stores; they do not change this.
 | `lisp/tests/tool-layer.lisp` | 16 tests. |
 | `lisp/tests/curated-index.lisp` | 9 tests (one a cleanup) of the index, the pin, the usage fold, `Settle`, the corrections and the project root. |
 | `lisp/tests/safe-stops.lisp` | 8 tests of the cooperative limits and the escape routes. |
+| `lisp/src/layer/child.lisp` | The memory tool in a child SBCL: the wire, the child's toplevel (`tool-child-main`), starting and killing a child, the image's answers to its calls (`service-call`) and their record. |
+| `lisp/src/tool/snippets.lisp` | The fixed texts' placeholders, and the Go pointers a summary prints run as Lisp calls. |
+| `lisp/src/tool/memory-tool.lisp` | `memory-tool-run`: `harness.Manager.RunMemory`'s shape over the Lisp tool (the manual, `omtool.Details`, the `ModelKindCode` event). |
+| `lisp/src/tool/lisp-texts.lisp` | The curated index's header with the Lisp forms, for the image's start contexts. |
+| `lisp/src/server/tool.lisp` | engine-rpc `tool/call`, the MCP server's `initialize`, `tools/list` and `tools/call`, and om `call`. |
+| `lisp/tests/tool-child.lisp` | 8 tests (one a cleanup) of the child, the result, the snippets and the Phase 0 tasks. |
 | `lisp/tool-parity.lisp`, `memory/contracts/lisptool_test.go` | The Go parity checks. |
 | `contracts/schemas/lisp-layer-generation.schema.json` | The layer manifest's line. |
 
@@ -277,7 +283,7 @@ one. A definition with no evidence yet stays held.
 
 | Group | Functions |
 |---|---|
-| Reads | `notes` (with `:search`, `:kind`, `:status`, `:subject`, `:since`, `:until`, `:limit`), `note-by-id`, `history` (`:search`, `:limit`), `recall` (`:offset`), `saved` |
+| Reads | `notes` (with `:search`, `:kind`, `:status`, `:subject`, `:since`, `:until`, `:from`, `:through`, `:limit`), `note-by-id`, `history` (`:search`, `:limit`), `recall` (`:offset`), `saved` (`:search`), `text` (the call's strings) |
 | Accessors | `note-*`, `turn-*`, `memory-*` |
 | Curated writes | `save` (`:body`, `:scope`, `:quoting`), `edit`, `forget-memory`, `feedback` |
 | Layer | `define`, `layer`, `layer-forget`, `layer-rollback`, `adaptables` |
@@ -295,8 +301,8 @@ The behavior follows omhost:
 
 ## Parity and tests
 
-`sbcl --non-interactive --load lisp/run-tests.lisp` runs every package's tests together: 97 tests,
-901 checks, 8 of the tests the cooperative limits'.
+`sbcl --non-interactive --load lisp/run-tests.lisp` runs every package's tests together (W4 alone: 97 tests,
+901 checks when it was written, 8 of the tests the cooperative limits'; now 120 tests with the child's).
 
 W4's tests cover the following:
 
@@ -359,12 +365,12 @@ variable, or without `sbcl`, they are skipped.
   `define` holds one now.
 - **Go-stored definitions.** Definitions stored as Go are not run here. The image's layer is a separate
   directory from the Go layer (`<store>/harness`).
-- **Runaway code.** Model code runs in the image's own threads. A CL function that runs long without
-  calling model code (a bignum product, a `sort` of a huge list, a `compile`) reaches no check, so only
-  the last resort stops it, and the image then needs a restart. Running detector passes and long
-  memory-tool programs in a child SBCL, where a timeout is a process kill, is the owner's decision
-  (it narrows decision 2). Heap limits stay image-wide: SBCL has no per-thread quota, and a heap
-  exhausted inside GC is fatal.
+- **Runaway code.** Memory tool programs now run in a child SBCL (decision 9, "The memory tool in a
+  child" below), where a timeout is a process kill and a heap exhausted is the child's. Adaptable
+  definitions still run in the image's own threads: a CL function that runs long without calling
+  model code (a bignum product, a `sort` of a huge list, a `compile`) reaches no check there, so only
+  the last resort stops it, and the image then needs a restart. Detector passes do not exist in the
+  image yet; when they do, they take the child runner. Heap limits in the image stay image-wide.
 - **Settled failures.** A settled definition that later fails falls back on each call and is counted, but
   nothing retires it. The Go harness has no retirement of written definitions either.
 
@@ -409,3 +415,137 @@ out, 2 settles promoting and 7 flagging. The test fails if the script stops reac
 Gaps: `promote` treats a memory that became unreadable between the listing and the promotion as not
 promoted, where Go's `Settle` stops with the error. The image does not cache the usage ledger between
 reads (`appendCache`); it reads the whole file each time, with the same result.
+
+## The memory tool in a child (work package 3)
+
+Decision 9 ([lisp-core.md](lisp-core.md)) moves memory tool programs out of the image: each call
+runs in a child SBCL, so a runaway program is a process kill that unwinds nothing in the image.
+Decision 10 makes the tool's fixed text Lisp whenever a harness uses the image. Adaptable
+definitions on the hot path (`rank-notes`, `phrase-note`) keep running in the image under the
+cooperative limits above.
+
+### The child
+
+- **Which program.** The dumped image runs itself as the child: `om-engine --dynamic-space-size
+  256MB --tool-child` (`build-image.lisp` sets `*image-child*`, and `om.server:main` hands
+  `--tool-child` to `tool-child-main`), so no second artifact ships. SBCL 2.2.9 still takes
+  `--dynamic-space-size` ahead of the arguments of an executable saved with `:save-runtime-options`
+  (probed; a later SBCL needs the same check). From source (the tests), the child is this runtime
+  and core with `--load lisp/load.lisp --eval (om.layer::tool-child-main)`. `*child-command*`
+  overrides both (the crash tests).
+- **Isolation.** Where `unshare -U -r -n -i` works (checked once), the child runs in new user,
+  network and IPC namespaces: no network, and nothing the image's IPC holds. `OM_TOOL_CHILD_UNSHARE=0`
+  turns it off. The environment is `LANG`, `HOME`, `PATH`, `SBCL_HOME`, `XDG_CACHE_HOME` and `TMPDIR`.
+  This is still a guard against mistakes, not a security boundary: the child runs as the user and
+  can read what the user can (only the reader stops model code from naming a file opener).
+- **Heap.** The child's dynamic space is `*child-heap-mb*` (256 MB). It loads with about 52 MB in
+  use, and its heap check stops a program at half of what is left (`*heap-limit-bytes*` in the
+  child), before exhaustion; a heap exhausted anyway kills only the child.
+- **Time.** The program runs under the child's cooperative deadline, `*tool-timeout-seconds*` (30 s;
+  the image's work answering its calls counts toward it). A child still running
+  `*child-kill-grace*` (3 s) later, whatever it is doing, gets SIGKILL. A cancelled engine-rpc
+  request (`$/cancelRequest`) kills it at once (outcome `cancelled`). A child that has not said
+  ready within `*child-start-seconds*` (30 s) is killed too.
+- **The wire.** One JSON object per line over the child's stdin and stdout: `{"ready": true}`, the
+  request (`code`, `model`, `strings`, `timeout`, `steps`, `heapLimit`), one `{"call", "args"}` per
+  OM.TOOL call that touches the image's state answered by `{"value"}` or `{"error"}`, and `{"done"}`.
+  Values are tagged (`{"i": "123"}`, `{"k": "search"}` for a keyword, `{"l": [...]}`, `{"note": [...]}`,
+  `{"turn": [...]}`, `{"memory": [...]}`), and the image only finds keywords, never interns one a child
+  sent. A line that is not the wire ends the child as crashed. Lines before `ready` (a source load's
+  own output) are skipped.
+- **What crosses.** `notes`, `note-by-id`, `history`, `recall`, `saved`, the curated writes, `layer`,
+  `layer-forget`, `layer-rollback`, `note-line` (it dispatches on the model's layer) and a top-level
+  `define` are round trips (`+remote-functions+`, `lock.lisp`'s wrapper; still under `tool-entry`).
+  The accessors, `show`, `text` and `adaptables` run in the child. The image answers each call under
+  its own `*call*` (the branch, store, project, session and model), so a write takes the store's
+  flock and passes `curated.Check` exactly as an in-image call does, and a held definition is held in
+  the image's layer. An error the image answers reaches the code as an `error` it may handle.
+- **Defuns.** Functions model code defines last for the call only: each call is a fresh child.
+
+### The call
+
+`memory-tool-run` is `harness.Manager.RunMemory`'s shape: empty code prints the manual (the API,
+the output rule, and the Go definitions in the project's code store listed as never run); otherwise
+the child runs the code and the answer is the text, whether it is an error, and `omtool.Details`
+(Go's member order). Level 0 reads `writes` back (`extract`'s notes of saves and edits) and the
+detectors `recalled` and `searches`, as from a Go call. The record follows `omhost.Record`: hits are
+the record ids, saved names and recall ids the reads returned, `empty` is a call whose every read
+found nothing. One `ModelKindCode` event goes to `<store>/models/<model>.jsonl` under the store's
+lock, classified as `recordCode` does (`VisibilityOf` over the latest compaction's `shown`, and the
+pinned index's names). Outcomes: `ok`, `compile` (refused when read, a placeholder, a snippet with
+no Lisp form; nothing ran), `runtime` (an error or a limit the child reached), `crashed` (the child
+died, did not start, or was killed past its deadline) and `cancelled`.
+
+The image serves it as engine-rpc `tool/call` (the PiG adapter: branch through `host/getBranch`,
+store under `host/configHome`, the session model), MCP `initialize`, `tools/list` and `tools/call`,
+and om `call`. For the last two the Go client now sends the session it resolved (the current one in
+the directory, else the MCP scratch session), as it does for events. Neither takes the session's
+engine lock, as Go's memory call takes none.
+
+### The fixed text and the snippets
+
+The text is `omtool`'s Lisp text (`memory/omtool/lisp.go`, [code-tool.md](code-tool.md), "The Lisp
+tool"), generated with Go's into `lisp/src/server/toolspec.json`. The image's `initialize`, its MCP
+answers and its start contexts use it; the start context's curated index gets the Lisp forms in its
+header (`lisp-texts.lisp`).
+
+What still prints Go forms, and why: everything whose bytes the golden corpus and the parity tests
+compare with Go's, which stays Go's until the switch.
+
+| Text | Go form printed | In the Lisp tool |
+|---|---|---|
+| The summary's omitted-records pointers (`selection.lisp`, `format-read`) | `om.Notes(...)`, `om.Notes(om.Kind(`file`)...)`, `om.Commits(...)`, `om.Reflections(...)` with `From`/`Through`/`Since`/`Until`/`Limit` | runs as `(notes ...)`; `om.Reflections` answers that it has no Lisp form yet |
+| The summary's instruction lines (`ledger-render.lisp`), including "The memory tool runs Go code" | `om.Recall(`<id>`)`, `om.History(om.Search(`<words>`))` | refused as placeholders, as in Go |
+| Thinning marks (`thin.lisp`) | `memory: om.Recall(`<entry id>`)` with the id | runs as `(recall "...")` |
+| The curated index as the PiG `curated-memory` section and `RenderIndex` (`curated-index.lisp`) | `om.Recall`, `om.Saved(om.Search(...))`, `om.Save(...)`, `om.Edit`, `om.ForgetMemory`, `om.Feedback(...)` | the start context gets the Lisp header; the write forms have no Go-pointer translation |
+
+A Go pointer runs when the whole code is one `om.Fn(...)` call with literal options, the shape
+`om.CheckSnippet` accepts. The answer's first line names the Lisp call it ran as.
+
+### Tests and results
+
+`lisp/tests/tool-child.lisp` (`sbcl --non-interactive --load lisp/run-tests.lisp`: 120 tests, 1,082
+checks, all passing):
+
+- **Round trip.** Reads over a branch with one round trip each (3 for 3 calls; accessors local),
+  hits and searches recorded, the output rule, an image error handled by model code, the strings
+  argument, a refusal as `compile`, Go code answered with the Lisp hint.
+- **Kill.** A `(loop)` under a 1 s deadline is stopped by the child itself; one under a 60 s child
+  deadline with the image's kill at 1 s is SIGKILLed within the bound; the next call runs.
+- **Heap cap.** A 160 MB child filling its heap is stopped by its heap check, or with the check out
+  of the way dies of `heap-exhausted-error`; the image's dynamic space and the next call are untouched.
+- **A write through the image's lock.** With the store's lock held in the image for 1.5 s, a child's
+  `save` waits for it, then lands, passes `curated.Check` and records one `code` event; a bad name is
+  refused through the child.
+- **Crashes.** A child killed in the middle of a call, one writing garbage and one that never starts:
+  each is `crashed`, and the image goes on.
+- **Snippets and the manual.** Go pointers run as Lisp calls, `From`/`Through`, placeholder forms
+  refused (Go's and Lisp's), the manual listing a Go code-store definition as never run, the index
+  header with Lisp forms.
+- **The usage event.** shown (summary), omitted, empty, a recall of a shown record as ok, an error,
+  and nothing without a model.
+- **The Phase 0 tasks.** The trial's memory (`bench/lisp/trial/memory.jsonl`) recorded by the
+  image's level 0, then the 20 tasks' reference answers written for the real API
+  (`bench/lisp/trial/lisp-tool.json`) through the tool: 20 of 20 print the trial's expected answer.
+  This proves each task solvable with the Lisp API; it is not a model trial (no model requests).
+
+Go (`OM_LISP_PARITY=1`, the real image): `TestLispMemoryTool` (engine-rpc, no fallback: the Lisp spec
+at `initialize`, results and details for ok, runtime, compile and placeholder calls, the manual),
+`TestLispEngineMatchesInProcess` (the scenario's tool call now runs on the image; only the compaction
+falls back), `TestLispMemoryToolTrial` (the 20 tasks through `om call` with `OM_ENGINE=lisp` and
+`OM_LISP_FALLBACK=0`, and an MCP `tools/call`), and `TestLispImageEndToEnd` (the MCP server on the
+image, its start contexts compared with Go's after the Lisp texts are put back).
+
+### Gaps
+
+- The fluency check runs reference answers only. The owner's gate, the trial over the roster's models
+  with the Lisp text, is not run (it makes model requests).
+- The reads are still the W4 approximations (history and recall texts, no reflections, files,
+  commits or attempts reads of their own; the trial's tasks use `notes :kind`).
+- A child start costs a process per call: `(+ 1 2)` takes 8 ms end to end in the dumped image (6 ms
+  under `unshare`, 10 runs each) and 0.3 s from
+  source. There is no pool and no per-session child, so model `defun`s do not carry over between
+  calls as the Go namespace's kept definitions do; the Lisp tool keeps nothing but layer definitions.
+- `tool/renderCall` and `tool/renderResult` are still Go's: the Lisp details render with Go's
+  header.
+- The image's own memory-call time (folding the branch per call) counts toward the program's 30 s.
