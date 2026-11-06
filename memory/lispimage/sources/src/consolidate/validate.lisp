@@ -171,7 +171,23 @@ curated memories listed, the branch, and the offer (nil refuses every definition
               ((drops-specifics-p (obs-content target) (obs-content record)) (return (values nil +reason-drops-specifics+)))
               ((v-reaches v tg sources) (return (values nil +reason-cycle+))))))))
 
+(defun origin-rank (origin)
+  "consolidate.originRank: model (and any origin not known) lowest, then host, then code."
+  (cond ((string= origin "code") 2) ((string= origin "host") 1) (t 0)))
+
+(defun v-least-provenance (v record sources)
+  "validator.leastProvenance: a record replacing sources has no origin above the lowest source's,
+and stands for the user only when every source does."
+  (dolist (id sources)
+    (let ((o (gethash id (v-shown v))))
+      (when o
+        (when (< (origin-rank (obs-origin o)) (origin-rank (obs-origin record)))
+          (setf (obs-origin record) (obs-origin o)))
+        (unless (or (obs-from-user o) (user-priority-p o))
+          (setf (obs-from-user record) nil))))))
+
 (defun v-accept (v record sources)
+  (v-least-provenance v record sources)
   (setf (obs-replaces record) (copy-list sources))
   (setf (obs-id record) (level1-record-id record))
   (setf (obs-token-count record) (observation-line-tokens (obs-id record) (obs-timestamp record) (obs-relevance record) (obs-content record)))

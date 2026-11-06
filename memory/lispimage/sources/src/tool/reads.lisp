@@ -309,8 +309,7 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
                      (let ((hay (string-downcase (om::join (list (mem-name m) (mem-type m) (mem-description m) (mem-body m))
                                                            (string #\Newline)))))
                        (every (lambda (w) (search w hay)) needles)))
-                   (curated-rank (remove-if-not (lambda (m) (seen-by-p m (call-session c)))
-                                                (list-memories (call-curated-dir c) (call-project c)))
+                   (curated-rank (list-as (call-curated-dir c) (call-project c) (call-session c))
                                  (handler-case (curated-usage (call-curated-dir c)) (error () nil))))))
 
 (defun write-call ()
@@ -318,7 +317,23 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
     (unless (call-curated-dir c) (tool-fail "curated memory is off"))
     (make-curated-call :dir (call-curated-dir c) :project (call-project c) :source (call-session c)
                        :evidence (lambda (quote) (quoted-in-p (conversation-texts) quote))
-                       :user-evidence (lambda (quote) (quoted-in-p (user-texts) quote)))))
+                       :user-evidence (lambda (quote) (quoted-in-p (user-texts) quote))
+                       :source-of (lambda (quote) (quoted-source (tool-texts) quote)))))
+
+(defun tool-texts ()
+  "The tool results' texts on the branch, the memory tool's own left out (omhost.QuotedSource's
+skip), so text the model printed through it is no source."
+  (loop for e across (branch)
+        for (role text) = (multiple-value-list (history-text e))
+        when (and (equal role "tool")
+                  (not (equal (om::jget (om::entry-message e) "toolName") "memory")))
+          collect text))
+
+(defun quoted-source (texts quote)
+  "omhost.QuotedSource over texts: the source-digest of the first holding quote, \"\" for none."
+  (let* ((needle (string-downcase (one-line quote)))
+         (text (find-if (lambda (text) (search needle (string-downcase (one-line text)))) texts)))
+    (if text (source-digest text) "")))
 
 (defun run-write (op &rest pairs)
   (let ((args (make-hash-table :test 'equal)))
@@ -335,9 +350,10 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
   "Changes a curated memory; it never pins one."
   (run-write "edit" "name" name "type" type "description" description "body" body))
 
-(defun om.tool:forget-memory (name)
-  "Retires a curated memory."
-  (run-write "forget" "name" name))
+(defun om.tool:forget-memory (name &key quoting)
+  "Forgets a curated memory for every session when quoting gives a user's words asking for it;
+without them it hides the memory in this session only and stages the forget."
+  (run-write "forget" "name" name "quote" quoting))
 
 (defun om.tool:feedback (name outcome quote)
   "Records that a memory helped or harmed, quoting the conversation."

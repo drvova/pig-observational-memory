@@ -526,16 +526,24 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
   "never at a keep").
 - Any other `save` is staged: visible in its session through `saved`, absent from the always-loaded
   index. Code checks evidence at `agent_settled` and `session_start`, with no request: a later user
-  quote, a level-1 citation, or the same normalized name and description staged in another session.
+  quote, a level-1 citation, or the same normalized name and description staged in another session
+  from distinct source content. A save quoting tool output is staged citing it (the digest of the
+  tool result holding the quote, `curated.SourceDigest`); two sessions' stagings count only when
+  their digests differ (`docs/brain-memory.md`, decision 7), so two sessions that read the same file
+  never corroborate each other, and a staging that cites nothing is no evidence.
   Evidence counts only from the memory's last save or edit, so evidence given for one text never
   promotes another. Level 1 lists only the staged memories of its own session (another session's
-  is visible only there); the same save staged here is the cross-session evidence.
+  is visible only there).
   Staged memories are never deleted automatically. A later user quote is a `feedback ... outcome=helped`
   whose quote is in a user message (the assistant's words and harness markup confirm nothing); a
   level-1 citation names a listed memory with at least one shown record code picked from a user
   message, so the model never confirms its own save; level 1 also runs the check after recording
   citations.
-- A `forget` through the memory tool retires a memory. A level-0 user correction whose subject matches a
+- A `forget` through the memory tool retires a memory other sessions see only on a user's words
+  quoted with it (`om.Quoting`, at most three memories per quote); without them it hides the memory
+  in its own session at once and stages the forget, leaving shared memory unchanged
+  (`docs/brain-memory.md`, decision 2; `docs/code-tool.md`, "The forget gate"). A memory only its own
+  session staged is retired at once. A level-0 user correction whose subject matches a
   curated memory ranks it lower and flags it in `/om:status` and `saved`; it never retires it and never
   touches a pinned memory. Nothing cools by time.
 - One validator on every write and every load: allowed fields, a body bound derived from what one

@@ -176,9 +176,19 @@
     (unless (and (visible-p m project) (zero-time-p (mem-retired m))) (error 'not-found))
     m))
 
+(defun hidden-in-p (m events session)
+  "curated.HiddenIn: session staged a forget of m since m was saved."
+  (and (string/= session "")
+       (some (lambda (e) (and (string= (ul-event e) "forget-staged") (string= (ul-session e) session)
+                              (not (time-before-p (usage-event-time e) (mem-created m)))))
+             events)))
+
 (defun get-as (dir name project session)
+  "Store.GetAs: get-in, a staged memory only in its staging sessions, and none whose forget
+session staged."
   (let ((m (get-in dir name project)))
     (unless (seen-by-p m session) (error 'not-found))
+    (when (hidden-in-p m (gethash name (usage-events-by-name dir)) session) (error 'not-found))
     m))
 
 (defun read-in (dir name project)
@@ -194,6 +204,16 @@
   (loop for name in (memory-file-names dir)
         for m = (handler-case (get-memory dir name) (curated-error () nil))
         when (and m (visible-p m project) (zero-time-p (mem-retired m))) collect m))
+
+(defun list-as (dir project session)
+  "Store.ListAs: list-memories as session sees them (seen-by-p, not hidden-in-p)."
+  (let ((listed (list-memories dir project)) (events (usage-events-by-name dir)))
+    (remove-if-not (lambda (m) (and (seen-by-p m session) (not (hidden-in-p m (gethash (mem-name m) events) session))))
+                   listed)))
+
+(defun source-digest (text)
+  "curated.SourceDigest: sha256 hex of the text, whitespace collapsed."
+  (om::sha256-octets (om::utf8-octets (one-line text))))
 
 ;;; Writes
 
@@ -211,7 +231,7 @@
 
 (defun same-description-p (a b) (string-equal (one-line a) (one-line b)))
 
-(defun append-usage (dir name event &key quote user record)
+(defun append-usage (dir name event &key quote user record session source)
   "Store.appendUsage: one usage line, in the Go struct's member order."
   (ensure-dir dir)
   (append-line (usage-path dir)
@@ -228,6 +248,8 @@
                    (when (and quote (string/= quote "")) (member* "quote" quote))
                    (when user (write-string ",\"user\":true" out))
                    (when (and record (string/= record "")) (member* "record" record))
+                   (when (and session (string/= session "")) (member* "session" session))
+                   (when (and source (string/= source "")) (member* "source" source))
                    (write-char #\} out)))))
 
 (defun defined-query-path (dir name)
@@ -238,8 +260,8 @@ legacy definitions directory."
 
 (defun defined-query-p (dir name) (some #'file-exists-p (defined-query-path dir name)))
 
-(defun save-memory (dir m source)
-  "Store.Save: (values saved joined)."
+(defun save-memory (dir m source &optional (digest ""))
+  "Store.SaveCiting (Store.Save without a digest): (values saved joined)."
   (validate-name (mem-name m))
   (unless (valid-type-p (mem-type m)) (fail "~A" (type-error-text (mem-type m))))
   (when (string= (om::trim-space (mem-description m)) "")
@@ -281,7 +303,9 @@ legacy definitions directory."
             (when (mem-staged m) (setf (mem-staged-by m) (add-source '() source)))
             (setf saved m)
             (write-checked dir m)))))
-    (append-usage dir (mem-name m) (if joined "staged" "save"))
+    (if (mem-staged saved)
+        (append-usage dir (mem-name m) (if joined "staged" "save") :session source :source digest)
+        (append-usage dir (mem-name m) (if joined "staged" "save")))
     (values saved joined)))
 
 (defun update-memory (dir name project source &key (type nil type-p) (description nil description-p) (body nil body-p))
@@ -307,13 +331,27 @@ legacy definitions directory."
     (append-usage dir name "edit")
     updated))
 
-(defun forget-memory* (dir name project)
-  "Store.Forget: retires the memory, keeping its file."
+(defun forget-memory* (dir name project &key quote)
+  "Store.Forget, and Store.ForgetQuoted with a quote: retires the memory, keeping its file."
   (with-store-lock (dir)
     (let ((m (read-in dir name project)))
       (setf (mem-retired m) (now))
       (write-memory dir m)))
-  (append-usage dir name "forget"))
+  (if quote
+      (append-usage dir name "forget" :quote quote :user t)
+      (append-usage dir name "forget")))
+
+(defun stage-forget (dir name project session)
+  "Store.StageForget: hides the memory in session, leaving it shared."
+  (read-in dir name project)
+  (append-usage dir name "forget-staged" :session session))
+
+(defun quoted-forgets (dir quote)
+  "Store.QuotedForgets."
+  (count-if (lambda (l) (and (string= (ul-event l) "forget") (ul-user l) (string= (ul-quote l) quote)))
+            (read-usage-lines dir)))
+
+(defparameter +max-forgets-per-quote+ 3 "curated.MaxForgetsPerQuote.")
 
 (defun normalize-quote (quote)
   (let ((quote (one-line quote)))
@@ -328,7 +366,10 @@ legacy definitions directory."
   ;; evidence: is a normalized quote in the conversation; nil accepts any quote
   (evidence nil)
   ;; user-evidence: is a normalized quote a user's words; nil finds none
-  (user-evidence nil))
+  (user-evidence nil)
+  ;; source-of: the source-digest of the tool output holding a normalized quote, "" for none;
+  ;; nil finds none
+  (source-of nil))
 
 (defun user-quoted-p (c quote)
   (and (cc-user-evidence c) (funcall (cc-user-evidence c) quote)))
@@ -355,21 +396,29 @@ of the write's string arguments; a key absent is an argument not given."
                   (when (string= (cc-project c) "") (fail "no project directory is known; save it as global instead"))
                   (setf (mem-project m) (cc-project c)))
                  (t (fail "scope ~A must be global or project" (q scope)))))
+         (let ((digest ""))
          (if (arg-p args "quote")
              (let ((normalized (handler-case (normalize-quote (arg args "quote"))
                                  (curated-error (e)
                                    (fail "~A" (replace-first (curated-error-message e) "feedback needs" "save's quote needs"))))))
                (unless (user-quoted-p c normalized)
-                 (fail "the quote is not a user's words in this conversation: copy words verbatim from a user message that confirm the memory, or save without quote to stage it")))
+                 (when (cc-source-of c) (setf digest (or (funcall (cc-source-of c) normalized) "")))
+                 (when (string= digest "")
+                   (fail "the quote is not a user's words in this conversation: copy words verbatim from a user message that confirm the memory, or save without quote to stage it"))
+                 (setf (mem-staged m) t)))
              (setf (mem-staged m) t))
-         (let ((saved (save-memory dir m (cc-source c))))
+         (let ((saved (save-memory dir m (cc-source c) digest)))
            (if (mem-staged saved)
-               (if (> (length (mem-staged-by saved)) 1)
-                   (format nil "Staged memory ~A [~A]~A: ~A. Another session staged the same memory, which is the evidence to make it live: it enters the memory index at its next render."
-                           (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved))
-                   (format nil "Staged memory ~A [~A]~A: ~A. It shows in saved in this session and stays out of the memory index until evidence confirms it: a user's words (feedback name=~A outcome=helped quote=\"...\"), a compaction citing it, or the same save in another session."
-                           (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved) (mem-name saved)))
-               (format nil "Saved memory ~A [~A]~A: ~A" (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved))))))
+               (cond ((<= (length (mem-staged-by saved)) 1)
+                      (format nil "Staged memory ~A [~A]~A: ~A. It shows in saved in this session and stays out of the memory index until evidence confirms it: a user's words (feedback name=~A outcome=helped quote=\"...\"), a compaction citing it, or the same save in another session quoting other tool output it rests on."
+                              (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved) (mem-name saved)))
+                     ((independent-stagings-p saved (gethash (mem-name saved) (usage-events-by-name dir)))
+                      (format nil "Staged memory ~A [~A]~A: ~A. Another session staged the same memory from other source content, which is the evidence to make it live: it enters the memory index at its next render."
+                              (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved)))
+                     (t
+                      (format nil "Staged memory ~A [~A]~A: ~A. Another session staged the same memory, but not from other source content it quotes, so it is no independent evidence: it stays staged until a user's words (feedback name=~A outcome=helped quote=\"...\"), a compaction citing it, or a session quoting other tool output confirms it."
+                              (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved) (mem-name saved))))
+               (format nil "Saved memory ~A [~A]~A: ~A" (mem-name saved) (mem-type saved) (scope-note saved) (mem-description saved)))))))
       ((string= op "edit")
        (let ((edit '()))
          (when (and (arg-p args "type") (string/= (om::trim-space (arg args "type")) ""))
@@ -382,16 +431,21 @@ of the write's string arguments; a key absent is an argument not given."
          (let ((m (apply #'update-memory dir name (cc-project c) (cc-source c) edit)))
            (format nil "Updated memory ~A [~A]: ~A" (mem-name m) (mem-type m) (mem-description m)))))
       ((string= op "forget")
+       (let ((quote (when (arg-p args "quote")
+                      (handler-case (normalize-quote (arg args "quote"))
+                        (curated-error (e)
+                          (fail "~A" (replace-first (curated-error-message e) "feedback needs" "forget's quote needs")))))))
        (handler-case
            (let ((m (handler-case (read-in dir name (cc-project c)) (curated-error () nil))))
-             (if (and m (not (seen-by-p m (cc-source c))))
-                 (error 'not-found)
-                 (forget-memory* dir name (cc-project c)))
+             (cond ((and m (not (seen-by-p m (cc-source c)))) (error 'not-found))
+                   ((null m) (forget-memory* dir name (cc-project c)))
+                   ((and (mem-staged m) (= 1 (length (mem-staged-by m)))) (forget-memory* dir name (cc-project c)))
+                   (t (return-from curated-run* (forget-shared c m quote))))
              (format nil "Forgot memory ~A." name))
          (not-found (e)
            (when (and (valid-name-p name) (defined-query-p dir name))
              (fail "~A is a retired defined query; the image does not forget defined queries (the Go engine does)" name))
-           (error e))))
+           (error e)))))
       ((string= op "feedback")
        (let ((outcome (or (arg args "outcome") "")))
          (unless (member outcome '("helped" "harmed") :test #'string=)
@@ -412,6 +466,20 @@ of the write's string arguments; a key absent is an argument not given."
                    (concatenate 'string text " The quote is a user's words, the evidence a staged memory needs: it goes live at the next check and enters the memory index at its next render.")
                    text))))))
       (t (fail "unknown memory write ~A" (q op))))))
+
+(defun forget-shared (c m quote)
+  "Call.forgetShared: retired for every session on a user's words (at most
++max-forgets-per-quote+ per quote), else hidden in this session and staged."
+  (let ((dir (cc-dir c)) (name (mem-name m)) (reason "no user's words ask for it"))
+    (when quote
+      (setf reason "the quote is not a user's words in this conversation")
+      (when (user-quoted-p c quote)
+        (if (< (quoted-forgets dir quote) +max-forgets-per-quote+)
+            (progn (forget-memory* dir name (cc-project c) :quote quote)
+                   (return-from forget-shared (format nil "Forgot memory ~A." name)))
+            (setf reason (format nil "the quote already forgot ~D memories, the most one quote forgets; a forget of more needs the user's words for each" +max-forgets-per-quote+)))))
+    (stage-forget dir name (cc-project c) (cc-source c))
+    (format nil "Hid memory ~A in this session and staged its forget: ~A, so other sessions still see it. Forgetting it for every session needs words copied verbatim from a user message asking for it, quoted with the forget." name reason)))
 
 (defun quoted-in-p (texts quote)
   "omhost.quotedIn over texts: quote, whitespace collapsed and case ignored, in one of them."
