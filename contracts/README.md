@@ -67,6 +67,13 @@ and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secret
 authority, hedge, time hint, keys, frame, writer), the hedge lexicon and the project identity;
 `encoding.jsonl` holds the cases both engines check.
 
+## Preferences that weaken security
+
+[insecure.md](insecure.md) specifies the fixed pattern list that holds security-weakening
+preferences and curated memories (its rules, negation and clause rule, and what is held and what
+releases it); `insecure.jsonl` is its cases, rewritten with `cd memory && go test ./insecure -args
+-write`.
+
 ## Golden corpus
 
 `golden/<fixture>/` holds, for each real transcript in `memory/transcript/testdata/real` (the SQL

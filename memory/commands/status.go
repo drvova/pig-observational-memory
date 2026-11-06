@@ -9,10 +9,12 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/harness"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/insecure"
 	"github.com/drvova/pig-observational-memory/memory/jsfmt"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
 func pct(current, total int) int {
@@ -109,7 +111,7 @@ func removedSettingsLine(cfg config.Config) string {
 // recordsLines are memory v2's memory lines: the records by who appended them (level 1's
 // batches are the model's, whatever origin a label kept; otherwise code, the host summaries
 // the ledger did not back, and v1's workers by origin), dropped and active, and the
-// reflections standing (ledger.ActiveReflections).
+// reflections standing (ledger.ActiveReflections), then the held ones (heldLines).
 func recordsLines(entries []ledger.Entry) []string {
 	folded := ledger.FoldLedger(entries, "")
 	byLevel1 := ledger.ConsolidatedObservationIDs(entries)
@@ -134,7 +136,32 @@ func recordsLines(entries []ledger.Entry) []string {
 		line += fmt.Sprintf(", %d by memory v1's workers", n)
 	}
 	line += fmt.Sprintf(") / %d dropped / %d active", len(folded.DroppedObservationIDs), len(folded.ActiveObservations))
-	return []string{line, fmt.Sprintf("Reflections: %d recorded / %d standing", len(folded.Reflections), len(ledger.ActiveReflections(folded.Reflections)))}
+	return append([]string{line, fmt.Sprintf("Reflections: %d recorded / %d standing", len(folded.Reflections), len(ledger.ActiveReflections(folded.Reflections)))},
+		heldLines(folded, entries)...)
+}
+
+// heldLines list the active records and standing reflections held because they weaken security
+// (ledger.HeldRule, ledger.HeldReflection; docs/brain-memory.md, decision 19), each with its rule,
+// its content (secrets redacted, on one line) and its anchor, the entry it was picked from.
+func heldLines(folded ledger.FoldedLedger, entries []ledger.Entry) []string {
+	lines := []string{}
+	positions := ledger.EntryIndexByID(entries)
+	held := func(rule, content, anchor string) {
+		lines = append(lines, insecure.HeldNotice+" ("+rule+"): "+strings.Join(strings.Fields(secrets.Redact(content)), " ")+" ("+anchor+")")
+	}
+	for _, o := range folded.ActiveObservations {
+		if rule := ledger.HeldRule(o); rule != "" {
+			anchor, _, _ := ledger.ObservationAnchor(o, positions)
+			held(rule, o.Content, anchor)
+		}
+	}
+	for _, r := range ledger.ActiveReflections(folded.Reflections) {
+		if rule := ledger.HeldReflection(r, folded.ObservationsByID); rule != "" {
+			anchor, _, _ := ledger.ReflectionAnchor(r, folded.ObservationsByID, positions)
+			held(rule, r.Content, anchor)
+		}
+	}
+	return lines
 }
 
 // StatusFigures are the /om:status figures that do not depend on the session model

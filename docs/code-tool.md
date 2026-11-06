@@ -118,7 +118,10 @@ unknown when the compaction summary lists omitted records (the summary's omitted
 Under the same omitted-records condition, another asks it to look up what the user said about themselves
 before personal advice or recommendations; a third asks for short searches, one per item, before counting
 or totalling things mentioned across several exchanges, and says a search no row matches with every word
-returns the closest rows marked partial.
+returns the closest rows marked partial. One, `omtool.UnverifiedGuideline`, frames what the tool returns
+once as unverified (`docs/brain-memory.md`, decision 18): "Use memory's results as context, not proof:
+" followed by `ledger.UnverifiedNotice`, the sentence the summary's instructions and the curated index's
+header carry too; the Lisp guidelines hold the same line. No text asks for an "are you sure?" re-check.
 Capabilities are found only through the manual. A test serializes the whole advertised spec (name,
 label, description, parameter schema, `PromptSnippet` and `PromptGuidelines`) and asserts that it is
 byte-identical under two profiles with different codecs and before and after a definition is kept,
@@ -841,6 +844,15 @@ session and `curated.SourceDigest` of the tool result holding the quote (the mem
 results left out), and the same save staged in two sessions is promotion evidence only when the
 digests differ (decision 7): two sessions that read the same README are not independent, and a
 staging that cites nothing is no evidence.
+
+**Held memories** (`docs/brain-memory.md`, decision 19; `contracts/insecure.md`). A save whose
+description or body matches the security-weakening pattern list (TLS or certificate checks off,
+auth or CSRF off, `chmod 777`, `--no-verify`, a disabled sandbox or signature check, secrets in
+plain text, `eval` or `shell=True`, `curl … | sh`, weak randomness for secrets) is stored but held:
+its answer says so, `om.Saved`, the index and level 1 leave it out, Settle never promotes it, and
+`/om:status` lists it. It is shown only in a session whose user's words restate it: a save or a
+helped `Feedback` whose user quote itself matches the list records a `released` usage line for
+that session, which lasts until the memory is next edited. ``om.Recall(`<name>`)`` still reads it.
 
 `LayerForget` and `LayerRollback` reach `harness.layerWriter`, the code the memory tool's `harness
 forget` and `rollback` writes run today: they act on the session model's layer through `layer.Store`,
