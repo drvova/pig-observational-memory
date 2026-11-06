@@ -62,10 +62,20 @@ type listTail struct {
 	queries []string
 }
 
+// alsoPart is one working-memory slot's part of the also: line: how many of its members the
+// summary leaves out, what they are, and the snippet that lists them.
+type alsoPart struct {
+	n     int
+	noun  string
+	query string
+}
+
 // omission is everything a choice leaves out, as the summary prints it.
 type omission struct {
 	rows  []spanRow
 	tails map[string]listTail
+	// also are the working-memory slots' members left out (the also: line), constraints first.
+	also []alsoPart
 	// records, spans and folded are Result.Omitted, Result.Spans and Result.Folded.
 	records, spans, folded int
 }
@@ -82,6 +92,48 @@ func (o omission) snippets() []string {
 				out = append(out, secrets.Redact(q))
 			}
 		}
+	}
+	for _, a := range o.also {
+		out = append(out, secrets.Redact(a.query))
+	}
+	return out
+}
+
+// preferenceKind is the read the also: line lists the constraints with: om.Notes(om.Kind(`preference`)).
+var preferenceKind = read{fn: readNotes, opts: omwire.Options{Where: []omwire.Pair{{Field: "kind", Value: "preference"}}}}
+
+// alsoParts are the working-memory members p leaves out (neither shown nor dropped): the
+// constraints registry's, listed by every preference record, then the finished plans', listed
+// by every plan (their records keep status proposed).
+func (s *state) alsoParts(p *selected) []alsoPart {
+	rules, done, preferences, plans := 0, 0, 0, 0
+	for _, it := range s.items {
+		if it.role != roleNote || p.dropped[it.id()] {
+			continue
+		}
+		if it.obs.Kind == "preference" {
+			preferences++
+		}
+		if it.obs.Status == ledger.StatusProposed {
+			plans++
+		}
+	}
+	for _, it := range s.members {
+		if p.on[it] || p.dropped[it.id()] {
+			continue
+		}
+		if it.slot == slotDone {
+			done++
+		} else {
+			rules++
+		}
+	}
+	var out []alsoPart
+	if rules > 0 {
+		out = append(out, alsoPart{n: rules, noun: "constraints", query: snippet(preferenceKind, omwire.Options{}, preferences)})
+	}
+	if done > 0 {
+		out = append(out, alsoPart{n: done, noun: "done", query: snippet(read{fn: readNotes}, omwire.Options{Status: ledger.StatusProposed}, plans)})
 	}
 	return out
 }
@@ -137,7 +189,7 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 			offNotes = append(offNotes, it)
 		}
 	}
-	o := omission{tails: map[string]listTail{}}
+	o := omission{tails: map[string]listTail{}, also: s.alsoParts(p)}
 	if files > 0 {
 		o.tails[groupFiles] = listTail{n: files, all: len(fileItems), queries: s.listQueries(fileKind, fileItems, p)}
 		o.records += files
@@ -170,7 +222,7 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 			o.spans += r.spans
 		}
 	}
-	tailCost := s.l.noticeCost(s.shown(p), o)
+	tailCost := s.l.noticeCost(s.shown(p), o) + s.l.alsoCost(o.also)
 	for group, t := range o.tails {
 		tailCost += s.l.tailCost(group, t, p.opened[group] > 0)
 	}
@@ -456,6 +508,8 @@ type Spans struct {
 func OmittedSpans(in SpansInput) (spans Spans, need int, ok bool) {
 	s := newState(Input{Reflections: in.Reflections, Observations: in.Observations, Folded: in.Folded, Branch: in.Branch, Format: ledger.FormatLines, ReflectionDates: ledger.ReflectionDateRanges(in.Folded)})
 	s.l.notice = false
+	// The level-1 input lists its working memory with the records; it prints no also: line.
+	s.members = nil
 	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}}
 	for _, it := range s.items {
 		if in.Listed[it.id()] {

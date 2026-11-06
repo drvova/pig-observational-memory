@@ -205,6 +205,7 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			Codec:           codec,
 			Aliases:         projection.Aliases,
 			ReflectionDates: ledger.ReflectionDateRanges(folded),
+			Slots:           V2Slots(cfg, model),
 		})
 		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords

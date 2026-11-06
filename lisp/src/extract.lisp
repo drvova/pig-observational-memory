@@ -104,7 +104,11 @@
   (fallback-status "")
   undated
   ;; answers: a pushback record's exchange (resolve-pushbacks, contest.lisp); -1 for any other.
-  (answers -1))
+  (answers -1)
+  ;; receipt: what the record's call or file state can close (working.lisp), nil for none;
+  ;; replaces-rule: the phrase a user rule says it replaces, "" for none.
+  (receipt nil)
+  (replaces-rule ""))
 
 (defstruct (xstate (:conc-name x-))
   entries
@@ -133,8 +137,12 @@
   (known (make-set))
   (exchange -1)
   (exchange-texts '())
-  ;; episodes: the episode ids by branch index (episodes-of, contest.lisp).
-  (episodes #()))
+  ;; episodes: the episode ids by branch index (episodes-of, contest.lisp); requests the newest
+  ;; request's index by branch index (requests-of, working.lisp).
+  (episodes #())
+  (requests #())
+  ;; outputs: the tool calls' outputs in the range, in order, as (target . text).
+  (outputs '()))
 
 (defstruct batch observations covers)
 
@@ -478,6 +486,7 @@
                                       o)
                                   i)))
                     (when correction (setf (rec-correction r) target))
+                    (when (string= kind "preference") (setf (rec-replaces-rule r) (replaced-rule-phrase sentence)))
                     (setf (rec-retraction r) retraction)
                     (when retraction
                       (setf (rec-named-phrase r) named-phrase (rec-named-words r) named-words)
@@ -719,7 +728,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
                               (vector-push-extend (list p "moved from" from) events))))))))))
     (coerce events 'list)))
 (defstruct tresult (index 0) (text "") failed present details)
-(defstruct fevent state other display sources)
+(defstruct fevent state other display sources reported)
 
 (defun skipped-tool-p (x name)
   (and (string/= name "") (or (string= name +memory-tool+) (member-str name (x-skip-tools x)))))
@@ -872,8 +881,12 @@ Kiro's write replacing a string (its command strReplace) edits the file."
                             ((and patch-p (not (contains (tresult-text result) +apply-patch-success+))) "failed")
                             (t "worked")))
              (akey (attempt-key (tcall-name call) key))
-             (earlier (gethash akey (x-unresolved x))))
-        (when (or (string/= outcome "worked") (string/= words "") earlier)
+             (earlier (gethash akey (x-unresolved x)))
+             ;; A worked call is a receipt (working.lisp); one that would close a plan is recorded
+             ;; even with no words of the model's.
+             (rc (and (string= outcome "worked") (call-receipt call key (tresult-text result)))))
+        (when (tresult-present result) (push-end (cons key (tresult-text result)) (x-outputs x)))
+        (when (or (string/= outcome "worked") (string/= words "") earlier (would-close-p x rc i))
           (let ((line (attempt-line (tcall-name call) display outcome (tresult-text result)))
                 (o (make-obs :kind "attempt" :outcome outcome :tool (tcall-name call) :target key))
                 (said '()))
@@ -887,6 +900,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
             (setf (obs-content o) (if said (cat (join said " ") " [" line "]") line))
             (let ((r (apply #'x-add x o sources)))
               (setf (obs-id (rec-obs r)) (record-id (rec-obs r)))
+              (setf (rec-receipt r) rc)
               (setf (gethash (obs-id (rec-obs r)) (x-words x)) (join said " "))
               (if (string= outcome "worked")
                   (progn (dolist (id earlier) (setf (gethash id (x-superseded x)) t))
@@ -910,7 +924,8 @@ Kiro's write replacing a string (its command strReplace) edits the file."
               (x-file-event x (first ev) (second ev) (third ev) sources))
             (multiple-value-bind (hash subject ok) (commit-from command (tresult-text result))
               (when ok
-                (apply #'x-add x (make-obs :content (cat "commit " hash " " subject) :kind "commit" :target hash) sources)))))))))
+                (let ((r (apply #'x-add x (make-obs :content (cat "commit " hash " " subject) :kind "commit" :target hash) sources)))
+                  (setf (rec-receipt r) (make-receipt :kind "commit" :keys (cons hash (record-keys subject)))))))))))))
 
 (defun x-file-event (x p state other sources)
   (let* ((key (path-key x p)) (previous (gethash key (x-file-events x))))
@@ -938,7 +953,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
                     do (when (mentions-p (entry-message (entry-at x i)) path) (setf source i) (return)))
               (push-end key (x-file-order x))
               (setf (gethash key (x-file-events x))
-                    (make-fevent :state state :other "" :display (path-display x path) :sources (list source))))))))))
+                    (make-fevent :state state :other "" :display (path-display x path) :sources (list source) :reported t)))))))))
 
 (defun x-emit-files (x)
   (dolist (key (x-file-order x))
@@ -948,7 +963,10 @@ Kiro's write replacing a string (its command strReplace) edits the file."
            (o (make-obs :content content :kind "file" :target key :keys (keys-add '() "paths" key))))
       (dolist (id (gethash key (x-files x)))
         (unless (member-str id (obs-supersedes o)) (push-end id (obs-supersedes o))))
-      (apply #'x-add x o (fevent-sources ev))))
+      (let ((r (apply #'x-add x o (fevent-sources ev))))
+        ;; A file written or edited by a tool call is a write receipt on its path.
+        (when (and (not (fevent-reported ev)) (member-str (fevent-state ev) '("written" "edited")))
+          (setf (rec-receipt r) (make-receipt :kind "write" :keys (list key)))))))
   (setf (x-records x) (stable-sort (x-records x) #'< :key #'rec-anchor)))
 
 ;;; shell.go
@@ -1172,8 +1190,10 @@ Kiro's write replacing a string (its command strReplace) edits the file."
       (resolve-corrections x (lambda (r) (rec-correction r)))
       (resolve-retractions x)
       (resolve-corrections x (lambda (r) (and (rec-correction r) (eq (rec-correction r) (rec-fallback r)))))
+      (x-resolve-rule-replacements x)
       (link-records x)
       (x-resolve-pushbacks x)
+      (x-resolve-closures x)
       (x-encode x)
       (values (x-batches x cite) (if (>= last 0) (entry-id (aref entries last)) "")))))
 
@@ -1268,9 +1288,14 @@ bound by the caller that knows the session and its repository; nil writes neithe
           (t (entry-source (entry-at x (rec-first r)))))))
 
 (defun x-encode (x)
-  (setf (x-episodes x) (episodes-of (x-entries x) (x-end x) (alist-member (getf *encoding* :writer) "session")))
+  (setf (x-episodes x) (episodes-of (x-entries x) (x-end x) (alist-member (getf *encoding* :writer) "session"))
+        (x-requests x) (requests-of (x-entries x) (x-end x)))
   (dolist (r (x-records x))
     (let ((o (rec-obs r)) (at (rec-anchor r)))
       (when (and (string= (obs-episode o) "") (>= at 0) (< at (length (x-episodes x))))
-        (setf (obs-episode o) (aref (x-episodes x) at))))
+        (setf (obs-episode o) (aref (x-episodes x) at)))
+      ;; A plan's requirement is the request it was made under (Observation.DerivedFrom).
+      (when (and (string= (obs-status o) "proposed") (string= (obs-derived-from o) "") (>= at 0)
+                 (< at (length (x-requests x))) (>= (aref (x-requests x) at) 0))
+        (setf (obs-derived-from o) (entry-id (entry-at x (aref (x-requests x) at))))))
     (encode-record (rec-obs r) (x-source-of x r))))

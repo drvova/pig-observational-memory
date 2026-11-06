@@ -66,6 +66,34 @@ type Input struct {
 	Aliases []ledger.SubjectAlias
 	// ReflectionDates date the reflections (ledger.ReflectionDateRanges).
 	ReflectionDates map[string]string
+	// Slots are the session model's working-memory caps (docs/memory-v2.md, "Working
+	// memory"); a zero cap takes its default (DefaultSlots).
+	Slots Slots
+}
+
+// Slots are the working memory's caps: how many of the user's rules and of their scope
+// exclusions the constraints registry shows, and how many finished plans the next section
+// shows with their receipts. What a cap leaves out is named in the also: line.
+type Slots struct {
+	Constraints, Scopes, Actions int
+}
+
+// DefaultSlots are the caps for a model with none set: about 10 constraints (and 10 scope
+// exclusions) and the last 5 actions (docs/brain-memory.md, decision 16).
+var DefaultSlots = Slots{Constraints: 10, Scopes: 10, Actions: 5}
+
+// withDefaults is s with each cap below 1 at its default.
+func (s Slots) withDefaults() Slots {
+	if s.Constraints < 1 {
+		s.Constraints = DefaultSlots.Constraints
+	}
+	if s.Scopes < 1 {
+		s.Scopes = DefaultSlots.Scopes
+	}
+	if s.Actions < 1 {
+		s.Actions = DefaultSlots.Actions
+	}
+	return s
 }
 
 // Result is a rendered summary and what it shows.
@@ -101,9 +129,11 @@ const (
 
 // The groups that are not a notes table.
 const (
-	groupRequest     = "request"
-	groupIntent      = "intent"
-	groupNext        = "next"
+	groupRequest = "request"
+	groupIntent  = "intent"
+	groupNext    = "next"
+	// groupConstraints is the constraints registry, rendered after the notes tables.
+	groupConstraints = "constraints"
 	groupReflections = "reflections"
 	groupFiles       = "files"
 	groupCommits     = "commits"
@@ -144,6 +174,10 @@ type item struct {
 	// extra is the instructions line the item's kind adds once to the summary that shows one
 	// (extraLine), "" for none.
 	extra string
+	// slot is a working-memory member's slot (slotConstraint, slotScope, slotDone), "" for
+	// none; receiptAt is a finished plan's receipt anchor, -1 when off the branch.
+	slot      string
+	receiptAt int
 	// value, valueKind and count are a value record's (extract.ValueParts); last is the branch
 	// index of its latest sighting, -1 when off the branch.
 	value, valueKind string
@@ -253,10 +287,29 @@ type state struct {
 	// partners are, by record id, the active records a possibly_updates or conflicts link joins
 	// it to, either way, in ledger order: taking one tries the others next.
 	partners map[string][]*item
+	// closed are the plans a receipt closed (ledger.ClosedBy); stale the open plans a newer
+	// request bears on, by plan id, with that request's entry id.
+	closed map[string]ledger.Closure
+	stale  map[string]string
+	// members are the working memory's members in ledger order: the constraints registry's
+	// (slotConstraint, slotScope) and the finished plans (slotDone); slots their caps.
+	members []*item
+	slots   Slots
 }
 
+// The working-memory slots of an item (item.slot).
+const (
+	slotConstraint = "constraint"
+	slotScope      = "scope"
+	slotDone       = "done"
+)
+
+// StatusDone is the status a plan a receipt closed shows (docs/memory-v2.md, "Working memory"):
+// shown, never stored; the plan's record keeps status proposed.
+const StatusDone = "done"
+
 func newState(in Input) *state {
-	s := &state{in: in, positions: ledger.EntryIndexByID(in.Branch), superseded: map[string]bool{}, byID: map[string]*item{}, records: map[string]ledger.Observation{}, partners: map[string][]*item{}}
+	s := &state{in: in, positions: ledger.EntryIndexByID(in.Branch), superseded: map[string]bool{}, byID: map[string]*item{}, records: map[string]ledger.Observation{}, partners: map[string][]*item{}, slots: in.Slots.withDefaults()}
 	s.l = newLayout(in)
 	for id, o := range in.Folded.ObservationsByID {
 		s.records[id] = o
@@ -327,13 +380,19 @@ func newState(in Input) *state {
 		s.byID[o.ID] = it
 	}
 	retracted := ledger.RetractedIDs(all)
+	s.closed = ledger.ClosedBy(all)
 	for _, it := range s.items {
 		if it.role == roleNote {
 			it.status = statusOf(it.obs, retracted)
+			if _, done := s.closed[it.obs.ID]; done && it.status == ledger.StatusProposed {
+				it.status = StatusDone
+			}
 		}
 	}
 	s.contest(all)
+	s.markStale()
 	s.markNext()
+	s.markConstraints()
 	s.link()
 	supersededBy := map[string][]string{}
 	for _, o := range all {
@@ -418,6 +477,7 @@ func (s *state) markNext() {
 			start = at
 		}
 	}
+	s.markDone()
 	if start < 0 {
 		return
 	}
@@ -431,6 +491,88 @@ func (s *state) markNext() {
 			it.noteGroup, it.group = it.group, groupNext
 		}
 	}
+}
+
+// markDone moves the finished plans into the next section (docs/memory-v2.md, "Working
+// memory"): the plans a receipt closed that nothing supersedes, the Actions cap of them whose
+// receipts are newest, shown with status done and the receipt. Older ones stay in their notes
+// tables, and the also: line names those the summary leaves out.
+func (s *state) markDone() {
+	var done []*item
+	for _, it := range s.items {
+		if it.role != roleNote || it.status != StatusDone || s.superseded[it.obs.ID] {
+			continue
+		}
+		it.receiptAt = -1
+		if receipt, ok := s.records[s.closed[it.obs.ID].ClosedBy]; ok {
+			if _, at, on := ledger.ObservationAnchor(receipt, s.positions); on {
+				it.receiptAt = at
+			}
+		}
+		it.slot = slotDone
+		s.members = append(s.members, it)
+		done = append(done, it)
+	}
+	sort.SliceStable(done, func(a, b int) bool { return done[a].receiptAt > done[b].receiptAt })
+	for i, it := range done {
+		if i < s.slots.Actions {
+			it.noteGroup, it.group = it.group, groupNext
+		}
+	}
+}
+
+// markStale finds the open plans a newer request bears on (docs/memory-v2.md, "Working
+// memory"): a plan stated under a request (ledger.Observation.DerivedFrom) that a later request
+// the person typed, after the plan and opening another episode, names a key of
+// (ledger.StaleTerms, ledger.BearsOn), questions left out. The newest such request is the one
+// the plan's line names.
+func (s *state) markStale() {
+	s.stale = map[string]string{}
+	for _, it := range s.items {
+		if it.role != roleNote || it.status != ledger.StatusProposed || it.obs.DerivedFrom == "" || !it.anchored || s.superseded[it.obs.ID] {
+			continue
+		}
+		from, ok := s.positions[it.obs.DerivedFrom]
+		terms := ledger.StaleTerms(it.obs)
+		if !ok || len(terms) == 0 {
+			continue
+		}
+		for i := len(s.in.Branch) - 1; i > it.anchor && i > from; i-- {
+			entry := s.in.Branch[i]
+			if !extract.IsRequest(entry) {
+				continue
+			}
+			text := extract.RequestText(entry)
+			if extract.IsQuestionText(text) || !ledger.BearsOn(text, terms) {
+				continue
+			}
+			s.stale[it.obs.ID] = entry.ID
+			if it.extra == "" {
+				it.extra = extraStale
+			}
+			break
+		}
+	}
+}
+
+// markConstraints moves the constraints registry's members into their own group
+// (docs/memory-v2.md, "Working memory"): the user's own preferences, rules and scope
+// exclusions in force (kind preference, ledger.UserPriority), none superseded, retracted,
+// hypothetical or contested.
+func (s *state) markConstraints() {
+	for _, it := range s.items {
+		if it.role != roleNote || it.group == groupNext || it.obs.Kind != "preference" || !ledger.UserPriority(it.obs) || it.contested ||
+			s.superseded[it.obs.ID] || it.status == ledger.StatusRetracted || it.status == ledger.StatusHypothetical {
+			continue
+		}
+		it.slot = slotConstraint
+		if extract.IsScopeExclusion(it.obs.Content) {
+			it.slot = slotScope
+		}
+		it.noteGroup, it.group = it.group, groupConstraints
+		s.members = append(s.members, it)
+	}
+	sort.SliceStable(s.members, func(a, b int) bool { return s.members[a].index < s.members[b].index })
 }
 
 // statusOf is a record's status as the summary shows it (docs/memory-v2.md, "Selection"):
@@ -495,6 +637,18 @@ func (s *state) link() {
 		}
 		if it.obs.Kind == ledger.KindPushback {
 			pointer("responds to", it.obs.RespondsTo, func(*item) bool { return true })
+		}
+		// A finished plan names its receipt, an open one the newer request it may be stale
+		// against (markDone, markStale).
+		if it.status == StatusDone {
+			c := s.closed[it.obs.ID]
+			parts = append(parts, "(closed by "+c.ClosedBy+": "+c.Receipt+")")
+			if it.extra == "" {
+				it.extra = extraClosed
+			}
+		}
+		if request, ok := s.stale[it.obs.ID]; ok {
+			parts = append(parts, "(may be stale "+request+")")
 		}
 		it.links = strings.Join(parts, " ")
 	}
@@ -637,6 +791,37 @@ func (s *state) choose(budget int) *selected {
 		}
 	}
 	records := s.items
+	// 1a. The constraints registry (markConstraints), newest first, at most each slot's cap: its
+	// reserve is the room the request leaves, ahead of every other class, so the user's rules
+	// stay shown when the budget is tight and the caps bound what it takes. One the registry has
+	// no room or cap for goes back to its notes table for good and competes in class 2.
+	taken := map[string]int{}
+	for i := len(records) - 1; i >= 0; i-- {
+		it := records[i]
+		if it.group != groupConstraints {
+			continue
+		}
+		cap := s.slots.Constraints
+		if it.slot == slotScope {
+			cap = s.slots.Scopes
+		}
+		if taken[it.slot] >= cap || !try(it) {
+			continue
+		}
+		taken[it.slot]++
+		// Its link partners come next, as in every class (newestFirst).
+		for _, other := range s.partners[it.id()] {
+			if !holdsNoValue(other) {
+				try(other)
+			}
+		}
+	}
+	for _, it := range records {
+		if it.group == groupConstraints && !p.on[it] {
+			it.group = it.noteGroup
+			s.l.price(it, s.canonical, s.supersededBy)
+		}
+	}
 	// Taking a record tries the records its links join it to next, in the same class, which may
 	// still not fit; a class a record may not hold refuses it as a partner too.
 	newestFirst := func(eligible func(*item) bool, roles ...role) {

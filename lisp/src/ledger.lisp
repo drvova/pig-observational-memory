@@ -30,12 +30,17 @@
   (replaces '() :type list)
   ;; responds-to: the claims a pushback record answers (Observation.RespondsTo).
   (responds-to '() :type list)
+  ;; closes: the closing links a receipt record carries (Observation.Closes), each a list
+  ;; (plan-id closed-by receipt).
+  (closes '() :type list)
   ;; The encoding fields (ledger-encoding.lisp): keys, frame and writer are alists in write order.
   (source "" :type string)
   (authority "" :type string)
   (hedge "" :type string)
   (time-hint "" :type string)
   (episode "" :type string)
+  ;; derived-from: the entry id of the request a plan was made under (Observation.DerivedFrom).
+  (derived-from "" :type string)
   (keys '() :type list)
   (frame '() :type list)
   (writer '() :type list))
@@ -82,11 +87,22 @@
     (when (obs-conflicts o) (field "conflicts" (strings (obs-conflicts o))))
     (when (obs-replaces o) (field "replaces" (strings (obs-replaces o))))
     (when (obs-responds-to o) (field "respondsTo" (strings (obs-responds-to o))))
+    (when (obs-closes o)
+      (write-string ",\"closes\":[" out)
+      (loop for (c . rest) on (obs-closes o)
+            do (destructuring-bind (id by receipt) c
+                 (write-string "{\"id\":" out) (write-json-string id out)
+                 (write-string ",\"closedBy\":" out) (write-json-string by out)
+                 (write-string ",\"receipt\":" out) (write-json-string receipt out)
+                 (write-char #\} out))
+               (when rest (write-char #\, out)))
+      (write-char #\] out))
     (unless (string= (obs-source o) "") (field "source" (obs-source o)))
     (unless (string= (obs-authority o) "") (field "authority" (obs-authority o)))
     (unless (string= (obs-hedge o) "") (field "hedge" (obs-hedge o)))
     (unless (string= (obs-time-hint o) "") (field "timeHint" (obs-time-hint o)))
     (unless (string= (obs-episode o) "") (field "episode" (obs-episode o)))
+    (unless (string= (obs-derived-from o) "") (field "derivedFrom" (obs-derived-from o)))
     (flet ((object (name alist writer)
              (when alist
                (write-char #\, out) (write-json-string name out) (write-char #\: out)
@@ -126,6 +142,23 @@
                  (push-end x out))))
     out))
 
+(defparameter +receipt-values+ '("exit 0" "write" "commit" "read")
+  "ledger.ReceiptValues: the receipts a closing link names.")
+
+(defun closures-from (v own)
+  "Observation.closuresFrom: a decoded closes list read leniently, each element a closing link to
+another record, as (plan-id closed-by receipt), the first per plan."
+  (let ((out '()))
+    (when (and (vectorp v) (not (stringp v)))
+      (loop for m across v
+            do (when (hash-table-p m)
+                 (let ((id (jget m "id")) (by (jget m "closedBy")) (receipt (jget m "receipt")))
+                   (when (and (memory-id-p id) (memory-id-p by) (string/= id own)
+                              (member receipt +receipt-values+ :test #'equal)
+                              (not (find id out :key #'first :test #'string=)))
+                     (push-end (list id by receipt) out))))))
+    out))
+
 (defregex +schema-field-name+ #r§^[a-z][a-z0-9_]{0,31}$§)
 
 (defun observation-from (m)
@@ -156,6 +189,7 @@
                 (obs-conflicts o) (link-ids (jget m "conflicts") (obs-id o))
                 (obs-replaces o) (link-ids (jget m "replaces") (obs-id o))
                 (obs-responds-to o) (link-ids (jget m "respondsTo") (obs-id o))
+                (obs-closes o) (closures-from (jget m "closes") (obs-id o))
                 (obs-supersedes o) (link-ids (jget m "supersedes") (obs-id o)))
           ;; Observation.readEncoding.
           (let ((s (jget m "source"))) (when (member s +source-values+ :test #'equal) (setf (obs-source o) s)))
@@ -163,6 +197,7 @@
           (let ((s (jget m "hedge"))) (when (member s +hedge-values+ :test #'equal) (setf (obs-hedge o) s)))
           (let ((s (jget m "timeHint"))) (when (time-hint-p s) (setf (obs-time-hint o) s)))
           (when (stringp (jget m "episode")) (setf (obs-episode o) (jget m "episode")))
+          (when (stringp (jget m "derivedFrom")) (setf (obs-derived-from o) (jget m "derivedFrom")))
           (setf (obs-keys o) (read-keys (jget m "keys"))
                 (obs-frame o) (read-members (jget m "frame") +frame-members+)
                 (obs-writer o) (read-members (jget m "writer") +writer-members+))

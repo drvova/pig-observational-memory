@@ -17,7 +17,10 @@ client's PI_OBSERVATIONAL_MEMORY_PASSIVE."
         (when (and (realp n) (> n 0) (= n (ftruncate n))) (setf (om::hconfig-summary-max cfg) (truncate n))))
       (when (member (om::jget nested "memoryFormat") '("tables" "lines") :test #'equal)
         (setf (om::hconfig-memory-format cfg) (om::jget nested "memoryFormat")))
-      (when (eq (om::jget nested "consolidate") :false) (setf (om::hconfig-consolidate-off cfg) t)))
+      (when (eq (om::jget nested "consolidate") :false) (setf (om::hconfig-consolidate-off cfg) t))
+      (when (eq (om::jget nested "rawFloor") :true) (setf (om::hconfig-raw-floor cfg) t))
+      (setf (om::hconfig-limits cfg) (om::read-limits nested)
+            (om::hconfig-model-limits cfg) (om::read-model-limits (om::jget nested "modelLimits") nil)))
     (setf (om::hconfig-passive cfg) (passive-p params))
     cfg))
 

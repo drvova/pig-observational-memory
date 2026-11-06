@@ -30,6 +30,7 @@ const (
 	level1Passive      = "passive mode"
 	level1OwnTrigger   = "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only"
 	level1Overflow     = "an overflow compaction runs level 0 only, so recovery is not delayed"
+	level1BelowFloor   = "the context is below the session model's raw floor: nothing is consolidated"
 	level1NoCut        = "the cut range is not on the branch"
 	level1Cancelled    = "the compaction was cancelled before the request"
 	level1NoWindow     = "the session model's context window is unknown"
@@ -89,6 +90,8 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		return skip(level1OwnTrigger)
 	case event.Reason == "overflow":
 		return skip(level1Overflow)
+	case cfg.RawFloor && BelowRawFloor(cfg, h.SessionModel(), event.TokensBefore):
+		return skip(level1BelowFloor)
 	case len(cut) == 0 || ledger.EntryIndexForID(entries, event.FirstKeptEntryID) < 0:
 		return skip(level1NoCut)
 	case request.Err() != nil:

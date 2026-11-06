@@ -94,6 +94,9 @@ type fileEvent struct {
 	state, other string
 	display      string
 	sources      []int
+	// reported marks a path PiG reported touched (fileOps), which no tool call ordered: never a
+	// receipt.
+	reported bool
 }
 
 // assistant reads an assistant message from its ordered content blocks: the text before its
@@ -284,7 +287,16 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 	}
 	akey := attemptKey(call.name, key)
 	earlier := x.unresolved[akey]
-	if outcome != ledger.OutcomeWorked || words != "" || len(earlier) > 0 {
+	// A worked call is a receipt (receipts.go); one that would close a plan is recorded even
+	// with no words of the model's, so its closing link has a record to sit on.
+	var rc *receipt
+	if outcome == ledger.OutcomeWorked {
+		rc = x.callReceipt(call, key, result.text)
+	}
+	if result.present {
+		x.outputs = append(x.outputs, callOutput{target: key, text: result.text})
+	}
+	if outcome != ledger.OutcomeWorked || words != "" || len(earlier) > 0 || x.wouldClose(rc, i) {
 		line := attemptLine(call.name, display, outcome, result.text)
 		obs := ledger.Observation{Kind: ledger.KindAttempt, Outcome: outcome, Tool: call.name, Target: key}
 		x.callKeys(&obs.Keys, call, outcome, result.text)
@@ -309,6 +321,7 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 		}
 		r := x.add(obs, sources...)
 		r.obs.ID = recordID(r.obs)
+		r.receipt = rc
 		x.words[r.obs.ID] = strings.Join(said, " ")
 		if outcome == ledger.OutcomeWorked {
 			for _, id := range earlier {
@@ -341,7 +354,8 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 			x.fileEvent(event.path, event.state, event.other, sources)
 		}
 		if hash, subject, ok := commitFrom(command, result.text); ok {
-			x.add(ledger.Observation{Content: "commit " + hash + " " + subject, Kind: ledger.KindCommit, Target: hash}, sources...)
+			r := x.add(ledger.Observation{Content: "commit " + hash + " " + subject, Kind: ledger.KindCommit, Target: hash}, sources...)
+			r.receipt = &receipt{kind: ledger.ReceiptCommit, keys: append([]string{hash}, ledger.RecordKeys(subject)...)}
 		}
 	}
 }
@@ -531,7 +545,7 @@ func (x *extraction) fileOps(last int) {
 			}
 		}
 		x.fileOrder = append(x.fileOrder, key)
-		x.fileEvents[key] = fileEvent{state: op.State, display: x.pathDisplay(op.Path), sources: []int{source}}
+		x.fileEvents[key] = fileEvent{state: op.State, display: x.pathDisplay(op.Path), sources: []int{source}, reported: true}
 	}
 }
 
@@ -569,7 +583,11 @@ func (x *extraction) emitFiles() {
 				obs.Supersedes = append(obs.Supersedes, id)
 			}
 		}
-		x.add(obs, event.sources...)
+		r := x.add(obs, event.sources...)
+		// A file written or edited by a tool call is a write receipt on its path.
+		if !event.reported && (event.state == stateWritten || event.state == stateEdited) {
+			r.receipt = &receipt{kind: ledger.ReceiptWrite, keys: []string{key}}
+		}
 	}
 	// Records are in branch order: file records sit at their newest evidence.
 	sort.SliceStable(x.records, func(a, b int) bool { return x.records[a].anchor < x.records[b].anchor })

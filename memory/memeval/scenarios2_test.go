@@ -3,12 +3,19 @@ package memeval
 // Scenarios 21-26 of docs/brain-memory.md, in the style of scenarios_test.go.
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
+	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/selection"
+	"github.com/drvova/pig-observational-memory/memory/session"
+	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
 // planBranch is a plan, then turns, compacted once with filler after them.
@@ -30,33 +37,162 @@ func planRows(summary, text string) []Row {
 	return out
 }
 
+// doneRows are the summary's rows of the plan (turn 0) shown finished: status done, naming the
+// receipt that closed it.
+func doneRows(summary, text string) []Row {
+	var out []Row
+	for _, r := range rowsFrom(summary, 0) {
+		if r.Cells["status"] == selection.StatusDone && strings.Contains(r.Text, text) && strings.Contains(r.Text, "(closed by ") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Scenario 21: assistant prose saying a plan is done, with no tool call doing it, leaves the
-// plan open; only a tool receipt closes it.
+// plan open; only a tool receipt closes it, and a "read file X" plan only a line unique to X in
+// tool output (decision 16).
 func TestScenario21ProseDoesNotClosePlan(t *testing.T) {
-	later(t, "phase 3: slot records and closedBy receipts")
 	c := planBranch(t, Turn{User: "How is the limiter going?", Reply: "Done: rate limiting in `api/limit.go` is finished and working."})
-	if len(planRows(c.Summary, "api/limit.go")) == 0 {
+	if len(planRows(c.Summary, "api/limit.go")) == 0 || len(doneRows(c.Summary, "api/limit.go")) > 0 {
 		t.Fatalf("the plan closed on prose alone:\n%s", c.Summary)
 	}
-}
-
-// Scenario 22: a fresh requirement that bears on a standing plan renders the plan "may be stale".
-func TestScenario22FreshRequirementMarksPlanStale(t *testing.T) {
-	later(t, "phase 3: derivedFrom staleness of plans")
-	c := planBranch(t, say("New requirement: the rate limit must be per tenant, keyed by `X-Tenant-ID`."))
-	rows := planRows(c.Summary, "api/limit.go")
-	if len(rows) == 0 || !strings.Contains(rows[0].Text, "may be stale") {
-		t.Fatalf("plan rows %+v\n%s", rows, c.Summary)
+	// A tool receipt on the plan's key closes it: the edit of api/limit.go.
+	c = planBranch(t, Turn{User: "Go on with the limiter.", Calls: []Call{{Name: "edit", Args: map[string]any{"path": "api/limit.go", "oldText": "a", "newText": "b"}, Result: "Edited api/limit.go"}}, Reply: "Edited the limiter."})
+	if len(planRows(c.Summary, "api/limit.go")) > 0 || len(doneRows(c.Summary, "api/limit.go")) == 0 {
+		t.Fatalf("the edit did not close the plan:\n%s", c.Summary)
+	}
+	read := "Next we will read `docs/limits.md` for the 3 tiers."
+	readBranch := func(turns ...Turn) hooks.CompactionResult {
+		entries, cut := turnsBranch(append([]Turn{say(read)}, turns...)...)
+		c, _ := compactOnce(t, entries, cut)
+		return c
+	}
+	// Prose saying the file was read closes nothing; neither does a read whose output only repeats
+	// what another file printed in the same turn; a line unique to it does.
+	cases := []struct {
+		name   string
+		turn   Turn
+		closes bool
+	}{
+		{"prose", Turn{User: "Did you read it?", Reply: "Yes, I read `docs/limits.md`: three tiers."}, false},
+		{"no unique line", Turn{User: "Read both docs.", Calls: []Call{
+			{Name: "read", Args: map[string]any{"path": "docs/other.md"}, Result: "tier one: free\ntier two: team"},
+			{Name: "read", Args: map[string]any{"path": "docs/limits.md"}, Result: "tier one: free\ntier two: team"},
+		}, Reply: "Read both."}, false},
+		{"unique line", Turn{User: "Read the limits doc.", Calls: []Call{
+			{Name: "read", Args: map[string]any{"path": "docs/limits.md"}, Result: "tier three: enterprise, 900 rps"},
+		}, Reply: "Read it."}, true},
+	}
+	for _, k := range cases {
+		c := readBranch(k.turn)
+		if closed := len(doneRows(c.Summary, "docs/limits.md")) > 0; closed != k.closes {
+			t.Fatalf("%s: closed %v, want %v:\n%s", k.name, closed, k.closes, c.Summary)
+		}
 	}
 }
 
-// Scenario 23: on a 1M-token window compaction comes late; the quality trigger fires first and
-// nothing below the raw floor is consolidated.
-func TestScenario23QualityTriggerOnLargeWindow(t *testing.T) {
-	t.Skip("phase 3: the raw floor and the quality trigger")
-	// Input: a 1,000,000-token window filled past the quality threshold, well below PiG's.
-	// Expected: the trigger compacts; the newest raw floor of entries is kept verbatim.
+// Scenario 22: a fresh requirement that bears on a standing plan renders the plan "may be stale";
+// the constraints show the resolved current set, a superseded rule out of it.
+func TestScenario22FreshRequirementMarksPlanStale(t *testing.T) {
+	c := planBranch(t, say("New requirement: the rate limit must be per tenant, keyed by `X-Tenant-ID`."))
+	rows := planRows(c.Summary, "api/limit.go")
+	if len(rows) == 0 || !strings.Contains(rows[0].Text, "may be stale "+UserID(1)) {
+		t.Fatalf("plan rows %+v\n%s", rows, c.Summary)
+	}
+	// A request that does not bear on the plan's keys, or only asks, leaves it as it was.
+	for _, turn := range []Turn{say("New requirement: the export must be gzip compressed."), say("Is the rate limit per tenant?")} {
+		c := planBranch(t, turn)
+		if rows := planRows(c.Summary, "api/limit.go"); len(rows) == 0 || strings.Contains(rows[0].Text, "may be stale") {
+			t.Fatalf("%q: plan rows %+v\n%s", turn.User, rows, c.Summary)
+		}
+	}
+	// The constraints registry holds the rules in force only: the newer rule, not the one it
+	// replaced.
+	entries, cut := turnsBranch(say("Always use `make test` for the tests."), say("Actually, always use `make ci` for the tests, not `make test`."))
+	c, _ = compactOnce(t, entries, cut)
+	var registry []Row
+	for _, r := range SummaryRows(c.Summary) {
+		if r.Table == "constraints" {
+			registry = append(registry, r)
+		}
+	}
+	if len(registry) != 1 || !strings.Contains(registry[0].Text, "make ci") || registry[0].Source != UserID(1) {
+		t.Fatalf("constraints %+v\n%s", registry, c.Summary)
+	}
 }
+
+// Scenario 23: on a 1M-token window compaction comes late; with the quality trigger on it fires
+// on the raw tokens since the last compaction, far below PiG's threshold, never on unknown usage
+// or below the floor; with the raw floor on, a compaction below it consolidates nothing (no
+// level-1 request). Both ship off.
+func TestScenario23QualityTriggerOnLargeWindow(t *testing.T) {
+	var entries []session.Entry
+	for i, turn := range Filler(7, 240) {
+		entries = append(entries, TurnEntries(turn, i)...)
+	}
+	raw := hooks.RawTokensSinceCompaction(entries)
+	if raw <= config.DefaultQualityTriggerTokens {
+		t.Fatalf("the branch holds %d raw tokens, under the threshold", raw)
+	}
+	setup := func(quality bool, tokens *int) (*runtime.Runtime, *testfix.FakeHost) {
+		cfg := config.Defaults
+		cfg.ConsolidateOff = true
+		cfg.PiAutoCompactionEnabled = false
+		cfg.QualityTrigger = quality
+		rt := runtime.New()
+		rt.SetConfig(cfg)
+		h := testfix.NewFakeHost(entries...)
+		h.Model = testfix.Model("eval", "session", map[string]any{"contextWindow": 1_000_000, "maxTokens": 32_000})
+		h.ModelsFake.Add(h.Model, testfix.KeyAuth("none"))
+		h.Usage = &host.ContextUsage{Tokens: tokens, ContextWindow: 1_000_000}
+		h.CompactFn = func(callbacks host.CompactCallbacks) { callbacks.OnComplete() }
+		return rt, h
+	}
+	used := raw + 1_500
+	for _, k := range []struct {
+		name    string
+		quality bool
+		tokens  *int
+		fires   bool
+	}{
+		{"off", false, &used, false},
+		{"on", true, &used, true},
+		{"on, unknown usage", true, nil, false},
+		{"on, below the floor", true, ptr(config.DefaultRawFloorTokens - 1), false},
+	} {
+		counter := testfix.CountRequests(t)
+		rt, h := setup(k.quality, k.tokens)
+		if done := hooks.MaybeTriggerCompaction(rt, h); done != nil {
+			<-done
+		}
+		if fired := h.CompactCount() == 1; fired != k.fires || counter.Total() != 0 {
+			t.Fatalf("%s: fired %v (want %v), requests %v", k.name, fired, k.fires, counter.ByStage())
+		}
+	}
+	// The raw floor: with it on and level 1 on, a compaction whose context is below the session
+	// model's floor makes no request; above it, the request is made.
+	for _, k := range []struct {
+		before   int
+		requests int
+	}{{config.DefaultRawFloorTokens - 1_000, 0}, {config.DefaultRawFloorTokens + 1_000, 1}} {
+		counter := testfix.CountRequests(t)
+		rt, h := setup(false, &used)
+		cfg := rt.Config()
+		cfg.ConsolidateOff, cfg.RawFloor, cfg.PiAutoCompactionEnabled = false, true, true
+		rt.SetConfig(cfg)
+		cut := UserID(200)
+		outcome := hooks.HandleBeforeCompact(context.Background(), rt, h, hooks.BeforeCompactEvent{
+			FirstKeptEntryID: cut, TokensBefore: k.before, BranchEntries: append([]session.Entry{}, entries...), Reason: "threshold",
+			Preparation: hooks.CompactionPreparation{Settings: hooks.CompactionSettings{Enabled: true, ReserveTokens: 16_384, KeepRecentTokens: 20_000}},
+		})
+		if outcome.Compaction == nil || counter.Total() != k.requests {
+			t.Fatalf("tokensBefore %d: requests %v, want %d (%+v)", k.before, counter.ByStage(), k.requests, outcome.Compaction.Details.Consolidation)
+		}
+	}
+}
+
+func ptr(n int) *int { return &n }
 
 // Scenario 24: a user's opinion the assistant pushed back on is kept as the claim with the
 // pushback beside it, never as a rule; a later user quote restating the claim lifts the contest.
@@ -102,7 +238,7 @@ func TestScenario24OpinionWithPushbackNotARule(t *testing.T) {
 		if r.Cells["kind"] == "claim" {
 			t.Fatalf("the restated claim is still contested: %+v\n%s", r, c.Summary)
 		}
-		lifted = lifted || r.Cells["kind"] == "preference"
+		lifted = lifted || isRuleRow(r)
 	}
 	if !lifted {
 		t.Fatalf("the restated claim is gone:\n%s", c.Summary)
@@ -143,7 +279,7 @@ func TestScenario25InsecurePreferenceHeld(t *testing.T) {
 		if strings.Contains(r.Text, "curl -k") {
 			t.Fatalf("an insecure preference is a summary row (%s):\n%s", r.Table, c.Summary)
 		}
-		kept = kept || strings.Contains(r.Text, "make test") && r.Cells["kind"] == "preference"
+		kept = kept || strings.Contains(r.Text, "make test") && isRuleRow(r)
 	}
 	if !kept {
 		t.Fatalf("the other preference is gone:\n%s", c.Summary)

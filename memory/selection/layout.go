@@ -20,6 +20,8 @@ var (
 	ReflectionFields = []string{"id", "dates", "content", "source"}
 	NoteFields       = []string{"id", "when", "kind", "status", "scope", "content", "superseded_by", "source"}
 	OmittedFields    = []string{"from", "to", "count", "spans", "first_id", "last_id", "query"}
+	// ConstraintFields are the constraints registry's: each rule verbatim and its source.
+	ConstraintFields = []string{"content", "source"}
 )
 
 // TablesInstructions open a memory v2 summary in the tables format. They start with
@@ -96,9 +98,14 @@ const (
 	NextLinesFormat = "- next: the next steps of the current work, as notes lines: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated under notes.\n"
 )
 
+// ConstraintsLine describes the constraints registry (docs/memory-v2.md, "Working memory").
+const ConstraintsLine = "- constraints (after the notes): the user's rules and scope exclusions in force, verbatim with their source; not repeated in the notes.\n"
+
 // sectionLine is the instructions' line a shown section adds, "" for a section with none.
 func (l *layout) sectionLine(group string) string {
 	switch group {
+	case groupConstraints:
+		return ConstraintsLine
 	case groupIntent:
 		return IntentLine
 	case groupNext:
@@ -116,6 +123,12 @@ const (
 	extraEvidence = "line:evidence"
 	extraValues   = "line:values"
 	extraContest  = "line:contested"
+	extraClosed   = "line:closed"
+	extraStale    = "line:stale"
+	extraAlso     = "line:also"
+	ClosedLine    = "- done: a plan with status done was closed by a tool receipt, (closed by <id>: <receipt>) naming the receipt's record and its kind (exit 0, write, commit or read); it is finished, never pending. Assistant prose closes nothing.\n"
+	StaleLine     = "- may be stale: a plan ending with (may be stale <entry id>) was made before a newer request of the user's that names its keys, that entry; check the plan against that request before acting on it.\n"
+	AlsoLine      = "- also (after ---): constraints and finished plans left out, with the om snippet that lists them.\n"
 	ContestedLine = "- claim: a notes row of kind claim is the user's preference or correction the assistant pushed back on: a claim, not a rule; (contested by <id>) names the pushback, a row of kind pushback ending with (responds to <id>), and (contested) alone one not shown. The user restating it makes it a rule again.\n"
 	EvidenceLine  = "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.\n"
 	ValuesLine    = "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.\n"
@@ -130,6 +143,12 @@ func extraLine(extra string) string {
 		return ValuesLine
 	case extraContest:
 		return ContestedLine
+	case extraClosed:
+		return ClosedLine
+	case extraStale:
+		return StaleLine
+	case extraAlso:
+		return AlsoLine
 	}
 	return ""
 }
@@ -215,6 +234,8 @@ func fieldsOf(group string) []string {
 		return ReflectionFields
 	case groupOmitted:
 		return OmittedFields
+	case groupConstraints:
+		return ConstraintFields
 	}
 	return NoteFields
 }
@@ -304,6 +325,11 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		shown := content
 		if it.links != "" {
 			shown += " " + it.links
+		}
+		if it.group == groupConstraints {
+			it.cells = []string{shown, source}
+			it.line = shown + suffix(source)
+			break
 		}
 		it.cells = []string{o.ID, it.from, it.shownKind(), it.status, scope, shown, replacedBy, source}
 		line := "[" + o.ID + "]"
@@ -402,6 +428,25 @@ func (l *layout) omittedCost(rows []spanRow) int {
 	return cost
 }
 
+// alsoText is the also: line: each working-memory slot's members the summary leaves out,
+// counted, with the om snippet that lists them.
+func alsoText(parts []alsoPart) string {
+	out := make([]string, 0, len(parts))
+	for _, a := range parts {
+		out = append(out, "+"+strconv.Itoa(a.n)+" more "+a.noun+": "+a.query)
+	}
+	return "also: " + strings.Join(out, "; ")
+}
+
+// alsoCost is what the also: line adds, with its instructions line and the separator before the
+// lines after the tables; 0 for none.
+func (l *layout) alsoCost(parts []alsoPart) int {
+	if len(parts) == 0 {
+		return 0
+	}
+	return estimate(trailerSeparator+alsoText(parts)) + 1 + estimate(AlsoLine)
+}
+
 // tailText is a capped list's end: how many it leaves out, and the queries that list the
 // whole list, shown items included.
 func tailText(t listTail) string {
@@ -459,7 +504,7 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	}
 	subjects := []string{}
 	for group := range byGroup {
-		if group != groupReflections && group != groupNotes && group != groupNext && !isList(group) {
+		if group != groupReflections && group != groupNotes && group != groupNext && group != groupConstraints && !isList(group) {
 			subjects = append(subjects, group)
 		}
 	}
@@ -475,7 +520,13 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	if items := byGroup[groupNotes]; len(items) > 0 {
 		blocks = append(blocks, block{group: groupNotes, items: items})
 	}
+	if items := byGroup[groupConstraints]; len(items) > 0 {
+		blocks = append(blocks, block{group: groupConstraints, items: items})
+	}
 	var lists []string
+	if len(o.also) > 0 {
+		lists = append(lists, alsoText(o.also))
+	}
 	listGroups := []string{groupFiles, groupCommits}
 	for _, kind := range extract.ValueKinds {
 		listGroups = append(listGroups, valueGroup(kind))
@@ -503,10 +554,13 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	for _, b := range blocks {
 		lines += l.sectionLine(b.group)
 	}
-	for _, extra := range []string{extraEvidence, extraContest, extraValues} {
+	for _, extra := range []string{extraEvidence, extraContest, extraClosed, extraStale, extraValues} {
 		if p.opened[extra] > 0 {
 			lines += extraLine(extra)
 		}
+	}
+	if len(o.also) > 0 {
+		lines += AlsoLine
 	}
 	if lines != "" {
 		text = strings.Replace(text, requestLine, requestLine+lines, 1)

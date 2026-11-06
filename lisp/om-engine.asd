@@ -40,6 +40,8 @@
                              (:file "conversation")
                              ;; Phase 2: episodes and assistant pushback beside user claims.
                              (:file "contest")
+                             ;; Phase 3: working memory (receipts, staleness, rule replacements).
+                             (:file "working")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")

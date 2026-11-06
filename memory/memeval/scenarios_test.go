@@ -69,6 +69,10 @@ func later(t *testing.T, phase string) {
 	t.Skip(phase)
 }
 
+// isRuleRow reports a row of the summary's rule class: the constraints registry (phase 3), or
+// a notes row of kind preference (a rule the registry had no room or cap for).
+func isRuleRow(r Row) bool { return r.Table == "constraints" || r.Cells["kind"] == "preference" }
+
 // rowsFrom are the summary's rows picked from turn.
 func rowsFrom(summary string, turn int) []Row {
 	var out []Row
@@ -138,7 +142,7 @@ func TestScenario02ConstraintInEveryRuleClass(t *testing.T) {
 	run := scenarioRunIn(t, tightWindow, 4, say("Set up the workspace."), say("Never run `cargo test`; use `make test`."))
 	for _, s := range run.Snapshots {
 		rows := rowsFrom(s.Summary, 1)
-		if len(rows) == 0 || rows[0].Cells["kind"] != "preference" || !holdsAll(rows[0].Text, []string{"`cargo test`", "`make test`"}) {
+		if len(rows) == 0 || !isRuleRow(rows[0]) || !holdsAll(rows[0].Text, []string{"`cargo test`", "`make test`"}) {
 			t.Fatalf("compaction %d: rule rows %+v\n%s", s.N, rows, s.Summary)
 		}
 	}
@@ -159,7 +163,7 @@ func TestScenario02ScopeExclusionInEveryRuleClass(t *testing.T) {
 	run := scenarioRunIn(t, tightWindow, 4, say("Set up the workspace."), say("Don't touch `migrations/`."))
 	for _, s := range run.Snapshots {
 		rows := rowsFrom(s.Summary, 1)
-		if len(rows) == 0 || rows[0].Cells["kind"] != "preference" || !strings.Contains(rows[0].Text, "`migrations/`") {
+		if len(rows) == 0 || !isRuleRow(rows[0]) || !strings.Contains(rows[0].Text, "`migrations/`") {
 			t.Fatalf("compaction %d: rule rows %+v\n%s", s.N, rows, s.Summary)
 		}
 	}
@@ -221,6 +225,27 @@ func TestScenario04CompletedInstructionNotPending(t *testing.T) {
 			if r.Table == "next" || r.Cells["status"] == ledger.StatusProposed || strings.Contains(r.Text, "migrate-up\" open") || strings.Contains(r.Text, "migrate-up\" failed") {
 				t.Fatalf("compaction %d presents the done migration as pending: %+v", s.N, r)
 			}
+		}
+	}
+	// A planned migration its run closed: next shows it finished, with the receipt, after every
+	// compaction, never as pending.
+	run = scenarioRun(t, 3, say("Next we will run the 3 pending migrations with `make migrate-up`."), Turn{
+		User:  "Run them now.",
+		Calls: []Call{{Name: "bash", Args: map[string]any{"command": "make migrate-up"}, Result: "Applied 3 migrations (0007_orders, 0008_carts, 0009_index)."}},
+		Reply: "Done.",
+	})
+	for _, s := range run.Snapshots {
+		var finished []Row
+		for _, r := range rowsFrom(s.Summary, 0) {
+			if r.Cells["status"] == ledger.StatusProposed {
+				t.Fatalf("compaction %d presents the done plan as pending: %+v", s.N, r)
+			}
+			if r.Table == "next" && r.Cells["status"] == "done" && strings.Contains(r.Text, "(closed by ") && strings.Contains(r.Text, ": exit 0)") {
+				finished = append(finished, r)
+			}
+		}
+		if len(finished) != 1 {
+			t.Fatalf("compaction %d: next shows no finished plan with its receipt:\n%s", s.N, s.Summary)
 		}
 	}
 }

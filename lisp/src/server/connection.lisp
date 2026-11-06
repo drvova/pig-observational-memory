@@ -24,6 +24,9 @@ lowering with who and why, and the project trust they were read under (:trusted,
   (worker-model nil)
   (removed '())
   (floor-lowered nil)
+  ;; The working-memory limits (config.Config.Limits, ModelLimits) and the raw floor and quality
+  ;; trigger switches (RawFloor, QualityTrigger), both off by default.
+  (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil) (quality-trigger nil)
   (trust :unknown))
 
 (defstruct (conn (:constructor %make-conn))
@@ -179,7 +182,11 @@ curatedMemoryIndexTokens), memoryFormat, and whether the removed `model` setting
                  (when (and present (member v '(:true :false))) (funcall setter (eq v :true))))))
         (bool "passive" (lambda (b) (setf (rcfg-passive cfg) b)))
         (bool "curatedMemory" (lambda (b) (setf (rcfg-curated-memory cfg) b)))
-        (bool "consolidate" (lambda (b) (setf (rcfg-consolidate-off cfg) (not b)))))
+        (bool "consolidate" (lambda (b) (setf (rcfg-consolidate-off cfg) (not b))))
+        (bool "rawFloor" (lambda (b) (setf (rcfg-raw-floor cfg) b)))
+        (bool "qualityTrigger" (lambda (b) (setf (rcfg-quality-trigger cfg) b))))
+      (setf (rcfg-limits cfg) (om::limits-over (rcfg-limits cfg) (om::read-limits nested))
+            (rcfg-model-limits cfg) (om::read-model-limits (gethash "modelLimits" nested) (rcfg-model-limits cfg)))
       (let ((n (positive-integer (gethash "compactionSummaryMaxTokens" nested))))
         (when n (setf (rcfg-summary-max cfg) n)))
       (let ((n (positive-integer (gethash "curatedMemoryIndexTokens" nested))))

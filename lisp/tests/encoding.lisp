@@ -35,6 +35,17 @@
                         want name)))
               ((string= kind "episode")
                (let ((m (json-parse input))) (check (episode-id (jget m "session") (jget m "entry")) want name)))
+              ;; Phase 3, working memory (src/working.lisp).
+              ((string= kind "keyMatches")
+               (let ((m (json-parse input)))
+                 (check (if (key-matches-p (jget m "key") (jget m "receipt")) "true" "false") want name)))
+              ((string= kind "staleTerms") (check (join (stale-terms (make-obs :content input)) " | ") want name))
+              ((string= kind "bearsOn")
+               (let ((m (json-parse input)))
+                 (check (if (bears-on-p (jget m "text") (coerce (jget m "terms") 'list)) "true" "false") want name)))
+              ((string= kind "readPlan") (check (if (read-plan-p (make-obs :content input)) "true" "false") want name))
+              ((string= kind "scopeExclusion") (check (if (scope-exclusion-p input) "true" "false") want name))
+              ((string= kind "replacedRule") (check (replaced-rule-phrase input) want name))
               (t (check kind "a known kind" name)))))))
 
 (deftest encoding-keys-alist
@@ -89,3 +100,22 @@
       (check (held "u" "t") (list "tool" "unverified" writer) "user and tool")
       (check (held "u") (list "user" "hedged" writer) "user alone")
       (check (held "u" "l") (list "" "hedged" writer) "a legacy source"))))
+
+;;; Phase 3: the working-memory limits (config/working.go) and the quality trigger
+;;; (hooks/working_v2.go), as memory/config's TestWorkingMemoryLimits and scenario 23 check them.
+
+(deftest working-memory-limits
+  (let* ((global (json-parse "{\"workingMemoryConstraints\":12,\"rawFloorTokens\":40000,\"modelLimits\":{\"anthropic/m\":{\"workingMemoryActions\":3,\"qualityTriggerTokens\":90000},\"x/y\":\"bad\"}}"))
+         (project (json-parse "{\"workingMemoryScopeExclusions\":4,\"workingMemoryConstraints\":-1,\"modelLimits\":{\"anthropic/m\":{\"rawFloorTokens\":50000}}}"))
+         (limits (limits-over (read-limits global) (read-limits project)))
+         (models (read-model-limits (jget project "modelLimits") (read-model-limits (jget global "modelLimits") nil))))
+    (check (limits-for '(0 0 0 0 0) nil nil) '(10 10 5 32000 64000) "defaults")
+    (check (limits-for limits models (json-parse "{\"provider\":\"anthropic\",\"id\":\"m\"}")) '(12 4 3 50000 90000) "the model's")
+    (check (limits-for limits models (json-parse "{\"provider\":\"other\",\"id\":\"m\"}")) '(12 4 5 40000 64000) "global")
+    (check (below-raw-floor-p t limits models nil 39999) t "below")
+    (check (below-raw-floor-p t limits models nil 0) nil "unknown tokensBefore")
+    (check (below-raw-floor-p nil limits models nil 100) nil "off")
+    (check (om.server::quality-due-p 70000 1000000 70000 64000 32000) t "due")
+    (check (om.server::quality-due-p nil 1000000 70000 64000 32000) nil "unknown usage")
+    (check (om.server::quality-due-p 31999 1000000 70000 64000 32000) nil "below the floor")
+    (check (om.server::quality-due-p 70000 1000000 nil 64000 32000) nil "off")))

@@ -82,3 +82,40 @@
 {"kind":"restates","name":"no keys and no specifics","input":"{\"claim\":\"Always use tabs.\",\"restatement\":\"Always use tabs, really.\"}","want":"false"}
 {"kind":"episode","name":"with session","input":"{\"session\":\"s1\",\"entry\":\"u1\"}","want":"4959a3a20621"}
 {"kind":"episode","name":"empty session","input":"{\"session\":\"\",\"entry\":\"u1\"}","want":"cd5ade7c9262"}
+{"name":"same path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"api/limit.go\"}","want":"true"}
+{"name":"absolute receipt path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"/srv/app/api/limit.go\"}","want":"true"}
+{"name":"relative receipt path","kind":"keyMatches","input":"{\"key\":\"/srv/app/api/limit.go\",\"receipt\":\"api/limit.go\"}","want":"true"}
+{"name":"leading dot slash","kind":"keyMatches","input":"{\"key\":\"./api/limit.go\",\"receipt\":\"api/limit.go\"}","want":"true"}
+{"name":"a bare word never matches a path's last element","kind":"keyMatches","input":"{\"key\":\"limit\",\"receipt\":\"/srv/app/api/limit\"}","want":"false"}
+{"name":"a different path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"api/limits.go\"}","want":"false"}
+{"name":"a suffix without a slash is no match","kind":"keyMatches","input":"{\"key\":\"limit.go\",\"receipt\":\"/srv/app/api/ratelimit.go\"}","want":"false"}
+{"name":"command equal","kind":"keyMatches","input":"{\"key\":\"make migrate-up\",\"receipt\":\"make migrate-up\"}","want":"true"}
+{"name":"command holding the key as words","kind":"keyMatches","input":"{\"key\":\"make migrate-up\",\"receipt\":\"make migrate-up ENV=staging\"}","want":"true"}
+{"name":"command holding part of a word","kind":"keyMatches","input":"{\"key\":\"make test\",\"receipt\":\"make test-unit\"}","want":"false"}
+{"name":"command naming the path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"go test ./api/limit.go\"}","want":"true"}
+{"name":"empty key","kind":"keyMatches","input":"{\"key\":\"\",\"receipt\":\"make test\"}","want":"false"}
+{"name":"path and its stem","kind":"staleTerms","input":"Next we will add rate limiting to `api/limit.go` with a burst of 20.","want":"api/limit.go | limit"}
+{"name":"short stem left out","kind":"staleTerms","input":"Next we will fix `db/x.go` by 3 PM.","want":"db/x.go"}
+{"name":"command key alone","kind":"staleTerms","input":"Next we will run the 3 pending migrations with `make migrate-up`.","want":"make migrate-up"}
+{"name":"no keys","kind":"staleTerms","input":"Next we will ship build 42 on Friday.","want":""}
+{"name":"dot file stem","kind":"staleTerms","input":"Next we will read `docs/limits.md` for the 3 tiers.","want":"docs/limits.md | limits"}
+{"name":"stem as a whole word","kind":"bearsOn","input":"{\"text\":\"New requirement: the rate limit must be per tenant, keyed by `X-Tenant-ID`.\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"true"}
+{"name":"stem inside a longer word","kind":"bearsOn","input":"{\"text\":\"How is the limiter going?\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"false"}
+{"name":"the same path as a key","kind":"bearsOn","input":"{\"text\":\"Make `api/limit.go` read the tenant header.\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"true"}
+{"name":"case folded","kind":"bearsOn","input":"{\"text\":\"The LIMIT is per tenant now.\",\"terms\":[\"limit\"]}","want":"true"}
+{"name":"unrelated","kind":"bearsOn","input":"{\"text\":\"The export must be gzip compressed.\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"false"}
+{"name":"a path term never matches a word","kind":"bearsOn","input":"{\"text\":\"the api limit go file\",\"terms\":[\"api/limit.go\"]}","want":"false"}
+{"name":"read","kind":"readPlan","input":"Next we will read `docs/limits.md` for the 3 tiers.","want":"true"}
+{"name":"look at","kind":"readPlan","input":"Next I will look at `internal/api/handler.go` for the 2 bugs.","want":"true"}
+{"name":"reread","kind":"readPlan","input":"We will reread `NOTES.md` before the 3 PM review.","want":"true"}
+{"name":"not a read","kind":"readPlan","input":"Next we will add rate limiting to `api/limit.go` with a burst of 20.","want":"false"}
+{"name":"ready is not read","kind":"readPlan","input":"Next we will get the 2 builds ready.","want":"false"}
+{"name":"don't touch","kind":"scopeExclusion","input":"Don't touch `db/migrations/` while you work on this.","want":"true"}
+{"name":"curly apostrophe","kind":"scopeExclusion","input":"Don’t touch `vendor/`.","want":"true"}
+{"name":"leave alone","kind":"scopeExclusion","input":"Leave the vendor directory alone.","want":"true"}
+{"name":"a rule that is not a scope exclusion","kind":"scopeExclusion","input":"Never run `pytest` directly here; always use `make ci-local` instead.","want":"false"}
+{"name":"not tail with a key","kind":"replacedRule","input":"Actually, always use `make ci` for the tests, not `make test`.","want":"`make test`"}
+{"name":"instead of a key","kind":"replacedRule","input":"Use `pnpm` instead of `npm`.","want":"`npm`"}
+{"name":"not but","kind":"replacedRule","input":"Run not `make test` but `make ci` before you push.","want":"`make test`"}
+{"name":"no key in the phrase","kind":"replacedRule","input":"Use tabs, not spaces.","want":""}
+{"name":"no replaced phrase","kind":"replacedRule","input":"Always use `make ci`.","want":""}

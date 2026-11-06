@@ -443,6 +443,9 @@ func (observation *Observation) readEncoding(m map[string]any) {
 	if s, ok := m["episode"].(string); ok {
 		observation.Episode = s
 	}
+	if s, ok := m["derivedFrom"].(string); ok {
+		observation.DerivedFrom = s
+	}
 	if keys, ok := m["keys"].(map[string]any); ok {
 		for _, kind := range KeyKinds {
 			list, _ := keys[kind].([]any)

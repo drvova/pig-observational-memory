@@ -323,12 +323,15 @@ nothing is due."
 
 (defparameter +level1-cancelled+ "the compaction was cancelled before the request")
 
-(defun level1-skip (cfg event entries cut own)
+(defun level1-skip (cfg event entries cut own &optional model)
   "consolidateV2's first skip reasons, or nil."
   (cond ((rcfg-consolidate-off cfg) "consolidate is false")
         ((rcfg-passive cfg) "passive mode")
         (own "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only")
         ((string= (om::cevent-reason event) "overflow") "an overflow compaction runs level 0 only, so recovery is not delayed")
+        ((and (rcfg-raw-floor cfg)
+              (om::below-raw-floor-p t (rcfg-limits cfg) (rcfg-model-limits cfg) model (om::cevent-tokens-before event)))
+         "the context is below the session model's raw floor: nothing is consolidated")
         ((or (null cut) (< (om::entry-index-for-id entries (om::cevent-first-kept event)) 0)) "the cut range is not on the branch")
         ((cancelled-p) +level1-cancelled+)))
 
@@ -341,7 +344,7 @@ reports the request and its usage (spent)."
   (let* ((out (make-l1)) (rep (l1-report out)))
     (when on-start (funcall on-start out))
     (flet ((skip (reason) (setf (report-reason rep) reason) (return-from consolidate-v2 out)))
-      (let ((reason (level1-skip cfg event entries cut own))) (when reason (skip reason)))
+      (let ((reason (level1-skip cfg event entries cut own model))) (when reason (skip reason)))
       (multiple-value-bind (resolved reason) (resolve-session-model model)
         (unless resolved (skip (concatenate 'string "the session model is unavailable: " reason)))
         (setf resolved (session-headers-for resolved))

@@ -18,6 +18,10 @@ func (x *extraction) encode() {
 		if r.obs.Episode == "" && r.anchor >= 0 && r.anchor < len(x.episodes) {
 			r.obs.Episode = x.episodes[r.anchor]
 		}
+		// A plan's requirement is the request it was made under (ledger.Observation.DerivedFrom).
+		if r.obs.Status == ledger.StatusProposed && r.obs.DerivedFrom == "" && r.anchor >= 0 && r.anchor < len(x.requests) && x.requests[r.anchor] >= 0 {
+			r.obs.DerivedFrom = x.in.Entries[x.requests[r.anchor]].ID
+		}
 		Encode(&r.obs, x.sourceOf(r), x.in.Writer, x.in.Frame, x.in.RepoRoot)
 	}
 }

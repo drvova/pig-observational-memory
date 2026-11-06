@@ -65,6 +65,14 @@ type Config struct {
 	// ConsolidateOff is set by consolidate: false, which turns the level-1
 	// consolidation request off. Read it through Consolidates.
 	ConsolidateOff bool
+	// Limits are the working-memory caps, raw floor and quality threshold set globally, and
+	// ModelLimits each model's ("<provider>/<id>"); read them through LimitsFor (working.go).
+	Limits      ModelLimits
+	ModelLimits map[string]ModelLimits
+	// RawFloor turns the raw floor on (rawFloor: true): no level-1 request below the session
+	// model's floor. QualityTrigger turns the quality trigger on (qualityTrigger: true). Both are
+	// off by default (docs/brain-memory.md, decision 15).
+	RawFloor, QualityTrigger bool
 	// RemovedSet are the RemovedSettings a settings file that was read sets to
 	// a valid value, in RemovedSettings order: nothing reads them and /om:status
 	// lists them while they are set (docs/memory-v2.md, "Migration > Settings").
@@ -313,6 +321,9 @@ type partial struct {
 	removed []string
 	// worker is the removed `model` setting's value when it is one of them.
 	worker *WorkerModelRef
+	// limits and modelLimits are the source's working-memory, floor and trigger limits.
+	limits      ModelLimits
+	modelLimits map[string]ModelLimits
 }
 
 var numberKeys = []string{
@@ -330,7 +341,20 @@ func normalizeSettings(value map[string]any) partial {
 	if format, ok := isMemoryFormat(value["memoryFormat"]); ok {
 		p.format = &format
 	}
-	for _, key := range []string{"passive", "debugLog", "curatedMemory", "consolidate"} {
+	p.limits, _ = readLimits(value)
+	if models, ok := value["modelLimits"].(map[string]any); ok {
+		for key, raw := range models {
+			if m, ok := raw.(map[string]any); ok {
+				if limits, set := readLimits(m); set {
+					if p.modelLimits == nil {
+						p.modelLimits = map[string]ModelLimits{}
+					}
+					p.modelLimits[key] = limits
+				}
+			}
+		}
+	}
+	for _, key := range []string{"passive", "debugLog", "curatedMemory", "consolidate", "rawFloor", "qualityTrigger"} {
 		if b, ok := value[key].(bool); ok {
 			p.bools[key] = b
 		}
@@ -393,7 +417,18 @@ func (p partial) apply(cfg *Config) {
 			cfg.CuratedMemory = b
 		case "consolidate":
 			cfg.ConsolidateOff = !b
+		case "rawFloor":
+			cfg.RawFloor = b
+		case "qualityTrigger":
+			cfg.QualityTrigger = b
 		}
+	}
+	cfg.Limits = cfg.Limits.over(p.limits)
+	for key, limits := range p.modelLimits {
+		if cfg.ModelLimits == nil {
+			cfg.ModelLimits = map[string]ModelLimits{}
+		}
+		cfg.ModelLimits[key] = cfg.ModelLimits[key].over(limits)
 	}
 	if p.floorSet {
 		cfg.KernelFloor = p.floor

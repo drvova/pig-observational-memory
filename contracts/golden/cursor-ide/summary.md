@@ -2,6 +2,7 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole.
+- constraints (after the notes): the user's rules and scope exclusions in force, verbatim with their source; not repeated in the notes.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
 - notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open), note (one written with the memory tool), decision or convention (read from a repository file, not an instruction); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; the memory tool's om.Recall(`<entry id>`) reads that entry.
@@ -15,7 +16,7 @@ The memory tool runs Go code: it reads any record back with its exact source, om
 intent[2]{which,content,source}:
   first,"<user_query> for figure 6.6 berlin and kay I want to show all the language overlaid on the same plot with transparecy, etc to show the distribution of lanaguage distributions, and toggles to add the mean, etc. </user_query>",cu000001
   latest,<user_query> please ask a subagent to restart this analysis from the start </user_query>,cu000056
-notes[134]{id,when,kind,status,scope,content,superseded_by,source}:
+notes[133]{id,when,kind,status,scope,content,superseded_by,source}:
   df08b1af6e54,,fact,,,"for figure 6.6 berlin and kay I want to show all the language overlaid on the same plot with transparecy, etc to show the distribution of lanaguage distributions, and toggles to add the mean, etc.",,cu000001
   ad5398816989,,assistant,,,Let me start by reading the relevant files to understand the current implementation of Figure 6.6.,,cu000002
   651c602930c9,,assistant,,,"The user wants to modify Figure 6.6 (Berlin and Kay) in their blog to show all languages overlaid on the same plot with transparency, and add toggles for mean, etc.",,cu000002
@@ -80,7 +81,6 @@ notes[134]{id,when,kind,status,scope,content,superseded_by,source}:
   7934ba827977,,assistant,,,"Add clear provenance warnings in the blog for CLICS² and color terms, matching the honesty already shown for ASJP and non-Swadesh Download real ASJP v19+ LDND distances from asjp.clld.org and replace the taxonomy approximation Download real CLICS³ colexification data from clics.clld.org and extract pairs programmatically",,cu000038
   bdca597fe980,,assistant,,,"**Medium-term:**",,cu000038
   2bb34d423d0d,,assistant,,,Verify Swadesh translations for at least the 40 original languages against Wiktionary programmatically Verify color term translations for major languages Document provenance chain for every data file,,cu000038
-  6bd4343971c0,,preference,,,"I don't want to add any warnings, I want to avoid using any simulated data all together and work hard to use real datasets of good provenance , assign a team of subagents to implement the full range of these tasks to their highest ability until this stuff is airtight",,cu000039
   ebf467e18923,,assistant,,,The user wants me to replace ALL fabricated/simulated data with real datasets.,,cu000040
   e81c9302b130,,assistant,,,"**ASJP**: Download real ASJP v19+ data from asjp.clld.org and compute actual pairwise LDND distances **CLICS²/CLICS³**: Download real colexification data and extract actual colexified pairs **Swadesh translations**: Verify against real Wiktionary data or other linguistic databases **Color terms**: Verify translations against real sources **Non-Swadesh translations**: This is already disclosed as AI-generated, but ideally should be verified too **ASJP**: The ASJP database is available at https://asjp.clld.org/ and I can download the listss table containing word lists, then compute pairwise LDND distances from those.",,cu000040
   64c57457a1f1,,assistant,,,"Now I'm mapping out the implementation strategy: I need to research the exact data formats and availability for ASJP and CLICS³, figure out how to programmatically verify Swadesh translations against linguistic databases, then execute these replacements in parallel where possible.",,cu000040
@@ -150,3 +150,5 @@ notes[134]{id,when,kind,status,scope,content,superseded_by,source}:
   b015c169f5c0,,assistant,,,"Sample Concept Analysis | `sample_concept.json` (1.1 MB) |",,cu000066
   1d2b0b061fea,,assistant,,,"**Blog text updates** — Removed all stale disclaimers:",,cu000066
   2585ca28848a,,assistant,,,"Replaced the \"taxonomy-based approximation\" scatter plot description with accurate text describing real ASJP v20 Normalized Levenshtein Distances Updated CLICS² references to CLICS³ throughout (nav, intro, section header, body text) Updated the Limitations section: \"ASJP distances are approximate\" replaced with \"ASJP coverage varies\" Updated Next Steps to reflect that ASJP and CLICS³ integration is complete",,cu000066
+constraints[1]{content,source}:
+  "I don't want to add any warnings, I want to avoid using any simulated data all together and work hard to use real datasets of good provenance , assign a team of subagents to implement the full range of these tasks to their highest ability until this stuff is airtight",cu000039

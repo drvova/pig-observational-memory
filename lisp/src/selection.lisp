@@ -77,6 +77,20 @@
   (cat "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call." (string #\Newline)))
 (defparameter +values-line+
   (cat "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value." (string #\Newline)))
+;; Phase 3, working memory (docs/memory-v2.md, "Working memory").
+(defparameter +extra-closed+ "line:closed")
+(defparameter +extra-stale+ "line:stale")
+(defparameter +closed-line+
+  (cat "- done: a plan with status done was closed by a tool receipt, (closed by <id>: <receipt>) naming the receipt's record and its kind (exit 0, write, commit or read); it is finished, never pending. Assistant prose closes nothing." (string #\Newline)))
+(defparameter +stale-line+
+  (cat "- may be stale: a plan ending with (may be stale <entry id>) was made before a newer request of the user's that names its keys, that entry; check the plan against that request before acting on it." (string #\Newline)))
+(defparameter +also-line+
+  (cat "- also (after ---): constraints and finished plans left out, with the om snippet that lists them." (string #\Newline)))
+(defparameter +constraints-line+
+  (cat "- constraints (after the notes): the user's rules and scope exclusions in force, verbatim with their source; not repeated in the notes." (string #\Newline)))
+(defparameter +constraint-fields+ '("content" "source"))
+(defparameter +default-slots+ '(10 10 5) "selection.DefaultSlots: constraints, scope exclusions, actions.")
+(defparameter +status-done+ "done")
 (defparameter +max-values-per-kind+ 40)
 (defparameter +omitted-advice+
   (cat "Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or "
@@ -169,7 +183,7 @@
 (defun raw-snippet-value (s)
   (if (contains-any s (format nil "`~C" #\Return)) (go-quote s) (cat "`" s "`")))
 
-(defun format-read (fn &key where from through since until limit)
+(defun format-read (fn &key where status from through since until limit)
   "om.FormatRead for the options a summary's snippets carry."
   (let ((parts '()))
     (dolist (p where)
@@ -177,6 +191,7 @@
         (if (string= field "kind")
             (push-end (cat "Kind(" (raw-snippet-value value) ")") parts)
             (push-end (cat "Where(" (raw-snippet-value field) ", " (raw-snippet-value value) ")") parts))))
+    (when status (push-end (cat "WithStatus(" (raw-snippet-value status) ")") parts))
     (when from (push-end (cat "From(" (raw-snippet-value from) ")") parts))
     (when through (push-end (cat "Through(" (raw-snippet-value through) ")") parts))
     (when since (push-end (cat "Since(" (raw-snippet-value since) ")") parts))
@@ -193,7 +208,10 @@
   (cost 0) cells (line "")
   ;; contested: a user claim standing contested (contested, contest.lisp); contested-by the
   ;; pushback records answering it.
-  contested (contested-by '()))
+  contested (contested-by '())
+  ;; slot: a working-memory member's slot (:constraint, :scope, :done), nil for none;
+  ;; receipt-at a finished plan's receipt anchor.
+  (slot nil) (receipt-at -1))
 
 (defun item-source (it) (if (item-anchored it) (item-anchor-id it) ""))
 
@@ -209,7 +227,10 @@
   observations reflections folded branch request-in intent-in aliases reflection-dates layout
   items request intent positions canonical (budget 0)
   (superseded (make-set)) (by-id (make-set)) (records (make-set))
-  (partners (make-set)) (superseded-by (make-set)))
+  (partners (make-set)) (superseded-by (make-set))
+  ;; Working memory: the closed plans (closed-by), the stale plans' newer requests, the members
+  ;; in ledger order and the caps (constraints scopes actions).
+  (closed (make-set)) (stale (make-set)) (members '()) (slots +default-slots+))
 
 (defun record-date (timestamp)
   (if (and (>= (length timestamp) 10) (iso-date-p (subseq timestamp 0 10))) (subseq timestamp 0 10) ""))
@@ -229,6 +250,7 @@
         ((string= group "intent") +intent-fields+)
         ((string= group "reflections") +reflection-fields+)
         ((string= group "omitted") +omitted-fields+)
+        ((string= group "constraints") +constraint-fields+)
         (t +note-fields+)))
 
 (defun list-group-p (group)
@@ -240,6 +262,8 @@
   (cond ((string= extra +extra-evidence+) +evidence-line+)
         ((string= extra +extra-values+) +values-line+)
         ((string= extra +extra-contest+) +contested-line+)
+        ((string= extra +extra-closed+) +closed-line+)
+        ((string= extra +extra-stale+) +stale-line+)
         (t "")))
 
 (defun extra-cost (extra) (estimate-tokens (extra-line extra)))
@@ -254,7 +278,8 @@
         (t (< (item-index a) (item-index b)))))
 
 (defun section-line (l group)
-  (cond ((string= group "intent") +intent-line+)
+  (cond ((string= group "constraints") +constraints-line+)
+        ((string= group "intent") +intent-line+)
         ((string= group "next") (if (layout-tables l) +next-line+ +next-lines-format+))
         (t "")))
 
@@ -314,6 +339,10 @@
               (scope (canonical-scope (obs-scope o) (canonical-of (sstate-canonical s) (obs-subject o))))
               (replaced-by (join (gethash (obs-id o) (sstate-superseded-by s)) " "))
               (shown (if (string/= (item-links it) "") (cat content " " (item-links it)) content)))
+         (when (string= (item-group it) "constraints")
+           (setf (item-cells it) (list shown source) (item-line it) (cat shown (suffix source)))
+           (setf (item-cost it) (if (layout-tables l) (row-cost l (item-group it) (item-cells it)) (1+ (estimate-tokens (item-line it)))))
+           (return-from price))
          (setf (item-cells it) (list (obs-id o) (item-from it) (shown-kind it) (item-status it) scope shown replaced-by source))
          (let ((line (cat "[" (obs-id o) "]")))
            (dolist (part (list (item-from it) (shown-kind it) (item-status it)))
@@ -339,9 +368,15 @@ codec's tables instructions without a state)."
 
 ;;; newState
 
+(defun slots-with-defaults (slots)
+  "Slots.withDefaults: each cap below 1 at its default."
+  (loop for i from 0 below 3
+        collect (let ((n (nth i slots))) (if (and n (>= n 1)) n (nth i +default-slots+)))))
+
 (defun make-state (observations folded branch budget &key request intent reflections (format "tables") codec
-                                                         aliases reflection-dates)
+                                                         aliases reflection-dates slots)
   (let ((s (make-sstate :budget budget :observations observations :reflections reflections :folded folded :branch branch
+                        :slots (slots-with-defaults slots)
                         :request-in request :intent-in intent :aliases aliases
                         :reflection-dates (or reflection-dates (make-set))
                         :layout (new-layout format codec) :positions (entry-index-by-id branch))))
@@ -384,11 +419,16 @@ codec's tables instructions without a state)."
                  (setf (gethash (obs-id o) (sstate-by-id s)) it)))
       (setf (sstate-items s) (nreverse items))
       (let ((retracted (retracted-ids all)))
+        (setf (sstate-closed s) (closed-by all))
         (dolist (it (sstate-items s))
           (when (eq (item-role it) :note)
-            (setf (item-status it) (if (gethash (obs-id (item-obs it)) retracted) +status-retracted+ (obs-status (item-obs it)))))))
+            (setf (item-status it) (if (gethash (obs-id (item-obs it)) retracted) +status-retracted+ (obs-status (item-obs it))))
+            (when (and (gethash (obs-id (item-obs it)) (sstate-closed s)) (string= (item-status it) +status-proposed+))
+              (setf (item-status it) +status-done+)))))
       (contest-items s all)
+      (mark-stale s)
       (mark-next s)
+      (mark-constraints s)
       (link-items s)
       (dolist (o all)
         (dolist (id (obs-supersedes o))
@@ -439,6 +479,7 @@ codec's tables instructions without a state)."
     (dolist (id ids)
       (let ((at (gethash id (sstate-positions s))))
         (when (and at (> at start)) (setf start at))))
+    (mark-done s)
     (when (< start 0) (return-from mark-next))
     (dolist (it (sstate-items s))
       (when (eq (item-role it) :note)
@@ -449,6 +490,58 @@ codec's tables instructions without a state)."
                    (open (and attempt (member (obs-outcome o) '("open" "failed") :test #'string=))))
               (when (or open (and (not attempt) (string= (item-status it) +status-proposed+)))
                 (setf (item-note-group it) (item-group it) (item-group it) "next")))))))))
+
+(defun mark-done (s)
+  "state.markDone: the closed plans nothing supersedes, the Actions cap of them with the newest
+receipts moved into next."
+  (let ((done '()))
+    (dolist (it (sstate-items s))
+      (when (and (eq (item-role it) :note) (string= (item-status it) +status-done+)
+                 (not (gethash (obs-id (item-obs it)) (sstate-superseded s))))
+        (setf (item-receipt-at it) -1)
+        (let ((receipt (gethash (second (gethash (obs-id (item-obs it)) (sstate-closed s))) (sstate-records s))))
+          (when receipt
+            (multiple-value-bind (id at on) (observation-anchor receipt (sstate-positions s))
+              (declare (ignore id))
+              (when on (setf (item-receipt-at it) at)))))
+        (setf (item-slot it) :done)
+        (push-end it (sstate-members s))
+        (push-end it done)))
+    (loop for it in (stable-sort done #'> :key #'item-receipt-at)
+          for i from 0
+          do (when (< i (third (sstate-slots s)))
+               (setf (item-note-group it) (item-group it) (item-group it) "next")))))
+
+(defun mark-stale (s)
+  "state.markStale: the open plans a later request the person typed bears on."
+  (let ((branch (sstate-branch s)))
+    (dolist (it (sstate-items s))
+      (let ((o (item-obs it)))
+        (when (and (eq (item-role it) :note) (string= (item-status it) +status-proposed+) (string/= (obs-derived-from o) "")
+                   (item-anchored it) (not (gethash (obs-id o) (sstate-superseded s))))
+          (let ((from (gethash (obs-derived-from o) (sstate-positions s))) (terms (stale-terms o)))
+            (when (and from terms)
+              (loop for i from (1- (length branch)) downto 0
+                    while (and (> i (item-anchor it)) (> i from))
+                    do (let ((e (elt branch i)))
+                         (when (request-entry-p e)
+                           (let ((text (request-text e)))
+                             (when (and (not (question-text-p text)) (bears-on-p text terms))
+                               (setf (gethash (obs-id o) (sstate-stale s)) (entry-id e))
+                               (when (string= (item-extra it) "") (setf (item-extra it) +extra-stale+))
+                               (return)))))))))))))
+
+(defun mark-constraints (s)
+  "state.markConstraints: the constraints registry's members, moved into their own group."
+  (dolist (it (sstate-items s))
+    (let ((o (item-obs it)))
+      (when (and (eq (item-role it) :note) (string/= (item-group it) "next") (string= (obs-kind o) "preference")
+                 (user-priority-p o) (not (item-contested it)) (not (gethash (obs-id o) (sstate-superseded s)))
+                 (string/= (item-status it) +status-retracted+) (string/= (item-status it) +status-hypothetical+))
+        (setf (item-slot it) (if (scope-exclusion-p (obs-content o)) :scope :constraint))
+        (setf (item-note-group it) (item-group it) (item-group it) "constraints")
+        (push-end it (sstate-members s)))))
+  (setf (sstate-members s) (stable-sort (sstate-members s) #'< :key #'item-index)))
 
 (defun link-items (s)
   (flet ((join-partner (a b)
@@ -478,6 +571,13 @@ codec's tables instructions without a state)."
                 (when (= (length parts) n) (push-end "(contested)" parts))))
             (when (string= (obs-kind o) "pushback")
               (pointer "responds to" (obs-responds-to o) (lambda (other) (declare (ignore other)) t))))
+          ;; A finished plan names its receipt, an open one the newer request it may be stale against.
+          (when (string= (item-status it) +status-done+)
+            (let ((c (gethash (obs-id o) (sstate-closed s))))
+              (push-end (cat "(closed by " (second c) ": " (third c) ")") parts))
+            (when (string= (item-extra it) "") (setf (item-extra it) +extra-closed+)))
+          (let ((request (gethash (obs-id o) (sstate-stale s))))
+            (when request (push-end (cat "(may be stale " request ")") parts)))
           (setf (item-links it) (join parts " ")))))
     (maphash (lambda (id items)
                (setf (gethash id (sstate-partners s)) (stable-sort (copy-list items) #'< :key #'item-index)))
@@ -589,6 +689,19 @@ codec's tables instructions without a state)."
                          (when (try c) (funcall on-text text))))))))
       (when (sstate-request s)
         (try-clipped (sstate-request s) (lambda (text) (setf (sel-request-text p) text))))
+      ;; 1a. The constraints registry, newest first, at most each slot's cap.
+      (let ((taken (make-hash-table :test 'eq)))
+        (dolist (it (reverse records))
+          (when (string= (item-group it) "constraints")
+            (let ((cap (if (eq (item-slot it) :scope) (second (sstate-slots s)) (first (sstate-slots s)))))
+              (when (and (< (gethash (item-slot it) taken 0) cap) (try it))
+                (incf (gethash (item-slot it) taken 0))
+                (dolist (other (gethash (item-id it) (sstate-partners s)))
+                  (unless (holds-no-value other) (try other))))))))
+      (dolist (it records)
+        (when (and (string= (item-group it) "constraints") (not (on-p p it)))
+          (setf (item-group it) (item-note-group it))
+          (price s it)))
       (let ((observations '(:note :file :commit)))
         (newest-first (lambda (it) (string= (item-group it) "next")) '(:note))
         (let ((fallen '()))
@@ -647,14 +760,26 @@ codec's tables instructions without a state)."
 
 (defstruct tail (n 0) (all 0) (queries '()))
 
-(defstruct omission (rows '()) (tails (make-set)) (records 0) (spans 0) (folded 0))
+(defstruct omission (rows '()) (tails (make-set)) (records 0) (spans 0) (folded 0)
+  ;; also: the working-memory members left out, as (n noun query), constraints first.
+  (also '()))
 
 (defun omission-snippets (o)
   (mapcar #'redact-secrets
    (append (mapcar #'span-row-query (omission-rows o))
           (loop for group in '("files" "commits" "values")
                 for tl = (gethash group (omission-tails o))
-                when tl append (tail-queries tl)))))
+                when tl append (tail-queries tl))
+          (mapcar #'third (omission-also o)))))
+
+(defun also-text (parts)
+  "alsoText: the also: line."
+  (cat "also: " (join (mapcar (lambda (a) (cat "+" (itoa (first a)) " more " (second a) ": " (third a))) parts) "; ")))
+
+(defun also-cost (parts)
+  (if parts (+ (estimate-tokens (cat +trailer-separator+ (also-text parts))) 1 (estimate-tokens +also-line+)) 0))
+
+
 
 (defun sorted-anchors (items)
   (sort (loop for it in items when (item-anchored it) collect (item-anchor it)) #'<))
@@ -662,9 +787,9 @@ codec's tables instructions without a state)."
 (defun count-in (anchors lo hi)
   (count-if (lambda (a) (<= lo a hi)) anchors))
 
-(defun snippet (source n &key from through since until)
+(defun snippet (source n &key from through since until status)
   "snippet: the read with its bounds, limited when n rows exceed the default."
-  (format-read (first source) :where (second source) :from from :through through :since since :until until
+  (format-read (first source) :where (second source) :status status :from from :through through :since since :until until
                               :limit (and (> n +default-limit+) (min n +max-limit+))))
 
 (defun date-range (items)
@@ -811,6 +936,22 @@ codec's tables instructions without a state)."
 (defparameter +read-files+ (list "Notes" (list (cons "kind" "file"))))
 (defparameter +read-values+ (list "Notes" (list (cons "kind" "value"))))
 
+(defparameter +read-preferences+ (list "Notes" (list (cons "kind" "preference"))))
+
+(defun also-parts (s p)
+  "state.alsoParts: the working-memory members p leaves out."
+  (let ((rules 0) (done 0) (preferences 0) (plans 0) (out '()))
+    (dolist (it (sstate-items s))
+      (when (and (eq (item-role it) :note) (not (gethash (item-id it) (sel-dropped p))))
+        (when (string= (obs-kind (item-obs it)) "preference") (incf preferences))
+        (when (string= (obs-status (item-obs it)) +status-proposed+) (incf plans))))
+    (dolist (it (sstate-members s))
+      (unless (or (on-p p it) (gethash (item-id it) (sel-dropped p)))
+        (if (eq (item-slot it) :done) (incf done) (incf rules))))
+    (when (> rules 0) (push-end (list rules "constraints" (snippet +read-preferences+ preferences)) out))
+    (when (> done 0) (push-end (list done "done" (snippet +read-notes+ plans :status +status-proposed+)) out))
+    out))
+
 (defun fewest (n fits)
   "The fewest k in [2, n] that fits, by halving: (values k ok)."
   (if (or (< n 2) (not (funcall fits n)))
@@ -841,7 +982,7 @@ codec's tables instructions without a state)."
           (push-end it note-anchors)
           (when (and (eq (item-role it) :note) (not (on-p p it)))
             (if (item-anchored it) (push-end it notes) (push-end it off-notes))))))
-    (let ((o (make-omission)))
+    (let ((o (make-omission :also (also-parts s p))))
       (when (> files 0)
         (setf (gethash "files" (omission-tails o))
               (make-tail :n files :all (length file-items) :queries (list-queries +read-files+ file-items p)))
@@ -862,7 +1003,7 @@ codec's tables instructions without a state)."
         (dolist (r (append note-rows reflection-rows off-rows))
           (incf (omission-records o) (span-row-count r))
           (incf (omission-spans o) (span-row-spans r)))
-        (let ((tails-cost (notice-cost s (shown-count s p) o)))
+        (let ((tails-cost (+ (notice-cost s (shown-count s p) o) (also-cost (omission-also o)))))
           (maphash (lambda (group tl) (incf tails-cost (tail-cost s group tl (> (opened p group) 0))))
                    (omission-tails o))
           (labels ((layout (note-fold reflection-fold)
@@ -909,14 +1050,15 @@ codec's tables instructions without a state)."
         (setf (gethash (item-group it) newest) (item-index it))))
     (when (gethash "next" by-group) (push-end (cons "next" (gethash "next" by-group)) blocks))
     (when (gethash "reflections" by-group) (push-end (cons "reflections" (gethash "reflections" by-group)) blocks))
-    (let ((subjects (sort (remove-if (lambda (g) (or (member g '("reflections" "notes" "next") :test #'string=) (list-group-p g)))
+    (let ((subjects (sort (remove-if (lambda (g) (or (member g '("reflections" "notes" "next" "constraints") :test #'string=) (list-group-p g)))
                                      groups)
                           (lambda (a b) (if (/= (gethash a newest) (gethash b newest))
                                             (< (gethash a newest) (gethash b newest))
                                             (string< a b))))))
       (dolist (group subjects) (push-end (cons group (gethash group by-group)) blocks)))
     (when (gethash "notes" by-group) (push-end (cons "notes" (gethash "notes" by-group)) blocks))
-    (let ((lists '()))
+    (when (gethash "constraints" by-group) (push-end (cons "constraints" (gethash "constraints" by-group)) blocks))
+    (let ((lists (if (omission-also o) (list (also-text (omission-also o))) '())))
       (dolist (group (append '("files" "commits") (mapcar #'value-group +value-kinds+) '("values")))
         (let* ((items (gethash group by-group))
                (items (if (has-prefix group "values.") (stable-sort (copy-list items) #'value-before-p) items))
@@ -926,9 +1068,10 @@ codec's tables instructions without a state)."
           (when parts (push-end (cat group ": " (join parts ", ")) lists))))
       (let ((text (layout-intro l))
             (lines (apply #'cat (mapcar (lambda (b) (section-line l (car b))) blocks))))
-        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-values+))
+        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-closed+ +extra-stale+ +extra-values+))
           (when (> (opened p extra) 0)
             (setf lines (cat lines (extra-line extra)))))
+        (when (omission-also o) (setf lines (cat lines +also-line+)))
         (when (string/= lines "")
           (let ((at (search +request-line+ text)))
             (when at
@@ -973,11 +1116,11 @@ codec's tables instructions without a state)."
                 :folded (omission-folded omitted) :snippets (omission-snippets omitted)))
 
 (defun render-summary (observations folded branch budget &rest options
-                       &key request intent reflections format codec aliases reflection-dates)
+                       &key request intent reflections format codec aliases reflection-dates slots)
   "selection.Render. request is (entry-id . text) or nil; intent a list of (which entry-id
 text); format \"tables\" (the default) or \"lines\"; codec :rows (the default) or :jsonl;
 reflection-dates a table of ReflectionDateRanges."
-  (declare (ignore request intent format codec aliases reflection-dates))
+  (declare (ignore request intent format codec aliases reflection-dates slots))
   ;; A record holding a preference that weakens security is never shown, nor a reflection
   ;; resting on one (held-rule; docs/brain-memory.md, decision 19).
   (multiple-value-setq (observations reflections)
@@ -1013,6 +1156,8 @@ reflection-dates a table of ReflectionDateRanges."
                                                                                                 (folded-by-id folded))))
          (p (make-sel)))
     (setf (layout-notice (sstate-layout s)) nil)
+    ;; The level-1 input lists its working memory with the records; it prints no also: line.
+    (setf (sstate-members s) '())
     (dolist (it (sstate-items s))
       (when (gethash (item-id it) listed) (setf (gethash it (sel-on p)) t)))
     (multiple-value-bind (o need ok) (omissions s p room)

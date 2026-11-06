@@ -299,6 +299,42 @@ permissions (decision 23) are not built yet.
   user quote restating it lifts the contest. Assistant prose still never makes a rule or closes
   anything. Scenario 24 passes.
 
+### Phase 3 status: working memory and trigger
+
+Built in Go and Lisp with byte-identical output (docs/memory-v2.md, "Working memory" and "The raw
+floor and the quality trigger"; contracts/encoding.md, "Derived from", "Receipts" and "Rule
+replacements"). Measured in [brain-memory-baseline.md](brain-memory-baseline.md), "Phase 3".
+
+- **Constraints registry: built.** A `constraints` table after the notes holds the user's rules and
+  scope exclusions in force, verbatim with their sources: superseded, retracted, contested and held
+  ones are out, and a rule saying what it replaces ("use `make ci`, not `make test`") supersedes the
+  rule it names. It is selected right after the split turn's request, newest first, up to the
+  model's caps. Under the 1,200-token cap constraints and scope exclusions go from 2 / 0% and 22 / 0%
+  shown at N = 16 / 20 to 100 / 98% and 100 / 100%, none lost; corrections, intentions and
+  identifiers give up room (below).
+- **Receipts: built.** A plan closes only on a tool receipt matching its keys (`exit 0`, `write`,
+  `commit`; a "read file X" plan only a `read` whose output holds a line unique to X), recorded on the
+  receipt record as `closes: [{id, closedBy, receipt}]`; prose never closes anything. A closed plan
+  shows `done` with `(closed by <id>: <receipt>)`, the newest of them in `next` beside the open steps.
+- **Staleness: built.** Plans carry `derivedFrom` (their request); an open plan a later request of the
+  person's names a key or file stem of is shown `(may be stale <entry id>)`, detected from stored
+  state toward the plan.
+- **Caps: built,** per model (`workingMemoryConstraints` 10, `workingMemoryScopeExclusions` 10,
+  `workingMemoryActions` 5, under `modelLimits` per model); what the summary shows nowhere is named on
+  one `also:` line with an om snippet that lists it. The constraint cap counts rules and scope
+  exclusions apart, 10 each, so about ten of each is shown.
+- **Raw floor and quality trigger: built, off.** `rawFloor` (32,000 tokens for an unknown model)
+  stops level 1 below the floor; `qualityTrigger` (64,000 raw tokens) asks for a level-0 compaction
+  at an idle settle, with PiG's auto-compaction off, usage known and above the floor; window − reserve
+  stays the backstop.
+- **Not built: carrying working memory to the next session.** Open intentions and constraints are
+  read from the session's own ledger; showing them first in the next session needs the shared core
+  (phase 6).
+- **Benches.** The ConstraintRot rebuild (`memeval -suite constraintrot`) and the ARCBench rule-loss
+  cases (`-suite arcbench`, its data only) measure delivery by code; the violation rates need an agent
+  model and are ready, not run.
+- Scenarios 3 (rendering), 4, 21, 22 and 23 pass.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -311,8 +347,8 @@ in a majority of runs.
 |---|---|---|
 | 1 | An exact identifier decays across compactions | Byte-exact in the summary or reachable through a printed snippet after 5 compactions |
 | 2 | A standing constraint or scope exclusion is lost | Both in every summary's rule class after 4 compactions |
-| 3 | A rule is kept but violated after compaction | The rule is rendered verbatim with its source; two rules planted in a long coding session are complied with in every reply after each compaction |
-| 4 | A completed instruction is re-executed | Never shown as pending after its success; `next` shows it finished, with its receipt |
+| 3 | A rule is kept but violated after compaction | The rule is rendered verbatim with its source; two rules planted in a long coding session are complied with in every reply after each compaction (rendering passes: phase 3, in the constraints registry; compliance needs a model) |
+| 4 | A completed instruction is re-executed | Never shown as pending after its success; `next` shows it finished, with its receipt (passes: phase 3) |
 | 5 | The agent forgets its own edits | File records at their newest state (fixed) |
 | 6 | A shell failure is read as success | The attempt is failed (fixed) |
 | 7 | A rename leaves a stale fact | The record prints "changed since <sha>, unverified", or "gone at <sha>" once the path or symbol no longer exists; never deleted |
@@ -329,9 +365,9 @@ in a majority of runs.
 | 18 | A forget is injected through tool output, or planted in a README | Staged; shared memory unchanged |
 | 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes |
 | 20 | A dream hypothesis is asserted as fact | Never in fact classes, also when clean inputs over-generalize into a rule |
-| 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt, and a "read file X" item only on a line unique to X in tool output |
-| 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale"; constraints show the resolved current set with superseded items marked |
-| 23 | Compaction comes late on a 1M window | With the quality trigger on, it fires; nothing below the floor is consolidated |
+| 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt, and a "read file X" item only on a line unique to X in tool output (passes: phase 3) |
+| 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale"; constraints show the resolved current set with superseded items marked (passes: phase 3; a superseded rule is left out of the registry, its successor ends with `(was <id>)`) |
+| 23 | Compaction comes late on a 1M window | With the quality trigger on, it fires; nothing below the floor is consolidated (passes: phase 3, both behind settings that ship off) |
 | 24 | A stored opinion becomes a rule (sycophancy) | The record keeps the claim and the pushback, is a claim record out of fact queries, and is not a rule (passes: phase 2 part D) |
 | 25 | An insecure preference is stored and applied | Held, listed in `/om:status`, never in the index |
 | 26 | A project record goes stale against HEAD | "changed since <sha>, unverified" on a changed hash, "gone at <sha>" only when the path or symbol is absent; level 1 re-checks the claim against the diff; no structure line in the ledger |

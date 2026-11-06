@@ -5,13 +5,17 @@
 //	go run ./cmd/memeval -seeds 20
 //	go run ./cmd/memeval -suite forgetting -seeds 5
 //	go run ./cmd/memeval -suite sharing -seeds 5
+//	go run ./cmd/memeval -suite constraintrot
+//	go run ./cmd/memeval -suite arcbench -arcbench-cases <dir>/data/rule-loss/cases.jsonl
 //
 // The forgetting (Tier 0b) and sharing (Tier 0c) suites print a table of checks each, pass, fail
 // or not built; their only requests are scripted level-1 replies a fake host serves.
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -29,7 +33,8 @@ func main() {
 	window := flag.Int("window", 0, "context window in tokens (0: the default small window)")
 	summaryMax := flag.Int("summary-max", 0, "summary cap in tokens, as compactionSummaryMaxTokens (0: none)")
 	noSnippets := flag.Bool("no-snippets", false, "do not run the printed snippets (every unshown probe counts as lost)")
-	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c) or all")
+	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), all, constraintrot or arcbench")
+	arcCases := flag.String("arcbench-cases", "", "ARCBench's data/rule-loss/cases.jsonl (data only; its code is never run)")
 	flag.Parse()
 	serialize.Location = time.UTC
 
@@ -92,11 +97,46 @@ func main() {
 	}
 	switch *suite {
 	case "tier0", "all":
+	case "constraintrot":
+		w := cfg.Window
+		results, err := memeval.ConstraintRot(context.Background(), w, 1, []int{1, 2, 4}, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		capped := w
+		capped.SummaryMaxTokens = 1200
+		cappedResults, err := memeval.ConstraintRot(context.Background(), capped, 1, []int{1, 2, 4}, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("ConstraintRot rebuild: %d policies, level 0, 0 model requests (violations need an agent model: ready, not run)\n\n", len(memeval.ConstraintRotPolicies))
+		fmt.Print(memeval.RuleTable(results))
+		fmt.Println()
+		fmt.Println("With the summary capped at 1,200 tokens:")
+		fmt.Println()
+		fmt.Print(memeval.RuleTable(cappedResults))
+		return
+	case "arcbench":
+		cases, err := readARCBench(*arcCases)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(2)
+		}
+		results, err := memeval.ARCBench(context.Background(), cases, []int{0, 750, 300})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("ARCBench rule-loss cases: %d, level 0, 0 model requests (violation@3 needs the agent model: ready, not run)\n\n", len(cases))
+		fmt.Print(memeval.ARCBenchTable(results))
+		return
 	case "forgetting", "sharing":
 		suites(nil)
 		return
 	default:
-		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing or all")
+		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing, all, constraintrot or arcbench")
 		os.Exit(2)
 	}
 	m, err := memeval.Measure(context.Background(), cfg, lister)
@@ -128,4 +168,27 @@ func main() {
 		fmt.Println()
 		suites(m.Runs)
 	}
+}
+
+// readARCBench reads ARCBench's cases file as data: one JSON object per line.
+func readARCBench(path string) ([]memeval.ARCBenchCase, error) {
+	if path == "" {
+		return nil, fmt.Errorf("-suite arcbench needs -arcbench-cases")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []memeval.ARCBenchCase
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<24)
+	for scanner.Scan() {
+		var c memeval.ARCBenchCase
+		if err := json.Unmarshal(scanner.Bytes(), &c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, scanner.Err()
 }

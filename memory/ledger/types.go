@@ -166,6 +166,10 @@ type Observation struct {
 	// the preferences, rules and corrections of the exchange its reply belongs to. Code sets it;
 	// none for every other record.
 	RespondsTo []string `json:"respondsTo,omitempty"`
+	// Closes are the closing links a receipt record carries (Closure, docs/brain-memory.md,
+	// decision 16): each plan its tool receipt closed, with the receipt record's id. Code sets it;
+	// none for every other record.
+	Closes []Closure `json:"closes,omitempty"`
 	// The encoding fields (docs/brain-memory.md, "Encoding"; contracts/encoding.md) are set by
 	// code at write time and are not part of the record's id, so a record keeps its id whichever
 	// engine or session wrote it. Every one is "" or zero, and omitted, for a record written
@@ -185,6 +189,10 @@ type Observation struct {
 	// Episode is the id of the episode the record belongs to (EpisodeID): the one the newest
 	// request the person typed at or before the record's newest source entry opened.
 	Episode string `json:"episode,omitempty"`
+	// DerivedFrom is the entry id of the request a plan (status proposed) was made under: the
+	// newest request the person typed at or before its newest source entry, its own entry for a
+	// plan the person stated. A newer request bearing on the plan's keys shows it "may be stale".
+	DerivedFrom string `json:"derivedFrom,omitempty"`
 	// Keys are the exact strings the record can be looked up by (Keys.Add).
 	Keys Keys `json:"keys,omitzero"`
 	// Frame is where in a repository the record was made (the adapter's host.Repo).
@@ -526,6 +534,7 @@ func ObservationFrom(v any) (Observation, bool) {
 	observation.Conflicts = observation.linkIDs(m["conflicts"])
 	observation.Replaces = observation.linkIDs(m["replaces"])
 	observation.RespondsTo = observation.linkIDs(m["respondsTo"])
+	observation.Closes = observation.closuresFrom(m["closes"])
 	observation.readEncoding(m)
 	// Each supersedes element is checked on its own, so one bad element drops
 	// only itself.

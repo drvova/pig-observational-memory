@@ -171,6 +171,42 @@ func encodingCases() []encodingCase {
 			user("u3", "Now set the proxy port to 8080."),
 			assistant("a3", "Set the proxy port to 8080 in `deploy/app.yaml`."),
 		}, []string{"fact", "attempt", "evidence", "value", "assistant", "fact"}},
+		// Phase 3, working memory: receipts close plans, a read plan needs a line unique to the
+		// file, prose closes nothing, and a rule naming what it replaces supersedes it.
+		{"plan closed by exit 0", []session.Entry{
+			user("u1", "Next we will run the 3 pending migrations with `make migrate-up`."),
+			assistant("a1", bash("c1", "make migrate-up")),
+			result("r1", "c1", "bash", "Applied 3 migrations.", false),
+		}, []string{"fact/proposed", "attempt"}},
+		{"plan closed by a write", []session.Entry{
+			user("u1", "Next we will add rate limiting to `api/limit.go` with a burst of 20."),
+			assistant("a1", call{"c1", "edit", map[string]any{"path": "api/limit.go", "oldText": "a", "newText": "b"}}),
+			result("r1", "c1", "edit", "Edited api/limit.go", false),
+		}, []string{"fact/proposed", "file"}},
+		{"plan not closed by prose", []session.Entry{
+			user("u1", "Next we will add rate limiting to `api/limit.go` with a burst of 20."),
+			assistant("a1", "Done: rate limiting in `api/limit.go` is finished."),
+		}, []string{"fact/proposed"}},
+		{"plan not closed by a failed run", []session.Entry{
+			user("u1", "Next we will run the 3 pending migrations with `make migrate-up`."),
+			assistant("a1", bash("c1", "make migrate-up")),
+			result("r1", "c1", "bash", "Command exited with code 2", true),
+		}, []string{"fact/proposed", "attempt"}},
+		{"read plan closed by a unique line", []session.Entry{
+			user("u1", "Next we will read `docs/limits.md` for the 3 tiers."),
+			assistant("a1", call{"c1", "read", map[string]any{"path": "docs/limits.md"}}),
+			result("r1", "c1", "read", "tier three: enterprise, 900 rps", false),
+		}, []string{"fact/proposed", "attempt", "file"}},
+		{"read plan not closed without a unique line", []session.Entry{
+			user("u1", "Next we will read `docs/limits.md` for the 3 tiers."),
+			assistant("a1", call{"c1", "read", map[string]any{"path": "docs/other.md"}}, call{"c2", "read", map[string]any{"path": "docs/limits.md"}}),
+			result("r1", "c1", "read", "tier one: free", false),
+			result("r2", "c2", "read", "tier one: free", false),
+		}, []string{"fact/proposed", "file", "file"}},
+		{"rule replaces the rule it names", []session.Entry{
+			user("u1", "Always use `make test` for the tests."),
+			user("u2", "Actually, always use `make ci` for the tests, not `make test`."),
+		}, []string{"preference", "preference"}},
 		{"lockfile", reads("package-lock.json", "{\n  \"lockfileVersion\": 3\n}", false), []string{"convention", "file"}},
 		{"lockfile read failed", reads("pnpm-lock.yaml", "ENOENT: no such file", true), []string{"attempt"}},
 		{"go.mod", reads("/work/app/go.mod", "module example.com/app\n\ngo 1.26\n", false), []string{"convention", "file"}},

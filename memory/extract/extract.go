@@ -123,6 +123,12 @@ type record struct {
 	// answers is a pushback record's exchange: the branch index of the user message whose
 	// claims it answers (resolvePushbacks); -1 for any other record.
 	answers int
+	// receipt is what the record's tool call or file state can close (resolveClosures), nil
+	// for none.
+	receipt *receipt
+	// replacesRule is the phrase a user rule says it replaces ("use X, not Y"; the Y holding a
+	// key), "" for none (resolveRuleReplacements).
+	replacesRule string
 }
 
 // extraction is one Extract call's state.
@@ -159,8 +165,13 @@ type extraction struct {
 	// user texts.
 	exchange      int
 	exchangeTexts []string
-	// episodes are the episode ids by branch index (Episodes), "" before the first request.
+	// episodes are the episode ids by branch index (Episodes), "" before the first request;
+	// requests the newest request's index by branch index (Requests).
 	episodes []string
+	requests []int
+	// outputs are the tool calls' outputs in the range, in order, for a read receipt's unique
+	// line.
+	outputs []callOutput
 }
 
 // Extract reads the source entries of in.Entries[in.Start:in.End] and returns the records
@@ -231,9 +242,12 @@ func Extract(in Input) Result {
 	x.resolveRetractions()
 	// A phrase retraction that withdrew nothing became the correction it would have been.
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil && r.correction == r.fallback })
+	x.resolveRuleReplacements()
 	x.linkRecords()
 	x.resolvePushbacks()
+	x.resolveClosures()
 	x.episodes = Episodes(in.Entries, in.End, in.Writer.Session)
+	x.requests = Requests(in.Entries, in.End)
 	x.encode()
 	result := Result{Batches: x.batches(cite)}
 	if last >= 0 {

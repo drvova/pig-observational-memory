@@ -35,6 +35,8 @@ before.
 | `keys` | `{paths, symbols, commands, tests, errors, config, versions}`, each a list of strings | What level 0 knows (below); extractors add more through `ledger.Keys.Add` (`keys-add`) |
 | `frame` | `{repoId, branch, head, path, symbol, bodyHash}` | The adapter's repository (below) and the record's one path |
 | `writer` | `{harness, session, model, engine}` | The host: its harness name, the session id, the session model's key (`provider/id`), and `go` or `lisp` |
+| `derivedFrom` | an entry id | A plan's request (below, "Derived from") |
+| `closes` | a list of `{id, closedBy, receipt}` | The closing links a receipt record carries (below, "Receipts") |
 
 `scope` keeps its meaning (the qualifier that tells two figures apart) and may also hold
 `session`, `project:<repoId>`, `user` or `global` (`ledger.Scope*`, `ledger.ProjectScope`). Level 0
@@ -192,6 +194,55 @@ class, beside its pushback.
 `contracts/encoding.jsonl` holds the marker, concession, restatement and episode-id cases, and
 `contracts/conversation.jsonl` the records of pushback and episode branches, which both engines
 check.
+
+### Derived from
+
+A record stated as a plan (status `proposed`) carries `derivedFrom`, the entry id of the newest
+request the person typed (as "Episode" reads requests) at or before its newest source entry: its own
+entry for a plan the person stated. Code sets it; it enters no id. A plan is shown `(may be stale
+<entry id>)` while a later request, after the plan and after `derivedFrom`, not ending with a question
+mark, names one of its **stale terms**: the keys of its text (`ledger.RecordKeys`, a leading `./`
+dropped) and, for a key holding `/` or `.`, its last path element without the extension when that is
+at least four characters long and differs from the key. A request names a term when a key of its text
+matches it as receipts do (below), or, for a term with no space, `/`, `.` or backquote, when the term
+lower-cased is a whole word of the request lower-cased (words are runs of ASCII letters, digits, `-`
+and `_`). The newest such request is named.
+
+### Receipts
+
+A plan closes only on a **receipt** whose keys match one of its keys, a key `k` matching a receipt
+key `r` (both with a leading `./` dropped) when they are equal, when the longer ends with `/` followed by the
+shorter and the shorter holds `/` or `.`, or, for an `r` holding a space, when `r` holds `k` as whole
+space-separated words or one of its words matches `k` as a path does. The receipts, read from the new
+records of an extraction in branch order:
+
+- `exit 0`: an attempt whose shell command worked; keys: the command and the call's key;
+- `write`: a file record written or edited by a tool call (never a path the host only reported);
+  keys: its path;
+- `commit`: a commit record; keys: its hash and the keys of its subject;
+- `read`: a worked call whose tool reads a file; keys: its path. It closes only a **read plan**, one
+  whose words (as above) hold `read`, `reread`, `re-read` or `look` followed by `at`, and only when
+  its output holds a line, trimmed, at least 8 bytes long with an ASCII letter, that no output of a
+  call on another target in the extraction holds. No other receipt closes a read plan.
+
+Each receipt closes, once, every standing plan before it (status `proposed`, not superseded, named by
+no earlier closing link) it matches: the ledger's plans first, then the extraction's. The link is
+written on the receipt record as `{"id": <plan>, "closedBy": <receipt id>, "receipt": <kind>}`; a
+worked call that would close a plan and makes no attempt record of its own (no words of the model's)
+makes one. The first link naming a plan, in ledger order, closes it. Assistant prose is never a
+receipt.
+
+### Rule replacements
+
+A user rule (kind `preference`, no status) naming what it replaces by "not X but Y", "instead of X"
+or a closing ", not X", the first such phrase that holds a key, supersedes every earlier standing rule
+of the user's (kind `preference`, no status, not superseded) whose keys hold every key of the phrase:
+"Actually, always use `make ci` for the tests, not `make test`." supersedes "Always use `make test`
+for the tests.".
+
+`contracts/encoding.jsonl` holds the key-match, stale-term, bears-on, read-plan, scope-exclusion and
+replaced-rule cases, and `contracts/conversation.jsonl` the records of receipt, read-plan and
+replacement branches, which both engines check.
 
 ### Writer
 

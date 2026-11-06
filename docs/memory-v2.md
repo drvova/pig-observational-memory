@@ -398,6 +398,8 @@ Records are taken in ordered classes, newest first within a class; a record that
 skipped and selection continues:
 
 1. the split turn's opening request;
+1a. the constraints registry (see "Working memory"): the user's rules and scope exclusions in force,
+   newest first, at most the session model's caps, ahead of every other class;
 1b. the next steps: plans still standing (`proposed`, not superseded or retracted) and open or failed
    attempts no later attempt resolved, anchored at or after the latest user request the summary
    quotes (the split turn's or the intent's), shown in their own `next` section and not in the notes
@@ -460,6 +462,71 @@ so an omitted row's snippet or ``om.History(om.Search(`<words>`))`` runs before 
 not mentioned. The numbers are the choice's (`Result.Omitted`, `Result.Spans`); the line costs its
 estimate inside the summary budget, and a summary that leaves nothing out prints none.
 `ledger.TablesSummaryBody` skips it (`ledger.OmittedNoticeStart`), so the tables still decode.
+
+### Working memory
+
+Phase 3 of `docs/brain-memory.md` (decisions 15 and 16) gives the summary working-memory slots, all
+built by code from the ledger at compaction and never shown as per-turn cues:
+
+- **The constraints registry.** After the notes tables (before `omitted`) a `constraints` table
+  (`content`, `source`; a `## constraints` heading in the lines format) holds the resolved current set
+  of the user's own rules, constraints and scope exclusions: records of kind preference that
+  `ledger.UserPriority` grants, none superseded, retracted, hypothetical, contested
+  (`ledger.Contested`) or held (`ledger.HeldRule`, dropped before rendering). Each is verbatim, with
+  its `(was <id>)` pointer when it replaced a rule, and its source. A rule naming what it replaces by
+  the correction forms ("use `make ci`, not `make test`", "instead of X", "not X but Y") with a key in
+  the replaced phrase supersedes every earlier standing rule of the user's holding all of that
+  phrase's keys (`extract.resolveRuleReplacements`), so the registry never shows both. The registry is
+  class 1a: its reserve is all the room the split turn's request leaves, bounded by the caps, so the
+  rules stay shown under a tight cap. A member the registry has no room or cap for goes back to its
+  notes table and competes in class 2.
+- **Finished plans with their receipts.** A plan (status `proposed`) closes only on a tool receipt
+  matching its keys (`ledger.PlanKeys`, `ledger.KeyMatches`: the same key, an absolute path ending
+  in the relative one, or a command holding it as whole words): a shell command that exited 0 (a test
+  run that passed is one), a successful file write or edit, or a commit. A "read file X" plan
+  (`ledger.IsReadPlan`) closes only on a worked call on X whose output holds a line, at least 8 bytes
+  with a letter, that no other tool output of the extraction holds. Assistant prose never closes
+  anything. Level 0 records the closing link on the receipt record (`closes: [{id, closedBy,
+  receipt}]`, `ledger.Closure`; a worked call that would close a plan is recorded even without the
+  model's words), and the first link naming a plan closes it (`ledger.ClosedBy`). A closed plan shows
+  status `done` and ends with `(closed by <id>: <receipt>)`; the session model's Actions cap of them
+  (the newest receipts) are in `next` beside the open steps, the rest in their notes tables, and none
+  is ever shown as pending.
+- **Staleness.** A plan's record carries `derivedFrom`, the entry id of the request it was made under
+  (the newest request the person typed at or before it; contracts/encoding.md, "Derived from"). An
+  open plan is shown `(may be stale <entry id>)` when a later request of the person's, opening
+  another episode and not a question, names one of the plan's keys or a path key's file stem of at
+  least four characters as a whole word (`ledger.StaleTerms`, `ledger.BearsOn`): detection runs from
+  stored state toward the plan, so the plan's own text never needs to say what changed.
+- **Caps and the also: line.** The caps are per model (`workingMemoryConstraints` 10,
+  `workingMemoryScopeExclusions` 10 and `workingMemoryActions` 5 by default, each also under
+  `modelLimits["<provider>/<id>"]`; `config.Config.LimitsFor`, `hooks.V2Slots`). Members the summary
+  shows nowhere are named in one `also:` line after `---`, counted per slot, with an om snippet that
+  lists them (``om.Notes(om.Kind(`preference`))`` for constraints, ``om.Notes(om.WithStatus(`proposed`))``
+  for finished plans, whose records keep status proposed).
+
+Each section's or row kind's instructions line (`constraints`, `done`, `may be stale`, `also`) is
+printed only in a summary showing one, as the other sections' are. Working memory is session-scoped:
+it is read from the branch's ledger. Carrying the open intentions and constraints into the next
+session first needs the shared core of phase 6 and is not built.
+
+### The raw floor and the quality trigger
+
+Both ship off (decision 15) until the engine's own effective-length measurements show a gain for a
+model:
+
+- **Raw floor** (`rawFloor: true`; `rawFloorTokens`, 32,000 for a model with none set, per model under
+  `modelLimits`): a compaction whose PiG-reported `tokensBefore` is known and below the session
+  model's floor makes no level-1 request (`hooks.BelowRawFloor`; its report says so), so nothing below
+  the floor is consolidated.
+- **Quality trigger** (`qualityTrigger: true`; `qualityTriggerTokens`, 64,000 by default, per model):
+  with PiG's auto-compaction off, at an idle `agent_settled`, the trigger also asks PiG to compact
+  when the estimated tokens of the source entries after the latest compaction entry exceed the
+  threshold (`hooks.RawTokensSinceCompaction`, local estimates, since PiG reports no per-entry
+  usage), PiG's reported context is known and above the floor value. Window − reserve stays the hard
+  backstop, every rule of "Auto-compaction off" holds (never on unknown usage, the "Nothing to
+  compact" suspension until the tip changes), and the compaction it asks for is the extension's own,
+  so it runs level 0 only.
 
 ### Thinning aged tool results (no request)
 
@@ -578,7 +645,8 @@ extension then triggers a compaction at `agent_settled`, only when the agent is 
 reported context exceeds `window − reserveTokens` (PiG's own inequality, with `reserveTokens` read
 through the trusted config path with model overrides), and never while usage is unknown. That
 compaction runs level 0 only. A "Nothing to compact" answer suspends the trigger until the branch tip
-changes. `/om:status` says compaction is off and only level 0 runs.
+changes. `/om:status` says compaction is off and only level 0 runs. The quality trigger ("The raw
+floor and the quality trigger"), when on, may ask earlier under the same rules.
 
 ### Branches
 

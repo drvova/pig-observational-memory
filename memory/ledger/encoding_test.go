@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -83,6 +84,28 @@ func TestEncodingContractCases(t *testing.T) {
 				t.Fatal(err)
 			}
 			got = EpisodeID(m["session"], m["entry"])
+		case "keyMatches":
+			var m map[string]string
+			if err := json.Unmarshal([]byte(c.Input), &m); err != nil {
+				t.Fatal(err)
+			}
+			got = fmt.Sprint(KeyMatches(m["key"], m["receipt"]))
+		case "staleTerms":
+			got = strings.Join(StaleTerms(Observation{Content: c.Input}), " | ")
+		case "bearsOn":
+			var m struct {
+				Text  string   `json:"text"`
+				Terms []string `json:"terms"`
+			}
+			if err := json.Unmarshal([]byte(c.Input), &m); err != nil {
+				t.Fatal(err)
+			}
+			got = fmt.Sprint(BearsOn(m.Text, m.Terms))
+		case "readPlan":
+			got = fmt.Sprint(IsReadPlan(Observation{Content: c.Input}))
+		case "scopeExclusion", "replacedRule":
+			// Level 0's grammar: memory/extract's TestWorkingContractCases.
+			continue
 		default:
 			t.Fatalf("%s: unknown kind %q", c.Name, c.Kind)
 		}

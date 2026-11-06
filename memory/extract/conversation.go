@@ -271,6 +271,9 @@ func (x *extraction) user(i int) {
 		if correction {
 			r.correction = &target
 		}
+		if kind == "preference" {
+			r.replacesRule = replacedRulePhrase(sentence)
+		}
 		r.retraction = retraction
 		if retraction {
 			r.named = named
@@ -278,6 +281,58 @@ func (x *extraction) user(i int) {
 				r.fallback, r.fallbackStatus = fallback, statusOf(sentence)
 			}
 		}
+	}
+}
+
+// replacedRulePhrase is the phrase a rule names as what it replaces, by the correction forms
+// ("not X but Y", "instead of X", "Y, not X") with X holding a key (ledger.RecordKeys): "always
+// use `make ci`, not `make test`". "" for none.
+func replacedRulePhrase(sentence string) string {
+	sentence = strings.ReplaceAll(sentence, "’", "'")
+	for _, pattern := range []*regexp.Regexp{correctionNotBut, correctionInsteadX, correctionNotTail} {
+		for _, m := range pattern.FindAllStringSubmatch(sentence, -1) {
+			if phrase := strings.TrimSpace(m[1]); len(ledger.RecordKeys(phrase)) > 0 {
+				return phrase
+			}
+		}
+	}
+	return ""
+}
+
+// resolveRuleReplacements makes a user rule naming what it replaces (replacedRulePhrase)
+// supersede every earlier standing rule of the user's whose keys hold every key of that phrase,
+// so the constraints show the rules in force, never the one the user replaced (docs/memory-v2.md,
+// "Working memory"). Both are preferences stated as fact (ledger.MaySupersede holds).
+func (x *extraction) resolveRuleReplacements() {
+	type rule struct{ id, content string }
+	earlier := []rule{}
+	for _, o := range x.in.Ledger.ActiveObservations {
+		if o.Kind == "preference" && ledger.UserPriority(o) && o.Status == "" && !x.superseded[o.ID] {
+			earlier = append(earlier, rule{o.ID, o.Content})
+		}
+	}
+	for _, r := range x.records {
+		if r.obs.Kind != "preference" || r.obs.Status != "" {
+			continue
+		}
+		if r.replacesRule != "" {
+			keys := ledger.RecordKeys(r.replacesRule)
+			for _, c := range earlier {
+				if x.superseded[c.id] || c.id == r.obs.ID {
+					continue
+				}
+				held := ledger.RecordKeys(c.content)
+				all := true
+				for _, k := range keys {
+					all = all && slices.Contains(held, k)
+				}
+				if all {
+					r.obs.Supersedes = append(r.obs.Supersedes, c.id)
+					x.superseded[c.id] = true
+				}
+			}
+		}
+		earlier = append(earlier, rule{r.obs.ID, r.obs.Content})
 	}
 }
 

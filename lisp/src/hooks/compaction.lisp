@@ -23,8 +23,60 @@ custom entry after the tip from its type and its data's JSON text and returns th
 
 (defstruct hconfig
   "The settings the hook reads (config.Config): passive, consolidate, compactionSummaryMaxTokens,
-memoryFormat."
-  (passive nil) (consolidate-off nil) (summary-max 0) (memory-format "tables"))
+memoryFormat, the working-memory limits (global and per model) and rawFloor."
+  (passive nil) (consolidate-off nil) (summary-max 0) (memory-format "tables")
+  (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil))
+
+;;; config/working.go: working memory's caps, the raw floor and the quality threshold
+
+(defparameter +limit-keys+
+  '("workingMemoryConstraints" "workingMemoryScopeExclusions" "workingMemoryActions" "rawFloorTokens" "qualityTriggerTokens")
+  "config.limitKeys, in ModelLimits order.")
+(defparameter +limit-defaults+ '(10 10 5 32000 64000)
+  "The defaults: constraints, scope exclusions, actions, the raw floor and the quality threshold.")
+
+(defun read-limits (object)
+  "readLimits: the limit keys of one settings object, 0 for unset."
+  (mapcar (lambda (key)
+            (let ((v (and (hash-table-p object) (jget object key))))
+              (if (and (realp v) (> v 0) (= v (ftruncate v))) (truncate v) 0)))
+          +limit-keys+))
+
+(defun limits-over (base over)
+  "ModelLimits.over: over's set limits laid over base."
+  (mapcar (lambda (b o) (if (> o 0) o b)) base over))
+
+(defun read-model-limits (object into)
+  "modelLimits: each \"<provider>/<id>\" entry's set limits laid over into's (a hash table, made
+when nil); returns it."
+  (when (hash-table-p object)
+    (maphash (lambda (key value)
+               (let ((limits (read-limits value)))
+                 (when (and (hash-table-p value) (some #'plusp limits))
+                   (unless into (setf into (make-hash-table :test 'equal)))
+                   (setf (gethash key into) (limits-over (gethash key into (list 0 0 0 0 0)) limits)))))
+             object))
+  into)
+
+(defun hook-model-pair (model)
+  "host.ModelProvider and host.ModelID of a session model (a decoded object), \"\" for none."
+  (if (hash-table-p model)
+      (let ((id (str (jget model "id"))))
+        (values (str (jget model "provider")) (if (string/= id "") id (str (jget model "modelId")))))
+      (values "" "")))
+
+(defun limits-for (limits model-limits model)
+  "Config.LimitsFor: the session model's modelLimits entry, else the global setting, else the
+default, field by field: (constraints scope-exclusions actions raw-floor quality-threshold)."
+  (multiple-value-bind (provider id) (hook-model-pair model)
+    (let ((out (limits-over +limit-defaults+ limits)))
+      (if (and model-limits (or (string/= provider "") (string/= id "")))
+          (limits-over out (gethash (cat provider "/" id) model-limits (list 0 0 0 0 0)))
+          out))))
+
+(defun below-raw-floor-p (raw-floor limits model-limits model tokens-before)
+  "BelowRawFloor: the floor is on and tokensBefore is known and below the model's floor."
+  (and raw-floor (> tokens-before 0) (< tokens-before (fourth (limits-for limits model-limits model)))))
 
 (defstruct cevent
   "hooks.BeforeCompactEvent with its preparation's members."
@@ -223,6 +275,8 @@ own-trigger is runtime.CompactInFlight: the extension's own compaction."
         ((hconfig-passive cfg) "passive mode")
         (own-trigger "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only")
         ((string= (cevent-reason event) "overflow") "an overflow compaction runs level 0 only, so recovery is not delayed")
+        ((below-raw-floor-p (hconfig-raw-floor cfg) (hconfig-limits cfg) (hconfig-model-limits cfg) model (cevent-tokens-before event))
+         "the context is below the session model's raw floor: nothing is consolidated")
         ((or (null cut) (< (entry-index-for-id entries (cevent-first-kept event)) 0)) "the cut range is not on the branch")
         ((null model) "the session model is unavailable: no session model")
         (t (error "level 1 with a session model is not ported"))))
@@ -304,7 +358,8 @@ is skipped with level1-skip-reason's report."
              (r (render-summary observations folded entries memory-budget
                                 :reflections reflections :request request :intent (v2-intent entries cut request)
                                 :format fmt :codec (profile-codec fmt) :aliases (projection-aliases projection)
-                                :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded)))))
+                                :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded))
+                                :slots (subseq (limits-for (hconfig-limits cfg) (hconfig-model-limits cfg) model) 0 3))))
         (when (and (string/= (summary-text r) "") (<= (estimate-tokens (summary-text r)) memory-budget))
           (setf summary (summary-text r) kind "records"
                 shown (append (mapcar #'refl-id (summary-reflections r)) (mapcar #'obs-id (summary-observations r))))

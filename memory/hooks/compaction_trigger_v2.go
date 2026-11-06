@@ -101,12 +101,20 @@ func maybeTriggerCompactionV2(rt *runtime.Runtime, h host.Host, cfg config.Confi
 		return nil
 	}
 	threshold := ReadV2Threshold(cfg, h)
-	if !threshold.Exceeded() {
+	// The quality trigger (off by default; working_v2.go) may ask before PiG's threshold, which
+	// stays the hard backstop.
+	quality, qualityOn := ReadQualityTrigger(cfg, h, entries)
+	due := func(t V2Threshold, q QualityTrigger) bool { return t.Exceeded() || qualityOn && q.Due(t) }
+	if !due(threshold, quality) {
 		return nil
 	}
 	rt.SetCompactionBackoff(nil)
 	sessionIdentity := sessionIdentityOf(h)
-	notifyUI(h, fmt.Sprintf("Observational memory: context ~%s tokens is over PiG's threshold %s (window - reserveTokens) and PiG's auto-compaction is off; compacting (level 0)", jsfmt.Locale(*threshold.Tokens), jsfmt.Locale(threshold.Limit())), "info")
+	if threshold.Exceeded() {
+		notifyUI(h, fmt.Sprintf("Observational memory: context ~%s tokens is over PiG's threshold %s (window - reserveTokens) and PiG's auto-compaction is off; compacting (level 0)", jsfmt.Locale(*threshold.Tokens), jsfmt.Locale(threshold.Limit())), "info")
+	} else {
+		notifyUI(h, fmt.Sprintf("Observational memory: ~%s raw tokens since the last compaction are over the quality threshold %s (context ~%s tokens); compacting (level 0)", jsfmt.Locale(quality.Raw), jsfmt.Locale(quality.Threshold), jsfmt.Locale(*threshold.Tokens)), "info")
+	}
 	deferred = true
 	done := make(chan struct{})
 	go func() {
@@ -127,7 +135,8 @@ func maybeTriggerCompactionV2(rt *runtime.Runtime, h host.Host, cfg config.Confi
 			rt.SetCompactInFlight(false)
 			return
 		}
-		if !ReadV2Threshold(cfg, h).Exceeded() {
+		current, _ := ReadQualityTrigger(cfg, h, currentEntries)
+		if !due(ReadV2Threshold(cfg, h), current) {
 			rt.SetCompactInFlight(false)
 			notifyUI(h, "Observational memory: compaction skipped — the context is no longer over PiG's threshold", "info")
 			return
