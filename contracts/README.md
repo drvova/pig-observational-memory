@@ -61,6 +61,14 @@ entropy test) and role-label escaping, which every engine applies byte for byte;
 and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secrets ./serialize
 -args -write`.
 
+## Level-0 encoding cases
+
+`encoding.jsonl` holds level 0's records for short branches that state rules, scope exclusions,
+decisions and read repository files (`docs/memory-v2.md`, level 0): each line is a branch's entries,
+its working directory and the records Go writes, which every engine must write byte for byte
+(`lisp/tests/encoding.lisp`). Rewrite it with `cd memory && go test ./extract -run EncodingCases
+-args -write` after a change to those rules.
+
 ## Golden corpus
 
 `golden/<fixture>/` holds, for each real transcript in `memory/transcript/testdata/real` (the SQL

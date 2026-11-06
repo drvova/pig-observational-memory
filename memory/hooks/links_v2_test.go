@@ -69,9 +69,9 @@ func TestV2Level1ConfirmsPossibleUpdate(t *testing.T) {
 		o.PossiblyUpdates = []string{oldID}
 	})
 	entries := []ledger.Entry{
-		userMessage("u0", "Staging deploys on port 8080"+strings.Repeat(", running the usual checks", 40)),
+		userMessage("u0", "Staging deploys on port 8080"+strings.Repeat(", running the usual checks", 42)),
 		testfix.ObservationsRecordedEntry("om-0", []ledger.Observation{old}, "u0"),
-		userMessage("u1", "Staging now uses port 9090"+strings.Repeat(", after the usual checks", 40)),
+		userMessage("u1", "Staging now uses port 9090"+strings.Repeat(", after the usual checks", 42)),
 		assistantMessage("a1", "Noted."),
 		testfix.ObservationsRecordedEntry("om-1", []ledger.Observation{later}, "a1"),
 		userMessage("u2", "Next please"),

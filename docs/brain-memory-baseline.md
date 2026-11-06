@@ -129,7 +129,7 @@ column gives that result.
 |---|---|---|---|
 | 1 | identifier after 5 compactions | **pass** | |
 | 2 | constraint in every rule class (ledger ≥ 3× what is shown) | **pass** | |
-| 2 | scope exclusion in every rule class | skip, phase 2 | fails: not recorded |
+| 2 | scope exclusion in every rule class | **pass** (phase 2C) | |
 | 3 | rule verbatim with its source after an approval-like request | **pass** | |
 | 4 | completed migration never shown as pending | **pass** | |
 | 5 | own edits at their newest state (edited, written, deleted, reverted) | **pass** | |
@@ -156,11 +156,57 @@ column gives that result.
 | 25 | insecure preference held, not in the index | skip, phase 1 | fails: in the index |
 | 26 | project record stale against HEAD | skip, phase 4 | no body yet |
 
-Nine pass today: 1, 2 (constraint), 3, 4, 5, 6, 9 (session), 15 and 16. Scenarios 10, 11, 12,
+Nine passed at the baseline: 1, 2 (constraint), 3, 4, 5, 6, 9 (session), 15 and 16. Phase 2C
+(below) makes 2 (scope exclusion) pass and adds a decision probe (`TestDecisionWithReasonRecorded`). Scenarios 10, 11, 12,
 13 and 18 belong to the two phase 1 branches (`claude/phase1-forget-evidence` and
 `claude/phase1-secrets-roles`), and so does 25. Their bodies assert the expected outcome with
 today's APIs. A body may need adjusting to the API its phase adds. Scenarios 10 and 11 already
 pass with the inputs given; the phase that owns them may strengthen the inputs.
+
+## After phase 2C: conversation encoding
+
+Phase 2C (`claude/phase2-conversation`, `docs/memory-v2.md` "Standing rules and scope
+exclusions", "Keys", "Decisions" and "Repository conventions") adds the rule verbs, scope
+exclusions, substitutions, standing and process rules and team forms to level 0, records decisions
+with their reasons as kind `decision`, keeps a rule's and a decision's keys through level 1, and
+records repository conventions from read tool results. The same 20 seeds, default window (1,482
+snippets run, none failing, 0 requests):
+
+| class | 1 | 2 | 4 | 5 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| identifier | 100 / 0 / 0 | 97 / 3 / 0 | 90 / 10 / 0 | 85 / 15 / 0 | 61 / 39 / 0 | 59 / 41 / 0 | 47 / 53 / 0 | 38 / 62 / 0 |
+| error text | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| decision | 95 / 5 / 0 | 85 / 15 / 0 | 70 / 30 / 0 | 51 / 49 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | 99 / 1 / 0 | 93 / 7 / 0 | 88 / 12 / 0 | 80 / 20 / 0 | 45 / 55 / 0 | 38 / 63 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| probes per class | 120 | 119 | 100 | 100 | 99 | 80 | 60 | 60 |
+
+With the summary capped at 1,200 tokens (3,190 snippets, none failing):
+
+| class | 1 | 2 | 4 | 8 | 16 | 20 |
+|---|---|---|---|---|---|---|
+| identifier | 23 / 77 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 34 / 66 / 0 | 0 / 100 / 0 |
+| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 68 / 32 / 0 | 10 / 90 / 0 |
+| decision | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | 24 / 76 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 71 / 29 / 0 | 0 / 100 / 0 |
+
+- **Scope exclusions** go from 91–100% lost to 100% shown at every N in the default window, and
+  are never lost under the cap.
+- **Decisions** go from 100% lost to never lost: shown at first (95% at N = 1), then reachable
+  through the printed snippet once the ledger outgrows the budget. A decision is not a user rule,
+  so it competes with the other records (class 4 with specifics, else the last class); under the
+  cap it is reachable only.
+- **The cost, under the cap only.** Every probe round now adds a scope exclusion to the user rule
+  class, so at 16 and 20 compactions the 1,200-token summary has no room for every rule: older
+  constraints, exclusions and corrections move from shown to reachable (the baseline showed 97–100%
+  of constraints at N = 20). None is lost, and the default window shows all of them. The
+  summary's header also names the two new kinds, a few tokens on every summary.
+- **Error text** is unchanged: it belongs to the tool-output work (`claude/phase2-tool-output`).
+- The invariants held on all 600 compactions of both runs.
 
 ## Re-running it
 
