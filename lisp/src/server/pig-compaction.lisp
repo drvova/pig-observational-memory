@@ -236,14 +236,14 @@ stays empty)."
   (concatenate 'string "omitted: the compacted conversation; the memory tool searches it ("
                om::+snippet-history-search+ ")."))
 
-(defun recovered-compaction-json (event reason)
+(defun recovered-compaction-json (event reason &optional (skip-tools (list om::+memory-tool+)))
   "hooks.v2RecoveredCompaction with the report's reason: the minimal brief of the cut range in
 its pointer form, bounded by the range, else the fallback summary."
   (let ((summary +v2-fallback-summary+))
     (ignore-errors
      (let* ((cut (om::source-entries (om::cut-range (om::cevent-branch event) event)))
             (removed (+ (om::source-tokens cut) (om::estimate-tokens (om::previous-summary (om::cevent-branch event) event))))
-            (brief (om::minimal-brief cut (list om::+memory-tool+) 0 removed)))
+            (brief (om::minimal-brief cut skip-tools 0 removed)))
        (when (and (stringp brief) (string/= brief "")) (setf summary brief))))
     (om::cresult-map-json
      (om::make-cresult :summary summary :first-kept (om::cevent-first-kept event)
@@ -265,7 +265,8 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
              (handler-case (host-call "host/appendEntry" "customType" type "data" (om::raw-json data-json))
                (error (e) (log-line "compaction: append ~A: ~A" type e)))
              "")
-   :cwd (scope-cwd)))
+   :cwd (scope-cwd)
+   :skip-tools (conn-skip-tools c)))
 
 (defun level1-would-run-p (cfg event model own)
   "Whether consolidateV2 would go past its skip checks to resolving the session model: level 1
@@ -287,7 +288,6 @@ session model. Such a compaction is not ported (level 1 is a later work package)
            (data (om::jget params "data")))
       (flet ((answer (result) (om::jobject "result" result "thinning" thinning)))
         (when (cancelled-p) (return-from answer-before-compact (answer :null)))
-        (check-skip-tools c "event/sessionBeforeCompact")
         (let* ((event (decode-before-compact data))
                (model (session-model))
                (store (if (rcfg-curated-memory cfg)
@@ -317,4 +317,4 @@ session model. Such a compaction is not ported (level 1 is a later work package)
                     ((string= (om::cevent-first-kept event) "") (error e))
                     (t (log-line "compaction recovered: ~A" e)
                        (answer (om::jobject "compaction"
-                                            (om::raw-json (recovered-compaction-json event (format nil "panic: ~A" e)))))))))))))))
+                                            (om::raw-json (recovered-compaction-json event (format nil "panic: ~A" e) (conn-skip-tools c)))))))))))))))

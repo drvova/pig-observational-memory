@@ -86,8 +86,10 @@ it instead.
   - **`detectV2` and keep-head run in the image** (docs/lisp-port-evidence.md). With a store and
     a session model the harness detectors run over what the extraction read, the keep-head
     rule's notes ride in its batches, and the detect event is recorded once the extraction
-    landed. A store with retired defined tools or rules written before the layer, and a branch
-    with a memory call in the removed query language, are refused before anything is appended.
+    landed. A store with rules written before the layer, and a branch with a memory call in the
+    removed query language (a call of a defined query the skip list holds included), are refused
+    before anything is appended. Retired defined tools' calls are memory plumbing through the
+    connection's skip list (docs/lisp-port-migration.md).
   - An extraction that fails before its first append is refused too.
 - **`event/context`.** It follows Go's rules:
   - `seq`/`base`/`reuse`, with `-32001` for a base the image does not hold;
@@ -130,7 +132,7 @@ in-process path.
 
 | Event | Go | The image |
 |---|---|---|
-| `event/sessionStart` | `ReloadConfig`, `engine.SessionStart` | The pin reset, then with a store (`engine.CuratedCall`: the configuration read fresh under `host/projectTrusted`, curated memory on, a `host/configHome`) the curated settle (`curated-settle` over the branch's corrections), each notice through `host/notify`. Refused first when the store holds retired defined tools (`definitions/`, `harness/_2a/tool/`) or a layer the v1 migration reads (any `harness/*/instructions/` file, or the removed `model` setting). |
+| `event/sessionStart` | `ReloadConfig`, `engine.SessionStart` | The pin reset, then with a store (`engine.CuratedCall`: the configuration read fresh under `host/projectTrusted`, curated memory on, a `host/configHome`) the curated settle (`curated-settle` over the branch's corrections), each notice through `host/notify`, after the retired defined tools' names are read into the connection's skip list (`NoteRetired`) and the v1 layer is migrated (`MigrateLayerV2`), each migration told through `host/notify` with a UI ([lisp-port-migration.md](lisp-port-migration.md)). Refused first only under a lowered kernel floor with layer data to read. |
 | `event/beforeAgentStart` | `engine.Index`, `SectionText` | `{"sections": {"curated-memory": ...}}`: the tool-note line, then the index through the connection's pin within `curatedMemoryIndexTokens`. Never a returned `systemPrompt`. |
 | `event/agentStart` | `hooks.OnAgentStart` | `EnsureConfig`, then `{"thinning": bool}`. |
 | `event/projectTrust` | `ReloadConfig` | The same. |
@@ -165,9 +167,8 @@ compaction slot free (`runtime.TryStartCompact`):
   `tokensBefore`, `messagesToSummarize`, `turnPrefixMessages`, `isSplitTurn`, `previousSummary`,
   `fileOps` and `settings.reserveTokens`, the branch entries, the reason and the custom
   instructions.
-- **Refusals, before any side effect.** In this order: a skip list the image does not hold
-  (retired tools, see session start); the harness hook point (a session model with a store, see
-  below); and level 1 when it would run, that is consolidation on, not passive, not the
+- **Refusals, before any side effect.** In this order: the harness hook point (a session model
+  with a store, see below); and level 1 when it would run, that is consolidation on, not passive, not the
   extension's own compaction, not an overflow, and a session model. Level 1 is a later work
   package, so the Go engine runs that compaction whole.
 - **Level 0.** Under the connection's extraction mutex, W5's `build-compaction` over the host:
@@ -226,8 +227,7 @@ goes, filled by the evidence work package ([lisp-port-evidence.md](lisp-port-evi
 - `tool/*` (the memory tool), `/om:status` and level 1. The harness's part of a compaction runs
   at the hook point above (docs/lisp-port-evidence.md), but for a profile that may not be the
   default, which is refused.
-- The store cases: a store with retired defined tools or a v1 layer to migrate (the names and
-  the migration are not read).
+- A session start under a lowered kernel floor with layer data to read (docs/lisp-port-migration.md).
 - A failed append inside the compaction is dropped, and the appends after it are still made; Go
   stops the extraction's appends at the first failure.
 - The `$/acted` notice for the image's direct store writes (the curated settle writes the store

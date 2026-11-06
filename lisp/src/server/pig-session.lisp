@@ -84,44 +84,21 @@ whatever the UI). An unreadable branch settles nothing."
           (dolist (notice (om.layer::settled-notices promoted flagged))
             (host-notify notice "info")))))))
 
-(defun dir-has-entries-p (pattern)
-  (and (directory pattern :resolve-symlinks nil) t))
-
-(defun retired-data-p (dir)
-  "Whether the store holds what harness.RetiredQueries reads (the layer's all-models tool
-definitions, or the legacy definitions directory, which curated.Store.migrateDefinitions also
-writes). The image does not read their names, so such a store is Go's to start."
-  (let ((dir (string-right-trim "/" dir)))
-    (or (dir-has-entries-p (format nil "~A/definitions/*.*" dir))
-        (dir-has-entries-p (format nil "~A/harness/_2a/tool/*.*" dir)))))
-
-(defun migration-data-p (dir cfg)
-  "Whether harness.MigrateLayerV2 may have work: written instructions in any model's layer
-(layer.Store.MigrateInstructions and MigrateToV2 read them), or the removed worker `model`
-setting naming a layer to fold. The migration is not ported, so such a store is Go's to start."
-  (or (rcfg-worker-model cfg)
-      (dir-has-entries-p (format nil "~A/harness/*/instructions/*.*" (string-right-trim "/" dir)))))
-
 ;;; Session start, project trust, agent start, compaction, shutdown
 
 (define-method "event/sessionStart" (params)
   ;; Server.handle: ReloadConfig, then engine.SessionStart: the pin reset, the namespace reset
   ;; and the detector pass stopped (the image holds neither), the retired defined tools' names
   ;; read (NoteRetired), the v1 layer migrated (MigrateLayer) and the curated evidence settled
-  ;; (SettleCurated). A store holding retired definitions or a layer to migrate is refused
-  ;; before the settle writes anything, and the image then refuses every later event that
-  ;; reads the skip list (check-skip-tools): Go's list grows with those names.
+  ;; (SettleCurated). The first two are server/migration.lisp's; a lowered kernel floor with
+  ;; layer work to do is refused there before anything is written.
   (with-event (c params)
     (conn-reload-config c)
     (om.layer::pin-reset (conn-pin* c))
     (multiple-value-bind (dir project cfg) (curated-call c)
       (declare (ignore project))
       (when dir
-        (when (retired-data-p dir)
-          (sb-thread:with-mutex ((conn-mutex c)) (setf (conn-retired-unknown c) t))
-          (not-ported "event/sessionStart with retired defined tools in the curated store (harness.Manager.NoteRetired)"))
-        (when (migration-data-p dir cfg)
-          (not-ported "event/sessionStart with a v1 layer to migrate (harness.MigrateLayerV2)"))
+        (session-start-layer c dir cfg)
         (settle-curated-pig c)))
     (om::jobject)))
 

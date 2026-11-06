@@ -194,7 +194,7 @@
                                                     extra)))))))
         (let ((r (jget (call "session-start" "with_summary" :true) "result")))
           (check (has-prefix (jget r "text") "The memory tool (MCP server om, tool memory):") t "no summary yet")
-          (check (coerce (jget r "remaining") 'list) '("migrate-layer")))
+          (check (gethash "remaining" r) nil "the layer migration ran on the image"))
         (call "turn-end")
         (let ((summary (jget (jget (call "compact" "reason" "manual") "result") "text")))
           (check (and (stringp summary) (string/= summary "") t) t "the summary")

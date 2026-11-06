@@ -11,8 +11,10 @@
 (defstruct (rcfg (:constructor make-rcfg ()))
   "The settings the ported events read (config.Config): passive, curatedMemory, consolidate,
 compactionSummaryMaxTokens, curatedMemoryIndexTokens and memoryFormat, the removed worker
-`model` setting (whether one is set), and the project trust they were read under (:trusted,
-:untrusted or :unknown)."
+`model` setting ((provider . id), config.Config.RemovedWorkerModel), the removed settings set to
+a valid value (RemovedSet, in config.RemovedSettings order), whether kernelFloor asks for a
+lowering with who and why, and the project trust they were read under (:trusted, :untrusted or
+:unknown)."
   (passive nil)
   (curated-memory t)
   (consolidate-off nil)
@@ -20,6 +22,8 @@ compactionSummaryMaxTokens, curatedMemoryIndexTokens and memoryFormat, the remov
   (index-tokens 2000)
   (memory-format "tables")
   (worker-model nil)
+  (removed '())
+  (floor-lowered nil)
   (trust :unknown))
 
 (defstruct (conn (:constructor %make-conn))
@@ -43,11 +47,11 @@ compactionSummaryMaxTokens, curatedMemoryIndexTokens and memoryFormat, the remov
   ;; hooks.extractMu for this connection's session: a PiG process runs one session at a time,
   ;; so it is a per-session mutex, which may be held while a host call waits.
   (extract-mutex (sb-thread:make-mutex :name "om extraction"))
-  ;; Set at a session start that found retired defined tools (or v1 definitions) in the store:
-  ;; their names join Go's skip list (harness.Manager.SkipNames), which the image does not
-  ;; read, so every event that reads the skip list is refused for the connection's life (the
-  ;; list only grows within a process).
-  (retired-unknown nil)
+  ;; harness.Manager's retired names (NoteRetired at each session start, server/migration.lisp):
+  ;; the retired defined queries no other tool held, which join the skip list (SkipNames). Go
+  ;; keeps one Manager per process and PiG one connection per process, so the set lives as long
+  ;; as the connection and only grows.
+  (retired-names '())
   (ended nil))
 
 (defun make-conn (params)
@@ -155,6 +159,13 @@ ones held when it still has the last of them at its place. A simple vector of en
   "config.positiveInteger: a whole number above 0, else nil."
   (and (realp v) (> v 0) (= v (ftruncate v)) (truncate v)))
 
+(defparameter +removed-settings+
+  '("observeAfterTokens" "reflectAfterTokens" "observerChunkMaxTokens" "compactionCatchUpMaxChunks"
+    "consolidateWhenIdle" "model" "fallbackModel" "observationsPoolTargetTokens" "observationsPoolMaxTokens"
+    "compactionMaxRetainedTokens" "compactAfterTokens" "compactAfterTokensMode" "compactAfterTokensRatio"
+    "workerMemoryMaxTokens" "agentMaxTurns" "agentMaxTokens" "showWorkerNotifications" "memoryEngine")
+  "config.RemovedSettings.")
+
 (defun apply-settings (cfg path)
   "readNamespaced(path).apply: the observational-memory object's booleans (passive,
 curatedMemory, consolidate), its positive integers (compactionSummaryMaxTokens,
@@ -173,11 +184,45 @@ curatedMemoryIndexTokens), memoryFormat, and whether the removed `model` setting
         (when n (setf (rcfg-index-tokens cfg) n)))
       (let ((f (gethash "memoryFormat" nested)))
         (when (member f '("tables" "lines") :test #'equal) (setf (rcfg-memory-format cfg) f)))
-      ;; config.normalizeSettings: the removed `model` setting (memory v1's worker model) is
-      ;; kept only to migrate its layer (removedValueValid: an object with a non-empty id).
+      ;; config.normalizeSettings: the removed settings set to a valid value (ignored; /om:status
+      ;; lists them), and the removed `model` setting (memory v1's worker model), kept only to
+      ;; migrate its layer.
+      (let ((removed (removed-settings-set nested)))
+        (when removed
+          (setf (rcfg-removed cfg)
+                (remove-if-not (lambda (k) (or (member k removed :test #'string=)
+                                               (member k (rcfg-removed cfg) :test #'string=)))
+                               +removed-settings+))))
       (let ((m (gethash "model" nested)))
-        (when (and (hash-table-p m) (stringp (gethash "id" m)) (string/= (gethash "id" m) ""))
-          (setf (rcfg-worker-model cfg) t))))))
+        (when (removed-value-valid-p "model" m)
+          (setf (rcfg-worker-model cfg) (cons (om::str (gethash "provider" m)) (gethash "id" m)))))
+      ;; config.normalizeFloor: kernelFloor {"lower": bool, "requestedBy", "reason"}, a later
+      ;; source overriding; a lowering without who and why leaves the floor engaged (Floor.Lower).
+      (let ((f (gethash "kernelFloor" nested)))
+        (when (and (hash-table-p f) (member (gethash "lower" f) '(:true :false)))
+          (setf (rcfg-floor-lowered cfg)
+                (and (eq (gethash "lower" f) :true)
+                     (string/= (om::trim-space (om::str (gethash "requestedBy" f))) "")
+                     (string/= (om::trim-space (om::str (gethash "reason" f))) ""))))))))
+
+(defun removed-value-valid-p (key v)
+  "config.removedValueValid: whether a removed setting's value is one memory v1 applied."
+  (cond ((string= key "compactionCatchUpMaxChunks") (and (realp v) (= v (ftruncate v)) (>= v 0)))
+        ((string= key "compactAfterTokensMode") (and (member v '("calibrated" "ratio") :test #'equal) t))
+        ((string= key "compactAfterTokensRatio") (and (realp v) (> v 0) (< v 1)))
+        ((member key '("model" "fallbackModel") :test #'string=)
+         (and (hash-table-p v) (stringp (gethash "id" v)) (string/= (gethash "id" v) "")))
+        ((string= key "memoryEngine") (and (member v '("v1" "v2") :test #'equal) t))
+        ((member key '("consolidateWhenIdle" "showWorkerNotifications") :test #'string=)
+         (and (member v '(:true :false)) t))
+        (t (and (positive-integer v) t))))
+
+(defun removed-settings-set (nested)
+  "The removed settings nested sets to a valid value, in config.RemovedSettings order."
+  (loop for key in +removed-settings+
+        when (multiple-value-bind (v present) (gethash key nested)
+               (and present (removed-value-valid-p key v)))
+          collect key))
 
 (defun load-config (c cwd trust)
   (multiple-value-bind (agent-dir dir-name) (conn-paths c)
@@ -222,8 +267,8 @@ lock; a reload during the check makes it ask again, and an unknown trust is not 
   "harness.StoreOf's answer: curated memory on and a config home the host names."
   (and (rcfg-curated-memory (conn-cfg c)) (string/= (host-string "host/configHome") "")))
 
-(defun check-skip-tools (c what)
-  "Refuses (not ported) an event that reads the memory tool names when the connection's skip
-list holds retired defined tools the image cannot name (conn-retired-unknown)."
-  (when (sb-thread:with-mutex ((conn-mutex c)) (conn-retired-unknown c))
-    (not-ported (format nil "~A with retired defined tools in the curated store (harness.Manager.SkipNames)" what))))
+(defun conn-skip-tools (c)
+  "harness.MemoryToolNames over the connection's manager (Manager.SkipNames): the memory tool,
+then the retired names NoteRetired added, in name order."
+  (cons om::+memory-tool+
+        (sort (copy-list (sb-thread:with-mutex ((conn-mutex c)) (conn-retired-names c))) #'string<)))

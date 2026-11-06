@@ -39,11 +39,9 @@ first that fails. Returns how many landed."
 
 (defun check-harness-store (store)
   "Refuses (not ported) a store whose harness data the image does not read the way Go does
-before anything is appended: retired defined tools (their names are memory plumbing and their
-calls memory queries) and rules written before the layer (which Go migrates first)."
-  (when (or (om.layer::dir-file-names (format nil "~A/harness/_2a/tool" store) ".rows")
-            (om.layer::dir-file-names (format nil "~A/definitions" store) ".rows"))
-    (not-ported "event/turnEnd with retired defined tools in the store"))
+before anything is appended: rules written before the layer (which Go migrates first). Retired
+defined tools are read (server/migration.lisp): their names are in the skip list, and a call of
+one the detectors read signals legacy-memory-call."
   (when (om.layer::go-legacy-rules-p store)
     (not-ported "event/turnEnd with rules written before the layer (rules.migrate)")))
 
@@ -61,10 +59,11 @@ removed query language, is refused (not ported), so the Go engine reads the turn
       (multiple-value-bind (batches covers)
           (handler-case (let* ((start (om::extraction-start-index branch)) (folded (om::fold-ledger branch)))
                           (multiple-value-bind (batches covers)
-                              (om::extract branch start (length branch) folded :skip-tools (list om::+memory-tool+)
+                              (om::extract branch start (length branch) folded :skip-tools (conn-skip-tools c)
                                                                                 :cwd (scope-cwd))
                             (multiple-value-bind (batches thunk)
-                                (om.layer::harness-detect store model branch start (length branch) folded batches covers)
+                                (om.layer::harness-detect store model branch start (length branch) folded batches covers
+                                                          :defined (and store (string/= covers "") (defined-queries c store)))
                               (setf record thunk)
                               (values batches covers))))
             (om.layer::legacy-memory-call (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e)))
@@ -82,7 +81,6 @@ removed query language, is refused (not ported), so the Go engine reads the turn
   (with-event (c params)
     (ensure-config c)
     (unless (rcfg-passive (conn-cfg c))
-      (check-skip-tools c "event/turnEnd")
       (let* ((store (store-dir c)) (model (if store (session-model-key) "")))
         (when (and store (string/= model "")) (check-harness-store store))
         (extract-turn c :store (and (string/= model "") store) :model model)))
@@ -118,7 +116,7 @@ Returns how many results it thinned; a failure leaves what it did so far (Go rec
                  (plan (sb-thread:with-mutex ((conn-mutex c))
                          (if (equal key (conn-thin-key c)) (conn-thin-plan c) :none))))
             (when (eq plan :none)
-              (setf plan (om::thin-plan (subseq branch 0 (1+ i)) (list om::+memory-tool+) (scope-cwd)))
+              (setf plan (om::thin-plan (subseq branch 0 (1+ i)) (conn-skip-tools c) (scope-cwd)))
               (sb-thread:with-mutex ((conn-mutex c)) (setf (conn-thin-key c) key (conn-thin-plan c) plan)))
             (if plan (om::thin-apply messages plan) 0))))
     (request-cancelled (e) (error e))
@@ -129,7 +127,6 @@ Returns how many results it thinned; a failure leaves what it did so far (Go rec
   ;; pristine list; -32001 when the image does not hold the request it builds on. The engine
   ;; edits deep copies and answers only the messages it changed.
   (with-event (c params)
-    (check-skip-tools c "event/context")
     (let* ((seq (param-int params "seq")) (base (param-int params "base")) (reuse (param-int params "reuse"))
            (raw (let ((m (om::jget params "messages"))) (if (and (vectorp m) (not (stringp m))) m #())))
            (pristine nil))

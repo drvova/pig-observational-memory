@@ -96,4 +96,10 @@
                 :serial t
                 :components ((:file "server/compaction-harness")
                              (:file "server/pig-session")
-                             (:file "server/pig-compaction")))))
+                             (:file "server/pig-compaction")))
+               ;; The retired names and the v1 layer migration at a session start (docs/lisp-port-migration.md)
+               (:module "migration"
+                :pathname "src"
+                :serial t
+                :components ((:file "layer/go-layer")
+                             (:file "server/migration")))))

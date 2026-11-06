@@ -56,9 +56,10 @@ events, so it stays held; `/om:status` lists it from Go.
 `event/turnEnd` with a store and a session model runs `harness-detect` over what the extraction
 read: the two kernel detectors, the keep-head rule's notes (origin `code`) placed in the batches of
 their cut-point segments, and the detect event recorded once the extraction landed. The turn end is
-refused (not ported, before any write) for a store with retired defined tools or with rules written
-before the layer (Go migrates those first), and for a branch with a memory call in the removed query
-language (`memory/legacyquery` is not ported).
+refused (not ported, before any write) for a store with rules written before the layer (Go migrates
+those first), and for a branch with a memory call in the removed query language, a call of a defined
+query the skip list holds included (`memory/legacyquery` is not ported). Retired defined tools are
+read at the session start (docs/lisp-port-migration.md).
 
 ## The retire rule (decision 6)
 
@@ -123,7 +124,7 @@ calls it from `neutral-compaction`; the neutral host has no session model
 
 - **Legacy rule migration** (`<store>/rules/*.rows`): not ported; the turn end refuses, and
   `after-pass` records the pass and skips evaluation.
-- **The legacy query language** in memory calls and retired defined tools: refused at a turn end.
+- **The legacy query language** in memory calls and calls of defined queries: refused at a turn end.
 - **The Go layer's held definitions** (`settleDefinitionsV2`, `layer.ClaimHeld`): not settled by the
   image. Level 1 offers text only (decision 5), so the image holds none; ones Go held are settled by
   Go. Only held remedies are credited in `ranHeld`, the one Go kind the image applies.
