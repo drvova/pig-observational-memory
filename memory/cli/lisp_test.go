@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -350,14 +351,37 @@ func TestLispStartsImage(t *testing.T) {
 	}
 }
 
-// With no image running and none configured, an event fails with what to set.
+// With no image running and none configured, an event runs on the Go engine; with falling back
+// off it fails with what to set.
 func TestLispNoImage(t *testing.T) {
 	_, home := env(t)
 	t.Setenv(EngineEnv, "lisp")
 	t.Setenv(LispImageEnv, "")
 	t.Setenv(LispSocketEnv, "")
 	p := genericFixture(t, home)
+	om(t, p, "hook", "generic", "turn-end")
+	if summary := om(t, p, "hook", "generic", "compact"); !strings.Contains(summary, "9000") {
+		t.Fatalf("summary on the Go engine %s", summary)
+	}
+	t.Setenv(LispFallbackEnv, "0")
 	if _, errOut, code := omErr(t, p, "hook", "generic", "turn-end"); code != 1 || !strings.Contains(errOut, LispImageEnv) {
 		t.Fatalf("exit %d: %s", code, errOut)
+	}
+}
+
+// An image that cannot start is unreachable (the Go engine may run instead); other errors are
+// not. An image that dies after a request was written is retried, never replaced by a Go run
+// (TestLispStartsImage's crash case).
+func TestLispUnreachableImage(t *testing.T) {
+	if !isUnreachable(&unreachableError{errors.New("x")}) || isUnreachable(errors.New("x")) {
+		t.Fatal("isUnreachable")
+	}
+	root, _ := env(t)
+	t.Setenv(EngineEnv, "lisp")
+	t.Setenv(LispImageEnv, filepath.Join(root, "no-such-image"))
+	t.Setenv(LispSocketEnv, "")
+	c := newLispClient(root)
+	if err := c.call("ping", map[string]any{}, nil); !isUnreachable(err) {
+		t.Fatalf("missing image: %v", err)
 	}
 }

@@ -57,7 +57,8 @@ harness hook / MCP / PiG
   engine lock) keyed by harness and session id. Stores on disk keep the formats in `contracts/schemas`,
   so the Go engine and the image read each other's data.
 - **Lifecycle:** `om` starts the image when the socket is absent or refuses, waits for it to listen,
-  and retries once. The image writes a pid file, exits after a period without clients (a setting), and
+  and retries once. While the Go engine remains, it runs any event the image has not ported or cannot
+  be reached for before the request is written (`OM_LISP_FALLBACK=0` turns this off). The image writes a pid file, exits after a period without clients (a setting), and
   takes a file lock so only one image runs per user. A crash loses only in-memory caches. Unsettled live
   edits are on disk as held definitions and load again.
 - **Heap:** the image starts with an explicit `--dynamic-space-size` and streams transcripts instead

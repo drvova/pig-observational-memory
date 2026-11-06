@@ -104,7 +104,7 @@ own file, loaded after `methods.lisp`. That replaces the not-ported entry.
 | `OM_LISP_IMAGE` | `observational-memory.lispImage` (absolute path) | The image to start |
 | `OM_ENGINE_SOCKET` | | The socket (default `<root>/engine.sock`) |
 | `OM_ENGINE_IDLE_SECONDS` | `observational-memory.lispIdleSeconds` | Passed to the image at start |
-| `OM_LISP_FALLBACK=0` | | Turn "not ported" into an error, instead of running the Go engine |
+| `OM_LISP_FALLBACK=0` | | Turn "not ported" and an unreachable image into errors, instead of running the Go engine |
 
 How it behaves:
 
@@ -119,10 +119,13 @@ How it behaves:
 4. **MCP.** It forwards each MCP message with an id. It writes the image's answer in the same field
    order `om` writes its own answers.
 
-**Decision to review:** falling back to the Go engine on "not ported" is on by default. This keeps
-a harness working while the port is partial: `OM_ENGINE=lisp` covers every event, and the image
-does what it can. Two things are errors, never a silent fallback: a failure to start or reach the
-image, and "not ported" with `OM_LISP_FALLBACK=0`.
+**Falling back** (the owner's decision: fallbacks are good practice while porting). The Go engine
+runs an event instead of the image, by default, in two cases: the image answers "not ported" (before
+any side effect), or it cannot be started or reached before the request is written (no image
+configured, a start that fails, a socket that never listens; noted in om's log). Nothing ran in
+either case, so nothing is done twice. A failure after a request was written is retried once on a
+fresh image and is otherwise an error, never a Go run, since the image may have acted on it.
+`OM_LISP_FALLBACK=0` makes both cases errors.
 
 ## Tests and measurements (Linux x86-64, SBCL 2.2.9)
 
