@@ -22,6 +22,27 @@ These four were made by the project owner:
 4. **Models write Lisp only.** The memory tool's language is Lisp. Definitions models stored as Go are
    listed but never run, as v1's data is.
 
+The owner then accepted these, from the next-steps research (kept outside the repo):
+
+5. **Level 1 offers text, not Go.** Level 1 asks only for consolidation instructions (text) until Lisp
+   detectors and Lisp adaptable proposals exist. It never asks for a Go definition. Model detectors
+   stored as Go are listed, never run, as decision 4 says.
+6. **A settled definition that keeps failing is reverted.** One compaction is one unit: a compaction
+   in which the definition ran and failed at least once fails, one in which it ran and never failed
+   passes, and one in which it never ran counts for neither. Three failing units in a row, or more
+   than three among the last ten that counted, revert it through a new generation, as a held one is
+   reverted. A kernel-check failure on load, or any failure that touches source coverage, reverts it at
+   once. Within a compaction interval, a definition stops being called after its second timeout.
+7. **Rule evaluation moves to Lisp.** No Go engine runs when the image serves PiG.
+8. **Evidence is a snapshot.** A compaction credits every held definition in the layer as it stood at
+   that compaction, kept per session, as `rules.SettleV2`'s `RanHeld` does in Go.
+9. **Where model code runs.** Adaptables on the hot path run in the image. Detector passes and memory
+   tool programs run in a child SBCL started from the same core, with a small heap, so a runaway one
+   is a process kill that unwinds nothing in the image.
+10. **Platforms and the tool text.** SBCL is pinned to a 2.6.x release built in CI. Windows keeps the
+    Go engine for the first release in which the image is the default. The memory tool's fixed text
+    becomes Lisp (with the last-value rule) for every model when a harness opts into the image.
+
 ## What stays in Go, and why
 
 - **`om`, the client** (`memory/cmd/om`): the command harnesses run. Hook events, MCP and `om call` are
