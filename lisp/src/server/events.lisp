@@ -38,12 +38,9 @@ first that fails. Returns how many landed."
          (and (string/= home "") (format nil "~A/observational-memory/memories" (string-right-trim "/" home))))))
 
 (defun check-harness-store (store)
-  "Refuses (not ported) a store whose harness data the image does not read the way Go does
-before anything is appended: rules written before the layer (which Go migrates first). Retired
-defined tools are read (server/migration.lisp): their names are in the skip list, and a call of
-one the detectors read signals legacy-memory-call."
-  (when (om.layer::go-legacy-rules-p store)
-    (not-ported "event/turnEnd with rules written before the layer (rules.migrate)")))
+  "The harness store's part before a turn end's extraction: rules written before the layer are
+migrated first (rules.migrate, src/harness/rule-migration.lisp), as Go's rules.For does."
+  (om.layer::migrate-legacy-rules store))
 
 (defun extract-turn (c &key store model)
   "hooks.extractTurnV2: level 0 over the entries after the furthest extraction marker, the
@@ -83,7 +80,9 @@ removed query language, is refused (not ported), so the Go engine reads the turn
     (unless (rcfg-passive (conn-cfg c))
       (let* ((store (store-dir c)) (model (if store (session-model-key) "")))
         (when (and store (string/= model "")) (check-harness-store store))
-        (extract-turn c :store (and (string/= model "") store) :model model)))
+        ;; The store's kernel floor (src/harness/floor.lisp) applies to the definitions it reads.
+        (let ((om::*kernel-floor-lowered* (conn-floor-lowered-p c store)))
+          (extract-turn c :store (and (string/= model "") store) :model model))))
     (thinning-result c)))
 
 ;;; Context

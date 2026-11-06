@@ -189,6 +189,13 @@ func lispFlow(t *testing.T, image string) string {
 	section("generic session start with memories", text)
 	section("its notices", log)
 	section("the curated store after it", curatedStore(t, root, fixtureLines))
+	// om status runs on the image (docs/lisp-port-status.md): everything before its code
+	// section, which the image redefines for the Lisp layer, is Go's.
+	status := om(t, "", "status", "--harness", "mine", "--dir", home)
+	if i := strings.Index(status, "\n\n── Code ──"); i >= 0 {
+		status = status[:i] + "\n"
+	}
+	section("status", status)
 
 	// Pi's protocol: a session file with Pi's own compactions, compacted on Pi's cut and not
 	// stored (the harness keeps it), its summary record stored once.

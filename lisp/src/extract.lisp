@@ -1,7 +1,6 @@
 ;;;; memory/extract: level-0 extraction (extract.go, conversation.go, text.go, work.go,
-;;;; shell.go, drop.go). Every rule is ported but the memory tool's notes (work.go note), which
-;;;; parse the code tool's details and the frozen legacy query language: a memory tool call with a
-;;;; result signals an error rather than being skipped (docs/lisp-spike.md, "Scope").
+;;;; shell.go, drop.go). The memory tool's notes (work.go note), which parse the code tool's
+;;;; details and the frozen legacy query language, are src/legacy/notes.lisp's x-memory-note.
 
 (in-package "OM.ENGINE")
 
@@ -644,8 +643,8 @@ subject and scope."
         (loop for call in calls for n from 0
               do (let ((result (result-of x i (tcall-id call))))
                    (cond ((string= (tcall-name call) +memory-tool+)
-                          (when (tresult-present result)
-                            (error "extract: memory tool notes are not ported")))
+                          ;; work.go note, in src/legacy/notes.lisp (it reads the frozen query parser).
+                          (x-memory-note x i call result))
                          ((skipped-tool-p x (tcall-name call)))
                          (t (x-call x i call result (if (eql n first) words ""))))))))))
 

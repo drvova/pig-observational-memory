@@ -295,17 +295,23 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
           (handler-case
               (multiple-value-bind (result entries cut)
                   (sb-thread:with-mutex ((conn-extract-mutex c))
-                    (let ((hh (harness-hook-host ch (pig-hook-host c))))
-                      (om::build-compaction hh event (pig-hook-config cfg)
-                                            :model model :own-trigger own
-                                            :context-window (model-int model "contextWindow")
-                                            :max-output (model-max-tokens model)
-                                            :level1 (lambda (entries cut budget)
-                                                      (let ((r (consolidate-v2 c hh cfg event entries cut budget
-                                                                               :model model :store store :own own
-                                                                               :on-start (lambda (r) (setf (ch-level1 ch) r)))))
-                                                        (values (l1-entries r) (report-applied (l1-report r))
-                                                                (report-json (l1-report r)) (l1-usage r)))))))
+                    ;; The session model's profile (harness.Ledger.ProfileWith), applied to the render.
+                    (let ((om::*summary-profile* (ch-profile ch))
+                          (om::*kernel-floor-lowered* (conn-floor-lowered-p c store))
+                          (hh (harness-hook-host ch (pig-hook-host c))))
+                      ;; runtime.Snapshot's CompactHookInFlight, which /om:status shows.
+                      (call-with-hook-in-flight
+                       c (lambda ()
+                           (om::build-compaction hh event (pig-hook-config cfg)
+                                                 :model model :own-trigger own
+                                                 :context-window (model-int model "contextWindow")
+                                                 :max-output (model-max-tokens model)
+                                                 :level1 (lambda (entries cut budget)
+                                                           (let ((r (consolidate-v2 c hh cfg event entries cut budget
+                                                                                    :model model :store store :own own
+                                                                                    :on-start (lambda (r) (setf (ch-level1 ch) r)))))
+                                                             (values (l1-entries r) (report-applied (l1-report r))
+                                                                     (report-json (l1-report r)) (l1-usage r)))))))))
                 (check-cancelled)
                 (setf (ch-result ch) result (ch-entries ch) entries (ch-cut ch) cut)
                 (handler-case (after-compaction ch)
