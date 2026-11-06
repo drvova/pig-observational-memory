@@ -178,6 +178,44 @@ func TestLispLevel1MatchesInProcess(t *testing.T) {
 			}
 		}
 	}
+	// A merge of the user's statement and a record from the assistant's text is the model's,
+	// never the user's (docs/brain-memory.md, "Provenance, not detection"), on both paths.
+	var user, other map[string]any
+	for _, o := range probe.Result.(map[string]any)["compaction"].(map[string]any)["details"].(map[string]any)["observations"].([]any) {
+		o := o.(map[string]any)
+		switch sources, _ := o["sourceEntryIds"].([]any); {
+		case len(sources) > 0 && sources[0] == "h6b" && user == nil:
+			user = o
+		case len(sources) > 0 && sources[0] != "h6b" && other == nil:
+			other = o
+		}
+	}
+	if user == nil || other == nil {
+		t.Fatalf("no user and assistant records among the candidates: %v", ids)
+	}
+	mixed := level1Call(map[string]any{"merges": []any{map[string]any{
+		"ids":     []any{user["id"], other["id"]},
+		"content": user["content"].(string) + " " + other["content"].(string),
+	}}})
+	want := level1Compact(t, inProcess, "", testfix.ToJSONValue(mixed).(map[string]any))
+	got := level1Compact(t, lisp, "", testfix.ToJSONValue(mixed).(map[string]any))
+	sameRun(t, "mixed merge", want, got)
+	merged := 0
+	for _, e := range got.Appended.([]any) {
+		data, _ := e.(map[string]any)["Data"].(map[string]any)
+		for _, o := range func() []any { list, _ := data["observations"].([]any); return list }() {
+			o := o.(map[string]any)
+			if replaces, _ := o["replaces"].([]any); len(replaces) == 2 {
+				merged++
+				if o["origin"] != "model" || o["fromUser"] == true {
+					t.Fatalf("a merge of the user's words and another record claims more provenance: %v", o)
+				}
+			}
+		}
+	}
+	if merged != 1 {
+		t.Fatalf("the mixed merge was not recorded (%d): %v", merged, consolidationOf(got))
+	}
 	if lines := log.lines(); len(lines) != 0 {
 		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
 	}
