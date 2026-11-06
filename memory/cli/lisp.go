@@ -16,13 +16,16 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
 )
 
-// The Lisp engine's client mode (docs/lisp-port-image-client.md): with OM_ENGINE=lisp, om
-// forwards hook events, MCP messages and om call to the user's SBCL image over a unix socket,
-// starting the image when the socket is absent or refuses. Without the variable nothing here
-// runs and om is the Go engine, as before.
+// The Lisp engine's client mode (docs/lisp-port-image-client.md, docs/lisp-core.md "The
+// switch"): by default (lispimage.Select) om forwards hook events, MCP messages and om call to
+// the user's SBCL image over a unix socket, starting the image when the socket is absent or
+// refuses, and building it from the embedded sources on first use. OM_ENGINE=go (or "engine":
+// "go" in the root's settings, or a platform without the image's transport) is the Go engine,
+// and then nothing here runs.
 const (
-	// EngineEnv selects the engine: "lisp" is the image; anything else is the Go engine.
-	EngineEnv = "OM_ENGINE"
+	// EngineEnv selects the engine: "lisp" is the image, "go" (or any other value) the Go
+	// engine; unset, the engine setting, else the image.
+	EngineEnv = config.EngineEnv
 	// LispImageEnv is the image's executable (else the lispImage setting).
 	LispImageEnv = lispimage.ImageEnv
 	// LispSocketEnv moves the socket (default <root>/engine.sock).
@@ -78,6 +81,8 @@ func isNotPorted(err error) bool {
 type lispClient struct {
 	launcher *lispimage.Launcher
 	fallback bool
+	// explicit is true when OM_ENGINE or the engine setting chose the image (not the default).
+	explicit bool
 	conn     net.Conn
 	r        *bufio.Reader
 	id       int
@@ -85,10 +90,11 @@ type lispClient struct {
 
 // newLispClient is the client of the image for root, or nil when om is not in Lisp mode.
 func newLispClient(root string) *lispClient {
-	if os.Getenv(EngineEnv) != "lisp" {
+	sel := lispimage.Select(root)
+	if !sel.Lisp {
 		return nil
 	}
-	return &lispClient{launcher: lispimage.FromEnv(root), fallback: lispimage.FallbackOn()}
+	return &lispClient{launcher: lispimage.FromEnv(root), fallback: lispimage.FallbackOn(), explicit: sel.Explicit}
 }
 
 func (c *lispClient) close() {
@@ -122,6 +128,49 @@ func (c *lispClient) start() error {
 	}
 	c.use(conn)
 	return nil
+}
+
+// connect opens the connection: to the image listening on the socket, else to one it starts.
+// When the build the image must report is known (the embedded build, or a .build file beside a
+// configured image), it asks the image for its build id first (initialize) and stops an image
+// built from other sources (an om upgraded under a running image), then starts the current one.
+// Everything here comes before the event's request, so a failure is a failover.
+func (c *lispClient) connect() error {
+	if err := c.dial(); err != nil {
+		if err := c.start(); err != nil {
+			return err
+		}
+	}
+	want := c.launcher.ExpectedBuild()
+	if want == "" {
+		return nil
+	}
+	for stopped := false; ; stopped = true {
+		var res struct {
+			BuildID string `json:"buildId"`
+		}
+		transport, err := c.roundTrip("initialize", map[string]any{"protocolVersion": 1}, &res)
+		if transport != nil || err != nil {
+			c.close()
+			if transport != nil {
+				return transport
+			}
+			return err
+		}
+		if res.BuildID == want {
+			return nil
+		}
+		if stopped {
+			c.close()
+			return fmt.Errorf("om: the engine image on %s reports build %q, not %q", c.launcher.Socket, res.BuildID, want)
+		}
+		_, _ = c.roundTrip("image/stop", map[string]any{}, nil)
+		c.close()
+		c.launcher.WaitGone(retryWait)
+		if err := c.start(); err != nil {
+			return err
+		}
+	}
 }
 
 // roundTrip sends one request and reads its answer on the open connection.
@@ -163,13 +212,11 @@ func (c *lispClient) roundTrip(method string, params any, result any) (transport
 func (c *lispClient) call(method string, params any, result any) error {
 	for attempt := 0; ; attempt++ {
 		if c.conn == nil {
-			if err := c.dial(); err != nil {
-				if err := c.start(); err != nil {
-					if attempt == 0 {
-						return &unreachableError{err}
-					}
-					return err
+			if err := c.connect(); err != nil {
+				if attempt == 0 {
+					return &unreachableError{err}
 				}
+				return err
 			}
 		}
 		transport, err := c.roundTrip(method, params, result)
@@ -232,7 +279,7 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 		return res, true, err
 	}
 	err = a.lisp.call(event, a.sessionParams(s, extra), &res)
-	if a.fallsBack(err) {
+	if a.fallsBack(event, err) {
 		return res, false, nil
 	}
 	if err != nil {
@@ -248,18 +295,25 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 
 // fallsBack reports whether the Go engine runs instead of the image: falling back is on and the
 // image has not ported the method, or could not be started or reached before the request was
-// written. An unreachable image is noted in om's log, since every event then runs on Go.
-func (a *app) fallsBack(err error) bool {
+// written (no sbcl to build it, a build still running, a start that fails). Every fallback is
+// one line in <root>/engine.log with its reason; with OM_ENGINE=lisp (or the setting) an
+// unreachable image is noted in om's log too, as before the image was the default.
+func (a *app) fallsBack(event string, err error) bool {
 	if !a.lisp.fallback {
 		return false
 	}
 	if isUnreachable(err) {
-		if a.log != nil {
+		lispimage.LogFailover(a.root, event, err.Error())
+		if a.log != nil && a.lisp.explicit {
 			fmt.Fprintf(a.log, "om: the engine image is unreachable, running the Go engine: %v\n", err)
 		}
 		return true
 	}
-	return isNotPorted(err)
+	if isNotPorted(err) {
+		lispimage.LogFailover(a.root, event, "not ported: "+err.Error())
+		return true
+	}
+	return false
 }
 
 // runRemaining runs the Go steps the image named as not ported, under the session's engine
@@ -302,7 +356,7 @@ func (a *app) mcpViaLisp(harnessName, dir string, raw []byte) (answer json.RawMe
 		Message json.RawMessage `json:"message"`
 	}
 	err = a.lisp.call("mcp", a.toolParams(harnessName, dir, map[string]any{"message": json.RawMessage(raw)}), &res)
-	if a.fallsBack(err) {
+	if a.fallsBack("mcp", err) {
 		return nil, false, nil
 	}
 	return res.Message, true, err
@@ -314,7 +368,7 @@ func (a *app) callViaLisp(harnessName, dir string, arguments map[string]any) (re
 		return nil, false, nil
 	}
 	err = a.lisp.call("call", a.toolParams(harnessName, dir, map[string]any{"arguments": arguments}), &res)
-	if a.fallsBack(err) {
+	if a.fallsBack("call", err) {
 		return nil, false, nil
 	}
 	return res, true, err

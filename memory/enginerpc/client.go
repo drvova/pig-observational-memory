@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
@@ -224,9 +225,14 @@ func (c *Client) connection() (*Peer, error) {
 		return nil, fmt.Errorf("enginerpc: initialize: %w", err)
 	}
 	if c.requireBuild != "" && result.BuildID != c.requireBuild {
+		// A stale image (om upgraded under it) is stopped, so the next event starts the
+		// current one instead of failing over until the stale one idles out.
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = peer.Call(stopCtx, MethodImageStop, struct{}{}, nil)
+		cancel()
 		_ = stop()
 		<-peer.Done()
-		return nil, fmt.Errorf("enginerpc: the engine reports build %q, not %q: a stale image (stop it with image/stop; the next event starts the current one)", result.BuildID, c.requireBuild)
+		return nil, fmt.Errorf("enginerpc: the engine reports build %q, not %q: a stale image (stopped; the next event starts the current one)", result.BuildID, c.requireBuild)
 	}
 	c.peer, c.stop, c.tool = peer, stop, result.Tool
 	return peer, nil

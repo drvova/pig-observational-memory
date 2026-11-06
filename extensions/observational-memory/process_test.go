@@ -3,15 +3,19 @@ package observationalmemory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/enginerpc"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
+	"github.com/drvova/pig-observational-memory/memory/lispimage/fakesbcl"
 )
 
 // useProcessEngine turns the engine setting to "process" in a temporary agent directory and
@@ -26,6 +30,7 @@ func useProcessEngine(t *testing.T) *int {
 		t.Fatal(err)
 	}
 	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+	t.Setenv(config.EngineEnv, "")
 	var mu sync.Mutex
 	var stops []func() error
 	started := 0
@@ -89,17 +94,101 @@ func testStatusOverTheRPC(t *testing.T) {
 	}
 }
 
-// Without the setting the factory never starts an engine.
-func TestInProcessEngineByDefault(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
-	previous := engineDialer
+// "engine": "go" (and OM_ENGINE=go over any setting) is the kill switch: the factory never
+// starts an engine. Without a setting the image is the default, and where the image has no
+// transport (Windows) the in-process engine is.
+func TestEngineSelection(t *testing.T) {
+	agentDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+	t.Setenv(lispimage.RootEnv, t.TempDir())
+	t.Setenv(lispimage.ImageEnv, "")
+	t.Setenv(lispimage.FallbackEnv, "")
+	previous, previousLisp, previousLog := engineDialer, lispDialer, engineLog
+	engineLog = &lockedBuilder{}
 	engineDialer = func(string) enginerpc.Dialer {
 		t.Fatal("an engine process was started")
 		return nil
 	}
-	t.Cleanup(func() { engineDialer = previous })
+	lispDials := 0
+	lispDialer = func(l *lispimage.Launcher) enginerpc.Dialer {
+		lispDials++
+		return func() (io.Reader, io.Writer, func() error, error) { return nil, nil, nil, errors.New("no image here") }
+	}
+	t.Cleanup(func() { engineDialer, lispDialer, engineLog = previous, previousLisp, previousLog })
+	write := func(engine string) {
+		if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"observational-memory": {"engine": "`+engine+`"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Setenv(config.EngineEnv, "")
+	if setting := config.ReadEngine(config.DefaultPaths()); !setting.Lisp() || !setting.Default {
+		t.Fatalf("default %+v", setting)
+	}
+	processEngine()
+	if lispDials != 1 {
+		t.Fatalf("the default did not reach the image: %d", lispDials)
+	}
+	for _, engine := range []string{"go", "in-process"} {
+		write(engine)
+		if processEngine() != nil {
+			t.Fatalf("engine %q started one", engine)
+		}
+	}
+	write("lisp")
+	t.Setenv(config.EngineEnv, "go")
 	if processEngine() != nil {
-		t.Fatal("process engine without the setting")
+		t.Fatal("OM_ENGINE=go over the setting")
+	}
+	if lispDials != 1 {
+		t.Fatalf("the kill switch reached the image: %d", lispDials)
+	}
+
+	supported := config.LispSupported
+	config.LispSupported = false
+	t.Cleanup(func() { config.LispSupported = supported })
+	t.Setenv(config.EngineEnv, "")
+	write("")
+	if setting := config.ReadEngine(config.DefaultPaths()); setting.Mode != config.EngineInProcess || processEngine() != nil {
+		t.Fatalf("windows default %+v", setting)
+	}
+}
+
+// While the image is being built from the embedded sources (here a fake sbcl that takes its
+// time) the extension keeps the image's client, and every event runs on the Go fallback.
+func TestLispEngineWhileBuilding(t *testing.T) {
+	agentDir, root, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+	t.Setenv(config.EngineEnv, "")
+	t.Setenv(lispimage.RootEnv, root)
+	t.Setenv(lispimage.ImageEnv, "")
+	t.Setenv(lispimage.SocketEnv, "")
+	t.Setenv(lispimage.FallbackEnv, "")
+	if _, err := fakesbcl.Write(bin, fakesbcl.Options{Image: "#!/bin/sh\nexit 1\n", BuildID: lispimage.BuildID(), Sleep: 1}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	previous := engineLog
+	log := &lockedBuilder{}
+	engineLog = log
+	t.Cleanup(func() {
+		engineLog = previous
+		l := lispimage.FromEnv(root)
+		for i := 0; i < 1000; i++ {
+			if release, ok := lispimage.TryLock(filepath.Join(l.BuildDir(), "build.lock")); ok {
+				release()
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	client := processEngine()
+	if client == nil {
+		t.Fatalf("no client while building: %q", log.String())
+	}
+	defer client.Close()
+	if text := log.String(); !strings.Contains(text, "building the engine image") || !strings.Contains(text, "until it is built") {
+		t.Fatalf("log %q", text)
 	}
 }
 
@@ -114,6 +203,7 @@ func useLispEngine(t *testing.T) *lockedBuilder {
 		t.Fatal(err)
 	}
 	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+	t.Setenv(config.EngineEnv, "")
 	t.Setenv(lispimage.RootEnv, t.TempDir())
 	t.Setenv(lispimage.ImageEnv, "")
 	t.Setenv(lispimage.FallbackEnv, "")
@@ -202,6 +292,7 @@ func TestLispEngineWithoutAnImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+	t.Setenv(config.EngineEnv, "")
 	t.Setenv(lispimage.RootEnv, t.TempDir())
 	t.Setenv(lispimage.ImageEnv, "")
 	t.Setenv(lispimage.SocketEnv, "")

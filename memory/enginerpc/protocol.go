@@ -12,8 +12,10 @@ const ProtocolVersion = 1
 
 // Host → engine methods: the harness's events, the memory tool, the commands.
 const (
-	MethodInitialize           = "initialize"
-	MethodShutdown             = "shutdown"
+	MethodInitialize = "initialize"
+	MethodShutdown   = "shutdown"
+	// MethodImageStop stops a Lisp image (every connection); a client sends it to a stale build.
+	MethodImageStop            = "image/stop"
 	MethodSessionStart         = "event/sessionStart"
 	MethodProjectTrust         = "event/projectTrust"
 	MethodBeforeAgentStart     = "event/beforeAgentStart"

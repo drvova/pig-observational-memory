@@ -79,7 +79,7 @@ func lispFlow(t *testing.T, image string) string {
 	t.Setenv(LispSocketEnv, "")
 	t.Setenv(LispFallbackEnv, "")
 	if image == "" {
-		t.Setenv(EngineEnv, "")
+		t.Setenv(EngineEnv, "go")
 	} else {
 		t.Setenv(EngineEnv, "lisp")
 		t.Setenv(LispImageEnv, image)
