@@ -9,7 +9,8 @@ ignore. The data the engine stores is specified by the JSON Schemas in `contract
 its output for real transcripts by the golden corpus in `contracts/golden/`
 ([contracts/README.md](../contracts/README.md)). What the engine stores and renders never holds a
 detected secret's value, and the level-1 request escapes role-like labels in tool text, by the
-rules of [contracts/secrets.md](../contracts/secrets.md).
+rules of [contracts/secrets.md](../contracts/secrets.md). A preference or curated memory that
+weakens security is held by the pattern list of [contracts/insecure.md](../contracts/insecure.md).
 
 Status: **exists** means `om` implements it today, with a test; **proposed** means this document
 specifies it and no code implements it yet.
