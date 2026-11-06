@@ -51,6 +51,7 @@
                 :pathname "src"
                 :serial t
                 :components ((:file "tool/package")
+                             (:file "layer/limits")
                              (:file "tool/files")
                              (:file "tool/curated")
                              (:file "layer/reader")

@@ -71,7 +71,7 @@ compiles it: sets d's name and fn. Signals refused."
           (multiple-value-bind (fn warnings failure)
               (handler-bind ((warning #'muffle-warning))
                 (let ((*package* package))
-                  (compile nil `(lambda ,lambda-list ,@body))))
+                  (compile nil `(lambda ,lambda-list ,@(ticked-body body :doc t)))))
             (declare (ignore warnings))
             (when failure (refuse "the definition of ~A does not compile" (adaptable-name a)))
             (setf (ldef-fn d) fn))

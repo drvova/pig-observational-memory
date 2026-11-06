@@ -93,7 +93,22 @@ other CL symbol outside +allowed-cl+ is refused too.")
 
 (defparameter +wrapped+
   '(("FORMAT" . safe-format) ("ERROR" . safe-error) ("MAKE-ARRAY" . safe-make-array)
-    ("MAKE-STRING" . safe-make-string) ("MAKE-LIST" . safe-make-list))
+    ("MAKE-STRING" . safe-make-string) ("MAKE-LIST" . safe-make-list)
+    ;; limits.lisp: the points where code can go on for ever check the run's budget
+    ("LOOP" . safe-loop) ("DO" . safe-do) ("DO*" . safe-do*) ("DOLIST" . safe-dolist)
+    ("DOTIMES" . safe-dotimes) ("TAGBODY" . safe-tagbody) ("DEFUN" . safe-defun)
+    ("LAMBDA" . safe-lambda) ("LABELS" . safe-labels) ("FLET" . safe-flet)
+    ("FUNCALL" . safe-funcall) ("APPLY" . safe-apply)
+    ;; no handler of model code sees a storage condition
+    ("IGNORE-ERRORS" . safe-ignore-errors)
+    ;; no list made from code, no allocation past the cap, no circular list
+    ("COERCE" . safe-coerce) ("MAKE-HASH-TABLE" . safe-make-hash-table)
+    ("VECTOR-PUSH-EXTEND" . safe-vector-push-extend) ("EXPT" . safe-expt)
+    ("SETF" . safe-setf) ("PSETF" . safe-psetf) ("NCONC" . safe-nconc) ("MAPCAN" . safe-mapcan)
+    ("MAPCON" . safe-mapcon) ("MERGE" . safe-merge)
+    ;; no symbol's own name handed to model code to change
+    ("STRING" . safe-string) ("STRING-TRIM" . safe-string-trim)
+    ("STRING-LEFT-TRIM" . safe-string-left-trim) ("STRING-RIGHT-TRIM" . safe-string-right-trim))
   "CL names model code reads as a checked wrapper.")
 
 (defparameter +denied-names+
@@ -304,7 +319,9 @@ it has not resolved through the allowed set first."
   (let ((c (rd-next r)))
     (case c
       ((nil) (refuse "the code ends after #"))
-      (#\' (list 'function (read-required r)))
+      (#\' (let ((f (read-required r)))
+             ;; #'(lambda ...) is the lambda itself: SAFE-LAMBDA expands to (function (lambda ...))
+             (if (and (consp f) (eq (car f) 'safe-lambda)) f (list 'function f))))
       (#\( (let ((items (read-list-tail r #\))))
              (unless (listp (cdr (last items))) (refuse "a dotted vector"))
              (coerce items 'simple-vector)))
@@ -358,7 +375,16 @@ a list of (form . source). Signals refused on the first form refused; nothing ha
         (push (cons form (subseq text start (rd-pos r))) out)))
     (nreverse out)))
 
-(defparameter +defining+ '(defun defvar defparameter defconstant))
+(defparameter +defining+ '(defun safe-defun defvar defparameter defconstant))
+
+(defun check-handler-clauses (clauses)
+  "A HANDLER-CASE of model code catches only errors (ERROR, which it reads as SAFE-ERROR, a
+type that leaves out storage conditions) and :no-error: a clause on t, a compound type or any
+other name could keep going after the stack or the heap ran out."
+  (loop for clause in clauses
+        for type = (if (consp clause) (car clause) clause)
+        unless (or (eq type 'safe-error) (eq type :no-error))
+          do (refuse "a handler-case clause on ~(~A~): model code catches only error" type)))
 
 (defun check-form (form)
   "The checks after reading: a defining form names a symbol of the model's own package, and
@@ -368,6 +394,8 @@ define is only a top-level form (checked by the runner)."
                (when (and (consp x) (not (gethash x seen)))
                  (setf (gethash x seen) t)
                  (when (> (incf depth) 100000) (refuse "a form too large to check"))
+                 (when (and (eq (car x) 'handler-case) (listp (cdr x)))
+                   (check-handler-clauses (cddr x)))
                  (when (and (member (car x) +defining+) (consp (cdr x)))
                    (let ((name (cadr x)))
                      (unless (and (symbolp name) name (not (keywordp name))
