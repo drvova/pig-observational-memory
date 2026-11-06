@@ -8,22 +8,22 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 - omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and in query the om snippet (memory tool code) that lists them.
 - The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. Remembered items are user-reported or extracted context, unverified against the current repository and conversation; existing code and the user's current words take precedence. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (om.Recall(`<id>`)), and searches what these tables condensed (om.History(om.Search(`<words>`))); use it when precision needs the source.
 
-Shown here: 3 of 14 records; 11 left out, listed by 2 spans under omitted and the +1 more of the files line and the +6 more of the values line. Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or om.History(om.Search(`<words>`)).
+Shown here: 4 of 14 records; 10 left out, listed by 1 span under omitted and the +6 more of the values line. Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or om.History(om.Search(`<words>`)).
 
 intent[1]{which,content,source}:
   first,"<redacted: ~73 KB Kiro Crew agent system prompt>",msg00001-0000-4000-8000-000000000000
 notes[3]{id,when,kind,status,scope,content,superseded_by,source}:
-  162d86b07b3e,,attempt,,,"**Project summary:** The `antigravity` project is a minimal scratch/step-in workspace for experimenting with the Kiro IDE and agent (agy) tooling. It currently contains only a `README.md` (describing it as a step-in scratch for Antigravity), a `.kiro/settings/cli.json` config, and a `.kiro/agents` directory — no source code yet. It's essentially a clean-slate sandbox. --- Now creating and running the Hello World file: [write \"create\" worked]",,msg00004-0000-4000-8000-000000000000
+  cfc293ecdf93,,attempt,,,"Output: `Hello Universe` ✓ Now deleting the file and verifying: [shell \"del hello.py && dir /b\" worked]",,msg00012-0000-4000-8000-000000000000
   63fb9d316670,,assistant,,,"**Summary of what was done:**",,msg00020-0000-4000-8000-000000000000
   e910e4cfdcd6,,assistant,,,Created `hello.py` → printed `Hello World` Updated it → printed `Hello Universe` Deleted it → confirmed absent from directory listing,,msg00020-0000-4000-8000-000000000000
 omitted[1]{from,to,count,spans,first_id,last_id,query}:
-  2023-11-14,2023-11-14,4,2,msg00001-0000-4000-8000-000000000000,msg00012-0000-4000-8000-000000000000,om.Notes(om.From(`msg00001-0000-4000-8000-000000000000`).Through(`msg00012-0000-4000-8000-000000000000`))
+  2023-11-14,2023-11-14,4,,msg00001-0000-4000-8000-000000000000,msg00008-0000-4000-8000-000000000000,om.Notes(om.From(`msg00001-0000-4000-8000-000000000000`).Through(`msg00008-0000-4000-8000-000000000000`))
 
 ---
 
-files: +1 more, all 1: om.Notes(om.Kind(`file`))
+files: C:\Users\<u>\demo-workspace\antigravity\hello.py edited (msg00008-0000-4000-8000-000000000000)
 values: +6 more, all 6: om.Notes(om.Kind(`value`))

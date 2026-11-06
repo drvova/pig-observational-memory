@@ -121,7 +121,7 @@ func TestLispGoldenSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, _ := res["text"].(string)
-	got := normalizeIDs(t, golden{records: string(turn), compaction: string(all[len(turn):]), summary: text + "\n"}, all)
+	got := sameEngine(normalizeIDs(t, golden{records: string(turn), compaction: string(all[len(turn):]), summary: text + "\n"}, all))
 	checkSafetyOutput(t, got)
 	for name, pair := range map[string][2]string{recordsFile: {want.records, got.records}, compactionFile: {want.compaction, got.compaction}, summaryFile: {want.summary, got.summary}} {
 		if pair[0] != pair[1] {

@@ -133,6 +133,8 @@ failing host method answers `-32000` with its error text.
 | `host/sessionId` | `Session.SessionID` | | `{"value": string}` |
 | `host/sessionFile` | `Session.SessionFile` | | `{"value": string}` ("" in memory) |
 | `host/configHome` | `ConfigHomer.ConfigHome` | | `{"value": string}` ("" when unknown: no curated store) |
+| `host/repo` | `RepoReader.Repo` | | `{"repo": {"repoId", "root", "commonDir", "remote", "rootCommit", "branch", "head"} or null}`: the git repository of the session's working directory, read by the adapter (`memory/gitrepo`; [contracts/encoding.md](../contracts/encoding.md)); `null` outside one or for a host that reads none. The engine reads it once per compaction (`runtime.CachedRepo`). |
+| `host/harness` | `HarnessNamer.Harness` | | `{"value": string}` (`"pig"` for the PiG adapter, "" for a host that names none): the harness records name as their writer. |
 | `host/notify` | `UI.Notify` | `message`, `level` | `{}` |
 | `host/isIdle` | `Agent.IsIdle` | | `{"value": bool}` |
 | `host/compact` | `Agent.Compact` | | `{}` once the compaction completed, an error with its message when it failed. The engine's `Compact` returns at once and runs the callback on the reply. |

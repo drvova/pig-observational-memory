@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/gitrepo"
 	"net"
 	"os"
 	"path/filepath"
@@ -278,7 +279,16 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 	if err := remember(a.root, s); err != nil {
 		return res, true, err
 	}
-	err = a.lisp.call(event, a.sessionParams(s, extra), &res)
+	params := a.sessionParams(s, extra)
+	switch event {
+	case "turn-end", "compact", "before-compact", "prompt":
+		// The image's level 0 frames its records with the repository the adapter side reads
+		// (host.Repo), as neutral.Host.Repo hands the Go engine; the image never runs git.
+		if repo, ok, err := gitrepo.Read(s.Cwd); err == nil && ok {
+			params["repo"] = repo
+		}
+	}
+	err = a.lisp.call(event, params, &res)
 	if a.fallsBack(event, err) {
 		return res, false, nil
 	}

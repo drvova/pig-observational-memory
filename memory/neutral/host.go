@@ -40,6 +40,12 @@ type Host struct {
 	Log io.Writer
 	// Now is the clock entries are stamped with; nil is time.Now.
 	Now func() time.Time
+	// HarnessName is the harness the session runs in (the registry's name), which records carry as
+	// their writer; "" for none.
+	HarnessName string
+	// ReadRepo reads the git repository holding a directory (gitrepo.Read, which the om command
+	// sets); nil reads none, so records carry no frame.
+	ReadRepo func(dir string) (host.Repo, bool, error)
 
 	// The parsed transcript and store, kept while their files are unchanged (Versioned), so a
 	// hook that appends many entries reads each file once rather than once per append.
@@ -59,6 +65,19 @@ type Versioned interface {
 var _ host.ToolHost = (*Host)(nil)
 var _ host.ConfigHomer = (*Host)(nil)
 var _ host.SessionFileReader = (*Host)(nil)
+var _ host.RepoReader = (*Host)(nil)
+var _ host.HarnessNamer = (*Host)(nil)
+
+// Harness is the session's harness name.
+func (h *Host) Harness() string { return h.HarnessName }
+
+// Repo is the repository holding the working directory (ReadRepo), none without a reader.
+func (h *Host) Repo() (host.Repo, bool, error) {
+	if h.ReadRepo == nil {
+		return host.Repo{}, false, nil
+	}
+	return h.ReadRepo(h.Dir)
+}
 
 func (h *Host) now() time.Time {
 	if h.Now != nil {

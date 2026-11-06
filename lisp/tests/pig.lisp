@@ -254,9 +254,9 @@ agent directory dir (settings.json there)."
                  (jget (jget (jget (peer-exchange stream id "event/beforeAgentStart" (jobject "scope" scope) :host (phost-fn h)) "result")
                              "sections")
                        "curated-memory")))
-          (check (search "port" (section 3)) nil "pinned")
+          (check (search "Deploys on 8080" (section 3)) nil "pinned")
           (peer-exchange stream 4 "event/sessionCompact" (jobject "scope" scope) :host (phost-fn h))
-          (check (and (search "port" (section 5)) t) t "rendered again after a compaction"))
+          (check (and (search "Deploys on 8080" (section 5)) t) t "rendered again after a compaction"))
         ;; A store with a file the layer never recorded, and a legacy definition the kernel
         ;; refuses, starts on the image: the untracked file is left alone, the definition is
         ;; renamed .refused (curated.Store.migrateDefinitions), and later events run.

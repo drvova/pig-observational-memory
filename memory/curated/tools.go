@@ -86,7 +86,7 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 		default:
 			return "", fmt.Errorf("scope %q must be global or project", scope)
 		}
-		digest := ""
+		digest, userQuote := "", ""
 		if quote, given := args["quote"]; given {
 			normalized, err := NormalizeQuote(quote)
 			if err != nil {
@@ -102,11 +102,17 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 				// Words from tool output never confirm a memory: the save is staged, citing
 				// the content they come from.
 				m.Staged = true
+			} else {
+				userQuote = normalized
 			}
 		} else {
 			m.Staged = true
 		}
 		saved, err := c.Store.SaveCiting(m, c.Source, digest)
+		if err != nil {
+			return "", err
+		}
+		held, err := c.hold(saved, userQuote)
 		if err != nil {
 			return "", err
 		}
@@ -123,9 +129,9 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 					text = fmt.Sprintf("Staged memory %s [%s]%s: %s. Another session staged the same memory, but not from other source content it quotes, so it is no independent evidence: it stays staged until a user's words (feedback name=%s outcome=helped quote=\"...\"), a compaction citing it, or a session quoting other tool output confirms it.", saved.Name, saved.Type, scopeNote(saved), saved.Description, saved.Name)
 				}
 			}
-			return text, nil
+			return text + held, nil
 		}
-		return fmt.Sprintf("Saved memory %s [%s]%s: %s", saved.Name, saved.Type, scopeNote(saved), saved.Description), nil
+		return fmt.Sprintf("Saved memory %s [%s]%s: %s", saved.Name, saved.Type, scopeNote(saved), saved.Description) + held, nil
 	case OpEdit:
 		edit := Edit{}
 		// Models often send every optional field, blank: only a body may be
@@ -206,7 +212,18 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 			return "", err
 		}
 		text := "Recorded that " + what + " " + name + " " + outcome + "."
-		if m, err := c.Store.GetAs(name, c.Project, c.Source); user && err == nil && m.Staged {
+		m, err := c.Store.GetAs(name, c.Project, c.Source)
+		switch {
+		case err != nil || !user:
+		case HeldRule(m) != "":
+			if !restates(quote) {
+				break
+			}
+			if err := c.Store.release(m.Name, c.Source, quote); err != nil {
+				return "", err
+			}
+			text += " " + releasedNote(HeldRule(m))
+		case m.Staged:
 			text += " The quote is a user's words, the evidence a staged memory needs: it goes live at the next check and enters the memory index at its next render."
 		}
 		return text, nil
@@ -273,4 +290,30 @@ func Describe(m Memory) string {
 		fmt.Fprintf(&b, ", sessions: %s", strings.Join(m.Sources, ", "))
 	}
 	return b.String()
+}
+
+// hold is what a save says of a memory that weakens security (HeldRule): held, and released in
+// this session when the user's words it quotes (userQuote, "" for none) restate it; "" for a
+// memory that is not held.
+func (c Call) hold(m Memory, userQuote string) (string, error) {
+	rule := HeldRule(m)
+	if rule == "" {
+		return "", nil
+	}
+	if userQuote != "" && restates(userQuote) {
+		if err := c.Store.release(m.Name, c.Source, userQuote); err != nil {
+			return "", err
+		}
+		return " " + releasedNote(rule), nil
+	}
+	return " " + heldNote(rule), nil
+}
+
+// heldNote and releasedNote are what the memory tool says of a held memory.
+func heldNote(rule string) string {
+	return "It weakens security (" + rule + "), so it is held: listed in /om:status, kept out of the memory index and saved, and never applied, until a user's own words restate it in a session."
+}
+
+func releasedNote(rule string) string {
+	return "It weakens security (" + rule + "), so it is held: the user's words restate it, so it is shown in this session only; every other session holds it until its user's words restate it."
 }

@@ -101,7 +101,9 @@ func (s Store) Settle(in SettleInput) (Settled, error) {
 		return out, err
 	}
 	for _, m := range all {
-		if m.Staged {
+		// A held memory (HeldRule) is never promoted: no evidence makes a preference that
+		// weakens security live for every session.
+		if m.Staged && HeldRule(m) == "" {
 			if evidence := promotionEvidence(m, events[m.Name]); evidence != "" {
 				promoted, err := s.promote(m.Name, evidence)
 				if err != nil {

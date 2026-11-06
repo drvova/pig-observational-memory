@@ -4,7 +4,7 @@
   "description": "The two record kinds level 0 writes from a tool's result (docs/memory-v2.md, \"Tool output\"), as members of a records list (defs.schema.json#/$defs/observation). Source: memory/extract/output.go (outputRecords, emitValues, valueContent, ValueParts), lisp/src/output.lisp.",
   "$defs": {
     "valueRecord": {
-      "description": "One exact value tool output printed (ledger.KindValue): target is kind:value, the kind one of extract.ValueKinds and the value its raw spelling; content is the kind, a space and the value, with \" (seen N times)\" when N results printed it; sourceEntryIds are the entry it was first seen in and, when another, the latest; it supersedes the value's earlier record.",
+      "description": "One exact value tool output printed (ledger.KindValue): target is kind:value, the kind one of extract.ValueKinds and the value its raw spelling; content is the kind, a space and the value, with \" (seen N times)\" when N results printed it; sourceEntryIds are the entry it was first seen in and, when another, the latest; it supersedes the value's earlier record. Its encoding fields (contracts/encoding.md): source tool-observed, hedge stated, and the value as a key of its kind (paths, errors, tests, symbols, versions, config for kv).",
       "type": "object",
       "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount", "kind", "target"],
       "additionalProperties": false,
@@ -22,11 +22,19 @@
         "kind": { "const": "value" },
         "target": { "type": "string", "pattern": "^(path|error|sha|url|kv|ip|issue|test|branch|symbol|version):[^\\r\\n]+$" },
         "origin": { "const": "code" },
+        "source": { "const": "tool-observed" },
+        "authority": { "const": "tool" },
+        "hedge": { "const": "stated" },
+        "timeHint": { "type": "string", "pattern": "^(after|before):[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "episode": { "type": "string" },
+        "keys": { "$ref": "defs.schema.json#/$defs/recordKeys" },
+        "frame": { "$ref": "defs.schema.json#/$defs/recordFrame" },
+        "writer": { "$ref": "defs.schema.json#/$defs/recordWriter" },
         "supersedes": { "$ref": "defs.schema.json#/$defs/recordIds" }
       }
     },
     "evidenceRecord": {
-      "description": "At most eight verbatim lines of a tool result that failed or matched a failure grammar (ledger.KindEvidence): content is the tool, its quoted target (clipped) and \" output: \" then the lines (each at most 160 characters) joined by \" ⏎ \"; tool and target are the call's, as its attempt's; sourceEntryIds are the call's entry and its result's.",
+      "description": "At most eight verbatim lines of a tool result that failed or matched a failure grammar (ledger.KindEvidence): content is the tool, its quoted target (clipped) and \" output: \" then the lines (each at most 160 characters) joined by \" ⏎ \"; tool and target are the call's, as its attempt's; sourceEntryIds are the call's entry and its result's. Its encoding fields (contracts/encoding.md) say a tool printed it, stated: source tool-observed, keys the call's command or paths and the paths, tests, error types and versions its output named.",
       "type": "object",
       "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount", "kind", "tool", "target"],
       "additionalProperties": false,
@@ -44,7 +52,15 @@
         "kind": { "const": "evidence" },
         "tool": { "type": "string" },
         "target": { "type": "string" },
-        "origin": { "const": "code" }
+        "origin": { "const": "code" },
+        "source": { "const": "tool-observed" },
+        "authority": { "const": "tool" },
+        "hedge": { "const": "stated" },
+        "timeHint": { "type": "string", "pattern": "^(after|before):[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "episode": { "type": "string" },
+        "keys": { "$ref": "defs.schema.json#/$defs/recordKeys" },
+        "frame": { "$ref": "defs.schema.json#/$defs/recordFrame" },
+        "writer": { "$ref": "defs.schema.json#/$defs/recordWriter" }
       }
     }
   }

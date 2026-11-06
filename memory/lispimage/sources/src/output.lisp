@@ -957,10 +957,27 @@ or a test's (build)."
           (incf (ovalue-count st))
           (setf (ovalue-newest st) index))))
     (when (ofacts-evidence f)
-      (apply #'x-add x (make-obs :content (cat (tcall-name call) " " (go-quote (clip display 80)) " output: "
+      ;; What a tool printed, stated as printed (contracts/encoding.md), with its keys.
+      (let ((o (make-obs :content (cat (tcall-name call) " " (go-quote (clip display 80)) " output: "
                                        (join (ofacts-evidence f) +evidence-separator+))
-                         :kind "evidence" :tool (tcall-name call) :target key)
-             sources))))
+                         :kind "evidence" :tool (tcall-name call) :target key
+                         :source "tool-observed" :hedge "stated"
+                         :keys (call-keys x call "" ""))))
+        (dolist (v (ofacts-values f))
+          (let ((k (value-key-kind (car v))))
+            (when (and (string/= k "") (string/= k "config"))
+              (setf (obs-keys o) (keys-add (obs-keys o) k (cdr v))))))
+        (apply #'x-add x o sources)))))
+
+(defun value-key-kind (kind)
+  "valueKeyKind."
+  (cond ((string= kind "path") "paths")
+        ((string= kind "error") "errors")
+        ((string= kind "test") "tests")
+        ((string= kind "symbol") "symbols")
+        ((string= kind "version") "versions")
+        ((string= kind "kv") "config")
+        (t "")))
 
 (defun x-load-values (x active)
   (dolist (o active)
@@ -978,7 +995,9 @@ or a test's (build)."
   (dolist (k (x-value-order x))
     (let* ((st (gethash k (x-value-states x)))
            (o (make-obs :content (value-content (ovalue-kind st) (ovalue-value st) (ovalue-count st))
-                        :kind "value" :target k
+                        :kind "value" :target k :source "tool-observed" :hedge "stated"
+                        :keys (let ((kk (value-key-kind (ovalue-kind st))))
+                                (if (string/= kk "") (keys-add '() kk (ovalue-value st)) '()))
                         :source-ids (if (string/= (ovalue-first-id st) "") (list (ovalue-first-id st)) '()))))
       (setf (obs-supersedes o) (append (obs-supersedes o) (ovalue-prior st)))
       (x-add x o (ovalue-newest st)))))

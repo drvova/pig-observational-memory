@@ -16,14 +16,20 @@
                              ;; The secret scanner and role-label escaping (contracts/secrets.md).
                              (:file "secrets")
                              (:file "roles")
+                             ;; Preferences that weaken security (contracts/insecure.md).
+                             (:file "insecure")
                              (:file "end-base")
                              (:file "entry")
                              (:file "ledger")
+                             ;; Phase 2: the encoding fields (contracts/encoding.md).
+                             (:file "ledger-encoding")
                              (:file "ledger-subjects")
                              (:file "ledger-reflections")
                              (:file "ledger-replace")
                              (:file "ledger-fold")
                              (:file "ledger-render")
+                             ;; The records a preference that weakens security holds.
+                             (:file "ledger-held")
                              (:file "end-kernel")
                              (:file "transcript")
                              (:file "end-readers")
@@ -78,6 +84,8 @@
                              (:file "layer/lock")
                              ;; 1b, the curated ranked index (docs/lisp-port-tool-layer.md)
                              (:file "tool/curated-index")
+                             ;; Curated memories that weaken security are held.
+                             (:file "tool/curated-held")
                              ;; W3t: the fixed texts the image hands with the Lisp forms
                              (:file "tool/lisp-texts")))
                ;; W4 next steps, evidence and retirement (docs/lisp-port-evidence.md)

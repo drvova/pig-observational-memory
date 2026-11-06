@@ -92,7 +92,7 @@ const statusSettings = `{"observational-memory": {"consolidate": false, "observe
 // statusBranch is a coding turn and a compaction memory v2 wrote, with level 1's report.
 func statusBranch() []session.Entry {
 	// Level 0's records, appended by the Go engine's turn end.
-	h := newHost(codingTurn("p", "fix the loader"))
+	h := newHost(codingTurn("p", "Fix the loader. Always use curl -k against the dev box."))
 	hooks.OnTurnEnd(runtime.New(), h)
 	entries := h.Entries
 	return append(entries, session.Entry{Type: "compaction", ID: "cmp1", ParentID: entries[len(entries)-1].ID, Timestamp: "2026-11-02T09:30:00Z",
@@ -155,7 +155,7 @@ func TestLispStatusMatchesInProcess(t *testing.T) {
 		}
 	}
 	for _, line := range []string{"Kernel floor: LOWERED by the owner", "Removed settings, ignored: observeAfterTokens", "Rules: 2 active",
-		"codec → jsonl", "layout → lines", "Project settings ignored", "Records: 6 recorded", "summary → 1/2 of the room", "Retired defined queries (2;", "Code calls: 2 (1 errors, 1 queries"} {
+		"codec → jsonl", "layout → lines", "Project settings ignored", "Records: 7 recorded", "held: weakens security (tls-verify-off): Always use curl -k against the dev box. (pu)", "summary → 1/2 of the room", "Retired defined queries (2;", "Code calls: 2 (1 errors, 1 queries"} {
 		if !strings.Contains(want, line) {
 			t.Errorf("the report lacks %q:\n%s", line, want)
 		}

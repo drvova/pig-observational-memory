@@ -1766,6 +1766,26 @@ func ValueParts(o ledger.Observation) (kind, value string, count int, ok bool) {
 	return kind, value, count, true
 }
 
+// valueKeyKind is the key kind (ledger.KeyKinds) a value kind's values are looked up by, "" for
+// a kind no key holds (sha, url, ip, issue, branch).
+func valueKeyKind(kind string) string {
+	switch kind {
+	case ValuePath:
+		return ledger.KeyPaths
+	case ValueError:
+		return ledger.KeyErrors
+	case ValueTest:
+		return ledger.KeyTests
+	case ValueSymbol:
+		return ledger.KeySymbols
+	case ValueVersion:
+		return ledger.KeyVersions
+	case ValueKV:
+		return ledger.KeyConfig
+	}
+	return ""
+}
+
 // valueState is one value's sighting in an extraction: the ledger's record of it, continued.
 type valueState struct {
 	kind, value string
@@ -1809,7 +1829,16 @@ func (x *extraction) outputRecords(call toolCall, result toolResult, key, displa
 	}
 	if len(f.evidence) > 0 {
 		content := call.name + " " + strconv.Quote(clip(display, 80)) + " output: " + strings.Join(f.evidence, EvidenceSeparator)
-		x.add(ledger.Observation{Content: content, Kind: ledger.KindEvidence, Tool: call.name, Target: key}, sources...)
+		// What a tool printed, stated as printed (contracts/encoding.md): the call's command or
+		// paths, and the paths, tests, error types and versions its output named, as keys.
+		obs := ledger.Observation{Content: content, Kind: ledger.KindEvidence, Tool: call.name, Target: key, Source: ledger.SourceToolObserved, Hedge: ledger.HedgeStated}
+		x.callKeys(&obs.Keys, call, "", "")
+		for _, v := range f.values {
+			if k := valueKeyKind(v.kind); k != "" && k != ledger.KeyConfig {
+				obs.Keys.Add(k, v.value)
+			}
+		}
+		x.add(obs, sources...)
 	}
 }
 
@@ -1841,7 +1870,10 @@ func (x *extraction) loadValues(active []ledger.Observation) {
 func (x *extraction) emitValues() {
 	for _, key := range x.valueOrder {
 		st := x.values[key]
-		obs := ledger.Observation{Content: valueContent(st.kind, st.value, st.count), Kind: ledger.KindValue, Target: key}
+		obs := ledger.Observation{Content: valueContent(st.kind, st.value, st.count), Kind: ledger.KindValue, Target: key, Source: ledger.SourceToolObserved, Hedge: ledger.HedgeStated}
+		if k := valueKeyKind(st.kind); k != "" {
+			obs.Keys.Add(k, st.value)
+		}
 		if st.firstID != "" {
 			obs.SourceEntryIDs = []string{st.firstID}
 		}

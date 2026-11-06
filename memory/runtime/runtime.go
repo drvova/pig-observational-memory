@@ -100,6 +100,11 @@ type Runtime struct {
 	shownOnce map[string]bool
 	// detectorPass is the detector pass in flight (SwapDetectorPass), nil when none runs.
 	detectorPass DetectorPass
+	// repoKey, repo and repoOK are the host's repository and the key (the working directory and
+	// latest compaction) it was read for (CachedRepo).
+	repoKey string
+	repo    host.Repo
+	repoOK  bool
 }
 
 // The reasons a detector pass is stopped (DetectorPass.Stop): a run it kills unfinished is an
@@ -575,6 +580,32 @@ func (r *Runtime) recheckProviderCredential(ctx context.Context, models host.Mod
 	}
 	debuglog.Log(ctx, "resolve.availability_recheck", data)
 	return recovered
+}
+
+// CachedRepo is the host's repository (host.RepoReader) read once for key (the working
+// directory and the session's latest compaction entry), so git runs once per compaction, not at
+// every turn end. ok is false for a host that reads none, outside a repository, and after a
+// failed read, which is not cached.
+func (r *Runtime) CachedRepo(key string, h host.Host) (host.Repo, bool) {
+	reader, ok := h.(host.RepoReader)
+	if !ok {
+		return host.Repo{}, false
+	}
+	r.mu.Lock()
+	if key != "" && key == r.repoKey {
+		repo, ok := r.repo, r.repoOK
+		r.mu.Unlock()
+		return repo, ok
+	}
+	r.mu.Unlock()
+	repo, ok, err := reader.Repo()
+	if err != nil {
+		return host.Repo{}, false
+	}
+	r.mu.Lock()
+	r.repoKey, r.repo, r.repoOK = key, repo, ok
+	r.mu.Unlock()
+	return repo, ok
 }
 
 // CachedThinPlan is the thinning plan when it was derived for key (the session and its

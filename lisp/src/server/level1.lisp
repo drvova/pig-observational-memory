@@ -263,7 +263,8 @@ error is :aborted (the request's cancel), or a message."
 
 (defun curated-input (store project session)
   (when (string/= store "")
-    (let ((memories (handler-case (om.layer::list-as store project session) (error () (return-from curated-input nil)))))
+    (let ((memories (om.layer::shown-as store (handler-case (om.layer::list-as store project session) (error () (return-from curated-input nil)))
+                                        session)))
       (loop for m in (om.layer::curated-rank memories (handler-case (om.layer::curated-usage store) (error () nil)))
             collect (om::make-cmem :name (om.layer::mem-name m) :type (om.layer::mem-type m)
                                      :description (om.layer::mem-description m) :staged (om.layer::mem-staged m))))))
@@ -350,12 +351,19 @@ reports the request and its usage (spent)."
           (when (<= output-cap 0) (skip "no output cap: the model's output limit is unknown and the summary budget is 0"))
           (let* ((first-kept (om::cevent-first-kept event))
                  (projection (om::full-projection* entries first-kept))
-                 (cut-ids (om::make-set)) (candidates '()) (active '()))
+                 (cut-ids (om::make-set)) (candidates '()) (active '()) (observations '()) (reflections '()))
             (dolist (e cut) (setf (gethash (om::entry-id e) cut-ids) t))
             (let ((last (om::find-last-compaction-index entries)))
               (when (and (>= last 0) (< last (om::entry-index-for-id entries first-kept)))
                 (setf (gethash (om::entry-id (aref entries last)) cut-ids) t)))
-            (dolist (o (om::projection-observations projection))
+            ;; A held record (held-rule) never reaches level 1, so no merge carries it out of the
+            ;; hold (docs/brain-memory.md, decision 19).
+            (multiple-value-setq (observations reflections)
+              (let ((by-id (om::make-set)))
+                (dolist (o (om::projection-observations projection)) (setf (gethash (om::obs-id o) by-id) o))
+                (om::without-held (om::projection-observations projection)
+                                  (om::active-reflections (om::projection-reflections projection)) by-id)))
+            (dolist (o observations)
               (if (and (member (om::obs-origin o) '("code" "host") :test #'string=) (cites-any-p (om::obs-source-ids o) cut-ids))
                   (push-end-list o candidates)
                   (push-end-list o active)))
@@ -370,7 +378,7 @@ reports the request and its usage (spent)."
                     (multiple-value-bind (prompt ok)
                         (om::build-prompt (om::make-pin* :cut cut :skip-tools (om::hhost-skip-tools h) :candidates candidates
                                                          :active active
-                                                         :reflections (om::active-reflections (om::projection-reflections projection))
+                                                         :reflections reflections
                                                          :instructions (om::cevent-custom-instructions event)
                                                          :available (- window 4096 output-cap fixed)
                                                          :memory-budget (max 0 budget) :branch entries :folded folded
@@ -394,7 +402,8 @@ reports the request and its usage (spent)."
                                                       :reflections (om::prompt-reflections prompt) :folded folded
                                                       :subjects (om::subjects-of (om::projection-observations projection))
                                                       :links (om::prompt-links prompt) :curated (om::prompt-curated prompt)
-                                                      :branch entries :offer shown-offer))
+                                                      :branch entries :offer shown-offer
+                                                      :writer (getf om::*encoding* :writer)))
                                  (result (om::validate-level1 (l1answer-arguments a) in)))
                             (setf (report-refused rep) (length (om::vresult-refusals result)) (l1-answered out) t)
                             (when (om::vresult-refusals result)

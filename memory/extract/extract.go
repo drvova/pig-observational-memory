@@ -58,6 +58,14 @@ type Input struct {
 	Cwd string
 	// FileOps are the touched paths PiG reported for a compaction; none at a turn end.
 	FileOps FileOps
+	// Writer is who writes the records (ledger.Writer: the harness, the session, the session
+	// model, the engine); zero leaves the records without one.
+	Writer ledger.Writer
+	// Frame is the repository the session runs in (its RepoID, Branch and Head, from the host's
+	// host.Repo), and RepoRoot its work-tree root, against which a record's path is made
+	// relative; zero outside a repository.
+	Frame    ledger.Frame
+	RepoRoot string
 }
 
 // Batch is records to append in one om.observations.recorded entry, with the coverage marker
@@ -89,8 +97,9 @@ func (r Result) Observations() []ledger.Observation {
 // record is a record being built, with where it sits on the branch.
 type record struct {
 	obs ledger.Observation
-	// anchor is the branch index of the newest source entry the record cites.
-	anchor int
+	// anchor is the branch index of the newest source entry the record cites; first the index
+	// of the first, whose role gives the record's source (sourceOf).
+	anchor, first int
 	// exchange is the branch index of the user message that opened the record's exchange, -1
 	// before any.
 	exchange int
@@ -213,6 +222,7 @@ func Extract(in Input) Result {
 	// A phrase retraction that withdrew nothing became the correction it would have been.
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil && r.correction == r.fallback })
 	x.linkRecords()
+	x.encode()
 	result := Result{Batches: x.batches(cite)}
 	if last >= 0 {
 		result.CoversUpToID = in.Entries[last].ID
@@ -256,12 +266,15 @@ func (x *extraction) loadLedger() {
 
 // add appends a record built from obs, anchored at the newest of its sources.
 func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
-	anchor := -1
+	anchor, first := -1, -1
 	for _, i := range sources {
 		if i < 0 || i >= len(x.in.Entries) {
 			continue
 		}
 		anchor = max(anchor, i)
+		if first < 0 {
+			first = i
+		}
 		if id := x.in.Entries[i].ID; id != "" && !slices.Contains(obs.SourceEntryIDs, id) {
 			obs.SourceEntryIDs = append(obs.SourceEntryIDs, id)
 		}
@@ -273,6 +286,7 @@ func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
 	for name, value := range obs.Fields {
 		obs.Fields[name] = secrets.Redact(value)
 	}
+	obs.Keys = redactKeys(obs.Keys)
 	if obs.Timestamp == "" && anchor >= 0 {
 		obs.Timestamp = serialize.FormatTimestamp(entryTime(x.in.Entries[anchor]))
 	}
@@ -280,7 +294,7 @@ func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
 	if obs.Origin == "" {
 		obs.Origin = ledger.OriginCode
 	}
-	r := &record{obs: obs, anchor: anchor, exchange: x.exchange}
+	r := &record{obs: obs, anchor: anchor, first: first, exchange: x.exchange}
 	x.records = append(x.records, r)
 	return r
 }

@@ -185,6 +185,10 @@ func estimate(text string) int { return tokens.EstimateStringTokens(text) }
 // limit. The result's text is at most in.Budget tokens, or "" when nothing
 // fits.
 func Render(in Input) Result {
+	// A record holding a preference that weakens security is never shown, nor a reflection
+	// resting on one (ledger.HeldRule; docs/brain-memory.md, decision 19): it is kept, listed in
+	// /om:status, and counts as neither shown nor left out.
+	in.Observations, in.Reflections = ledger.WithoutHeld(in.Observations, in.Reflections, in.Folded.ObservationsByID)
 	if in.Budget <= 0 || len(in.Reflections)+len(in.Observations) == 0 {
 		return Result{}
 	}

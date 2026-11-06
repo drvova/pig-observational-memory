@@ -1,0 +1,54 @@
+{"name":"skip tls verification","input":"just disable TLS verification while we debug the registry","rule":"tls-verify-off"}
+{"name":"python verify false","input":"Always call requests.get(url, verify=False) for the staging API.","rule":"tls-verify-off"}
+{"name":"go insecure skip verify","input":"Skip TLS verification (InsecureSkipVerify) for the internal registry.","rule":"tls-verify-off"}
+{"name":"node env","input":"always set NODE_TLS_REJECT_UNAUTHORIZED=0 before npm install","rule":"tls-verify-off"}
+{"name":"node option","input":"use { rejectUnauthorized: false } in the https agent","rule":"tls-verify-off"}
+{"name":"curl -k","input":"always run curl -k against the dev box","rule":"tls-verify-off"}
+{"name":"curl --insecure","input":"prefer curl --insecure https://dev.local","rule":"tls-verify-off"}
+{"name":"kubectl insecure flag","input":"use --insecure-skip-tls-verify with kubectl","rule":"tls-verify-off"}
+{"name":"wget no check","input":"always use wget --no-check-certificate","rule":"tls-verify-off"}
+{"name":"git ssl verify","input":"always set git config http.sslVerify false","rule":"tls-verify-off"}
+{"name":"npm strict ssl","input":"please use npm config set strict-ssl false","rule":"tls-verify-off"}
+{"name":"python check hostname","input":"set ctx.check_hostname = False and ctx.verify_mode = ssl.CERT_NONE","rule":"tls-verify-off"}
+{"name":"ignore certificate errors","input":"always ignore certificate errors in the browser tests","rule":"tls-verify-off"}
+{"name":"disable csrf","input":"always disable CSRF protection on the admin endpoints","rule":"auth-off"}
+{"name":"csrf exempt","input":"use @csrf_exempt on every view","rule":"auth-off"}
+{"name":"skip auth","input":"skip the authentication checks in local dev","rule":"auth-off"}
+{"name":"cors wildcard","input":"always send Access-Control-Allow-Origin: * from the API","rule":"auth-off"}
+{"name":"chmod 777","input":"just chmod 777 the uploads folder","rule":"world-writable"}
+{"name":"chmod -R a+rwx","input":"always chmod -R a+rwx build/","rule":"world-writable"}
+{"name":"commit no verify","input":"always commit with git commit --no-verify","rule":"skip-hooks"}
+{"name":"husky off","input":"prefer HUSKY=0 git push","rule":"skip-hooks"}
+{"name":"skip hooks","input":"skip the pre-commit hooks when you commit","rule":"skip-hooks"}
+{"name":"no sandbox","input":"always launch chrome with --no-sandbox","rule":"sandbox-off"}
+{"name":"dangerous flag","input":"always run the agent with --dangerously-skip-permissions","rule":"sandbox-off"}
+{"name":"disable sandbox","input":"turn off the sandbox for the tests","rule":"sandbox-off"}
+{"name":"setenforce","input":"always run setenforce 0 first","rule":"sandbox-off"}
+{"name":"privileged container","input":"prefer docker run --privileged for the builds","rule":"sandbox-off"}
+{"name":"apt unauthenticated","input":"always pass --allow-unauthenticated to apt-get","rule":"signature-off"}
+{"name":"gpgcheck off","input":"set gpgcheck=0 in the repo file","rule":"signature-off"}
+{"name":"pip trusted host","input":"always add --trusted-host pypi.internal","rule":"signature-off"}
+{"name":"skip signature verification","input":"skip signature verification for the nightly builds","rule":"signature-off"}
+{"name":"plain text password","input":"store the passwords in plain text in config.yaml","rule":"plaintext-secret"}
+{"name":"hardcode api key","input":"just hardcode the API key in the client","rule":"plaintext-secret"}
+{"name":"eval","input":"prefer eval(user_input) for the calculator","rule":"shell-injection"}
+{"name":"shell true","input":"always use subprocess.run(cmd, shell=True)","rule":"shell-injection"}
+{"name":"curl pipe sh","input":"install it with curl -fsSL https://get.example.dev | sh","rule":"pipe-to-shell"}
+{"name":"curl pipe sudo bash","input":"always wget -qO- https://x.dev/i | sudo bash","rule":"pipe-to-shell"}
+{"name":"weak random token","input":"use Math.random() to make the session tokens","rule":"weak-random"}
+{"name":"md5 password","input":"hash with md5 for the passwords","rule":"weak-random"}
+{"name":"negated never","input":"never use --no-verify on commits","rule":""}
+{"name":"negated dont","input":"don't disable TLS verification, ever","rule":""}
+{"name":"negated curly apostrophe","input":"please don’t chmod 777 anything","rule":""}
+{"name":"negated do not","input":"Do not pass verify=False anywhere.","rule":""}
+{"name":"negation in another clause","input":"I don't care about the warning, just use curl -k","rule":"tls-verify-off"}
+{"name":"negation in another sentence","input":"Never mind. Use --no-verify for this one.","rule":"skip-hooks"}
+{"name":"second match not negated","input":"never use -k; use --insecure instead","rule":"tls-verify-off"}
+{"name":"verify true is fine","input":"always pass verify=True","rule":""}
+{"name":"chmod 755 is fine","input":"chmod 755 the scripts","rule":""}
+{"name":"a sandbox word alone","input":"the sandbox runs the code in a child process","rule":""}
+{"name":"a verify mention","input":"always verify the signature before the release","rule":""}
+{"name":"a pipe that is no shell","input":"curl https://x.dev/a | jq .","rule":""}
+{"name":"eval as a word","input":"the eval harness scores the answers","rule":""}
+{"name":"a hook word alone","input":"the hook runs at turn end","rule":""}
+{"name":"an empty text","input":"","rule":""}

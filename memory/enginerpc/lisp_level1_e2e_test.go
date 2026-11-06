@@ -105,7 +105,7 @@ func sameRun(t *testing.T, name string, want, got level1Run) {
 		what      string
 		want, got any
 	}{{"result", want.Result, got.Result}, {"appended", want.Appended, got.Appended}, {"requests", want.Requests, got.Requests}, {"notifications", want.Notifications, got.Notifications}} {
-		if !reflect.DeepEqual(part.want, part.got) {
+		if !reflect.DeepEqual(asGo(part.want), asGo(part.got)) {
 			w, _ := json.MarshalIndent(part.want, "", " ")
 			g, _ := json.MarshalIndent(part.got, "", " ")
 			t.Fatalf("%s: %s differ\nin-process: %s\nlisp:       %s", name, part.what, clip(w), clip(g))

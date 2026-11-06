@@ -299,6 +299,7 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
                   (sb-thread:with-mutex ((conn-extract-mutex c))
                     ;; The session model's profile (harness.Ledger.ProfileWith), applied to the render.
                     (let ((om::*summary-profile* (ch-profile ch))
+                          (om::*encoding* (session-encoding c (or (ignore-errors (get-branch c)) (om::cevent-branch event))))
                           (om::*kernel-floor-lowered* (conn-floor-lowered-p c store))
                           (hh (harness-hook-host ch (pig-hook-host c))))
                       ;; runtime.Snapshot's CompactHookInFlight, which /om:status shows.

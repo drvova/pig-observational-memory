@@ -1,0 +1,60 @@
+{"name":"plain statement","kind":"hedge","input":"The build uses make.","want":"stated"}
+{"name":"empty","kind":"hedge","input":"","want":"stated"}
+{"name":"i think","kind":"hedge","input":"I think the port is 8080.","want":"hedged"}
+{"name":"curly apostrophe","kind":"hedge","input":"I don’t think it works.","want":"hedged"}
+{"name":"not sure","kind":"hedge","input":"Not sure the cache is warm.","want":"hedged"}
+{"name":"maybe at start","kind":"hedge","input":"Maybe use the staging DB.","want":"hedged"}
+{"name":"might","kind":"hedge","input":"This might break the tests.","want":"hedged"}
+{"name":"probably","kind":"hedge","input":"It's probably the lockfile.","want":"hedged"}
+{"name":"i guess","kind":"hedge","input":"I guess we keep it.","want":"hedged"}
+{"name":"seems","kind":"hedge","input":"It seems flaky on CI.","want":"hedged"}
+{"name":"may be","kind":"hedge","input":"The token may be expired.","want":"hedged"}
+{"name":"may alone is not a hedge","kind":"hedge","input":"Ship it in May.","want":"stated"}
+{"name":"apparently is hearsay","kind":"hedge","input":"Apparently the API rate-limits at 100 rps.","want":"unverified"}
+{"name":"i heard","kind":"hedge","input":"I heard the release moved.","want":"unverified"}
+{"name":"someone told me","kind":"hedge","input":"Someone told me the cert expires Friday.","want":"unverified"}
+{"name":"hearsay outranks a hedge","kind":"hedge","input":"I think, apparently, it is fixed.","want":"unverified"}
+{"name":"whole words only: mighty","kind":"hedge","input":"A mighty refactor landed.","want":"stated"}
+{"name":"whole words only: seemsless","kind":"hedge","input":"The seemsless parser ran.","want":"stated"}
+{"name":"whole words only: unsurely","kind":"hedge","input":"The unsurely named field.","want":"stated"}
+{"name":"an apostrophe before is no boundary","kind":"hedge","input":"He'maybe","want":"stated"}
+{"name":"punctuation is a boundary","kind":"hedge","input":"(maybe) later","want":"hedged"}
+{"name":"upper case","kind":"hedge","input":"PROBABLY NOT.","want":"hedged"}
+{"name":"whitespace runs fold","kind":"hedge","input":"I\n\tthink so","want":"hedged"}
+{"name":"likely","kind":"hedge","input":"Most likely a race.","want":"hedged"}
+{"name":"unlikely","kind":"hedge","input":"Unlikely to matter.","want":"hedged"}
+{"name":"iirc","kind":"hedge","input":"IIRC the flag is -race.","want":"hedged"}
+{"name":"non-ASCII neighbours are boundaries","kind":"hedge","input":"émaybeé","want":"hedged"}
+{"name":"digits are word characters","kind":"hedge","input":"maybe2","want":"stated"}
+{"name":"npm package","kind":"versions","input":"Run npm install react@18.3.1 first.","want":["react@18.3.1"]}
+{"name":"scoped package","kind":"versions","input":"Pin @types/node@20.11.5, then build.","want":["@types/node@20.11.5"]}
+{"name":"go module with v","kind":"versions","input":"go get golang.org/x/net@v0.24.0","want":["golang.org/x/net@v0.24.0"]}
+{"name":"quotes and brackets","kind":"versions","input":"use `left-pad@1.3.0`, and (lodash@4.17.21).","want":["left-pad@1.3.0","lodash@4.17.21"]}
+{"name":"an email is no version","kind":"versions","input":"mail me at dev@example.com","want":[]}
+{"name":"latest is no version","kind":"versions","input":"go install x@latest","want":[]}
+{"name":"repeats once","kind":"versions","input":"a@1 a@1 b@2","want":["a@1","b@2"]}
+{"name":"the name needs a letter","kind":"versions","input":"1.2@3.4","want":[]}
+{"name":"no name","kind":"versions","input":"@1.2.3","want":[]}
+{"name":"a bad version character","kind":"versions","input":"pkg@1.2/3","want":[]}
+{"name":"none","kind":"versions","input":"nothing here","want":[]}
+{"name":"plan","kind":"timeHint","input":"{\"content\":\"I'll migrate the DB tomorrow.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\",\"status\":\"proposed\"}","want":"after:2026-11-02"}
+{"name":"past event","kind":"timeHint","input":"{\"content\":\"We already moved CI to GitHub Actions.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\"}","want":"before:2026-11-02"}
+{"name":"the assistant's past event","kind":"timeHint","input":"{\"content\":\"I fixed this earlier.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"assistant\"}","want":"before:2026-11-02"}
+{"name":"a past event with a date has none","kind":"timeHint","input":"{\"content\":\"We already shipped it on 2026-10-30.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\",\"eventDate\":\"2026-10-30\"}","want":""}
+{"name":"a preference has none","kind":"timeHint","input":"{\"content\":\"I previously preferred tabs.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"preference\"}","want":""}
+{"name":"a hypothetical has none","kind":"timeHint","input":"{\"content\":\"If we already have it, skip.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\",\"status\":\"hypothetical\"}","want":""}
+{"name":"a plain fact has none","kind":"timeHint","input":"{\"content\":\"The port is 8080.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\"}","want":""}
+{"name":"no date, no hint","kind":"timeHint","input":"{\"content\":\"I'll do it.\",\"timestamp\":\"later\",\"kind\":\"fact\",\"status\":\"proposed\"}","want":""}
+{"name":"authority of user-said","kind":"authority","input":"user-said","want":"user"}
+{"name":"authority of harness-memory","kind":"authority","input":"harness-memory","want":"repo-file"}
+{"name":"authority of tool-observed","kind":"authority","input":"tool-observed","want":"tool"}
+{"name":"authority of assistant-claim","kind":"authority","input":"assistant-claim","want":"model"}
+{"name":"authority of model-inferred","kind":"authority","input":"model-inferred","want":"model"}
+{"name":"authority of host-summary","kind":"authority","input":"host-summary","want":"model"}
+{"name":"authority of other-session","kind":"authority","input":"other-session","want":"model"}
+{"name":"authority of external-untrusted","kind":"authority","input":"external-untrusted","want":"model"}
+{"name":"authority of none","kind":"authority","input":"","want":""}
+{"name":"source of origin:peer","kind":"customSource","input":"origin:peer","want":"other-session"}
+{"name":"source of origin:task-notification","kind":"customSource","input":"origin:task-notification","want":"tool-observed"}
+{"name":"source of origin:other","kind":"customSource","input":"origin:other","want":"external-untrusted"}
+{"name":"source of note","kind":"customSource","input":"note","want":""}

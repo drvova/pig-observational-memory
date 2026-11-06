@@ -34,6 +34,9 @@ type Input struct {
 	// Offer is what the prompt offered to define (Prompt.HarnessShown with the request's
 	// DefinitionOffer); nil refuses every definition and rule.
 	Offer *DefinitionOffer
+	// Writer is who writes the new records (the session's harness, session, model and engine);
+	// zero leaves them without one.
+	Writer ledger.Writer
 }
 
 // Link is a possible update (ledger.Observation.PossiblyUpdates) the level-1 input lists: Later
@@ -342,6 +345,18 @@ func (v *validator) merge(index int, item any) {
 			}
 		}
 	}
+	// The text is the model's, so its source is level 1's; its authority starts at the top and
+	// is lowered to the least source's (leastProvenance), its hedge is never below the text's or
+	// any source's, and its keys are the sources' together.
+	record.Source = ledger.SourceModelInferred
+	record.Authority = ledger.AuthorityUser
+	record.Hedge = ledger.HedgeOf(content)
+	for _, o := range sources {
+		record.Keys.Union(o.Keys)
+	}
+	record.Frame = commonFrame(sources)
+	record.TimeHint = commonField(sources, func(o ledger.Observation) string { return o.TimeHint })
+	record.Episode = commonField(sources, func(o ledger.Observation) string { return o.Episode })
 	v.applyLabels(&record, m, false)
 	// The text is the model's, so the record is; but when every source stood for the user's own
 	// correction or preference, so does the merge, and it keeps the user's class in selection.
@@ -423,6 +438,8 @@ func (v *validator) label(index int, item any) {
 	if record.Kind != candidate.Kind {
 		record.Origin = ledger.OriginModel
 		record.FromUser = false
+		record.Source = ledger.SourceModelInferred
+		record.Authority = ledger.LeastAuthority(record.Authority, ledger.AuthorityModel)
 	}
 	v.accept(record, []string{id})
 }
@@ -546,7 +563,9 @@ func (v *validator) accept(record ledger.Observation, sources []string) {
 
 // leastProvenance holds a record replacing sources to the least provenance among them
 // (docs/brain-memory.md, "Provenance, not detection"): its origin is never above the lowest
-// source's (model, then host, then code), and it stands for the user (FromUser) only when every
+// source's (model, then host, then code), its authority never above the lowest source's
+// (ledger.AuthorityRank; a source with none leaves it none), its hedge never below the most
+// hedged source's, and it stands for the user (FromUser) only when every
 // source does, so a merge of a tool-derived record and the user's words is not the user's. The
 // rules a merge and a label are built by already give this; it is checked here, after every
 // proposal's validation, so no later rule can raise what a summary inherits.
@@ -562,7 +581,32 @@ func (v *validator) leastProvenance(record *ledger.Observation, sources []string
 		if !o.FromUser && !ledger.UserPriority(o) {
 			record.FromUser = false
 		}
+		record.Authority = ledger.LeastAuthority(record.Authority, o.Authority)
+		record.Hedge = ledger.StrongestHedge(record.Hedge, o.Hedge)
 	}
+	if v.in.Writer != (ledger.Writer{}) {
+		record.Writer = v.in.Writer
+	}
+}
+
+// commonFrame is the sources' frame when they all share one, else none.
+func commonFrame(sources []ledger.Observation) ledger.Frame {
+	for _, o := range sources[1:] {
+		if o.Frame != sources[0].Frame {
+			return ledger.Frame{}
+		}
+	}
+	return sources[0].Frame
+}
+
+// commonField is the sources' value of field when they all share one, else "".
+func commonField(sources []ledger.Observation, field func(ledger.Observation) string) string {
+	for _, o := range sources[1:] {
+		if field(o) != field(sources[0]) {
+			return ""
+		}
+	}
+	return field(sources[0])
 }
 
 // originRank orders origins by the authority of their text: what a model wrote (and any origin
