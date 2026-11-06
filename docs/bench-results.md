@@ -52,6 +52,60 @@ go run ./cmd/compactbench production -data ../bench/compactbench-data
 
 Retention takes under a minute per budget on two cores. Each `-out` line carries a session's recall, its ledger and source recall, the atoms only system messages hold, per-kind counts and, with `-keep-summaries`, the summary.
 
+## Tool output values (phase 2, part B)
+
+Level 0 now reads tool results by code (docs/memory-v2.md, "Tool output"): a `value` record per
+exact value a result printed (path, error type, SHA, URL, `KEY=value`, address, issue, failing test,
+branch, searched symbol, version) and an `evidence` record of at most 8 verbatim lines when a result
+failed or matched a failure grammar. The summary lists the values after the tables, ranked by how
+many results printed them, at most one per 200 tokens and 40 of a kind, with one om snippet listing
+the rest. Same adapter, data release and scoring as above; measured on 2026-11-06 at the merge of
+`origin/claude/lisp-core` 3180846 into `claude/phase2-tool-output` (the "before" column is
+`origin/claude/lisp-core` 3cb517a, the table above).
+
+The scanners were fitted on half the sessions (the release's even indexes, "fit") and are reported
+on the other half ("test") as well as on all 146.
+
+| Budget | Mean recall before | after (all) | after (fit / test) | Ledger recall before / after | Mean summary chars before / after |
+|---|---|---|---|---|---|
+| 4,096 | 16.5% | **25.8%** | 24.6% / 27.0% | 22.9% / 49.6% | 13,710 / 14,600 |
+| 8,192 | 19.9% | **37.4%** | 36.8% / 38.1% | 23.0% / 49.7% | 19,762 / 22,287 |
+| 16,384 | 21.8% | **41.0%** | 40.7% / 41.4% | 23.0% / 49.7% | 24,840 / 28,533 |
+| engine's own | 23.0% | **42.5%** | 42.9% / 42.2% | 23.0% / 49.7% | 37,651 / 42,413 |
+
+Test-half recall before was 18.6%, 22.1%, 23.7% and 24.3% at the four budgets, so the test half
+gains 8.4, 16.0, 17.7 and 17.9 points, about what the fit half gains (10.3, 19.0, 20.8, 21.2).
+
+- **Atoms only tool output holds** (16,384 tokens; placed at the first of user, assistant, tool
+  call, tool output, system that holds the atom): **0.7% → 40.8%** of 3,007 (test half 35.2% of
+  1,510); 15.2% at 4,096 and 41.6% at the engine's budget. The values also hold atoms that a user or
+  assistant message named first: user atoms 53.9% → 58.1%, assistant 53.4% → 72.3%, tool-call
+  arguments 34.0% → 64.1%. System-only atoms stay at 0% (not replayed). The adapter now computes this placement
+  itself (`first found in` in its report); it puts 579 atoms first in tool-call arguments where the
+  table above has 652, and 1,420 nowhere where it has 1,347, the other rows equal.
+- **Per kind at 16,384 tokens, before → after:** error names 13.6% → 80.0%, PR numbers 73.0% →
+  87.6%, addresses 22.6% → 52.3%, paths 20.8% → 37.7%, SHAs 15.8% → 34.7%, URLs 9.2% → 22.7%,
+  `KEY=value` 5.2% → 17.0%.
+- **Ledger recall** (in the summary or in an active record the memory tool reads) rises from 23.0%
+  to 49.7%: the value records hold what the summary's 40-per-kind lists leave out.
+- **Precision** (the share of the indexed tool-output values that are labelled atoms of their
+  session, any kind): 21.5% over all sessions (fit 23.1%, test 19.8%), 31.4% for values that hold
+  an atom. By kind on the test half, is an atom / holds one: error types 42.0% / 42.0%, IPs 38.6% /
+  45.6%, SHAs 38.5% / 45.8%, URLs 24.6% / 41.1%, paths 18.5% / 26.3%, `KEY=value` 15.9% / 26.1%;
+  issues, tests, branches, symbols and versions are no atom kind of the benchmark (an issue value
+  keeps its `#`, which the benchmark's label drops, so it only holds one). The labels count only
+  values that recur in later requests, so a value that is not a label is not necessarily noise.
+- **Determinism and parity.** Every run is byte-identical; the Lisp core gives the same records and
+  summaries byte for byte (`OM_LISP_PARITY=1`, including fifteen of these sessions converted to the
+  generic format through `OM_LISP_PARITY_EXTRA`). No model request is made.
+
+memeval (docs/brain-memory-baseline.md, phase 2 part B): error text, 100% lost before, is 99% shown
+one compaction after its turn left the context and never lost (reachable through the printed
+snippet from N = 8), with the identifier and intention curves within a few points of before.
+
+Reproduce: as above; the report's "by half", "value precision by value kind" and "first found in"
+tables give the rows here.
+
 ## Judge harness (decision 21)
 
 [`bench/longmemeval`](../bench/longmemeval/README.md) can now re-judge a finished run with a pinned judge from a different model family than the answering model, and compare two judged runs (`lme.py judge`, `lme.py compare`; logic in `judging.py`). It is built and unit-tested with scripted fake judges; no real judge pass has been run yet, so there are no numbers here. Every LongMemEval figure above was judged by the answering model itself.

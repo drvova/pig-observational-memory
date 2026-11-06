@@ -172,6 +172,36 @@ Error text, scope exclusions and decisions are still lost: the fields give recor
 provenance, while recording those classes is the work of the tool-output and conversation
 extractors of phase 2.
 
+## Phase 2 part B: tool output
+
+Level 0 reads tool results into value and evidence records (`claude/phase2-tool-output`;
+docs/memory-v2.md, "Tool output"). The error-text probe's failing run now gives an evidence record
+holding `orders_test.go:42: pq: duplicate key value violates unique constraint "…"` verbatim, so
+error text moves from lost to shown, then reachable. Tier 0, 20 seeds, 600 compactions, 1,513
+snippets run (none failed), 0 model requests, all four invariants kept on every compaction:
+
+| class | 1 | 2 | 4 | 5 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| identifier | 99 / 1 / 0 | 97 / 3 / 0 | 90 / 10 / 0 | 83 / 17 / 0 | 61 / 39 / 0 | 59 / 41 / 0 | 45 / 55 / 0 | 37 / 63 / 0 |
+| error text | **99 / 1 / 0** | **96 / 4 / 0** | **92 / 8 / 0** | **76 / 24 / 0** | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| scope exclusion | 5 / 0 / 95 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 |
+| decision | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 |
+| intention | 98 / 2 / 0 | 96 / 4 / 0 | 86 / 14 / 0 | 69 / 31 / 0 | 43 / 57 / 0 | 36 / 64 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| probes per class | 120 | 118 | 100 | 100 | 100 | 80 | 60 | 60 |
+
+On `origin/claude/lisp-core` 3180846 (phase 1 and part A, without tool output) the same run gives
+error text 100% lost at every N, identifier 99/98/90/84/61/59/47/38 and intention
+99/93/87/75/44/36/25/23 shown: the evidence rows cost the other probes at most 6 points shown at
+one N (intention at N = 5), and none is ever lost. With the 1,200-token cap error text is 9% shown
+and 91% reachable at N = 1, then reachable (never lost); the base branch's capped run already
+showed constraints at 10% and 0% at N = 16 and 20 (this branch: 91% and 27%), so that drop is not
+this change's. "probes per class" at N = 2 is 118 (119 on the base, 120 in phase 0): summary sizes move a probe
+past the 30th compaction. The renamed-ids control now compares the cells both runs scored
+(`TestTier0RenamedIDs`: 1,403 compared, 3 scored in one run only), since name lengths shift when a
+run reaches its last compaction.
+
 ## Re-running it
 
 - CI runs `cd memory && go test ./memeval`. That is 2 seeds, about 30 s, or 1 seed over 430
