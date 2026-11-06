@@ -141,10 +141,24 @@ repeated compactions, which rendering from records avoids.
   only when X is more than a pronoun or the sentence quotes a key; substitutions ("use X instead of
   Y", "use X, not Y", "prefer X over Y"); standing instructions ("from now on", "always/never … from
   now"); process rules ("before you commit/push/merge", "after each change … run", "make sure to …
-  before"); and team forms ("we always/never/use/prefer", "our convention is"). A question, a rule
-  posed under the speaker's own condition ("if we", "if I", "suppose", "what if"; "if you change
-  the schema, run …" is a rule addressed to the agent and counts) and a retraction are not rules,
-  and a later retraction never withdraws one (`ledger.MaySupersede`); only a correction replaces it.
+  before"); and team forms ("we always/never/use/prefer", "our convention is"). Policy forms
+  (`isPolicyRule`) count only when the sentence quotes a key or names a word beyond pronouns,
+  function words and fillers: "never/always <any verb> X" as an imperative or a policy (at the
+  sentence start, after a clause mark or after "and", "please", "should", "to"; no past, third-person
+  or "-ing" form, and not of a bare "it", "this" or "that", which is the thing at hand); "must / must
+  not / mustn't / shall / shall not" (not a guess: "it must be the cache", "you must have deleted
+  it", "they must be busy"); "is/are (not) allowed", "is/are prohibited / forbidden / not permitted";
+  "requires … approval / review / sign-off" and "needs … approval" (not the speaker's own "I need a
+  review"); "policy:", "company/team/org policy is", "rule:", "we have a rule that", "the rule is
+  that"; and "only <verb> X" or "X only" with X a key. They are read outside double-quoted spans. A
+  question, a rule posed under the speaker's own condition ("if we", "if I", "suppose", "what if";
+  "if you change the schema, run …" is a rule addressed to the agent and counts), one reported from
+  someone else ("he said", "my manager said", "Alice said", "according to", "I was told"), a
+  one-time permission ("you can push this once", "just this once", "for this task"; decision 23 of
+  docs/brain-memory.md: recorded as it would be without the rule, never as a rule) and a retraction
+  are not rules, and a later retraction never withdraws one (`ledger.MaySupersede`); only a
+  correction replaces it. A policy-form rule that weakens security is held like any other
+  (`ledger.HeldRule`, decision 19).
   Assistant text never makes a rule. A rule, preference or decision from the user's turn is set
   `source: user-said` and `authority: user` by its extractor, with its keys (`ledger.RecordKeys`)
   in `keys.paths` (a key with a slash or a file name) or `keys.commands` (any other); consecutive

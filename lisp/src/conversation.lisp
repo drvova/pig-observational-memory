@@ -61,6 +61,7 @@
                 #r§(?i)\bstay\s+out\s+of\s+(\S+)§)))
 
 (defregex +rule-hypothetical+ #r§(?i)\b(?:if\s+(?:we|i)|suppose|supposing|what\s+if|hypothetically)\b§)
+(defregex +rule-one-time+ #r§(?i)\b(?:(?:just\s+)?this\s+once|just\s+once|(?:only\s+)?this\s+(?:one\s+)?time|one[-\s](?:time|off)|for\s+this\s+(?:task|change|commit|pr|one|run|session|ticket|request)|(?:it|that)\s+once)\b§)
 
 (defparameter +decision-patterns+
   (mapcar #'compile-regex
@@ -78,19 +79,157 @@
   '("it" "that" "this" "them" "those" "these" "me" "us" "him" "her" "anything" "everything" "something" "nothing"))
 
 (defun rule-p (sentence)
-  "isRule: a standing rule or scope exclusion, neither a question nor posed hypothetically."
+  "isRule: a standing rule, scope exclusion or policy form, neither a question, posed
+hypothetically, reported from someone else nor a one-time permission."
   (let ((sentence (replace-all sentence "’" "'")))
-    (when (or (question-p sentence) (regex-match-p +rule-hypothetical+ sentence))
+    (when (or (question-p sentence) (regex-match-p +rule-hypothetical+ sentence)
+              (reported-p sentence) (regex-match-p +rule-one-time+ sentence))
       (return-from rule-p nil))
     (when (some (lambda (p) (regex-match-p p sentence)) +rule-patterns+)
       (return-from rule-p t))
     (let ((keyed (and (record-keys sentence) t)))
-      (dolist (p +scope-patterns+ nil)
+      (dolist (p +scope-patterns+)
         (let ((m (regex-find-submatch p sentence)))
           (when m
             (let ((object (to-lower (trim (second m) "`'\".,;:!?()"))))
               (when (or keyed (and (string/= object "") (not (member-str object +scope-pronouns+))))
-                (return-from rule-p t)))))))))
+                (return-from rule-p t))))))
+      (policy-rule-p sentence keyed))))
+
+;;; The policy forms of a standing rule (rules.go, isPolicyRule).
+
+(defregex +policy-never-always+ #r§(?i)(?:^(?:(?:ok(?:ay)?|so|also|and|but|oh|please|remember|important|note|reminder)\W+)*|[:;,(]\s*|\b(?:and|or|but|please|should|to)\s+)(?:never|always)\s+([a-z][a-z-]*)\b([^.;:!?]*)§)
+(defregex +policy-modal+ #r§(?i)\b(?:must|shall)(?:\s+not|n't|nt)?\s+(?:(?:always|never|only|not|also|first)\s+)*([a-z][a-z'-]*)\b([^.;:!?]*)§)
+(defregex +policy-modal-epistemic+ #r§(?i)\b(?:i|it|that|this|there|which|what|who)\s+(?:must|shall)\b|\bmust'?ve\b|\bmust\s+have\s+(?:been|done|made|got|gone|seen|run|left|lost|forgot|forgotten|broken|written|[a-z]+ed)\b|\bmust\s+be\s+(?:the|a|an|my|your|our|some|something|because|wrong|right|why|it|that|so|joking|kidding|tired|confused|nice|flaky|busy|down|slow|off|missing|stale|weird|hard|easy|great|crazy)\b§)
+(defregex +policy-modal-guess+ #r§(?i)\b(?:they|he|she|you|we)\s+must\s+be\s+([a-z]+)§)
+(defregex +policy-allowed+ #r§(?i)(?:\b(?:is|are)(?:n't|nt)?|'s|'re)\s+(?:(?:not|never|strictly|only|also|absolutely)\s+)*(?:allowed|permitted|prohibited|forbidden|disallowed|banned)\b§)
+(defregex +policy-approval+ #r§(?i)\b(requires?|required|needs?|needed)\b([^.;:!?]*?)\b(approval|review|sign-?off|signoff)s?\b§)
+(defregex +policy-approval-own+ #r§(?i)\b(?:i|we)\s+(?:really\s+|still\s+|just\s+)?(?:need|needs|needed|require|required)\b§)
+
+(defparameter +policy-markers+
+  (mapcar #'compile-regex
+          (list #r§(?i)(?:^|\b(?:company|team|org|organi[sz]ation|security|house|project|repo|our)\s+)(?:policy|rule)\s*:§
+                #r§(?i)\b(?:company|team|org|organi[sz]ation|security|house|our)\s+(?:policy|rule)\s+(?:is|says|states|requires)\b§
+                #r§(?i)\b(?:we\s+have|there\s+is|there's|i\s+have|our\s+team\s+has)\s+a\s+(?:[a-z-]+\s+)?(?:rule|policy)\s+(?:that|to|against)\b§
+                #r§(?i)\b(?:the|our|my)\s+rule\s+is\s+(?:that|to)\b§)))
+
+(defregex +policy-only+ #r§(?i)(?:^|[:;,]\s*|\b(?:and|please|you|we|to|should|must|may|can)\s+)only\s+([a-z][a-z-]*)\b([^.;:!?]*)§)
+(defregex +policy-key-only+ #r§(?i)(`[^`\n]+`|[A-Za-z0-9_./~-]+)\s+only\b(?:\s+([a-z]+))?§)
+(defregex +policy-key-only-subject+ #r§(?i)^(?:i|it|that|this|he|she|they|there)\b§)
+(defregex +policy-quoted+ #r§"[^"\n]*"|“[^”\n]*”§)
+(defregex +policy-token+ #r§[A-Za-z0-9][A-Za-z0-9_'./@$-]*§)
+(defregex +rule-reported+ #r§(?i)\b(?:he|she|they|someone|somebody|people|everyone|everybody|(?:my|our|his|her|their|the|a)\s+(?:boss|manager|lead|colleague|coworker|co-worker|teammate|friend|client|customer|reviewer|cto|ceo|admin|mentor|teacher))\s+(?:said|says|told|tells|wrote|writes|mentioned|claims|claimed|insists|insisted|thinks|thought|suggested|suggests)\b|\baccording\s+to\b|\b(?:i\s+was|we\s+were|i've\s+been|we've\s+been)\s+told\b§)
+(defregex +rule-reported-name+ #r§\b([A-Z][a-z]+)\s+(?:said|says|told|wrote|mentioned|claims|claimed|thinks|suggested)\b§)
+
+(defparameter +rule-reported-name-words+ '("Policy" "Rule" "Docs" "Documentation" "Guidelines" "Spec" "Readme"))
+
+(defparameter +policy-verb-stop+
+  '("mind" "again" "ever" "before" "been" "had" "has" "was" "were" "is" "are" "did" "does" "got"
+    "the" "a" "an" "so" "that" "this" "it" "really" "quite" "sure" "enough" "once" "too"
+    "more" "less" "heard" "seen" "said" "thought" "knew" "told" "went" "came" "used" "true"
+    "false" "if" "when" "after" "for" "in" "on" "one" "two" "just" "here" "there" "then" "now"
+    "very" "much" "like" "until" "because" "with" "to" "of" "at" "by" "as" "some" "all"
+    "what" "how" "why" "who" "know" "think" "guess" "seem" "seems" "happen" "happens" "work" "works"))
+
+(defparameter +policy-ing-verbs+ '("bring" "string" "ping" "sing" "ring" "swing" "sting" "fling" "cling" "wring"))
+
+(defparameter +policy-fillers+
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (w (fields "i me my mine you your yours we us our ours they them their theirs he him his she her hers it its myself yourself ourselves themselves
+		this that these those anything everything something nothing anyone anybody someone somebody everyone everybody nobody one ones
+		a an the any some all every each no none such other another
+		to of in on at for with without from by into onto about over under up down out off away back through after before as than like via per
+		and or but nor so if when unless until while because then also
+		again ever here there now just really very too even still yet already anymore today first more less much many well please
+		be is are was were been being am do does did done have has had can could will would should shall may might must not never always only
+		get got go going let lets make sure ok okay fine good right wrong true false ready careful thing things stuff way
+		policy rule company team org approval review signoff sign-off allowed permitted prohibited forbidden disallowed banned
+		require requires required need needs needed")
+             table)
+      (setf (gethash w table) t))))
+
+(defparameter +policy-key-only-next+
+  '("is" "are" "was" "were" "has" "have" "had" "does" "did" "contains" "returns" "takes" "gets"
+    "seems" "appears" "runs" "happens" "exists" "fails" "breaks" "works" "matters" "shows"))
+
+(defun policy-content-p (text)
+  "policyContent: a word in text that is not a filler."
+  (dolist (tok (regex-find-all-strings +policy-token+ text) nil)
+    (let ((w (to-lower (trim-right tok "'.-"))))
+      (when (and (string/= w "") (not (gethash w +policy-fillers+)))
+        (return t)))))
+
+(defun policy-verb-p (word)
+  "policyVerb: a word an imperative may open with."
+  (let ((w (to-lower word)))
+    (cond ((member-str w +policy-verb-stop+) nil)
+          ((and (has-suffix w "ed") (not (has-suffix w "eed")) (> (length w) 4)) nil)
+          ((and (has-suffix w "s") (not (has-suffix w "ss")) (not (has-suffix w "us"))) nil)
+          ((and (has-suffix w "ing") (not (member-str w +policy-ing-verbs+))) nil)
+          (t t))))
+
+(defun policy-occasion-p (tail)
+  "policyOccasion: an object that is the thing at hand (\"it\", \"them\", a bare \"this\" or \"that\")."
+  (let ((tokens (regex-find-all-strings +policy-token+ tail)))
+    (when tokens
+      (let ((first (to-lower (first tokens))))
+        (cond ((member-str first '("it" "them")) t)
+              ((member-str first '("this" "that"))
+               (or (null (rest tokens))
+                   (and (gethash (to-lower (trim-right (second tokens) "'.-")) +policy-fillers+) t)))
+              (t nil))))))
+
+(defun modal-guess-p (text)
+  "isModalGuess: a pronoun's \"must be X\" with X no participle."
+  (let ((m (regex-find-submatch +policy-modal-guess+ text)))
+    (and m (let ((w (to-lower (second m)))) (and (not (has-suffix w "ed")) (not (has-suffix w "en")))))))
+
+(defun reported-p (sentence)
+  "isReported: a sentence stating someone else's words."
+  (or (regex-match-p +rule-reported+ sentence)
+      (some (lambda (m) (not (member-str (second m) +rule-reported-name-words+)))
+            (regex-find-all-submatch +rule-reported-name+ sentence))))
+
+(defun policy-rule-p (sentence keyed)
+  "isPolicyRule: a policy form of a standing rule, read outside double-quoted spans."
+  (let ((text (regex-replace-all +policy-quoted+ sentence " ")))
+    (dolist (m (regex-find-all-submatch +policy-never-always+ text))
+      (when (and (policy-verb-p (second m)) (not (policy-occasion-p (third m))) (or keyed (policy-content-p (third m))))
+        (return-from policy-rule-p t)))
+    (unless (or (regex-match-p +policy-modal-epistemic+ text) (modal-guess-p text))
+      (let ((loc (regex-find-submatch-index +policy-modal+ text)))
+        (when loc
+          (let ((verb (subseq text (aref loc 2) (aref loc 3))))
+            (when (and (or (string-equal verb "be") (policy-verb-p verb))
+                       (not (policy-occasion-p (subseq text (aref loc 4) (aref loc 5))))
+                       (or keyed (policy-content-p (cat (subseq text 0 (aref loc 0)) " " (subseq text (aref loc 4) (aref loc 5))))))
+              (return-from policy-rule-p t))))))
+    (let ((loc (regex-find-submatch-index +policy-allowed+ text)))
+      (when (and loc (or keyed (policy-content-p (cat (subseq text 0 (aref loc 0)) " " (subseq text (aref loc 1))))))
+        (return-from policy-rule-p t)))
+    (unless (regex-match-p +policy-approval-own+ text)
+      (let ((loc (regex-find-submatch-index +policy-approval+ text)))
+        (when loc
+          (let ((verb (to-lower (subseq text (aref loc 2) (aref loc 3))))
+                (noun (to-lower (subseq text (aref loc 6) (aref loc 7)))))
+            (when (and (or (not (has-prefix verb "need")) (string= noun "approval"))
+                       (or keyed (policy-content-p (cat (subseq text 0 (aref loc 0)) " " (subseq text (aref loc 4) (aref loc 5))
+                                                        " " (subseq text (aref loc 1))))))
+              (return-from policy-rule-p t))))))
+    (dolist (p +policy-markers+)
+      (let ((loc (regex-find-submatch-index p text)))
+        (when (and loc (or keyed (policy-content-p (subseq text (aref loc 1)))))
+          (return-from policy-rule-p t))))
+    (unless keyed (return-from policy-rule-p nil))
+    (dolist (m (regex-find-all-submatch +policy-only+ text))
+      (when (and (policy-verb-p (second m)) (record-keys (third m)))
+        (return-from policy-rule-p t)))
+    (when (regex-match-p +policy-key-only-subject+ text) (return-from policy-rule-p nil))
+    (let ((keys (record-keys sentence)))
+      (dolist (m (regex-find-all-submatch +policy-key-only+ text) nil)
+        (when (and (member-str (trim (second m) "`") keys)
+                   (not (member-str (to-lower (third m)) +policy-key-only-next+)))
+          (return-from policy-rule-p t))))))
 
 (defun decision-p (sentence)
   "isDecision: decision wording, not a question, a condition or a decision not taken."

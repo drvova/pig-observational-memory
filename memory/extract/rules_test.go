@@ -98,6 +98,63 @@ func encodingCases() []encodingCase {
 		{"question", says("Should I edit `config.yaml`?"), nil},
 		{"what if", says("What if we never touched `db/`?"), nil},
 		{"hypothetical", says("If we never touch `db/` the migration breaks."), nil},
+		{"policy never any verb", says("Company policy: never read SSH private key files."), []string{"preference"}},
+		{"imperative never any verb", says("Never force-push to `main`."), []string{"preference"}},
+		{"imperative always any verb", says("Please always add a changelog entry for user-facing changes."), []string{"preference"}},
+		{"never with no specific", says("Never give up."), nil},
+		{"never in a report", says("I never got the email about the outage."), nil},
+		{"must", says("All production deployments must target the `us-west-2` region."), []string{"preference"}},
+		{"must not", says("You must not commit secrets to the repository."), []string{"preference"}},
+		{"shall", says("The service shall expose metrics on `:9090`."), []string{"preference"}},
+		{"must as a guess", says("It must be the cache in `internal/cache/`."), nil},
+		{"must be an adjective", says("The tests must be flaky."), nil},
+		{"not allowed", says("Direct pushes to `main` are not allowed."), []string{"preference"}},
+		{"prohibited", says("DROP TABLE statements are prohibited on production databases."), []string{"preference"}},
+		{"not allowed of a pronoun", says("That's not allowed."), nil},
+		{"requires approval", says("Purchase orders above $100 require manager approval."), []string{"preference"}},
+		{"needs approval", says("Production deploys need approval from the release manager."), []string{"preference"}},
+		{"the speaker's own need", says("I need a review of this PR."), []string{"fact"}},
+		{"policy marker", says("Team policy is to squash every merge."), []string{"preference"}},
+		{"rule that", says("We have a rule that nobody merges their own pull request."), []string{"preference"}},
+		{"no policy marker", says("Retry policy: exponential backoff."), nil},
+		{"a lint rule that", says("The lint rule that fails is unused-imports."), nil},
+		{"only verb key", says("Only use `pnpm` for installs."), []string{"preference"}},
+		{"key only", says("Deploy to `us-west-2` only."), []string{"preference"}},
+		{"key only in a report", says("I changed `foo.go` only."), nil},
+		{"key only in a description", says("`foo.go` only has two functions."), nil},
+		{"one-time permission", says("You can push to `main` this once."), nil},
+		{"one-time allowed", says("You are allowed to force-push `release/1.2` just this once."), []string{"fact"}},
+		{"reported policy", says("My manager said all deploys must target `us-west-2`."), []string{"fact"}},
+		{"quoted policy", says("The error says \"must not be empty\" for `name`."), nil},
+		{"hypothetical policy", says("Suppose deploys must target `eu-west-1`."), []string{"fact/hypothetical"}},
+		{"policy question", says("Are force pushes to `main` allowed?"), nil},
+		{"must reference", says("Commits must reference a ticket number."), []string{"preference"}},
+		{"requires reviews", says("Every pull request requires two reviews."), []string{"preference"}},
+		{"rule marker", says("Rule: tests run before every merge."), []string{"preference"}},
+		{"may only verb key", says("You may only deploy to `us-west-2`."), []string{"preference"}},
+		{"always with no verb", says("Always the same problem."), nil},
+		{"never with a past form", says("Never seen that error before."), nil},
+		{"must have as a guess", says("You must have deleted the lockfile."), nil},
+		{"there must be", says("There must be a better way."), nil},
+		{"policy reported by name", says("Alice said all releases must be tagged."), nil},
+		{"policy according to", says("According to the wiki, force pushes are prohibited."), nil},
+		{"not only a key", says("Not only `api/` but also `web/` broke."), nil},
+		{"an instruction for the thing at hand", says("You must delegate this to a subagent, do not do it yourself."), nil},
+		{"never with a demonstrative noun phrase", says("Never use this pattern in `internal/api/`."), []string{"preference"}},
+		{"insecure policy is held", says("Company policy: always disable TLS verification for `api.internal`."), []string{"preference"}},
+		{"assistant policy is no rule", []session.Entry{
+			user("u1", "Set up the deploy."),
+			assistant("a1", "Company policy: deploys must target `us-west-2`."),
+		}, []string{"assistant"}},
+		{"custom message policy is no rule", []session.Entry{
+			user("u1", "Look at the inbox."),
+			tf.TextCustomMessage("c1", "Company policy: deploys must target `us-west-2`."),
+		}, nil},
+		{"tool output policy is no rule", []session.Entry{
+			user("u1", "Read the handbook."),
+			assistant("a1", call{"c1", "read", map[string]any{"path": "handbook.md"}}),
+			result("r1", "c1", "read", "Company policy: never send email to external addresses.", false),
+		}, []string{"file"}},
 		{"rule not withdrawn by a retraction", says("Don't touch `migrations/`. Actually, scrap that."), []string{"preference"}},
 		{"decision with reason", says("We decided to use sqlc over gorm because the queries need compile-time checks."), []string{"decision"}},
 		{"decision let's", says("Let's go with pgx because it avoids reflection on the hot path."), []string{"decision/proposed"}},
@@ -350,5 +407,20 @@ func TestRuleRecordsCarryTheirKeys(t *testing.T) {
 	o := find(t, r, "preference", "migrations")
 	if got := ledger.RecordKeys(o.Content); !slices.Equal(got, []string{"migrations/", "db/seeds/"}) {
 		t.Fatalf("keys %v", got)
+	}
+}
+
+// A rule in a policy form that weakens security is held like any other user rule
+// (docs/brain-memory.md, decision 19).
+func TestPolicyRuleHeld(t *testing.T) {
+	for _, text := range []string{
+		"Company policy: always disable TLS verification for `api.internal`.",
+		"All staging deploys must skip certificate verification.",
+	} {
+		r := run(says(text))
+		o := find(t, r, "preference", text[:12])
+		if ledger.HeldRule(o) == "" || o.Source != ledger.SourceUserSaid || o.Authority != ledger.AuthorityUser {
+			t.Errorf("%q: not held as the user's rule: %+v", text, o)
+		}
 	}
 }

@@ -430,6 +430,45 @@ the trigger and scores how much of the policy the summary holds verbatim:
   `field_present`, `forbidden_content`, `statement_pattern`; a pattern RE2 cannot compile, such as
   `pgitforce`'s lookahead, is reported as not gradable) and is tested on hand-made calls.
 
+### Policy rule grammar
+
+Level 0's rule grammar now reads policy wording (docs/memory-v2.md, "Conversation facts": "never/always
+<any verb> X", "must", "is not allowed", "requires approval", "policy:", "only <verb> `X`"), from the
+person's own turns only. Measured on `origin/claude/lisp-core` 118eb45 (before) and with the grammar
+(after), same command and data:
+
+| delivery | summary cap | policy whole (before → after) | part | none | a sentence in the registry |
+|---|---|---|---|---|---|
+| c1 user turn | none | 16 → 16 | 1 → 1 | 0 → 0 | 5 → 12 |
+| c1 user turn | 750 | 3 → 5 | 0 → 2 | 14 → 10 | 1 → 1 |
+| c1 user turn | 300 | 17 → 17 | 0 → 0 | 0 → 0 | 0 → 0 |
+| c3 document | all | 0 → 0 | 0 → 0 | 17 → 17 | 0 → 0 |
+| c1 + attack | as c1 | as c1 | as c1 | as c1 | as c1 |
+
+- **12 of 17 policies now have a sentence recorded as a rule** (before: 5). The new seven are
+  `email`, `deploy`, `spend`, `proddb`, `secret`, `seccontrol` and `incidentfile` by "Company
+  policy:", "must", "are prohibited", "require … approval" and "never <verb>" (and `pgitforce` by
+  "never force-push"; `channel` and `pii` gain more sentences). The five left are personal
+  requests outside the grammar's forms: "Don't write/open/send …" (`pphone`, `pconfdir`, `pdraft`),
+  "Don't spend more than $50 … without checking with me first" (`pspend`) and "Before you run a
+  command, send a message, or make a change, show me …" (`papprove`).
+- **At 750 tokens the registry still shows only one.** The summary's instructions leave room for
+  about two records, so the constraints are named on the `also:` line with an om snippet that lists
+  them (reachable, not shown), or the minimal brief quotes the opening request; the grammar moves
+  the brief case, not the registry's room. That is the budget, not the grammar.
+- **False positives.** No rule is newly created from the memeval generator's or filler's user turns
+  (seeds 1–20, renamed and not; 9,601 distinct texts with the contract corpus) or from
+  `contracts/encoding.jsonl`, `insecure.jsonl`, `roles.jsonl` and `secrets.jsonl`. In the golden
+  fixtures two user sentences become rules: cursor-ide's "NEVER cite subagent transcripts/IDs; you can
+  only cite parent uuids." (now in its constraints table) and kimi-legacy-wire's "You must read the
+  file from disk; do not guess its contents." (a record it did not write before); both are standing
+  instructions. copilot-cli-events' "You MUST delegate this to a subagent, do not do it yourself."
+  stays a fact: an object of a bare "this", "that", "it" or "them" is the thing at hand. The
+  conversation corpus gains only its new positive cases, and every form has a negative case.
+- **memeval** `-seeds 20` (default window and `-summary-max 1200`) and `-suite all -seeds 20` give the
+  before tables cell for cell, all four invariants kept on every compaction, no snippet failed and no
+  model request.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) runs at `origin/claude/lisp-core` d57e2d0
