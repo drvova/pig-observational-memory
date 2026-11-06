@@ -10,7 +10,11 @@
 
 (in-package "OM.SERVER")
 
-(defparameter +ported-formats+ '("generic" "claude-code"))
+(defun ported-formats ()
+  "Every transcript format W2's readers read: the file formats and the database ones."
+  (append (mapcar #'car om::*transcript-formats*) (mapcar #'car om::*db-formats*)))
+
+(defun db-format-p (format) (and (assoc format om::*db-formats* :test #'string=) t))
 
 ;;; Clock and ids
 
@@ -19,7 +23,11 @@
   (multiple-value-bind (sec usec) (sb-ext:get-time-of-day) (values sec usec)))
 
 (defun utc-stamp ()
-  "The time as Go's \"2006-01-02T15:04:05.000Z\" in UTC, the form neutral.Host stamps entries with."
+  "The time as Go's \"2006-01-02T15:04:05.000Z\" in UTC, the form neutral.Host stamps entries with.
+OM_ENGINE_CLOCK, when the image was started with it, is that stamp fixed (the golden corpus's
+fixed clock, for tests)."
+  (let ((fixed (sb-posix:getenv "OM_ENGINE_CLOCK")))
+    (when (and fixed (string/= fixed "")) (return-from utc-stamp fixed)))
   (multiple-value-bind (sec usec) (unix-now)
     (multiple-value-bind (s mi h d mo y) (decode-universal-time (+ sec 2208988800) 0)
       (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0D.~3,'0DZ" y mo d h mi s (floor usec 1000)))))
@@ -96,14 +104,16 @@ grain and a rewrite of the same size within it would read stale."
       (let ((key (transcript-key path format)))
         (if (and key (equal key (session-transcript-key session)))
             (session-transcript-entries session)
-            (let ((entries (om::read-transcript format path)))
+            (let ((entries (if (db-format-p format)
+                               (om::db-entries format path (session-id session))
+                               (om::transcript-file-entries format path))))
               (setf (session-transcript-key session) key
                     (session-transcript-entries session) entries)
               entries)))))
 
 (defun check-format (params)
   (let ((format (param-string params "format" "generic")))
-    (unless (member format +ported-formats+ :test #'string=)
+    (unless (member format (ported-formats) :test #'string=)
       (not-ported (format nil "the ~A transcript format" format)))
     format))
 
@@ -150,8 +160,6 @@ inside the extraction is recovered (extraction never fails a turn) and named in 
     (return-from turn-end-level-0 (om::jobject "appended" 0 "passive" :true)))
   (let* ((format (check-format params))
          (branch (read-branch session params format)))
-    (when (find "compaction" branch :key #'om::entry-type :test #'string=)
-      (not-ported "level 0 on a branch with a compaction"))
     (handler-case
         (let ((start (om::extraction-start-index branch)))
           (multiple-value-bind (batches covers)

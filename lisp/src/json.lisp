@@ -221,9 +221,15 @@ with the exponent's leading zero dropped."
                  (t (write-char c out))))
   (write-char #\" out))
 
+(defstruct (raw-json (:constructor raw-json (text)))
+  "JSON text written as it is (json.RawMessage), for a member whose encoding keeps a Go struct's
+field order."
+  (text "" :type string))
+
 (defun write-json (v out &key (escape-html t))
   "encoding/json over a decoded value: object keys sorted."
-  (cond ((hash-table-p v)
+  (cond ((raw-json-p v) (write-string (raw-json-text v) out))
+        ((hash-table-p v)
          (let ((keys (sort (loop for k being the hash-keys of v collect k) #'string<)))
            (write-char #\{ out)
            (loop for (k . rest) on keys

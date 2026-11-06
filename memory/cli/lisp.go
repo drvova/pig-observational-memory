@@ -217,9 +217,13 @@ func (c *lispClient) call(method string, params any, result any) error {
 // summary, without the final newline), a compaction for before-compact, and the Go steps the
 // image has not ported that the client still runs after it (engine.SettleCurated).
 type lispResult struct {
-	Text       string         `json:"text"`
-	Compaction map[string]any `json:"compaction"`
-	Remaining  []string       `json:"remaining"`
+	Text string `json:"text"`
+	// Compaction is kept as the image wrote it: its details are in ledger.MemoryDetails' field
+	// order, which a decoded map would lose.
+	Compaction json.RawMessage `json:"compaction"`
+	Remaining  []string        `json:"remaining"`
+	// Notice marks a view answer that is a note or the usage line, shown and never copied.
+	Notice bool `json:"notice"`
 }
 
 // sessionParams are the session fields every event carries, plus the client's environment the
@@ -278,6 +282,8 @@ func (a *app) runRemaining(s Session, steps []string) error {
 	defer release()
 	for _, step := range steps {
 		switch step {
+		case "migrate-layer":
+			engine.MigrateLayer(h)
 		case "settle-curated":
 			engine.SettleCurated(h)
 		default:

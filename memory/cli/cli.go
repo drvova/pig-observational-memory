@@ -137,6 +137,16 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return err
 		}
 		a.rt.EnsureConfig(h)
+		if args[0] == "view" {
+			// The image answers the view's text; showing and copying it stay here.
+			res, handled, err := a.viaLisp("view", s, map[string]any{"args": strings.Join(fs.Args(), " ")})
+			if handled {
+				if err == nil {
+					commands.ShowView(a.rt, h, res.Text, res.Notice, nil)
+				}
+				return err
+			}
+		}
 		if args[0] == "status" {
 			return commands.RunStatus(a.rt, h)
 		}

@@ -147,6 +147,43 @@ func lispFlow(t *testing.T, image string) string {
 	section("generic store", store("mine", "g1"))
 	section("generic compact", om(t, string(p), "hook", "generic", "compact"))
 	section("generic store after compact", store("mine", "g1"))
+
+	// From here on every event is ported: the image answers each one, with no fallback.
+	if image != "" {
+		t.Setenv(LispFallbackEnv, "0")
+	}
+	section("view after compact", om(t, "", "view", "--harness", "mine", "--dir", home))
+	section("view full", om(t, "", "view", "--harness", "mine", "--dir", home, "full"))
+	section("view usage", om(t, "", "view", "--harness", "mine", "--dir", home, "everything"))
+	// Level 0 after a compaction, a second compaction, and the summary at the next start.
+	for i := 40; i < 48; i++ {
+		lines = append(lines, fmt.Sprintf(`{"id":"m%d","role":"user","text":"Host h-%d moved to region r-%d and now serves port %d.","timestamp":"2026-05-02T10:00:00Z"}`, i, i, i, 9000+i))
+		lines = append(lines, fmt.Sprintf(`{"id":"r%d","role":"assistant","text":"Noted: h-%d moved.","timestamp":"2026-05-02T10:00:05Z"}`, i, i))
+	}
+	if err := os.WriteFile(gen, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	om(t, string(p), "hook", "generic", "turn-end")
+	section("generic store after a turn end past the compaction", store("mine", "g1"))
+	section("generic second compact", om(t, string(p), "hook", "generic", "compact"))
+	section("generic session start", om(t, string(p), "hook", "generic", "session-start"))
+	section("generic store after the second compact", store("mine", "g1"))
+
+	// Pi's protocol: a session file with Pi's own compactions, compacted on Pi's cut and not
+	// stored (the harness keeps it), its summary record stored once.
+	data, err := os.ReadFile(filepath.Join("..", "transcript", "testdata", "real", "pi-compactions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pi := filepath.Join(home, "pi.jsonl")
+	if err := os.WriteFile(pi, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pp, _ := json.Marshal(map[string]any{"session_id": "p1", "transcript_path": pi, "cwd": home, "reason": "threshold", "first_kept_entry_id": "eaa61939"})
+	section("pi session start", om(t, string(pp), "hook", "pi", "session-start"))
+	om(t, string(pp), "hook", "pi", "turn-end")
+	section("pi before-compact", om(t, string(pp), "hook", "pi", "before-compact"))
+	section("pi store", store("pi", "p1"))
 	return normalizeFlow(out.String(), root, home)
 }
 

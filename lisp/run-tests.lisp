@@ -35,6 +35,9 @@
   (dolist (file '("readers" "store"))
     (load (merge-pathnames (format nil "tests/~A.lisp" file) here))))
 
+;; W5: the hooks.
+(load (merge-pathnames "tests/hooks.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

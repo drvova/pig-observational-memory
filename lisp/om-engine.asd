@@ -59,4 +59,13 @@
                              (:file "layer/store")
                              (:file "layer/adaptable")
                              (:file "tool/reads")
-                             (:file "layer/lock")))))
+                             (:file "layer/lock")))
+               ;; W5, hooks (docs/lisp-port-hooks.md)
+               (:module "w5"
+                :pathname "src"
+                :serial t
+                :components ((:file "hooks/serialize")
+                             (:file "hooks/compaction")
+                             (:file "hooks/thin")
+                             (:file "hooks/view")
+                             (:file "server/hooks")))))
