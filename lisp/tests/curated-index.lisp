@@ -80,8 +80,11 @@
   (let ((dir (test-dir "settle-store")))
     (at-time ("2026-11-01T10:00:00Z")
       (save-memory dir (make-memory :name "quote-me" :type "user" :description "Q" :staged t) "s1")
-      (save-memory dir (make-memory :name "twice" :type "user" :description "T" :staged t) "s1")
-      (save-memory dir (make-memory :name "twice" :type "user" :description "t" :staged t) "s2")
+      (save-memory dir (make-memory :name "twice" :type "user" :description "T" :staged t) "s1" (source-digest "a file s1 read"))
+      (save-memory dir (make-memory :name "twice" :type "user" :description "t" :staged t) "s2" (source-digest "a file s2 read"))
+      ;; the same source content in two sessions is no independent evidence
+      (save-memory dir (make-memory :name "same-readme" :type "user" :description "R" :staged t) "s1" (source-digest "README"))
+      (save-memory dir (make-memory :name "same-readme" :type "user" :description "R" :staged t) "s2" (source-digest " README "))
       (save-memory dir (make-memory :name "waiting" :type "user" :description "W" :staged t) "s1")
       (save-memory dir (make-memory :name "green-tea" :type "user" :description "G") "s1"))
     (at-time ("2026-11-01T11:00:00Z")
@@ -98,6 +101,7 @@
         (om::check (nth-value 1 (curated-settle dir "" (list (make-correction :id "r1" :subject "tea" :nanos later)))) '())))
     (om::check (mem-staged (get-memory dir "quote-me")) nil)
     (om::check (mem-staged (get-memory dir "waiting")) t)
+    (om::check (mem-staged (get-memory dir "same-readme")) t)
     (om::check (settled-notices '(("x" . "e")) '("a" "b"))
                '("Observational memory: staged memory x is now live (e); it enters the memory index at its next render"
                  "Observational memory: a correction matches the memories a, b; they rank last and are flagged in saved until edited"))))

@@ -24,7 +24,7 @@ Save a memory with om.Save(`<name>`, `<type>`, `<description>`, om.Body(`<body>`
 ;;; The usage ledger
 
 (defstruct (usage-line (:conc-name ul-))
-  (time "") (name "") (event "") (quote "") (user nil) (record ""))
+  (time "") (name "") (event "") (quote "") (user nil) (record "") (session "") (source ""))
 
 (defun json-member (object key)
   "encoding/json's field match: the key exactly, else a key equal to it ignoring case.
@@ -52,6 +52,8 @@ type, or it has no name."
           (string-member "event" (lambda (v) (setf (ul-event line) v)))
           (string-member "quote" (lambda (v) (setf (ul-quote line) v)))
           (string-member "record" (lambda (v) (setf (ul-record line) v)))
+          (string-member "session" (lambda (v) (setf (ul-session line) v)))
+          (string-member "source" (lambda (v) (setf (ul-source line) v)))
           (multiple-value-bind (v found) (json-member object "user")
             (cond ((or (not found) (eq v :null)))
                   ((eq v :true) (setf (ul-user line) t))
@@ -180,13 +182,20 @@ also: line as far as the rest goes, then how many are left out; \"\" for no memo
                                     "; find them with the memory tool's " +snippet-saved-search+ ".)"))))
         (values text shown)))))
 
-(defun index-for (dir project budget)
-  "curated.IndexFor: the index of the live memories that apply in project, ranked by the usage
-evidence; +empty-index+ when there are none. (values text shown-names)."
-  (let ((memories (remove-if #'mem-staged (handler-case (list-memories dir project) (error () '())))))
+(defun render-live (dir listed budget)
+  (let ((memories (remove-if #'mem-staged listed)))
     (if (null memories)
         (values +empty-index+ '())
         (render-index (curated-rank memories (handler-case (curated-usage dir) (error () nil))) budget))))
+
+(defun index-for (dir project budget)
+  "curated.IndexFor: the index of the live memories that apply in project, ranked by the usage
+evidence; +empty-index+ when there are none. (values text shown-names)."
+  (render-live dir (handler-case (list-memories dir project) (error () '())) budget))
+
+(defun index-as (dir project session budget)
+  "curated.IndexAs: index-for without the memories whose forget session staged."
+  (render-live dir (handler-case (list-as dir project session) (error () '())) budget))
 
 ;;; Pin: the index one conversation was given
 
@@ -274,9 +283,29 @@ since it was saved and after its last save or edit; \"\" for none."
                 ((string/= evidence ""))
                 ((and (string= event "helped") (ul-user e)) (setf evidence "a user's words quoted in feedback"))
                 ((string= event "cited") (setf evidence "a compaction's citation"))))))
-    (if (and (string= evidence "") (>= (length (mem-staged-by m)) 2))
+    (if (and (string= evidence "") (independent-stagings-p m events))
         "the same save staged in another session"
         evidence)))
+
+(defun independent-stagings-p (m events)
+  "curated.independentStagings: two sessions that staged m cite distinct source content, counted
+since m was saved and after its last edit."
+  (let ((by (mem-staged-by m)) (cited (make-hash-table :test 'equal)))
+    (when (>= (length by) 2)
+      (dolist (e events)
+        (unless (time-before-p (usage-event-time e) (mem-created m))
+          (let ((event (ul-event e)))
+            (cond ((string= event "edit") (clrhash cited))
+                  ((and (or (string= event "save") (string= event "staged"))
+                        (string/= (ul-source e) "")
+                        (member (ul-session e) by :test #'string=))
+                   (pushnew (ul-source e) (gethash (ul-session e) cited) :test #'string=))))))
+      (loop for a in by
+            thereis (loop for b in by
+                          thereis (and (string/= a b)
+                                       (loop for da in (gethash a cited)
+                                             thereis (loop for db in (gethash b cited)
+                                                           thereis (string/= da db)))))))))
 
 (defun list-all-memories (dir)
   "Store.listAll: every readable, unretired memory, whatever its project, in name order."
