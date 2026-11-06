@@ -1,0 +1,68 @@
+── The memory tool ──
+Runs Common Lisp code (SBCL) over this session's memory: top-level forms evaluated in order in a
+package that uses COMMON-LISP. The om functions are external symbols of the OM package, written
+om:<name>. The result is what the code printed (to *standard-output*), then the value of the last
+form unless it is nil or the last form is itself a printing call (format, print, princ, prin1,
+write, write-line, write-string, terpri, fresh-line, pprint). A read error (unbalanced parentheses,
+a symbol the OM package does not export) or a run-time error prints "error: <message>".
+
+── Reads ──
+Each read returns a page (see Values). Options are keyword arguments, all optional.
+  (om:notes &key ...) page: the active records, oldest first.
+  (om:history &key ...) page: user, assistant and tool text as entries, newest first, without the current turn.
+  (om:files &key ...) page: the file records: the newest state per path.
+  (om:commits &key ...) page: the commit records.
+  (om:attempts &key ...) page: the attempt records; :failed, :worked and :open select by outcome.
+  (om:note-by-id id) note: one record; signals an error when there is none.
+  (om:subjects) alist: (subject . count) of the active records' canonical subjects, sorted by subject.
+
+── Options (keyword arguments of every read) ──
+  :search "words": keeps rows matching every literal word, case-insensitive, over every column;
+      when no row matches every word, the rows are ranked by how many of the words each contains
+      instead, and the page is marked partial.
+  :from "id": keeps rows at or after this entry id (an anchor or a record id).
+  :through "id": keeps rows at or before this entry id.
+  :since "YYYY-MM-DD": keeps rows on or after this date (entry time).
+  :until "YYYY-MM-DD": keeps rows on or before this date (entry time).
+  :where '("field" "value"): keeps rows whose field equals value (case-insensitive).
+  :contains '("field" "value"): keeps rows whose field contains value (case-insensitive).
+  :kind "k": keeps records of this kind, as :where '("kind" "k").
+  :subject "s": keeps records whose subject equals s.
+  :status "s": keeps records with this status: proposed, hypothetical or retracted.
+  :sort-by "field" :desc t: orders rows by field, descending when :desc is true.
+  :limit n: holds at most n rows: 1 to 200, 20 when not given.
+  :failed t, :worked t, :open t: keep attempts that failed, that worked, or with no outcome yet.
+  Example: (om:notes :kind "fact" :since "2026-05-02" :sort-by "when" :desc t :limit 50)
+
+── Values ──
+  note: one record, a structure with readers
+    (om:note-id n) the record id; (om:note-when n) the time it was taken, "YYYY-MM-DD HH:MM";
+    (om:note-kind n) its kind (fact, preference, correction, attempt, file, commit, ...);
+    (om:note-subject n) the canonical subject; (om:note-content n) the record's text;
+    (om:note-status n) proposed, hypothetical or retracted, "" when stated as fact;
+    (om:note-event-date n) the date it is about, "" when none; (om:note-origin n) code, model or host;
+    (om:note-outcome n) an attempt's outcome: "failed", "worked", or "" while open;
+    (om:note-tool n), (om:note-target n) the tool and the path or object an attempt or file record names;
+    (om:note-source n) the first source entry id; (om:note-source-role n) that entry's role;
+    (om:note-anchor n) the entry id the record's summary line ends with;
+    (om:note-relevance n) high, medium or low;
+    (om:note-superseded-by n) list of ids of the records that supersede this one;
+    (om:note-supersedes n) list of ids of the records it supersedes.
+  entry: one message of the conversation, with readers (om:entry-id e), (om:entry-when e),
+    (om:entry-role e) user, assistant or tool, and (om:entry-text e).
+  Every string field is "" when empty, never nil.
+  page: a page of rows, read with
+    (om:rows p) the rows held, a list; (om:matched p) how many rows matched;
+    (om:showing p) how many are held; (om:next-page p) the call for the next page, nil when every
+    match is held; (om:partial p) true for a ranked partial search;
+    (om:len p) the number of rows held; (om:ids p) the rows' ids, in order;
+    (om:count-by p "field") an alist (value . count) over the rows held, sorted by value;
+    (om:group-by p "field") an alist (value . page) over the rows held, sorted by value;
+    (om:filter-rows p predicate) a page of the rows held that the predicate accepts;
+    (om:field row "field") a row's column by its listing name ("kind", "when", "superseded_by", ...)
+    as a string, lists joined with spaces.
+  count-by, group-by, filter-rows, len and ids run on the rows held and cost no call.
+
+── Language level ──
+Standard Common Lisp (SBCL): the whole COMMON-LISP package, no other libraries, no files, no
+network. Strings compare with string=, string<, string-equal; search finds a substring.

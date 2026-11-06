@@ -1,0 +1,3 @@
+(let* ((p (om:notes :since "2026-05-02" :until "2026-05-04" :limit 200))
+       (q (om:filter-rows p (lambda (r) (not (string= (om:field r "kind") "attempt"))))))
+  (format t "~d" (om:len q)))

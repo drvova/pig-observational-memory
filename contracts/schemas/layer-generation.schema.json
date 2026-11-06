@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Layer manifest line",
+  "description": "One line of <store>/harness/<model dir>/manifest.jsonl (layer.ModelDir: the model id with bytes outside [a-z0-9.-] written as _hh), the append-only record of a model's layer: each definition written, removed, reverted or rolled back, and the passes that change no file. A line without an op is skipped on read. The definitions themselves (<kind>/<name>.rows, held/<kind>/<name>.rows, blobs/<digest>.rows) are text in the rows codec with a layer header table, not JSON. Source: memory/layer/manifest.go (Generation, the Op constants), memory/layer/migrate_v2.go (OpMigrateV2), memory/layer/layer.go (Kind constants, Digest).",
+  "type": "object",
+  "required": ["gen", "time", "op"],
+  "additionalProperties": false,
+  "properties": {
+    "gen": { "description": "The generation number, from 1 in manifest order.", "type": "integer", "minimum": 1 },
+    "time": { "type": "string" },
+    "op": { "enum": ["put", "forget", "revert", "rollback", "build", "revise", "establish", "migrate", "propose", "migrate-v2"] },
+    "kind": { "enum": ["format", "schema", "instructions", "summary", "tool", "detector", "remedy"] },
+    "name": { "type": "string" },
+    "digest": { "description": "layer.Digest of the content written: 16 hex characters.", "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "session": { "type": "string" },
+    "target": { "description": "A rollback's generation.", "type": "integer", "minimum": 0 },
+    "keep": { "type": "array", "items": { "type": "string" } },
+    "reason": { "type": "string" },
+    "from": { "type": "string" },
+    "held": { "type": "boolean" },
+    "evidence": { "type": "string" },
+    "events": { "type": "integer", "minimum": 0 }
+  }
+}

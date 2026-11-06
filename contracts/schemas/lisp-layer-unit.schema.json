@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lisp layer evidence unit",
+  "description": "One line of <layer root>/<model dir>/units.jsonl, the Lisp image's record of one conclusive compaction unit of a settled adaptable-function definition, which the retire rule reads (docs/lisp-core.md decision 6): a compaction in which the definition ran and failed at least once is a fail, one in which it ran and never failed a pass; one in which it never ran is not recorded. Source: lisp/src/rules/evidence.lisp (append-unit, units-of).",
+  "type": "object",
+  "required": [
+    "time",
+    "name",
+    "digest",
+    "gen",
+    "outcome",
+    "failures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "time": {
+      "description": "RFC 3339 with nanoseconds.",
+      "type": "string"
+    },
+    "name": {
+      "description": "The adaptable function's name.",
+      "type": "string"
+    },
+    "digest": {
+      "description": "The digest of the settled text (layer.Digest).",
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$"
+    },
+    "gen": {
+      "description": "The layer generation that settled the text; units of another settle are not read.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "outcome": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "failures": {
+      "description": "How many of its runs in the unit failed its kernel check, errored or timed out.",
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

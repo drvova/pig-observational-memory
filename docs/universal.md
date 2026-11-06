@@ -1,7 +1,7 @@
 # om: the memory engine in any harness
 
 `om` is the memory engine as one Go binary (`memory/cmd/om`), built from the same packages the PiG
-extension runs, for harnesses that are not PiG: Claude Code, Codex, OpenCode, Pi, and any other that can
+extension runs (and the client of the SBCL image both use, see [The engine](#the-engine)), for harnesses that are not PiG: Claude Code, Codex, OpenCode, Pi, and any other that can
 run a command at a turn's end. The engine is unchanged: level 0 records the conversation by code,
 compaction renders the summary from the ledger (`selection.Render`), and the memory tool runs Go over
 that memory in a sandboxed child. What differs is how each harness hands the engine its conversation and
@@ -18,6 +18,24 @@ om install claude-code      # or any name om harnesses lists; --dry-run prints t
 `om install` merges into the harness's own config and keeps a `.om-backup` of any file it changes;
 `om uninstall <harness>` takes out exactly what it wrote. The store lives under `$OM_HOME` (default
 `~/.om`), whose `settings.json` takes the [settings](configuration.md).
+
+### The engine
+
+`om` forwards hook events, MCP messages and `om call` to the user's SBCL engine image
+([lisp-core.md](lisp-core.md)) over `~/.om/engine.sock`, starting it when none listens. No release ships an
+image yet: `om` carries the Lisp sources and, the first time it needs the image, builds it with the `sbcl`
+on `PATH` into `~/.om/engine/<build id>/`, detached ([lisp-build.md](lisp-build.md)). That event and any
+other the image cannot take before it acted (no `sbcl`, a build still running or failed, an image that
+does not start, a method it has not ported) run on the Go engine, each one line in `~/.om/engine.log`
+with its reason, and `om status` counts them (the image's own status also counts the refusals it
+answered). `OM_ENGINE=go` is the kill switch. The variables:
+
+| Variable | Setting in `~/.om/settings.json` | Meaning |
+|---|---|---|
+| `OM_ENGINE=go` | `"engine": "go"` | The kill switch: the Go engine, never the image. `OM_ENGINE=lisp` (or `"engine": "lisp"`) chooses the image explicitly, and then a fallback is also noted on om's stderr. The default is the image, except on Windows, where it is Go. |
+| `OM_LISP_IMAGE` | `lispImage` (absolute) | An image to start instead of the built one. |
+| `OM_LISP_FALLBACK=0` | | Never fall back: an image that cannot run, or a method it has not ported, is an error. |
+| `OM_ENGINE_SOCKET`, `OM_ENGINE_IDLE_SECONDS` | `lispIdleSeconds` | The socket, and how long the image stays up with no client (900 s). |
 
 ## What each harness gets
 
@@ -71,10 +89,59 @@ have not run inside OpenCode or Pi.
 
 ## Harness registry
 
-Every harness `om install` knows is an entry in `memory/cli/registry.go`: where its MCP client reads
-servers (a JSON file and the key its servers live under), which hook family it speaks and where those
-hooks live, and its transcript format. `om harnesses` lists them. An entry carries only what the harness's
-own documentation confirms; anything else is left out until it is confirmed.
+Every harness `om install` knows is an entry in `memory/cli/assets/harnesses.json`: where its MCP client
+reads servers (a JSON, YAML or TOML file and the key its servers live under), which hook family it speaks
+and where those hooks live, its transcript format, and the install steps a config file cannot say. `om
+harnesses` lists them. An entry carries only what the harness's own documentation confirms; anything else
+is left out until it is confirmed. The file is the whole registry, and `memory/cli` only interprets it, so
+another engine can read the same file; its JSON Schema is `contracts/schemas/registry.schema.json`, and a
+test validates the file against it.
+
+### The registry's vocabulary
+
+An entry has a `name`, a `title`, a `note` and a `source`, and a `class` saying how the memory tool's MCP
+server is registered:
+
+- **`file`:** om edits the config at `path` (by GOOS, `darwin`, `linux`, `windows`, or `""` for any) in
+  `format` `json`, `yaml` or `toml`, putting `entry` under the object path `key` (`list` for a list of
+  entries each carrying its `id`, `name` by default; `skeleton` for the top-level keys a new YAML file needs).
+- **`own`:** om writes `content` as a whole file of its own at `path`.
+- **`manual`:** om prints the `manual` steps and the server's command.
+- **`none`:** an install step registers it, or the harness has no MCP client.
+
+A config path is a template: a leading `~` is the home directory and `${VAR:-default}` is `$VAR` when set,
+else the default. In `entry`, `content` and install steps, `$OM` is om's path, `$OM_SH` that path quoted
+for a POSIX shell, `$OM_SH_ESCAPED` `$OM_SH` escaped for a double-quoted string, and `$HARNESS` the entry's
+name.
+
+`hooks` is the hook spec: `path`, `events` (om's `session-start`, `prompt`, `turn-end` and `pre-compact` to
+the harness's event names), `transcript` (a `memory/transcript` format), and the flags for how the family
+writes and reads its hooks (`flat`, `topLevel`, `toml`, `key`, `timeoutMS`, `timeoutKey`, `noTimeout`,
+`noType`, `matcher`, `version`, `enable`, `env`, `noStdin`, and for context `plainContext`, `contextField`,
+`textContext`, `noContext`, `summaryOnStart`, `summaryOnPrompt`, `summaryAtPreCompact`,
+`sessionFromCurrent`; the schema describes each). Three fields say what Go functions used to:
+
+- **`transcriptFrom`** finds the transcript from the payload's cwd and session: a list of candidates, the
+  first that yields a path wins. A candidate is a `path` template, only on `os` when set, where `${cwd}`
+  and `${session}` are the payload's, `${md5(cwd)}` is its hex MD5, `${slug(cwd)}` is the cwd with every
+  byte that is not an ASCII letter or digit as `-`, and `${VAR}` without a default is the environment's;
+  an empty payload value or unset variable skips the candidate, and payload values are never expanded
+  again. Or it is a named `resolver`: `kiro-session` (a glob over Kiro's workspace buckets) and `crush-db`
+  (the nearest `.crush` directory up to the repository root).
+- **`sessionFrom`** finds the session id: a list of candidates, each a payload `field` (`a.b` for a nested
+  one) that is a non-empty string not in `not`, with `prefix` before it, or the named `resolver`
+  `amazon-q-conversation` (the directory's row in Amazon Q's SQLite database).
+- **`record`** is how om records the turn a payload carries: `fields` maps payload fields to `user` or
+  `assistant` (users first), or the named `mapper` `amp-messages` reads Amp's message lists.
+
+`install` are steps run after the MCP server and the hooks, in order, and undone in reverse:
+`run-command` (`command`, and `remove` on uninstall), `plugin-asset` (the embedded `asset` written into
+`dir` under its own name, with om's path and the harness name), `text-file` (`path`, `content`,
+`executable`), `json-file` (`path`, `value`, written as om writes JSON configs), `managed-line` (one `line`
+marked as om's in the file of commands at `path`), `print` (`text`, and `removeText` on uninstall, with
+`$DIR` for `dir`) and `codex-config` (Codex's MCP table and notify program in the TOML at `path`). Adding
+a harness is one entry; only a new resolver, mapper or step kind needs code, and the schema lists the
+names the code knows.
 
 [Harnesses](harnesses.md) lists all of them, generated from the registry: the harnesses that also get
 recording and compaction, the ones whose config `om install` writes, the ones where `om install` prints the
@@ -154,4 +221,7 @@ echo '{"harness":"mine","session_id":"s1","transcript_path":"/path/t.jsonl","for
 
 `format` is `generic`, `claude-code`, `codex`, `pi`, `gemini`, `qwen`, `kimi`, `droid`, `copilot`, `deepagents`, `cursor`, `qoder`, `cline`, `neovate`, `iflow`, `cortex` or `auggie`. The memory tool is `om mcp --harness mine` for an MCP
 client, or one call at a time with `om call --harness mine --dir /repo` (the tool's arguments as JSON on
-stdin); `om tool-spec` prints its name, description and JSON schema for registering it natively.
+stdin); `om tool-spec` prints its name, description and JSON schema for registering it natively. The full protocol, with its payload fields, outputs and errors, is [protocol.md](protocol.md).
+A harness that can host a long-lived child and answer its host calls (the branch, appends, the
+session model, one model stream) can run `om serve` instead and get the PiG adapter's whole
+feature set: thinning, exact-cut compaction and level 1 ([engine-rpc.md](engine-rpc.md)).

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.extracted entry",
+  "description": "Level 0's extraction marker: it read every source entry through coversUpToId and found nothing more to record after its last batch. Source: memory/ledger/types.go (ExtractedData, ExtractedEntry), written by memory/hooks/extract_v2.go.",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.extracted"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "coversUpToId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "coversUpToId": {
+          "$ref": "defs.schema.json#/$defs/entryId"
+        }
+      }
+    }
+  }
+}

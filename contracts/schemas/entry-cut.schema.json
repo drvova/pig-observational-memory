@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.cut entry",
+  "description": "The neutral host's cut marker: stored at the tip when a harness compacts its whole conversation; it is the compaction's firstKeptEntryId and the next compaction's range starts at it. Only the neutral store holds it. Source: memory/neutral/compact.go (CutMarker, Host.Compaction).",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.cut"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "The harness's reason (the generic payload's reason, a family hook's trigger); may be empty."
+        }
+      }
+    }
+  }
+}

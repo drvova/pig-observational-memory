@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Shared definitions of the memory ledger",
+  "description": "The record, reflection, alias and compaction-details shapes every ledger entry uses. Source: memory/ledger/types.go (Observation, Reflection, MemoryDetails, ConsolidationReport, ObservationFrom, ReflectionFrom, MemoryDetailsFrom), memory/ledger/aliases.go (SubjectAlias), memory/ids/ids.go (HashID).",
+  "$defs": {
+    "recordId": {
+      "description": "A record or reflection id: the first 12 hex characters of the SHA-256 of the record's identity (ids.HashID); ledger.MemoryIDPattern.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{12}$"
+    },
+    "recordIds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recordId" }
+    },
+    "entryId": {
+      "description": "A session entry id: a harness transcript's own id, a Pi/PiG entry id, or a neutral-store id (\"om\" and 8 hex digits, neutral/host.go newID). Readers require it non-empty.",
+      "type": "string",
+      "minLength": 1
+    },
+    "isoDate": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "observation": {
+      "description": "One record (ledger.Observation). The six kernel members are required (ObservationFrom refuses the record without them); the rest are optional and read leniently: a malformed optional member is cleared, not fatal. Writers emit no other member.",
+      "type": "object",
+      "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/recordId" },
+        "content": { "type": "string", "minLength": 1 },
+        "timestamp": {
+          "description": "When the source was said, as level 0 writes it (\"YYYY-MM-DD HH:MM\" in the source's time) or as a v1 worker wrote it; any non-empty string loads.",
+          "type": "string",
+          "minLength": 1
+        },
+        "relevance": { "enum": ["low", "medium", "high", "critical"] },
+        "sourceEntryIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/entryId" }
+        },
+        "tokenCount": { "type": "integer", "minimum": 0 },
+        "kind": {
+          "description": "ObservationKindValues and CodeKindValues.",
+          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note"]
+        },
+        "subject": { "type": "string" },
+        "scope": { "type": "string" },
+        "supersedes": { "$ref": "#/$defs/recordIds" },
+        "fields": {
+          "description": "Values of the fields a model's note schema adds, by field name.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "origin": {
+          "description": "Who wrote the record under memory v2; absent for a v1 worker's record.",
+          "enum": ["code", "model", "host"]
+        },
+        "fromUser": { "type": "boolean" },
+        "outcome": { "enum": ["failed", "worked", "open"] },
+        "tool": { "type": "string" },
+        "target": { "type": "string" },
+        "eventDate": { "$ref": "#/$defs/isoDate" },
+        "status": { "enum": ["proposed", "hypothetical", "retracted"] },
+        "possiblyUpdates": { "$ref": "#/$defs/recordIds" },
+        "conflicts": { "$ref": "#/$defs/recordIds" },
+        "replaces": { "$ref": "#/$defs/recordIds" }
+      }
+    },
+    "reflection": {
+      "description": "A durable conclusion (ledger.Reflection); content is one line (ReflectionFrom refuses a newline).",
+      "type": "object",
+      "required": ["id", "content", "supportingObservationIds", "tokenCount"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/recordId" },
+        "content": { "type": "string", "pattern": "^[^\\r\\n]+$" },
+        "supportingObservationIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "tokenCount": { "type": "integer", "minimum": 0 },
+        "supersedes": { "$ref": "#/$defs/recordIds" }
+      }
+    },
+    "subjectAlias": {
+      "description": "ledger.SubjectAlias: from and to are subjects (normalized on read); an alias with either empty is skipped.",
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string" }
+      }
+    },
+    "consolidationReport": {
+      "description": "ledger.ConsolidationReport: what memory v2's level-1 request did at one compaction. Counts are omitted when zero.",
+      "type": "object",
+      "required": ["requested", "applied"],
+      "additionalProperties": false,
+      "properties": {
+        "requested": { "type": "boolean" },
+        "applied": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "records": { "type": "integer", "minimum": 0 },
+        "merges": { "type": "integer", "minimum": 0 },
+        "reflections": { "type": "integer", "minimum": 0 },
+        "aliases": { "type": "integer", "minimum": 0 },
+        "dropped": { "type": "integer", "minimum": 0 },
+        "refused": { "type": "integer", "minimum": 0 },
+        "confirmed": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 },
+        "cited": { "type": "integer", "minimum": 0 },
+        "promoted": { "type": "integer", "minimum": 0 },
+        "harnessOffered": { "type": "boolean" },
+        "defined": { "type": "integer", "minimum": 0 },
+        "pending": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "memoryDetails": {
+      "description": "The details of a compaction the engine wrote (ledger.MemoryDetails, type om.folded): the full folded projection, whatever the summary text shows. v1 wrote foldThroughEntryId when it moved the cut (its fold boundary differs from firstKeptEntryId); v2 writes engine \"v2\" and keeps the host's cut.",
+      "type": "object",
+      "required": ["type", "version", "fullFold", "observations", "reflections"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "om.folded" },
+        "version": { "const": 1 },
+        "fullFold": { "type": "boolean" },
+        "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
+        "reflections": { "type": "array", "items": { "$ref": "#/$defs/reflection" } },
+        "foldThroughEntryId": {
+          "description": "The entry through which the summary folded the ledger (ledger.LatestFullFoldBoundaryID reads it before firstKeptEntryId). Readers accept null as absent.",
+          "type": ["string", "null"]
+        },
+        "summaryCodec": { "type": "string" },
+        "summaryFormat": { "type": "string" },
+        "aliases": { "type": "array", "items": { "$ref": "#/$defs/subjectAlias" } },
+        "engine": { "enum": ["v2"] },
+        "consolidation": { "$ref": "#/$defs/consolidationReport" },
+        "shown": { "type": "array", "items": { "$ref": "#/$defs/recordId" } }
+      }
+    },
+    "customEntry": {
+      "description": "The envelope of a custom session entry, as Pi/PiG (AppendEntry) and the neutral store (neutral/host.go appendEntry) write it. Members a host adds beyond these are allowed.",
+      "type": "object",
+      "required": ["type", "id", "customType", "data"],
+      "properties": {
+        "type": { "const": "custom" },
+        "id": { "$ref": "#/$defs/entryId" },
+        "parentId": { "type": ["string", "null"] },
+        "timestamp": { "type": "string", "minLength": 1 },
+        "customType": { "type": "string", "minLength": 1 },
+        "data": {}
+      }
+    }
+  }
+}

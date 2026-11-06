@@ -1,0 +1,2 @@
+(dolist (note (om:rows (om:notes :kind "preference" :sort-by "when")))
+  (write-line (om:note-content note)))

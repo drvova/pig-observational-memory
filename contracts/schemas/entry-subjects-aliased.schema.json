@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.subjects.aliased entry",
+  "description": "Subject aliases (v1's reflector; v2's level 1). It carries no coverage marker; observationsThroughId names the observation coverage the aliases were checked against. Source: memory/ledger/aliases.go (SubjectsAliasedData, SubjectsAliasedDataFrom, BuildSubjectsAliasedData).",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.subjects.aliased"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "aliases"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "defs.schema.json#/$defs/subjectAlias"
+          }
+        },
+        "observationsThroughId": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

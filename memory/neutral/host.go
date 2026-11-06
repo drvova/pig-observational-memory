@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -143,14 +144,27 @@ func (h *Host) appendEntry(entry map[string]any) (string, error) {
 		return "", err
 	}
 	// The store grew by exactly this line unless another writer got in between: keep the cache
-	// only when it was current before the append.
-	if before == h.storeVersion {
-		h.stored = append(h.stored, Stored{After: tip, Entry: entry})
+	// only when it was current before the append. The cached entry is the line as Load decodes
+	// it, not entry (whose payload is a Go value): the ledger's readers take decoded JSON, and
+	// would not see a typed marker, so the next extraction would read its range again.
+	if decoded, ok := decodedEntry(entry); ok && before == h.storeVersion {
+		h.stored = append(h.stored, Stored{After: tip, Entry: decoded})
 		h.storeVersion = fileVersion(h.Store.Path)
 	} else {
 		h.storeVersion = ""
 	}
 	return id, nil
+}
+
+// decodedEntry is entry as a store line's decoded JSON; false when it does not round-trip, and
+// the cache is then read again from the file.
+func decodedEntry(entry map[string]any) (map[string]any, bool) {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return nil, false
+	}
+	var out map[string]any
+	return out, json.Unmarshal(data, &out) == nil
 }
 
 // newID is an entry id the harness never uses ("om" and eight hex digits).

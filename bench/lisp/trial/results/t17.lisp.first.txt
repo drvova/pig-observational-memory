@@ -1,0 +1,3 @@
+(let* ((page (om:attempts :failed t :sort-by "when" :desc t :limit 1))
+       (attempt (first (om:rows page))))
+  (when attempt (princ (om:note-content attempt))))

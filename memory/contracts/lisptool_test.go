@@ -1,0 +1,695 @@
+package contracts
+
+// W4's parity checks of the Lisp port (docs/lisp-port-tool-layer.md): the curated store's writes
+// (curated.Call.Run, Describe, List and every file they write) and the evidence rule
+// (rules.SettleV2) run on the Go engine and on lisp/tool-parity.lisp, compared line by line and
+// file by file; and the files the Lisp store and layer write validate against contracts/schemas.
+// Like memory/selection/lispparity_test.go, they run only with OM_LISP_PARITY=1 and sbcl on PATH.
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/layer"
+	"github.com/drvova/pig-observational-memory/memory/rules"
+)
+
+func lispParity(t *testing.T) (sbcl, script string) {
+	t.Helper()
+	if os.Getenv("OM_LISP_PARITY") != "1" {
+		t.Skip("set OM_LISP_PARITY=1 to diff the Go engine against the SBCL port in lisp/")
+	}
+	sbcl, err := exec.LookPath("sbcl")
+	if err != nil {
+		t.Skip("sbcl is not on PATH")
+	}
+	script, err = filepath.Abs(filepath.Join("..", "..", "lisp", "tool-parity.lisp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sbcl, script
+}
+
+func runLisp(t *testing.T, sbcl string, args ...string) []string {
+	t.Helper()
+	cmd := exec.Command(sbcl, append([]string{"--script"}, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("sbcl: %v\n%s", err, stderr.String())
+	}
+	return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+}
+
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func quoted(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// curatedStep is one write (or read) of the curated script, with its context.
+type curatedStep struct {
+	Op           string            `json:"op"`
+	Args         map[string]string `json:"args"`
+	Session      string            `json:"session"`
+	Project      string            `json:"project"`
+	Time         string            `json:"time"`
+	User         []string          `json:"user"`
+	Conversation []string          `json:"conversation,omitempty"`
+	// Corrections are a settle step's user corrections (curated.SettleInput.Corrections).
+	Corrections []stepCorrection `json:"corrections,omitempty"`
+}
+
+type stepCorrection struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+	Time    string `json:"time"`
+}
+
+// quotedIn is omhost's quotedIn over plain texts: what both sides' evidence reads.
+func quotedIn(texts []string) func(string) bool {
+	return func(quote string) bool {
+		needle := strings.ToLower(strings.Join(strings.Fields(quote), " "))
+		for _, text := range texts {
+			if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), needle) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// curatedScript is a fixed script through every branch the writes take, then a random one over
+// small pools of names, types, descriptions, scopes and quotes.
+func curatedScript() []curatedStep {
+	user := []string{"I always drink green tea in the morning", "the build runs with make all"}
+	conversation := append([]string{"The assistant said: deploys go out on Tuesdays"}, user...)
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	var steps []curatedStep
+	add := func(op, session, project string, args map[string]string) {
+		at = at.Add(17 * time.Minute)
+		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: project, Time: at.Format(time.RFC3339), User: user, Conversation: conversation})
+	}
+	add("save", "s1", "/work", map[string]string{"name": "tea", "type": "user", "description": "Drinks  green tea", "quote": "always drink GREEN tea"})
+	add("save", "s1", "/work", map[string]string{"name": "tea", "type": "user", "description": "again"})
+	add("save", "s1", "/work", map[string]string{"name": "Tea", "type": "user", "description": "bad name"})
+	add("save", "s1", "/work", map[string]string{"name": "cafe", "type": "drink", "description": "bad type"})
+	add("save", "s1", "/work", map[string]string{"name": "cafe", "type": "user", "description": "   "})
+	add("save", "s1", "/work", map[string]string{"name": "cafe", "type": "user", "description": "x", "quote": "short"})
+	add("save", "s1", "/work", map[string]string{"name": "cafe", "type": "user", "description": "x", "quote": "not the user's words at all"})
+	add("save", "s1", "/work", map[string]string{"name": "build", "type": "project", "description": "Builds with make", "scope": "project", "body": "  Run make all.\n\nIt is the only target.  "})
+	add("save", "s2", "/work", map[string]string{"name": "build", "type": "project", "description": "builds WITH  make", "scope": "project"})
+	add("save", "s3", "/work", map[string]string{"name": "build", "type": "project", "description": "another description", "scope": "project"})
+	add("save", "s1", "", map[string]string{"name": "scoped", "type": "user", "description": "x", "scope": "project"})
+	add("save", "s1", "/work", map[string]string{"name": "scoped", "type": "user", "description": "x", "scope": "everywhere"})
+	add("save", "s1", "/work", map[string]string{"name": "long", "type": "lesson", "description": "Too long", "body": strings.Repeat("word ", 2100)})
+	add("describe", "s1", "/work", map[string]string{"name": "build"})
+	add("describe", "s1", "/work", map[string]string{"name": "tea"})
+	add("list", "s1", "/work", map[string]string{"project": "/work"})
+	add("list", "s1", "", map[string]string{"project": ""})
+	add("edit", "s1", "/work", map[string]string{"name": "tea", "type": "", "description": " "})
+	add("edit", "s1", "/work", map[string]string{"name": "tea", "type": "feedback", "description": "Drinks green tea daily", "body": "With no sugar."})
+	add("edit", "s3", "/work", map[string]string{"name": "build", "body": "x"})
+	add("edit", "s1", "/work", map[string]string{"name": "build", "description": "Builds with make all"})
+	add("edit", "s1", "/elsewhere", map[string]string{"name": "build", "body": ""})
+	add("edit", "s1", "/work", map[string]string{"name": "tea", "type": "nope"})
+	add("feedback", "s1", "/work", map[string]string{"name": "tea", "outcome": "helped", "quote": "drink green tea in the morning"})
+	add("feedback", "s1", "/work", map[string]string{"name": "build", "outcome": "helped", "quote": "the build runs with make"})
+	add("feedback", "s1", "/work", map[string]string{"name": "tea", "outcome": "harmed", "quote": "deploys go out on Tuesdays"})
+	add("feedback", "s1", "/work", map[string]string{"name": "tea", "outcome": "loved", "quote": "deploys go out on Tuesdays"})
+	add("feedback", "s1", "/work", map[string]string{"name": "tea", "outcome": "helped", "quote": "nowhere in this conversation"})
+	add("feedback", "s1", "/work", map[string]string{"name": "ghost", "outcome": "helped", "quote": "drink green tea in the morning"})
+	add("describe", "s1", "/work", map[string]string{"name": "tea"})
+	add("forget", "s3", "/work", map[string]string{"name": "build"})
+	add("forget", "s1", "/work", map[string]string{"name": "tea"})
+	add("forget", "s1", "/work", map[string]string{"name": "tea"})
+	add("save", "s1", "/work", map[string]string{"name": "tea", "type": "user", "description": "Saved again after a forget"})
+	add("list", "s1", "/work", map[string]string{"project": "/work"})
+	add("frobnicate", "s1", "/work", map[string]string{"name": "tea"})
+	steps = append(steps, indexScript(&at, user, conversation)...)
+
+	rng := rand.New(rand.NewPCG(3, 5))
+	pick := func(list []string) string { return list[rng.IntN(len(list))] }
+	names := []string{"tea", "build", "a-b", "x9", "ok-1", "ok-2", "ok-3", "Bad", "long-name-" + strings.Repeat("z", 60)}
+	types := []string{"user", "project", "lesson", "feedback", "reference", "user", "nope", ""}
+	descriptions := []string{"Drinks tea", "drinks  TEA", "Builds", " spaced  out ", "Ships on Tuesdays", "two\nlines", ""}
+	scopes := []string{"", "", "", "project", "global", "bogus"}
+	quotes := []string{"", "", "", "short", "always drink green tea", "deploys go out on Tuesdays", "not said by anyone here"}
+	bodies := []string{"", "Why: it matters.", "  padded body  ", strings.Repeat("x", 9990)}
+	for i := 0; i < 300; i++ {
+		args := map[string]string{"name": pick(names)}
+		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "feedback", "describe", "list", "record", "index", "rank", "settle", "pin", "usage"})
+		switch op {
+		case "save":
+			args["type"], args["description"], args["scope"] = pick(types), pick(descriptions), pick(scopes)
+			if q := pick(quotes); q != "" {
+				args["quote"] = q
+			}
+			if b := pick(bodies); b != "" {
+				args["body"] = b
+			}
+		case "edit":
+			for _, k := range []string{"type", "description", "body"} {
+				if rng.IntN(2) == 0 {
+					switch k {
+					case "type":
+						args[k] = pick(types)
+					case "description":
+						args[k] = pick(descriptions)
+					default:
+						args[k] = pick(bodies)
+					}
+				}
+			}
+		case "feedback":
+			args["outcome"], args["quote"] = pick([]string{"helped", "harmed", "meh"}), pick(quotes)
+		case "list":
+			args["project"] = pick([]string{"/work", ""})
+		case "record":
+			args["event"] = pick([]string{"view", "view", "view", "cited", "indexed", "save", "edit", "forget"})
+			if args["event"] == "cited" {
+				args["record"] = pick([]string{"r1", "r1,r2"})
+			}
+		case "index":
+			args["budget"] = pick([]string{"0", "5", "40", "60", "120", "400", "2000"})
+		case "pin":
+			if rng.IntN(3) == 0 {
+				args["reset"] = "true"
+			}
+			args["budget"] = pick([]string{"40", "2000"})
+		}
+		add(op, pick([]string{"s1", "s2"}), pick([]string{"/work", "/work", ""}), args)
+		if op == "settle" {
+			last := &steps[len(steps)-1]
+			for k := rng.IntN(4); k > 0; k-- {
+				offset := []time.Duration{-48 * time.Hour, -time.Minute, time.Second, time.Hour}[rng.IntN(4)]
+				last.Corrections = append(last.Corrections, stepCorrection{
+					ID:      fmt.Sprintf("c%d", rng.IntN(6)),
+					Subject: pick([]string{"tea", "the Build", "ok 1", "x9 thing", "", "A-B", "long name"}),
+					Time:    at.Add(offset).Format(time.RFC3339Nano),
+				})
+			}
+		}
+	}
+	return steps
+}
+
+// indexScript is the fixed part of the curated script that ranks, renders, pins and settles: a
+// store of memories of every type with views, helped and harmed feedback, staged memories
+// promoted on each kind of evidence, corrections that flag a memory until its edit, a memory the
+// user pinned, and usage lines Go's decoder skips or matches ignoring case.
+func indexScript(at *time.Time, user, conversation []string) []curatedStep {
+	var steps []curatedStep
+	add := func(op, session, project string, args map[string]string, corrections ...stepCorrection) {
+		*at = at.Add(17 * time.Minute)
+		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: project, Time: at.Format(time.RFC3339), User: user, Conversation: conversation, Corrections: corrections})
+	}
+	add("index", "s1", "/work", map[string]string{"budget": "2000"})
+	for i, ty := range []string{"lesson", "reference", "project", "feedback", "user", "lesson", "reference", "project"} {
+		add("save", "s1", "/work", map[string]string{"name": fmt.Sprintf("m%d-note", i), "type": ty, "description": fmt.Sprintf("Memory %d of type %s, with a description long enough to cost tokens", i, ty), "quote": "the build runs with make all"})
+	}
+	add("save", "s1", "/work", map[string]string{"name": "rafaga-free", "type": "lesson", "description": "Ráfaga 😀 notes count as two UTF-16 units each", "quote": "the build runs with make all"})
+	add("index", "s1", "/work", map[string]string{"budget": "2000"})
+	add("rank", "s1", "/work", nil)
+	for _, name := range []string{"m0-note", "m0-note", "m7-note", "m2-note"} {
+		add("record", "s1", "/work", map[string]string{"name": name, "event": "view"})
+	}
+	add("feedback", "s1", "/work", map[string]string{"name": "m1-note", "outcome": "helped", "quote": "deploys go out on Tuesdays"})
+	add("feedback", "s1", "/work", map[string]string{"name": "m6-note", "outcome": "harmed", "quote": "deploys go out on Tuesdays"})
+	add("junk", "s1", "/work", nil)
+	add("usage", "s1", "/work", nil)
+	add("rank", "s1", "/work", nil)
+	for _, budget := range []string{"0", "1", "20", "60", "90", "150", "300"} {
+		add("index", "s1", "/work", map[string]string{"budget": budget})
+	}
+	// Staged memories: promoted on a user's quote, on a citation, on a second session; one
+	// whose evidence came before an edit is not.
+	add("save", "s1", "/work", map[string]string{"name": "staged-quote", "type": "user", "description": "Staged then confirmed"})
+	add("save", "s1", "/work", map[string]string{"name": "staged-cite", "type": "project", "description": "Staged then cited"})
+	add("save", "s1", "/work", map[string]string{"name": "staged-twice", "type": "reference", "description": "Staged in two sessions"})
+	add("save", "s2", "/work", map[string]string{"name": "staged-twice", "type": "reference", "description": "staged in TWO sessions"})
+	add("save", "s1", "/work", map[string]string{"name": "staged-edited", "type": "lesson", "description": "Cited before an edit"})
+	add("index", "s1", "/work", map[string]string{"budget": "2000"})
+	add("feedback", "s1", "/work", map[string]string{"name": "staged-quote", "outcome": "helped", "quote": "always drink green tea"})
+	add("record", "s1", "/work", map[string]string{"name": "staged-cite", "event": "cited", "record": "r1,r2"})
+	add("record", "s1", "/work", map[string]string{"name": "staged-edited", "event": "cited", "record": "r3"})
+	add("edit", "s1", "/work", map[string]string{"name": "staged-edited", "body": "Edited after the citation."})
+	add("pin", "s1", "/work", map[string]string{"budget": "2000"})
+	add("settle", "s1", "/work", nil,
+		stepCorrection{ID: "c1", Subject: "m3 note", Time: at.Add(time.Minute).Format(time.RFC3339Nano)},
+		stepCorrection{ID: "c2", Subject: "note", Time: at.Add(-72 * time.Hour).Format(time.RFC3339Nano)},
+		stepCorrection{ID: "c3", Subject: "M4", Time: at.Add(time.Minute + 500*time.Microsecond).Format(time.RFC3339Nano)})
+	add("pin", "s1", "/work", map[string]string{"budget": "2000"})
+	add("pin", "s1", "/work", map[string]string{"budget": "2000", "reset": "true"})
+	add("settle", "s1", "/work", nil, stepCorrection{ID: "c1", Subject: "m3 note", Time: at.Add(time.Minute).Format(time.RFC3339Nano)})
+	add("usage", "s1", "/work", nil)
+	add("rank", "s1", "/work", nil)
+	add("user-pin", "s1", "/work", map[string]string{"name": "m4-note"})
+	add("rank", "s1", "/work", nil)
+	add("edit", "s1", "/work", map[string]string{"name": "m3-note", "body": "Fixed after the correction."})
+	add("rank", "s1", "/work", nil)
+	add("index", "s1", "/work", map[string]string{"budget": "60"})
+	add("index", "s1", "", map[string]string{"budget": "2000"})
+	return steps
+}
+
+// goCurated runs the script on the Go store at dir, one line per step as tool-parity.lisp
+// prints it.
+func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
+	t.Helper()
+	var lines []string
+	var pin curated.Pin
+	for n, s := range steps {
+		at, err := time.Parse(time.RFC3339, s.Time)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := curated.Store{Dir: dir, Now: func() time.Time { return at }}
+		call := curated.Call{Store: store, Project: s.Project, Source: s.Session, UserEvidence: quotedIn(s.User)}
+		if s.Conversation != nil {
+			call.Evidence = quotedIn(s.Conversation)
+		}
+		switch s.Op {
+		case "record":
+			if s.Args["event"] == "cited" {
+				err = store.RecordCited(s.Args["name"], s.Args["record"])
+			} else {
+				err = store.Record(s.Args["name"], s.Args["event"])
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d recorded", n+1))
+		case "junk":
+			f, err := os.OpenFile(filepath.Join(dir, "usage.jsonl"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteString(usageJunk)
+			f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d junk", n+1))
+		case "user-pin":
+			path := filepath.Join(dir, s.Args["name"]+".md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(strings.Replace(string(data), "\n---\n", "\npinned: true\n---\n", 1)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d pinned", n+1))
+		case "usage":
+			usage, err := store.Usage()
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := []string{}
+			for name := range usage {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			parts := []string{}
+			for _, name := range names {
+				e := usage[name]
+				last := ""
+				if !e.Last.IsZero() {
+					last = e.Last.UTC().Format(time.RFC3339)
+				}
+				parts = append(parts, fmt.Sprintf("%s:%d/%d/%d/%d/%d/%s", name, e.Views, e.Helped, e.Harmed, e.Edits, e.Corrected, last))
+			}
+			lines = append(lines, fmt.Sprintf("%d usage %s", n+1, strings.Join(parts, " ")))
+		case "rank":
+			ms, err := store.List(s.Project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			usage := store.RankUsage()
+			names := []string{}
+			for _, m := range curated.Rank(ms, usage) {
+				name := m.Name
+				if curated.Flagged(m, usage[m.Name]) {
+					name += "!"
+				}
+				names = append(names, name)
+			}
+			lines = append(lines, fmt.Sprintf("%d rank %s", n+1, strings.Join(names, ",")))
+		case "index":
+			budget, _ := strconv.Atoi(s.Args["budget"])
+			text, shown := curated.IndexFor(store, s.Project, budget)
+			lines = append(lines, fmt.Sprintf("%d index %s %s", n+1, strings.Join(shown, ","), quoted(text)))
+		case "pin":
+			if s.Args["reset"] == "true" {
+				pin.Reset()
+			}
+			budget, _ := strconv.Atoi(s.Args["budget"])
+			text, shown, rendered := pin.Get(func() (string, []string) { return curated.IndexFor(store, s.Project, budget) })
+			lines = append(lines, fmt.Sprintf("%d pin %t %s %s %s", n+1, rendered, strings.Join(shown, ","), strings.Join(pin.Shown(), ","), quoted(text)))
+		case "settle":
+			in := curated.SettleInput{Project: s.Project}
+			for _, c := range s.Corrections {
+				when, err := time.Parse(time.RFC3339Nano, c.Time)
+				if err != nil {
+					t.Fatal(err)
+				}
+				in.Corrections = append(in.Corrections, curated.Correction{ID: c.ID, Subject: c.Subject, Time: when})
+			}
+			settled, err := store.Settle(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			promoted := []string{}
+			for _, p := range settled.Promoted {
+				promoted = append(promoted, p.Name+"="+p.Evidence)
+			}
+			lines = append(lines, fmt.Sprintf("%d settle %s | %s", n+1, quoted(strings.Join(promoted, ";")), strings.Join(settled.Flagged, ",")))
+		case "describe":
+			m, err := store.Get(s.Args["name"])
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("%d error %s", n+1, quoted(err.Error())))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%d describe %s", n+1, quoted(curated.Describe(m))))
+		case "list":
+			ms, err := store.List(s.Args["project"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := []string{}
+			for _, m := range ms {
+				names = append(names, m.Name)
+			}
+			lines = append(lines, fmt.Sprintf("%d list %s", n+1, strings.Join(names, ",")))
+		default:
+			text, err := call.Run(s.Op, s.Args)
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("%d error %s", n+1, quoted(err.Error())))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%d ok %s", n+1, quoted(text)))
+		}
+	}
+	return lines
+}
+
+// usageJunk are usage lines Go's decoder skips (a member of the wrong type, no name, not JSON)
+// or matches ignoring case, and a line still being written, which the next append completes
+// into one the decoder skips.
+const usageJunk = `{"name":"m0-note","event":"view","time":5}
+not json
+{"name":"","event":"view"}
+{"NAME":"m5-note","Event":"view","time":"2026-11-01T09:00:00Z"}
+{"name":"m5-note","event":"view","user":"yes"}
+{"name":"m5-note","event":"helped","user":true,"quote":null}
+[1,2]
+null
+{"name":"m5-note","event":"view"`
+
+// dropUsageJunk removes the lines the script's junk step wrote (usageJunk, its unfinished last
+// line completed by the next append) from the usage ledger at path, so what the store itself
+// wrote is checked against the schema.
+func dropUsageJunk(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	junk := strings.Split(usageJunk, "\n")
+	partial := junk[len(junk)-1]
+	kept := []string{}
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if line == "" || slices.Contains(junk[:len(junk)-1], strings.TrimSuffix(line, "\n")) || strings.HasPrefix(line, partial) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// storeFiles are the files under dir but the lock, by relative path.
+func storeFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() == ".lock" {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		out[filepath.ToSlash(rel)] = string(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func diffParity(t *testing.T, want, got []string) {
+	t.Helper()
+	for i := 0; i < len(want) || i < len(got); i++ {
+		w, g := "", ""
+		if i < len(want) {
+			w = want[i]
+		}
+		if i < len(got) {
+			g = got[i]
+		}
+		if w != g {
+			t.Fatalf("line %d differs (Go %d lines, Lisp %d lines):\n go:   %s\n lisp: %s", i+1, len(want), len(got), w, g)
+		}
+	}
+}
+
+func TestLispCuratedParity(t *testing.T) {
+	sbcl, script := lispParity(t)
+	root := t.TempDir()
+	steps := curatedScript()
+	scriptPath := filepath.Join(root, "script.json")
+	writeJSON(t, scriptPath, steps)
+	goDir := filepath.Join(root, "go", "observational-memory", "memories")
+	lispDir := filepath.Join(root, "lisp", "observational-memory", "memories")
+	want := goCurated(t, goDir, steps)
+	got := runLisp(t, sbcl, script, "curated", lispDir, scriptPath)
+	diffParity(t, want, got)
+	goFiles, lispFiles := storeFiles(t, goDir), storeFiles(t, lispDir)
+	names := []string{}
+	for name := range goFiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if lispFiles[name] != goFiles[name] {
+			t.Errorf("%s differs:\n go:   %q\n lisp: %q", name, goFiles[name], lispFiles[name])
+		}
+		delete(lispFiles, name)
+	}
+	for name := range lispFiles {
+		t.Errorf("%s: only the Lisp store wrote it", name)
+	}
+	dropUsageJunk(t, filepath.Join(lispDir, "usage.jsonl"))
+	seen := validateTree(t, loadSchemas(t), filepath.Join(root, "lisp"))
+	if seen["curated-memory.schema.json"] == 0 || seen["curated-usage-line.schema.json"] == 0 {
+		t.Errorf("the Lisp store wrote no memory or usage file (%v)", seen)
+	}
+	oks, errs, also, more, promoted, flagged := 0, 0, 0, 0, 0, 0
+	for _, w := range want {
+		_, rest, _ := strings.Cut(w, " ")
+		switch {
+		case strings.HasPrefix(rest, "ok "):
+			oks++
+		case strings.HasPrefix(rest, "error "):
+			errs++
+		case strings.HasPrefix(rest, "index "):
+			if strings.Contains(rest, `\nalso: `) {
+				also++
+			}
+			if strings.Contains(rest, " more memor") {
+				more++
+			}
+		case strings.HasPrefix(rest, "settle "):
+			if !strings.HasPrefix(rest, `settle "" |`) {
+				promoted++
+			}
+			if !strings.HasSuffix(rest, "| ") {
+				flagged++
+			}
+		}
+	}
+	t.Logf("identical: %d steps (%d writes done, %d refused; %d indexes with an also line, %d with more left out; %d settles promoting, %d flagging), %d files",
+		len(want), oks, errs, also, more, promoted, flagged, len(names))
+	if also == 0 || more == 0 || promoted == 0 || flagged == 0 {
+		t.Error("the script no longer reaches every branch of the index and the settle")
+	}
+}
+
+// settleCase is one held definition and the usage ledger events it is settled on.
+type settleCase struct {
+	Kind     string               `json:"kind"`
+	Name     string               `json:"name"`
+	HeldID   string               `json:"heldId"`
+	Time     string               `json:"time"`
+	Detector string               `json:"detector"`
+	Events   []curated.ModelEvent `json:"events"`
+}
+
+func TestLispSettleParity(t *testing.T) {
+	sbcl, script := lispParity(t)
+	rng := rand.New(rand.NewPCG(11, 13))
+	held := time.Date(2026, 11, 1, 10, 0, 0, 123456789, time.UTC)
+	defs := []layer.Definition{
+		{Kind: layer.KindInstructions, Name: "consolidation", Mode: layer.ModeExtend, Text: "Keep every figure with its unit."},
+		{Kind: layer.KindRemedy, Name: rules.RemedyKeepHead, Text: "remedy[1]{detector}:\n  uncited-assistant-specifics"},
+		{Kind: layer.KindDetector, Name: "go-plans", Text: rules.CodeDetectorText("func Count() int { return 1 }", "plans")},
+		{Kind: layer.KindDetector, Name: "missed-paths", Text: "detector[1]{check,description}:\n  thin-chunk,notes counted"},
+	}
+	var cases []settleCase
+	var want []string
+	for i := 0; i < 400; i++ {
+		d := defs[i%len(defs)]
+		d.Time = held
+		id := d.HeldID()
+		detector := "other"
+		if d.Kind == layer.KindDetector {
+			if def, err := rules.ParseDetector(d.Name, d.Text); err == nil && def.IsCode() {
+				detector = "code"
+			} else if err == nil && def.Retired() {
+				detector = "retired"
+			}
+		}
+		var events []curated.ModelEvent
+		for k := rng.IntN(5); k > 0; k-- {
+			offsets := []time.Duration{-time.Hour, -time.Nanosecond, 0, time.Nanosecond, time.Minute, 3 * time.Hour}
+			e := curated.ModelEvent{Time: held.Add(offsets[rng.IntN(len(offsets))]).Format(time.RFC3339Nano), Model: "p/m", Engine: curated.EngineV2}
+			if rng.IntN(8) == 0 {
+				e.Engine = ""
+			}
+			switch rng.IntN(3) {
+			case 0:
+				e.Kind = curated.ModelKindDetectorPass
+				e.Cut = fmt.Sprintf("e%d", rng.IntN(9))
+				e.Counts = map[string]int{}
+				if rng.IntN(2) == 0 {
+					e.Counts[rules.DefinedCountKey(d.Name)] = rng.IntN(3)
+				}
+				if rng.IntN(4) == 0 {
+					e.Errors = map[string]string{d.Name: "panic: index out of range"}
+				}
+			default:
+				e.Kind = curated.ModelKindPass
+				e.Stage = rules.StageCompaction
+				e.Outcome = []string{curated.OutcomeOK, curated.OutcomeEmpty, ""}[rng.IntN(3)]
+				e.Tokens = []int{0, 40, 250}[rng.IntN(3)]
+				e.Level1 = rng.IntN(2) == 0
+				e.Counts = map[string]int{}
+				for _, k := range []string{rules.CountLevel1Failed, rules.CountLevel1SpecificsRefused, rules.CountLevel1UnionKept, rules.CountLevel1Refused} {
+					if rng.IntN(5) == 0 {
+						e.Counts[k] = rng.IntN(3)
+					}
+				}
+			}
+			if rng.IntN(4) != 0 {
+				e.RanHeld = []string{id}
+			} else if rng.IntN(2) == 0 {
+				e.RanHeld = []string{d.Key() + "@0000000000000000"}
+			}
+			events = append(events, e)
+		}
+		decided, clean, reason := rules.SettleV2(events, d)
+		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: detector, Events: events})
+		state, cleanWord := "held", "unclean"
+		if decided {
+			state = "decided"
+		}
+		if clean {
+			cleanWord = "clean"
+		}
+		want = append(want, fmt.Sprintf("%d %s %s %s", i+1, state, cleanWord, quoted(reason)))
+	}
+	path := filepath.Join(t.TempDir(), "cases.json")
+	writeJSON(t, path, cases)
+	got := runLisp(t, sbcl, script, "settle", path)
+	diffParity(t, want, got)
+	decided := 0
+	for _, w := range want {
+		if strings.Contains(w, " decided ") {
+			decided++
+		}
+	}
+	t.Logf("identical: %d cases, %d decided", len(want), decided)
+}
+
+// The files the Lisp layer writes validate: its manifest against lisp-layer-generation and its
+// held index against the Go layer's layer-held-index.
+func TestLispLayerFilesValidate(t *testing.T) {
+	sbcl, script := lispParity(t)
+	set := loadSchemas(t)
+	root := t.TempDir()
+	runLisp(t, sbcl, script, "layer", root)
+	seen := map[string]int{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.Name() == ".lock" || strings.HasSuffix(rel, ".lisp"):
+		case strings.HasSuffix(rel, "/manifest.jsonl"):
+			for n, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+				seen["manifest"]++
+				for _, e := range set.ValidateJSON("lisp-layer-generation.schema.json", []byte(line)) {
+					t.Errorf("%s:%d: %v", rel, n+1, e)
+				}
+			}
+		case strings.HasSuffix(rel, "/held/index.json"):
+			seen["index"]++
+			for _, e := range set.ValidateJSON("layer-held-index.schema.json", data) {
+				t.Errorf("%s: %v", rel, e)
+			}
+		default:
+			t.Errorf("%s: no schema covers this stored file", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen["manifest"] < 5 || seen["index"] == 0 {
+		t.Errorf("the Lisp layer wrote too little: %v", seen)
+	}
+}

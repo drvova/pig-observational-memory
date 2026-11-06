@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/commands"
+	"github.com/drvova/pig-observational-memory/memory/lispimage"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
 )
 
@@ -27,9 +28,16 @@ const usage = `om: observational memory for coding agents
   om tool-spec                       the memory tool's name, description and JSON schema
   om status [--harness h] [--dir d]  the current session's memory figures
   om view [--harness h] [--dir d] [args]  print memory content (as /om:view)
+  om serve                           run the engine as a long-lived process for one harness
+                                     process: JSON-RPC 2.0 on stdin and stdout (docs/engine-rpc.md)
   om version
 
 The store lives under $OM_HOME (default ~/.om); its settings.json holds the settings.
+hook, mcp and call run on the SBCL engine image over <root>/engine.sock, started from
+$OM_LISP_IMAGE, else built on first use with the sbcl on PATH into <root>/engine (until then,
+and for anything the image cannot take, the Go engine runs; see <root>/engine.log).
+OM_ENGINE=go (or "engine": "go" in settings.json) always runs the Go engine; it is the default
+on Windows (docs/universal.md).
 `
 
 // Run is the om command over args (without the program name); it returns the exit status.
@@ -63,6 +71,8 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	case "version":
 		_, err := fmt.Fprintln(stdout, "om", Version)
 		return err
+	case "serve":
+		return serve(root, stdin, stdout)
 	case "hook":
 		if len(args) < 3 {
 			return fmt.Errorf("om hook <harness> <event>")
@@ -97,8 +107,15 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		if err := json.NewDecoder(stdin).Decode(&params); err != nil {
 			return fmt.Errorf("om call: the tool's arguments as JSON on stdin: %w", err)
 		}
+		a := newApp(root, stderr)
+		if res, ok, err := a.callViaLisp(*harnessName, *dir, params); ok {
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(stdout).Encode(map[string]any{"text": res["text"], "isError": res["isError"]})
+		}
 		raw, _ := json.Marshal(map[string]any{"name": omtool.ToolName, "arguments": params})
-		res := newApp(root, stderr).callTool(*harnessName, *dir, raw)
+		res := a.callTool(*harnessName, *dir, raw)
 		text := ""
 		if content, ok := res["content"].([]any); ok && len(content) > 0 {
 			text, _ = content[0].(map[string]any)["text"].(string)
@@ -124,8 +141,35 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return err
 		}
 		a.rt.EnsureConfig(h)
+		if args[0] == "view" {
+			// The image answers the view's text; showing and copying it stay here.
+			res, handled, err := a.viaLisp("view", s, map[string]any{"args": strings.Join(fs.Args(), " ")})
+			if handled {
+				if err == nil {
+					commands.ShowView(a.rt, h, res.Text, res.Notice, nil)
+				}
+				return err
+			}
+		}
 		if args[0] == "status" {
-			return commands.RunStatus(a.rt, h)
+			// The image answers the report's text (lisp/src/server/status.lisp); showing it
+			// stays here.
+			res, handled, err := a.viaLisp("om-status", s, nil)
+			if handled {
+				if err == nil {
+					h.Notify(res.Text, "info")
+				}
+			} else {
+				err = commands.RunStatus(a.rt, h)
+			}
+			// The image counts the events it refused; those it never saw (no image built yet,
+			// not reachable) only the engine log holds.
+			if a.lisp != nil {
+				if n := lispimage.FallbackCount(root); n > 0 {
+					h.Notify(fmt.Sprintf("Engine fallbacks: %d events ran on the Go engine (reasons in %s; OM_LISP_FALLBACK=0 turns falling back off)", n, lispimage.LogPath(root)), "info")
+				}
+			}
+			return err
 		}
 		return commands.RunView(a.rt, h, strings.Join(fs.Args(), " "), nil)
 	case "install", "uninstall":

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Model usage ledger line",
+  "description": "One line of <store>/models/<model file name>.jsonl (layer.ModelDir of the model id), the per-model usage ledger the harness profile and the rules are a pure function of. Events v1 wrote carry no engine and are read and listed but never judged under v2. Source: memory/curated/modelusage.go (ModelEvent, RecordModelLocked, the ModelKind and Outcome constants); written by memory/harness/code.go, memory/rules/v2.go and memory/hooks/detectors_v2.go.",
+  "type": "object",
+  "required": ["time", "model", "kind", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "time": { "description": "RFC 3339 with nanoseconds, UTC.", "type": "string", "minLength": 1 },
+    "model": { "description": "The model id (provider/id).", "type": "string", "minLength": 1 },
+    "kind": { "enum": ["memory", "decode", "defined", "code", "pass", "detect", "detector-pass"] },
+    "outcome": {
+      "description": "ok, error, empty, shown, omitted or columns for a call or decode; empty for a pass, detect or detector pass.",
+      "type": "string"
+    },
+    "codec": { "type": "string" },
+    "syntax": { "type": "boolean" },
+    "legacy": { "type": "boolean" },
+    "target": { "enum": ["summary", "index"] },
+    "tool": { "type": "string" },
+    "stage": { "description": "compaction under v2; observer, reflector or dropper for v1's worker passes.", "type": "string" },
+    "tokens": { "type": "integer", "minimum": 0 },
+    "counts": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "kinds": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "revisions": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "engine": { "enum": ["v2"] },
+    "level1": { "type": "boolean" },
+    "ranHeld": { "description": "Held definitions a pass ran with: kind/name@digest (layer.Definition.HeldID).", "type": "array", "items": { "type": "string" } },
+    "cut": { "type": "string" },
+    "errors": { "type": "object", "additionalProperties": { "type": "string" } },
+    "unfinished": { "type": "string" },
+    "pending": { "type": "array", "items": { "type": "string" } }
+  }
+}

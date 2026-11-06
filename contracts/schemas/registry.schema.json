@@ -1,0 +1,147 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://github.com/drvova/pig-observational-memory/contracts/schemas/registry.schema.json",
+ "title": "om harness registry",
+ "description": "memory/cli/assets/harnesses.json: every harness om install knows, as data (docs/universal.md, Harness registry). Strings in entry, content and install steps take the placeholders $OM, $OM_SH, $OM_SH_ESCAPED, $HARNESS and (print) $DIR.",
+ "type": "array",
+ "items": {"$ref": "#/$defs/harness"},
+ "$defs": {
+  "osPaths": {
+   "description": "A path template by GOOS (\"\" for every other): a leading ~ is the home directory, ${VAR:-default} is $VAR when set and default otherwise.",
+   "type": "object",
+   "minProperties": 1,
+   "propertyNames": {"enum": ["", "darwin", "linux", "windows"]},
+   "additionalProperties": {"type": "string", "minLength": 1}
+  },
+  "strings": {"type": "array", "items": {"type": "string", "minLength": 1}},
+  "harness": {
+   "type": "object",
+   "required": ["name", "title", "class"],
+   "additionalProperties": false,
+   "properties": {
+    "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "title": {"type": "string", "minLength": 1},
+    "class": {"description": "How the memory tool's MCP server is registered.", "enum": ["file", "own", "manual", "none"]},
+    "path": {"$ref": "#/$defs/osPaths"},
+    "format": {"enum": ["json", "yaml", "toml"]},
+    "key": {"description": "The object path the servers live under.", "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "list": {"type": "boolean"},
+    "id": {"type": "string", "minLength": 1},
+    "entry": {"type": "object"},
+    "skeleton": {"type": "object"},
+    "manual": {"type": "string", "minLength": 1},
+    "content": {"type": "string", "minLength": 1},
+    "hooks": {"$ref": "#/$defs/hooks"},
+    "install": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}},
+    "note": {"type": "string"},
+    "source": {"type": "string"}
+   },
+   "allOf": [
+    {"if": {"properties": {"class": {"const": "file"}}}, "then": {"required": ["path", "format", "key", "entry"]}},
+    {"if": {"properties": {"class": {"const": "own"}}}, "then": {"required": ["path", "content"]}},
+    {"if": {"properties": {"class": {"const": "manual"}}}, "then": {"required": ["manual"]}}
+   ]
+  },
+  "hooks": {
+   "type": "object",
+   "required": ["events", "transcript"],
+   "additionalProperties": false,
+   "properties": {
+    "path": {"$ref": "#/$defs/osPaths"},
+    "events": {
+     "description": "om's events to the harness's event names.",
+     "type": "object",
+     "minProperties": 1,
+     "propertyNames": {"enum": ["session-start", "prompt", "turn-end", "pre-compact"]},
+     "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "transcript": {"description": "A format of memory/transcript (Formats or DBFormats).", "type": "string", "minLength": 1},
+    "matcher": {"type": "string"},
+    "timeoutMS": {"type": "boolean"},
+    "topLevel": {"type": "boolean"},
+    "flat": {"type": "boolean"},
+    "plainContext": {"type": "boolean"},
+    "toml": {"type": "boolean"},
+    "timeoutKey": {"type": "string", "minLength": 1},
+    "noTimeout": {"type": "boolean"},
+    "enable": {"$ref": "#/$defs/strings"},
+    "noStdin": {"type": "boolean"},
+    "key": {"$ref": "#/$defs/strings"},
+    "recordUnlessFound": {"type": "boolean"},
+    "summaryAtPreCompact": {"type": "boolean"},
+    "noType": {"type": "boolean"},
+    "version": {"type": "integer"},
+    "contextField": {"type": "string", "minLength": 1},
+    "textContext": {"type": "boolean"},
+    "noContext": {"type": "boolean"},
+    "summaryOnStart": {"type": "boolean"},
+    "sessionFromCurrent": {"type": "boolean"},
+    "summaryOnPrompt": {"type": "boolean"},
+    "env": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+    "transcriptFrom": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pathCandidate"}},
+    "sessionFrom": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sessionCandidate"}},
+    "record": {"$ref": "#/$defs/record"}
+   }
+  },
+  "pathCandidate": {
+   "description": "A transcript path template (${cwd}, ${session}, ${md5(cwd)}, ${slug(cwd)}, ${VAR}, ${VAR:-default}, a leading ~), only on os when set, or a named resolver.",
+   "type": "object",
+   "additionalProperties": false,
+   "properties": {
+    "os": {"enum": ["darwin", "linux", "windows"]},
+    "path": {"type": "string", "minLength": 1},
+    "resolver": {"enum": ["kiro-session", "crush-db"]}
+   },
+   "oneOf": [{"required": ["path"]}, {"required": ["resolver"]}]
+  },
+  "sessionCandidate": {
+   "description": "A payload field (a.b for a nested one) that is a non-empty string not in not, with prefix before it, or a named resolver.",
+   "type": "object",
+   "additionalProperties": false,
+   "properties": {
+    "field": {"type": "string", "minLength": 1},
+    "not": {"$ref": "#/$defs/strings"},
+    "prefix": {"type": "string"},
+    "resolver": {"enum": ["amazon-q-conversation"]}
+   },
+   "oneOf": [{"required": ["field"]}, {"required": ["resolver"]}]
+  },
+  "record": {
+   "type": "object",
+   "additionalProperties": false,
+   "properties": {
+    "fields": {"type": "object", "minProperties": 1, "additionalProperties": {"enum": ["user", "assistant"]}},
+    "mapper": {"enum": ["amp-messages"]}
+   },
+   "oneOf": [{"required": ["fields"]}, {"required": ["mapper"]}]
+  },
+  "step": {
+   "type": "object",
+   "required": ["kind"],
+   "additionalProperties": false,
+   "properties": {
+    "kind": {"enum": ["run-command", "plugin-asset", "text-file", "json-file", "managed-line", "print", "codex-config"]},
+    "command": {"$ref": "#/$defs/strings"},
+    "remove": {"$ref": "#/$defs/strings"},
+    "dir": {"type": "string", "minLength": 1},
+    "asset": {"type": "string", "pattern": "^assets/"},
+    "path": {"type": "string", "minLength": 1},
+    "content": {"type": "string", "minLength": 1},
+    "executable": {"type": "boolean"},
+    "value": {},
+    "line": {"type": "string", "minLength": 1},
+    "text": {"type": "string", "minLength": 1},
+    "removeText": {"type": "string", "minLength": 1}
+   },
+   "allOf": [
+    {"if": {"properties": {"kind": {"const": "run-command"}}}, "then": {"required": ["command"]}},
+    {"if": {"properties": {"kind": {"const": "plugin-asset"}}}, "then": {"required": ["dir", "asset"]}},
+    {"if": {"properties": {"kind": {"const": "text-file"}}}, "then": {"required": ["path", "content"]}},
+    {"if": {"properties": {"kind": {"const": "json-file"}}}, "then": {"required": ["path", "value"]}},
+    {"if": {"properties": {"kind": {"const": "managed-line"}}}, "then": {"required": ["path", "line"]}},
+    {"if": {"properties": {"kind": {"const": "print"}}}, "then": {"required": ["text", "removeText"]}},
+    {"if": {"properties": {"kind": {"const": "codex-config"}}}, "then": {"required": ["path"]}}
+   ]
+  }
+ }
+}

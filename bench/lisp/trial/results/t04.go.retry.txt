@@ -1,0 +1,1 @@
+fmt.Println(om.Notes(om.Kind("correction").Search("billing").SortBy("when", true).Limit(1)).Rows[0].ID)

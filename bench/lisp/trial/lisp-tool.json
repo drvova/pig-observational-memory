@@ -1,0 +1,22 @@
+{
+ "t01": "(format t \"~d~%\" (length (notes :limit 200)))",
+ "t02": "(format t \"~d~%\" (length (notes :kind \"preference\" :limit 200)))",
+ "t03": "(format t \"~d~%\" (count \"failed\" (notes :kind \"attempt\" :limit 200) :key #'note-outcome :test #'string=))",
+ "t04": "(format t \"~a~%\" (note-id (first (sort (notes :kind \"correction\" :search \"billing\" :limit 200) #'string> :key #'note-when))))",
+ "t05": "(format t \"~a~%\" (note-content (first (sort (notes :kind \"correction\" :search \"Elasticsearch\" :limit 200) #'string> :key #'note-when))))",
+ "t06": "(format t \"~d~%\" (length (notes :since \"2026-05-03\" :limit 200)))",
+ "t07": "(dolist (n (notes :kind \"file\" :limit 200)) (format t \"~a~%\" (note-id n)))",
+ "t08": "(let* ((c (note-content (first (notes :kind \"commit\")))) (s (1+ (position #\\Space c)))) (format t \"~a~%\" (subseq c s (position #\\Space c :start s))))",
+ "t09": "(let ((counts '())) (dolist (n (notes :limit 200)) (let ((cell (assoc (note-kind n) counts :test #'string=))) (if cell (incf (cdr cell)) (push (cons (note-kind n) 1) counts)))) (loop for (k . c) in (sort counts #'string< :key #'car) do (format t \"~a=~d~%\" k c)))",
+ "t10": "(format t \"~d~%\" (count-if (lambda (r) (and (string= (turn-role r) \"user\") (string= (subseq (turn-when r) 0 10) \"2026-05-03\"))) (history :limit 200)))",
+ "t11": "(dolist (n (notes :limit 200)) (when (note-superseded-by n) (format t \"~a~%\" (note-id n))))",
+ "t12": "(format t \"~a~%\" (first (note-superseded-by (first (notes :search \"billing 8080\" :kind \"fact\")))))",
+ "t13": "(format t \"~d~%\" (count-if (lambda (n) (and (string= (note-outcome n) \"worked\") (string= (note-tool n) \"bash\"))) (notes :kind \"attempt\" :limit 200)))",
+ "t14": "(format t \"~a~%\" (subseq (note-when (find \"failed\" (notes :kind \"attempt\" :limit 200) :key #'note-outcome :test #'string=)) 0 10))",
+ "t15": "(dolist (n (notes :kind \"preference\")) (format t \"~a~%\" (note-content n)))",
+ "t16": "(format t \"~d~%\" (length (remove-duplicates (mapcar (lambda (n) (subseq (note-when n) 0 10)) (notes :limit 200)) :test #'string=)))",
+ "t17": "(format t \"~a~%\" (note-content (first (sort (remove \"failed\" (notes :kind \"attempt\" :limit 200) :key #'note-outcome :test-not #'string=) #'string> :key #'note-when))))",
+ "t18": "(format t \"~d~%\" (count-if (lambda (n) (search \"port\" (string-downcase (note-content n)))) (notes :limit 200)))",
+ "t19": "(format t \"~a~%\" (turn-id (find \"user\" (history :search \"commit rounding fix\") :key #'turn-role :test #'string=)))",
+ "t20": "(format t \"~d~%\" (count-if-not (lambda (n) (string= (note-kind n) \"attempt\")) (notes :since \"2026-05-02\" :until \"2026-05-04\" :limit 200)))"
+}

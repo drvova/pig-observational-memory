@@ -1,0 +1,5 @@
+(let* ((rows (om:rows (om:attempts :failed t :limit 200)))
+       (first-attempt (reduce (lambda (a b)
+                                (if (string< (om:note-when a) (om:note-when b)) a b))
+                              rows)))
+  (princ (subseq (om:note-when first-attempt) 0 10)))

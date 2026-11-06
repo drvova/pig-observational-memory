@@ -1,0 +1,7 @@
+(let* ((page (om:attempts :worked t))
+       (count (length
+               (om:rows
+                (om:filter-rows page
+                                (lambda (row)
+                                  (string= (om:field row "tool") "bash")))))))
+  (format t "~a" count))

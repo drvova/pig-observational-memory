@@ -265,11 +265,10 @@ func encodeJSON(v any) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-// installCodex adds the MCP server and the notify program to Codex's config
-// ($CODEX_HOME/config.toml, ~/.codex), each line marked as om's. An existing notify is left as
-// it is: Codex runs one notify program, and om does not replace another.
-func installCodex(w writer, exe string, remove bool) error {
-	path := filepath.Join(homeDir("CODEX_HOME", ".codex"), "config.toml")
+// installCodex adds the MCP server and the notify program to Codex's config (path, the
+// codex-config install step's), each line marked as om's. An existing notify is left as it is:
+// Codex runs one notify program, and om does not replace another.
+func installCodex(w writer, path, exe, harness string, remove bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -293,12 +292,12 @@ func installCodex(w writer, exe string, remove bool) error {
 	if hasNotify {
 		fmt.Fprintf(w.out, "%s already sets notify, which Codex runs alone: om's turn-end hook is not added, so nothing records Codex turns until your notify program also runs: %s hook codex notify '<payload>'\n", path, exe)
 	} else {
-		top = append(top, "notify = ["+q(exe)+", "+q("hook")+", "+q("codex")+", "+q("notify")+"] "+managedMark)
+		top = append(top, "notify = ["+q(exe)+", "+q("hook")+", "+q(harness)+", "+q("notify")+"] "+managedMark)
 	}
 	table := []string{
 		"[mcp_servers.om] " + managedMark,
 		"command = " + q(exe) + " " + managedMark,
-		"args = [" + q("mcp") + ", " + q("--harness") + ", " + q("codex") + "] " + managedMark,
+		"args = [" + q("mcp") + ", " + q("--harness") + ", " + q(harness) + "] " + managedMark,
 	}
 	// A top-level key must come before the first table.
 	out := strings.Join(top, "\n")
@@ -310,12 +309,6 @@ func installCodex(w writer, exe string, remove bool) error {
 	}
 	out += strings.Join(withExtras(table, extras), "\n") + "\n"
 	return w.write(path, []byte(out))
-}
-
-// pluginInstaller writes the om plugin into an OpenCode-style plugin directory (OpenCode and its
-// forks share the plugin API); the registry adds the MCP server.
-func pluginInstaller(harness, dirTemplate string) func(w writer, exe string, remove bool) error {
-	return assetInstaller(harness, dirTemplate, "assets/opencode/om.js")
 }
 
 // assetInstaller writes the plugin asset (with om's path and the harness name) into the
@@ -335,22 +328,21 @@ func assetInstaller(harness, dirTemplate, asset string) func(w writer, exe strin
 	}
 }
 
-// installCrush adds om's MCP server to Crush's crushrc ($XDG_CONFIG_HOME/crush/crushrc,
-// ~/.config/crush), a shell file of commands, as one line marked as om's.
-func installCrush(w writer, exe string, remove bool) error {
-	path := pathTemplate("${XDG_CONFIG_HOME:-~/.config}/crush/crushrc")
+// installManagedLine adds one line marked as om's to a file of commands (the managed-line
+// install step: Crush's crushrc, a shell file), or takes out om's.
+func installManagedLine(w writer, path, line string, remove bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	var kept []string
-	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if !strings.HasSuffix(line, managedMark) && (line != "" || len(kept) > 0) {
-			kept = append(kept, line)
+	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if !strings.HasSuffix(l, managedMark) && (l != "" || len(kept) > 0) {
+			kept = append(kept, l)
 		}
 	}
 	if !remove {
-		kept = append(kept, "mcp add om --command "+shellQuote(exe)+" --args mcp --args --harness --args crush "+managedMark)
+		kept = append(kept, line+" "+managedMark)
 	}
 	out := strings.Join(kept, "\n")
 	if out != "" {
@@ -359,7 +351,6 @@ func installCrush(w writer, exe string, remove bool) error {
 	return w.write(path, []byte(out))
 }
 
-// shellQuote is s single-quoted for a POSIX shell.
 // hookCommand is the shell command a JSON hook runs: om's path quoted for the shell the
 // harness runs hooks in (sh on Unix, where a double-quoted path would still expand $ and `).
 func hookCommand(exe, harness, event string) string {
@@ -370,108 +361,7 @@ func hookCommand(exe, harness, event string) string {
 	return q + " hook " + harness + " " + event
 }
 
+// shellQuote is s single-quoted for a POSIX shell.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// installPi writes the om extension into Pi's global extensions directory
-// ($PI_CODING_AGENT_DIR/extensions, ~/.pi/agent/extensions), which Pi loads at start.
-func installPi(w writer, exe string, remove bool) error {
-	return installPiExtension(w, exe, "pi", filepath.Join(homeDir("PI_CODING_AGENT_DIR", ".pi", "agent"), "extensions"), remove)
-}
-
-// piExtensionInstaller installs Pi's extension into a harness that loads Pi extensions from its
-// own agent directory (dir, a path template), under its own harness name.
-func piExtensionInstaller(harness, dir string) func(w writer, exe string, remove bool) error {
-	return func(w writer, exe string, remove bool) error {
-		return installPiExtension(w, exe, harness, pathTemplate(dir), remove)
-	}
-}
-
-func installPiExtension(w writer, exe, harness, dir string, remove bool) error {
-	path := filepath.Join(dir, "om.ts")
-	if remove {
-		return w.remove(path)
-	}
-	src, err := assets.ReadFile("assets/pi/om.ts")
-	if err != nil {
-		return err
-	}
-	src = bytes.ReplaceAll(src, []byte("__OM_BIN__"), []byte(strconv.Quote(exe)))
-	return w.write(path, bytes.ReplaceAll(src, []byte("__OM_HARNESS__"), []byte(strconv.Quote(harness))))
-}
-
-// pigSource is the PiG package this repository publishes (README.md).
-const pigSource = "git:github.com/drvova/pig-observational-memory"
-
-// installPiG adds the engine to PiG the way PiG installs any package: PiG runs it natively, so
-// nothing of om's binary is written.
-func installPiG(w writer, exe string, remove bool) error {
-	if remove {
-		w.run("pig", "remove", pigSource)
-	} else {
-		w.run("pig", "install", pigSource)
-	}
-	return nil
-}
-
-// installClineHook writes Cline's TaskComplete hook, an executable file in its hooks directory
-// (${CLINE_DIR:-~/.cline}/hooks) that hands the payload to om.
-func installClineHook(w writer, exe string, remove bool) error {
-	path := filepath.Join(pathTemplate("${CLINE_DIR:-~/.cline}/hooks"), "TaskComplete")
-	if remove {
-		return w.remove(path)
-	}
-	return w.writeMode(path, []byte("#!/bin/sh\n# om: observational memory (written by om install cline)\nexec "+shellQuote(exe)+" hook cline TaskComplete\n"), 0o755)
-}
-
-// installGoosePlugin writes om as a Goose plugin (~/.agents/plugins/om): its plugin.json and the
-// Stop hook in hooks/hooks.json, the only way Goose loads hooks.
-func installGoosePlugin(w writer, exe string, remove bool) error {
-	dir := pathTemplate("~/.agents/plugins/om")
-	manifest, hooksFile := filepath.Join(dir, "plugin.json"), filepath.Join(dir, "hooks", "hooks.json")
-	if remove {
-		if err := w.remove(hooksFile); err != nil {
-			return err
-		}
-		return w.remove(manifest)
-	}
-	if err := w.write(manifest, []byte("{\"name\": \"om\", \"version\": \"1.0.0\", \"description\": \"observational memory\"}\n")); err != nil {
-		return err
-	}
-	hooks := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellQuote(exe) + " hook goose Stop", "timeout": hookTimeouts[evTurnEnd]}}}}}}
-	data, err := encodeJSON(hooks)
-	if err != nil {
-		return err
-	}
-	return w.write(hooksFile, data)
-}
-
-// printAmazonQHooks prints the stop hook to add to an Amazon Q CLI agent file: hooks live in
-// each agent's JSON (~/.aws/amazonq/cli-agents/<name>.json), and which agent is yours is yours.
-func printAmazonQHooks(w writer, exe string, remove bool) error {
-	if remove {
-		fmt.Fprintf(w.out, "Amazon Q Developer CLI: remove om's stop hook from your agent file in %s\n", pathTemplate("~/.aws/amazonq/cli-agents"))
-		return nil
-	}
-	fmt.Fprintf(w.out, "Amazon Q Developer CLI: add to your agent file in %s, under \"hooks\":\n  \"stop\": [{\"command\": %q, \"timeout_ms\": %d}]\n", pathTemplate("~/.aws/amazonq/cli-agents"), shellQuote(exe)+" hook amazon-q stop", hookTimeouts[evTurnEnd]*1000)
-	return nil
-}
-
-// installKiroHooks writes om's Kiro hooks, a file of om's own in its global hooks directory
-// (~/.kiro/hooks/om.json, Kiro's v1 hook format).
-func installKiroHooks(w writer, exe string, remove bool) error {
-	path := pathTemplate("~/.kiro/hooks/om.json")
-	if remove {
-		return w.remove(path)
-	}
-	var hooks []any
-	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop"} {
-		hooks = append(hooks, map[string]any{"name": "om " + ev, "trigger": ev, "action": map[string]any{"type": "command", "command": shellQuote(exe) + " hook kiro " + ev}, "timeout": 60})
-	}
-	data, err := encodeJSON(map[string]any{"version": "v1", "hooks": hooks})
-	if err != nil {
-		return err
-	}
-	return w.write(path, data)
 }

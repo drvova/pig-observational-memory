@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neutral store line",
+  "description": "One line of the neutral host's store, <root>/sessions/<harness>/<session>.jsonl: an entry the engine wrote and the id of the entry it follows on the merged branch (\"\" puts it first). A line that does not decode is skipped on load. Source: memory/neutral/store.go (Stored, Store.Append, Branch), memory/neutral/host.go (appendEntry).",
+  "type": "object",
+  "required": [
+    "after",
+    "entry"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "after": {
+      "type": "string"
+    },
+    "entry": {
+      "anyOf": [
+        {
+          "$ref": "entry-observations-recorded.schema.json"
+        },
+        {
+          "$ref": "entry-reflections-recorded.schema.json"
+        },
+        {
+          "$ref": "entry-observations-dropped.schema.json"
+        },
+        {
+          "$ref": "entry-subjects-aliased.schema.json"
+        },
+        {
+          "$ref": "entry-extracted.schema.json"
+        },
+        {
+          "$ref": "entry-cut.schema.json"
+        },
+        {
+          "$ref": "entry-summary-handed.schema.json"
+        },
+        {
+          "$ref": "entry-compaction.schema.json"
+        }
+      ]
+    }
+  }
+}

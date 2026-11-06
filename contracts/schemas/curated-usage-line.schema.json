@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Curated usage ledger line",
+  "description": "One line of <store>/usage.jsonl, the curated store's append-only usage ledger: every view, save, edit, forget and helped or harmed sighting of a memory, by name; the index ranks memories by it. Source: memory/curated/store.go (usageLine, appendUsage, Usage, the Event constants).",
+  "type": "object",
+  "required": ["time", "name", "event"],
+  "additionalProperties": false,
+  "properties": {
+    "time": { "description": "RFC 3339, UTC, whole seconds.", "type": "string" },
+    "name": { "type": "string", "minLength": 1 },
+    "event": { "enum": ["view", "save", "edit", "forget", "helped", "harmed", "indexed", "staged", "cited", "corrected", "promoted"] },
+    "quote": { "description": "A helped or harmed event's evidence.", "type": "string" },
+    "user": { "description": "A helped event whose quote is a user's words.", "type": "boolean" },
+    "record": { "description": "The record a corrected, cited or promoted event names.", "type": "string" }
+  }
+}

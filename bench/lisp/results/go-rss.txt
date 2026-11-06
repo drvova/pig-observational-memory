@@ -1,0 +1,2 @@
+go-hello VmHWM: VmHWM:	    2452 kB
+go-jsonhook VmHWM: VmHWM:	    9128 kB

@@ -1,0 +1,50 @@
+{"id": "u00", "timestamp": "2026-05-04T09:00:00.000Z", "role": "user", "text": "I run 3 times a week, 25 km in total. Maybe I'll also do a 10K trail race in April, not decided yet."}
+{"id": "a00", "timestamp": "2026-05-04T09:01:00.000Z", "role": "assistant", "text": "Nice. A 10K trail race in April fits a base of 25 km a week; add one hill session."}
+{"id": "u01", "timestamp": "2026-05-05T09:03:00.000Z", "role": "user", "text": "I ran my first trail race in 2024. I'll buy new road shoes in March."}
+{"id": "a01", "timestamp": "2026-05-05T09:04:00.000Z", "role": "assistant", "text": "Plan: 1. Easy runs on Monday and Wednesday. 2. Hills on Friday, 6 x 90 seconds. 3. Long run on Sunday, 12 km."}
+{"id": "u02", "timestamp": "2026-05-06T09:06:00.000Z", "role": "user", "text": "Actually, scrap the trail race idea."}
+{"id": "a02", "timestamp": "2026-05-06T09:07:00.000Z", "role": "assistant", "text": "Understood, the trail race is off."}
+{"id": "u03", "timestamp": "2026-05-07T09:09:00.000Z", "role": "user", "text": "The database port is 5432. The service listens on port 3000."}
+{"id": "a03", "timestamp": "2026-05-07T09:10:00.000Z", "role": "assistant", "text": "Noted: Postgres on 5432, the service on 3000."}
+{"id": "u04", "timestamp": "2026-05-08T09:12:00.000Z", "role": "user", "text": "Let's use port 5433 instead of 5432."}
+{"id": "a04", "timestamp": "2026-05-08T09:13:00.000Z", "role": "assistant", "text": "I will switch the config to 5433."}
+{"id": "u05", "timestamp": "2026-05-09T09:15:00.000Z", "role": "user", "text": "Actually, scrap that, the port is 8080."}
+{"id": "a05", "timestamp": "2026-05-09T09:16:00.000Z", "role": "assistant", "text": "OK."}
+{"id": "u06", "timestamp": "2026-05-10T09:18:00.000Z", "role": "user", "text": "We will deploy build 42 on Friday."}
+{"id": "a06", "timestamp": "2026-05-10T09:19:00.000Z", "role": "assistant", "text": "Build 42 is scheduled for Friday at 10:00 UTC."}
+{"id": "u07", "timestamp": "2026-05-11T09:21:00.000Z", "role": "user", "text": "Actually, scrap that, deploy build 43 on Friday."}
+{"id": "a07", "timestamp": "2026-05-11T09:22:00.000Z", "role": "assistant", "text": "Build 43 it is."}
+{"id": "u08", "timestamp": "2026-05-12T09:24:00.000Z", "role": "user", "text": "The offsite budget is 5000 USD."}
+{"id": "a08", "timestamp": "2026-05-12T09:25:00.000Z", "role": "assistant", "text": "With 5000 USD you can cover 12 people for two days in Lisbon."}
+{"id": "u09", "timestamp": "2026-05-13T09:27:00.000Z", "role": "user", "text": "Correction: the offsite budget is 6000 USD."}
+{"id": "a09", "timestamp": "2026-05-13T09:28:00.000Z", "role": "assistant", "text": "Updated: 6000 USD covers 14 people."}
+{"id": "u10", "timestamp": "2026-05-14T09:30:00.000Z", "role": "user", "text": "If we move to Postgres, we will need 3 replicas."}
+{"id": "a10", "timestamp": "2026-05-14T09:31:00.000Z", "role": "assistant", "text": "Three replicas at 2 vCPU each cost about 180 EUR a month."}
+{"id": "u11", "timestamp": "2026-05-15T09:33:00.000Z", "role": "user", "text": "Suppose the budget is 6000 USD. What if we shard by tenant into 4 shards."}
+{"id": "a11", "timestamp": "2026-05-15T09:34:00.000Z", "role": "assistant", "text": "Sharding into 4 shards doubles the write capacity."}
+{"id": "u12", "timestamp": "2026-05-16T09:36:00.000Z", "role": "user", "text": "Will we migrate to Postgres in 2 weeks?"}
+{"id": "a12", "timestamp": "2026-05-16T09:37:00.000Z", "role": "assistant", "text": "Only if the load test on May 20 passes."}
+{"id": "u13", "timestamp": "2026-05-17T09:39:00.000Z", "role": "user", "text": "The outage started yesterday at 14:00. We fly out next week to Lisbon. Yesterday Ana booked it for tomorrow at 9."}
+{"id": "a13", "timestamp": "2026-05-17T09:40:00.000Z", "role": "assistant", "text": "I'll put the Lisbon flight in the calendar for next Monday."}
+{"id": "u14", "timestamp": "2026-05-18T09:42:00.000Z", "role": "user", "text": "The demo with Acme is in 3 days. We will ship the demo in 3 days."}
+{"id": "a14", "timestamp": "2026-05-18T09:43:00.000Z", "role": "assistant", "text": "The Acme demo is on the board."}
+{"id": "u15", "timestamp": "2026-05-19T09:45:00.000Z", "role": "user", "text": "I really like basil and mint in my cooking. I've been using basil lately."}
+{"id": "a15", "timestamp": "2026-05-19T09:46:00.000Z", "role": "assistant", "text": "Basil and mint go well with lemon."}
+{"id": "u16", "timestamp": "2026-05-20T09:48:00.000Z", "role": "user", "text": "I prefer tabs over spaces. Please use gofmt on every Go file. Never push to main directly."}
+{"id": "a16", "timestamp": "2026-05-20T09:49:00.000Z", "role": "assistant", "text": "Got it: tabs, gofmt and pull requests only."}
+{"id": "u17", "timestamp": "2026-05-21T09:51:00.000Z", "role": "user", "text": "ok thanks"}
+{"id": "a17", "timestamp": "2026-05-21T09:52:00.000Z", "role": "assistant", "text": "You're welcome."}
+{"id": "u18", "timestamp": "2026-05-22T09:54:00.000Z", "role": "user", "text": "We migrated the orders table to Postgres. The connection pool size is 8."}
+{"id": "a18", "timestamp": "2026-05-22T09:55:00.000Z", "role": "assistant", "text": "- pool: 8 connections\n- replicas: 3\n- if we add PgBouncer, 200 clients\n\n```\nmax_connections = 100\n```"}
+{"id": "u19", "timestamp": "2026-05-23T09:57:00.000Z", "role": "user", "text": "The connection pool size is 12, not 8. The connection pool does not run on Redis."}
+{"id": "a19", "timestamp": "2026-05-23T09:58:00.000Z", "role": "assistant", "text": "So the pool is 12 and Redis is out of the picture."}
+{"id": "u20", "timestamp": "2026-05-04T10:00:00.000Z", "role": "user", "text": "Forget the Postgres migration."}
+{"id": "a20", "timestamp": "2026-05-04T10:01:00.000Z", "role": "assistant", "text": "Noted."}
+{"id": "u21", "timestamp": "2026-05-05T10:03:00.000Z", "role": "user", "text": "Not doing the trail race after all. No rollback after all, build 42 passed."}
+{"id": "a21", "timestamp": "2026-05-05T10:04:00.000Z", "role": "assistant", "text": "Good news on build 42."}
+{"id": "u22", "timestamp": "2026-05-06T10:06:00.000Z", "role": "user", "text": "My favorite editor is Helix. I usually start work at 8."}
+{"id": "a22", "timestamp": "2026-05-06T10:07:00.000Z", "role": "assistant", "text": "Helix with the gopls server is a good fit."}
+{"id": "u23", "timestamp": "2026-05-07T10:09:00.000Z", "role": "user", "text": "<system-reminder>The user opened main.go</system-reminder>What does the \"Lisbon\" note say?"}
+{"id": "a23", "timestamp": "2026-05-07T10:10:00.000Z", "role": "assistant", "text": "It says the flight is next Monday."}
+{"id": "u24", "timestamp": "2026-05-08T10:12:00.000Z", "role": "user", "text": "Last Friday we shipped 2.4.1 and the day before yesterday we rolled back 2.4.0."}
+{"id": "a24", "timestamp": "2026-05-08T10:13:00.000Z", "role": "assistant", "text": "Both releases are in the changelog."}

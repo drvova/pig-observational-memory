@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Generic transcript line",
+  "description": "One line of the engine's interchange transcript format (format \"generic\", docs/universal.md \"Any other harness\"): what an adapter writes for a harness om has no reader for, and what om itself records under <root>/transcripts/<harness>/<session>.jsonl for a harness whose hook payload carries the turn (HookSpec.Record). A line without an id gets \"g\" and its line number; a line that is already a Pi message entry (type \"message\") is read as is, and a line of any other role is skipped. Source: memory/transcript/generic.go (Generic), memory/cli/hook.go (recordTurn).",
+  "anyOf": [
+    {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": { "type": { "const": "message" }, "id": { "type": "string" }, "message": { "type": "object" } }
+    },
+    {
+      "type": "object",
+      "required": ["role"],
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "description": "RFC 3339; recordTurn stamps the time it recorded the line when the payload had none.", "type": "string" },
+        "role": { "enum": ["user", "assistant", "tool"] },
+        "text": { "type": "string" },
+        "tools": {
+          "description": "An assistant line's tool calls.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "arguments": {} }
+          }
+        },
+        "toolCallId": { "description": "A tool line's call id.", "type": "string" },
+        "toolName": { "type": "string" },
+        "isError": { "type": "boolean" }
+      }
+    }
+  ]
+}

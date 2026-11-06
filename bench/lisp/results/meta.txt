@@ -1,0 +1,5 @@
+sbcl: SBCL 2.2.9.debian
+go: go version go1.26.0 linux/amd64
+kernel: Linux 6.18.44-fc-v236 x86_64, cpus: 4
+loadavg at start: 1.36 1.96 2.00 3/126 4838
+loadavg at end: 2.68 2.20 2.04 1/137 10551

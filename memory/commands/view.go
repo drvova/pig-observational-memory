@@ -149,9 +149,20 @@ func RunView(rt *runtime.Runtime, h host.Host, args string, copyText CopyFunc) e
 		}
 	}
 	output, usage := ViewOutput(entries, mode)
-	if usage {
+	ShowView(rt, h, output, usage, copyText)
+	return nil
+}
+
+// ShowView shows /om:view's output as RunView does: a notice (the nothing-visible note or the
+// usage line) as it is, else the output copied to the clipboard when one is available, with the
+// clipboard's notice. The engine image's view answer (OM_ENGINE=lisp) is shown through it.
+func ShowView(rt *runtime.Runtime, h host.Host, output string, notice bool, copyText CopyFunc) {
+	if notice {
 		h.Notify(output, "info")
-		return nil
+		return
+	}
+	if copyText == nil {
+		copyText = DefaultCopy
 	}
 	outcome := clipboard.Failed
 	func() {
@@ -168,5 +179,4 @@ func RunView(rt *runtime.Runtime, h host.Host, args string, copyText CopyFunc) e
 	default:
 		h.Notify(output+"\n\n"+viewCopyFailed, "info")
 	}
-	return nil
 }

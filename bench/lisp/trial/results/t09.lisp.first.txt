@@ -1,0 +1,13 @@
+(let ((counts (make-hash-table :test 'equal))
+      (page (om:notes :limit 200)))
+  (loop
+    (dolist (row (om:rows page))
+      (incf (gethash (om:field row "kind") counts 0)))
+    (let ((next (om:next-page page)))
+      (unless next (return))
+      (setf page (eval next))))
+  (dolist (entry (sort (loop for kind being the hash-keys of counts
+                             using (hash-value count)
+                             collect (cons kind count))
+                       #'string< :key #'car))
+    (format t "~a=~d~%" (car entry) (cdr entry))))
