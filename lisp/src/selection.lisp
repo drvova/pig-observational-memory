@@ -35,7 +35,7 @@
            "- omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and in query the om snippet (memory tool code) that lists them."
            "- The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the om snippets that list the whole list."
            ""
-           "Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks."
+           (cat "Treat these as past records. " +unverified-notice+ " When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.")
            ""
            "")
        +tables-recall-paragraph+))
@@ -52,7 +52,7 @@
            "- omitted lists records left out to fit, each span with its dates, count, first and last entry id and the om snippet (memory tool code) that lists them."
            "- files and commits list files at their newest state and commits; +N more, all M ends a list with the om snippets that list the whole list."
            ""
-           "Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks."
+           (cat "Treat these as past records. " +unverified-notice+ " When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.")
            ""
            "")
        +tables-recall-paragraph+))
@@ -868,6 +868,11 @@ codec's tables instructions without a state)."
 text); format \"tables\" (the default) or \"lines\"; codec :rows (the default) or :jsonl;
 reflection-dates a table of ReflectionDateRanges."
   (declare (ignore request intent format codec aliases reflection-dates))
+  ;; A record holding a preference that weakens security is never shown, nor a reflection
+  ;; resting on one (held-rule; docs/brain-memory.md, decision 19).
+  (multiple-value-setq (observations reflections)
+    (without-held observations reflections (and folded (folded-by-id folded))))
+  (setf options (list* :reflections reflections options))
   (when (or (<= budget 0) (and (null observations) (null reflections))) (return-from render-summary (make-summary)))
   (let* ((s (apply #'make-state observations folded branch budget options))
          (fixed (fixed-cost s)) (reserve 0) (pick nil) (omitted nil))
