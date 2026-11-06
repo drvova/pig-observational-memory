@@ -36,6 +36,8 @@
                              (:file "extract")
                              ;; Level 0's reading of tool output (memory/extract/output.go).
                              (:file "output")
+                             ;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0.
+                             (:file "conversation")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")

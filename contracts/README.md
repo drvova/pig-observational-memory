@@ -68,6 +68,14 @@ and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secret
 authority, hedge, time hint, keys, frame, writer), the hedge lexicon and the project identity;
 `encoding.jsonl` holds the cases both engines check.
 
+## Level-0 conversation cases
+
+`conversation.jsonl` holds level 0's records for short branches that state rules, scope exclusions,
+decisions and read repository files (`docs/memory-v2.md`, level 0): each line is a branch's entries,
+its working directory and the records Go writes, which every engine must write byte for byte
+(`lisp/tests/conversation.lisp`). Rewrite it with `cd memory && go test ./extract -run ConversationCases
+-args -write` after a change to those rules.
+
 ## Preferences that weaken security
 
 [insecure.md](insecure.md) specifies the fixed pattern list that holds security-weakening

@@ -24,7 +24,7 @@
 (defparameter +reason-self+ "supersedes itself")
 (defparameter +reason-no-support+ "cites no record whose specifics it carries")
 (defparameter +reason-malformed+ "is not an object")
-(defparameter +reason-code-kind+ "merges an attempt, file, commit or note record, whose fields code keeps")
+(defparameter +reason-code-kind+ "merges an attempt, file, commit, note, decision or convention record, whose fields code keeps")
 (defparameter +reason-merge-statuses+ "merges records with different statuses (proposed, hypothetical, retracted or stated as fact)")
 (defparameter +reason-not-link+ "names a pair the input did not list as a possible update")
 (defparameter +reason-verdict+ "has no verdict: confirm or reject")
@@ -86,6 +86,11 @@ curated memories listed, the branch, and the offer (nil refuses every definition
 (defun drops-specifics-p (source replacement)
   "dropsSpecifics: replacement does not give a specific of source as a whole item."
   (and (added-specifics source (list replacement)) t))
+
+(defun drops-record-p (o replacement)
+  "dropsRecord: dropsSpecifics, or a rule, correction or decision whose key replacement misses."
+  (or (drops-specifics-p (obs-content o) replacement)
+      (and (keeps-keys-p o) (missing-keys (obs-content o) replacement) t)))
 
 (defun drops-specifics-besides-update-p (earlier later)
   (let ((updated (updated-specifics later earlier)))
@@ -170,7 +175,7 @@ curated memories listed, the branch, and the offer (nil refuses every definition
               ((and (string/= (obs-scope record) "") (string/= (obs-scope target) "") (string/= (obs-scope record) (obs-scope target)))
                (return (values nil +reason-cross-scope+)))
               ((not (may-supersede-obs-p record target)) (return (values nil +reason-status-replace+)))
-              ((drops-specifics-p (obs-content target) (obs-content record)) (return (values nil +reason-drops-specifics+)))
+              ((drops-record-p target (obs-content record)) (return (values nil +reason-drops-specifics+)))
               ((v-reaches v tg sources) (return (values nil +reason-cycle+))))))))
 
 (defun origin-rank (origin)
@@ -271,7 +276,7 @@ and stands for the user only when every source does."
     (let ((content (one-line-of (jget item "content"))))
       (when (string= content "") (return-from v-merge (refuse v "merge" index +reason-empty+)))
       (dolist (o sources)
-        (when (drops-specifics-p (obs-content o) content) (return-from v-merge (refuse v "merge" index +reason-drops-specifics+))))
+        (when (drops-record-p o content) (return-from v-merge (refuse v "merge" index +reason-drops-specifics+))))
       (let ((record (make-obs :content content :timestamp (newest-timestamp sources) :relevance (highest-relevance sources)
                               :kind (common-field sources #'obs-kind) :subject (common-field sources #'obs-subject)
                               :scope (common-scope sources) :origin "model" :status (obs-status (first sources))
@@ -375,7 +380,7 @@ and stands for the user only when every source does."
     (flet ((support (id known)
              (let* ((resolved (v-resolve v id)) (cited (v-record v resolved)))
                (unless (or (and (null cited) known)
-                           (and cited (drops-specifics-p (obs-content cited) content))
+                           (and cited (drops-record-p cited content))
                            (member-str resolved supporting))
                  (push-end resolved supporting)))))
       (dolist (id (unique-strings (jget item "supportingIds")))
@@ -512,14 +517,14 @@ call it)."
       (multiple-value-bind (replacement ok) (gethash (obs-id o) (vresult-replaced result))
         (when ok
           (let ((r (gethash replacement by-id)))
-            (if (or (null r) (string= replacement (obs-id o)) (drops-specifics-p (obs-content o) (obs-content r)))
+            (if (or (null r) (string= replacement (obs-id o)) (drops-record-p o (obs-content r)))
                 (incf kept)
                 (unless (member-str (obs-id o) drop) (push-end (obs-id o) drop)))))))
     (dolist (r (vresult-reflections result))
       (let ((supporting '()))
         (dolist (id (refl-supporting r))
           (let ((o (gethash id by-id)))
-            (if (and o (drops-specifics-p (obs-content o) (refl-content r)))
+            (if (and o (drops-record-p o (refl-content r)))
                 (incf kept)
                 (push-end id supporting))))
         (when supporting

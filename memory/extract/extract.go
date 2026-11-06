@@ -144,6 +144,8 @@ type extraction struct {
 	// in this extraction in first-seen order.
 	values     map[string]*valueState
 	valueOrder []string
+	// conventions are the active convention records by file path (toolResult).
+	conventions map[string][]convention
 	// subjects are the ledger's subjects, which name a record's subject (ledger.SubjectInText).
 	subjects []string
 	// knownGiven are the specifics the ledger's active records already give; known their
@@ -159,23 +161,24 @@ type extraction struct {
 // Extract reads the source entries of in.Entries[in.Start:in.End] and returns the records
 // level 0 picks from them (docs/memory-v2.md, "Level 0: code only"): conversation facts, the
 // model's own words on its tool calls, memory tool notes, attempts, files at their newest
-// state and commits. It is a pure function of its input: the same branch and ledger always
-// give the same records with the same ids, and a record the ledger already holds is not
-// returned again.
+// state, commits and the repository conventions the files the session read set. It is a pure
+// function of its input: the same branch and ledger always give the same records with the same
+// ids, and a record the ledger already holds is not returned again.
 func Extract(in Input) Result {
 	in.Start = max(in.Start, 0)
 	in.End = min(in.End, len(in.Entries))
 	x := &extraction{
-		in:         in,
-		superseded: map[string]bool{},
-		unresolved: map[string][]string{},
-		words:      map[string]string{},
-		files:      map[string][]string{},
-		fileEvents: map[string]fileEvent{},
-		notes:      map[string][]string{},
-		values:     map[string]*valueState{},
-		known:      map[string]bool{},
-		exchange:   -1,
+		in:          in,
+		superseded:  map[string]bool{},
+		unresolved:  map[string][]string{},
+		words:       map[string]string{},
+		files:       map[string][]string{},
+		fileEvents:  map[string]fileEvent{},
+		notes:       map[string][]string{},
+		conventions: map[string][]convention{},
+		values:      map[string]*valueState{},
+		known:       map[string]bool{},
+		exchange:    -1,
 	}
 	x.loadLedger()
 	last := -1
@@ -196,6 +199,8 @@ func Extract(in Input) Result {
 			x.assistant(i)
 		case "bashExecution":
 			x.bashExecution(i)
+		case "toolResult":
+			x.toolResult(i)
 		}
 	}
 	// The touched paths are cited inside the compaction's cut range even when every entry of it
@@ -257,6 +262,8 @@ func (x *extraction) loadLedger() {
 			x.files[o.Target] = append(x.files[o.Target], o.ID)
 		case ledger.KindNote:
 			x.notes[o.Target] = append(x.notes[o.Target], o.ID)
+		case ledger.KindConvention:
+			x.conventions[o.Target] = append(x.conventions[o.Target], convention{o.ID, o.Content})
 		}
 	}
 	x.loadValues(active)
@@ -337,6 +344,7 @@ func (x *extraction) merge() {
 				}
 			}
 			prev.anchor = max(prev.anchor, r.anchor)
+			prev.obs.Keys.Union(r.obs.Keys)
 			// The joined text has one event date when its parts name at most one between them
 			// (ledger.EventDate): a part naming none adds no date, two different dates leave none.
 			switch {

@@ -33,7 +33,7 @@ func scenarioRun(t *testing.T, n int, lead ...Turn) Run {
 
 // tightWindow caps the summary (the compactionSummaryMaxTokens setting), so the ledger is
 // several times the summary within a few compactions.
-var tightWindow = Window{Context: 12_000, Reserve: 2_000, Overhead: 1_500, MaxOutput: 4_000, SummaryMaxTokens: 700}
+var tightWindow = Window{Context: 12_000, Reserve: 2_000, Overhead: 1_500, MaxOutput: 4_000, SummaryMaxTokens: 760}
 
 // shownOf reads the summary's omitted notice: how many records it shows of how many.
 var shownOf = regexp.MustCompile(`Shown here: (\d+) of (\d+) records`)
@@ -156,16 +156,40 @@ func TestScenario02ConstraintInEveryRuleClass(t *testing.T) {
 }
 
 // Scenario 2, the scope exclusion: "don't touch migrations/" at turn 1 is in every summary's
-// rule class through 4 compactions. Level 0 has no rule verb for "don't touch" today: the
-// sentence carries no specific and no preference wording, so it is not recorded at all.
+// rule class through 4 compactions. Level 0 reads it as a standing rule from the user's turn
+// (extract.isRule), and its key keeps it whole through level 1 (ledger.RecordKeys).
 func TestScenario02ScopeExclusionInEveryRuleClass(t *testing.T) {
-	later(t, "phase 2: missing rule verbs (\"don't touch\", scope exclusions) in level 0")
 	run := scenarioRunIn(t, tightWindow, 4, say("Set up the workspace."), say("Don't touch `migrations/`."))
 	for _, s := range run.Snapshots {
 		rows := rowsFrom(s.Summary, 1)
 		if len(rows) == 0 || rows[0].Cells["kind"] != "preference" || !strings.Contains(rows[0].Text, "`migrations/`") {
 			t.Fatalf("compaction %d: rule rows %+v\n%s", s.N, rows, s.Summary)
 		}
+	}
+}
+
+// The decision probe: "we decided to use X over Y because Z" at turn 1 is recorded as a
+// decision, verbatim with its reason and the rejected alternative, and is never lost through 4
+// compactions: shown, or listed by a snippet the summary prints.
+func TestDecisionWithReasonRecorded(t *testing.T) {
+	decision := "We decided to use sqlc over gorm because the queries need compile-time checks."
+	run := scenarioRunIn(t, tightWindow, 4, say("Set up the data layer."), say(decision))
+	res := Evaluate(run, []Probe{{Name: "decision", Class: ClassDecision, Turn: 1, Needles: []string{"sqlc", "gorm", "the queries need compile-time checks"}}}, lister)
+	if len(res.Cells) != 4 || len(res.SnippetErrors) > 0 {
+		t.Fatalf("cells %+v, snippet errors %v", res.Cells, res.SnippetErrors)
+	}
+	for _, c := range res.Cells {
+		if c.Outcome == Lost {
+			t.Fatalf("lost after %d compactions", c.N)
+		}
+	}
+	last := run.Snapshots[len(run.Snapshots)-1]
+	found := false
+	for _, o := range ledger.FoldLedger(last.Branch, "").ActiveObservations {
+		found = found || o.Kind == ledger.KindDecision && o.Content == decision && o.Origin == ledger.OriginCode
+	}
+	if !found {
+		t.Fatalf("no decision record stands for %q", decision)
 	}
 }
 

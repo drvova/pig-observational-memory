@@ -54,7 +54,7 @@ func enumOf[T ~string](values []T, description string) map[string]any {
 // labelProperties are the fields a record and a merge both set.
 func labelProperties() map[string]any {
 	return map[string]any{
-		"kind":       enumOf(ledger.ObservationKindValues, "What the record is. Ignored for attempt, file, commit and note records, whose kind code set, and for user corrections and preferences."),
+		"kind":       enumOf(ledger.ObservationKindValues, "What the record is. Ignored for attempt, file, commit, note, decision and convention records, whose kind code set, and for user corrections and preferences."),
 		"relevance":  enumOf(ledger.RelevanceValues, "How long the record matters."),
 		"subject":    map[string]any{"type": "string", "description": "Short lowercase noun phrase; a path a/b/c nests it under a broader subject. Reuse listed subjects."},
 		"scope":      map[string]any{"type": "string", "description": "The qualifier that tells two figures apart; records with different scopes never replace each other."},
@@ -73,7 +73,7 @@ func ToolFor(offer *DefinitionOffer) agents.Tool {
 	record["id"] = map[string]any{"type": "string", "description": "The candidate's id."}
 	record["outcome"] = enumOf([]string{ledger.OutcomeFailed, ledger.OutcomeWorked, ledger.OutcomeOpen}, "An attempt record's outcome.")
 	merge := labelProperties()
-	merge["ids"] = stringArray("The ids of the two or more records the merged line replaces: never attempt, file, commit or note records, nor records with different scopes.")
+	merge["ids"] = stringArray("The ids of the two or more records the merged line replaces: never attempt, file, commit, note, decision or convention records, nor records with different scopes.")
 	merge["content"] = map[string]any{"type": "string", "description": "One line carrying every specific of the merged records."}
 	tool := agents.Tool{
 		Name:        ToolName,

@@ -35,7 +35,7 @@ func level1Branch() []ledger.Entry {
 	return []ledger.Entry{
 		// Long enough that the summary budget (never more than the range removes) holds records.
 		userMessage("u1", "Deploy the api to staging on port 8080"+strings.Repeat(", running the usual checks", 60)),
-		assistantMessage("a1", "Deployed with the Makefile target"+strings.Repeat(", after the usual checks", 55)),
+		assistantMessage("a1", "Deployed with the Makefile target"+strings.Repeat(", after the usual checks", 65)),
 		testfix.ObservationsRecordedEntry("om-1", []ledger.Observation{port, makefile}, "a1"),
 		userMessage("u2", "Next please"),
 	}

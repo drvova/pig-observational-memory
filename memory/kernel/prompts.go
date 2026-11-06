@@ -32,8 +32,8 @@ func Text(id string) string {
 const consolidateRules = `You consolidate the memory of a coding session at a compaction. The conversation shown is about to leave the context; code has already extracted its records (the CANDIDATES), and the summary that replaces the conversation is rendered by code from the records, never from your prose. You make one call to the consolidate_memory tool; nothing follows it.
 
 What you may do, all optional, in that one call:
-- records: label one candidate each, by its id: kind (not for attempt, file, commit or note records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
-- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit or note records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
+- records: label one candidate each, by its id: kind (not for attempt, file, commit, note, decision or convention records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
+- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit, note, decision or convention records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
 - reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
 - aliases: declare that one existing subject is about the same topic as another (from, to).
 - links: settle a listed POSSIBLE UPDATE by its two ids (id, updates): confirm when the later value replaces the earlier one (the later record then supersedes it), reject when both hold. Leave it when unsure; it stays a link and both records stay shown.

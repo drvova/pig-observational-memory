@@ -214,8 +214,10 @@ func correctionOf(sentence string) (target correctionTarget, ok bool) {
 	return correctionTarget{}, false
 }
 
-// user reads a user message: a correction, a preference, a statement carrying specifics, or a
-// first-person statement about the user (isSelfStatement, a fact), one record per sentence, with relative dates annotated and the subject named from the
+// user reads a user message: a correction, a preference or standing rule (isPreference,
+// isRule), a decision (isDecision), a statement carrying specifics, or a first-person statement
+// about the user (isSelfStatement, a fact), one record per sentence, with relative dates
+// annotated and the subject named from the
 // ledger. Harness markup, questions-as-preferences, bare acknowledgements and echoes of
 // records already held are not records. The message opens a new exchange.
 func (x *extraction) user(i int) {
@@ -252,14 +254,20 @@ func (x *extraction) user(i int) {
 		case retraction:
 			// A retraction stands only once it names what it withdraws (resolveRetractions).
 			kind, status = "correction", ledger.StatusRetracted
-		case isPreference(sentence):
+		case isPreference(sentence), isRule(sentence):
 			kind = "preference"
+		case isDecision(sentence):
+			kind, status = ledger.KindDecision, statusOf(sentence)
 		case ledger.HasSpecifics(sentence), isSelfStatement(sentence):
 			kind, status = "fact", statusOf(sentence)
 		default:
 			continue
 		}
-		r := x.add(x.conversationRecord(sentence, kind, status, anchor, hasAnchor), i)
+		obs := x.conversationRecord(sentence, kind, status, anchor, hasAnchor)
+		if kind == "preference" || kind == ledger.KindDecision {
+			userRule(&obs)
+		}
+		r := x.add(obs, i)
 		if correction {
 			r.correction = &target
 		}
@@ -304,7 +312,9 @@ func (x *extraction) reply(i int, text string) {
 				given = append(given, ledger.NewGiven([]string{r.obs.Content}))
 			}
 		}
-		if len(ledger.Added(statement, given...)) == 0 {
+		// A decision stated with its reason is kept though it gives no new specific, unless the
+		// exchange already holds one (the user's, which the reply restates).
+		if len(ledger.Added(statement, given...)) == 0 && !(isAssistantDecision(statement) && !x.exchangeHasDecision()) {
 			return
 		}
 		x.add(x.conversationRecord(statement, "assistant", statusOf(statement), anchor, hasAnchor), i)
@@ -326,6 +336,16 @@ func (x *extraction) reply(i int, text string) {
 			keep(sentence)
 		}
 	}
+}
+
+// exchangeHasDecision reports a decision record of the current exchange.
+func (x *extraction) exchangeHasDecision() bool {
+	for _, r := range x.records {
+		if r.exchange == x.exchange && r.obs.Kind == ledger.KindDecision {
+			return true
+		}
+	}
+	return false
 }
 
 // listRuns are a list's items cut into runs of consecutive items with one status (statusOf)
@@ -356,7 +376,7 @@ func listRuns(items []string, anchor time.Time, hasAnchor bool) [][]string {
 // code record's.
 func conversational(kind ledger.ObservationKind) bool {
 	switch kind {
-	case "fact", "preference", "correction", "assistant", "event", "plan", "":
+	case "fact", "preference", "correction", "assistant", "event", "plan", "", ledger.KindDecision:
 		return true
 	}
 	return false

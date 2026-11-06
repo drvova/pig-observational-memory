@@ -133,6 +133,54 @@ repeated compactions, which rendering from records avoids.
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is
   reused by code for every later line.
+- **Standing rules and scope exclusions** (`memory/extract/rules.go`, from the user's own turns
+  only), recorded verbatim as `preference`, so they take selection's class 2 like any user rule:
+  always/never with the rule verbs the preference list lacks (touch, edit, modify, change, import,
+  install, bump, upgrade, delete, rename, commit, push, deploy, run); scope exclusions ("don't/do
+  not/never touch|edit|modify|change X", "leave X alone", "only modify X", "stay out of X"), counted
+  only when X is more than a pronoun or the sentence quotes a key; substitutions ("use X instead of
+  Y", "use X, not Y", "prefer X over Y"); standing instructions ("from now on", "always/never … from
+  now"); process rules ("before you commit/push/merge", "after each change … run", "make sure to …
+  before"); and team forms ("we always/never/use/prefer", "our convention is"). A question, a rule
+  posed under the speaker's own condition ("if we", "if I", "suppose", "what if"; "if you change
+  the schema, run …" is a rule addressed to the agent and counts) and a retraction are not rules,
+  and a later retraction never withdraws one (`ledger.MaySupersede`); only a correction replaces it.
+  Assistant text never makes a rule. A rule, preference or decision from the user's turn is set
+  `source: user-said` and `authority: user` by its extractor, with its keys (`ledger.RecordKeys`)
+  in `keys.paths` (a key with a slash or a file name) or `keys.commands` (any other); consecutive
+  rules that merge hold both keys. No rule sets `scope`: level 0 widens no scope yet
+  (`contracts/encoding.md`), so a scope exclusion's path stays in its keys. A sentence naming a phrase with specifics ("use ruff, not
+  flake8") stays the correction it reads as.
+- **Keys.** A rule's or a decision's keys (`ledger.RecordKeys`) are the code spans it quotes and the
+  bare paths it names: "Don't touch `migrations/`" carries no specific but has the key
+  `migrations/`. Level 1 never lets a merge, a supersede or a reflection stand for a user rule, a
+  user correction or a decision unless its text holds every key byte for byte
+  (`consolidate.dropsRecord`), so the path, tool or command a rule is about is never summarized
+  away.
+- **Decisions** (kind `decision`, a code kind level 1 never merges or relabels): a user sentence in
+  fixed decision wording ("let's go with X", "we're going with X", "we'll use X because Y",
+  "decided to/on/against X", "chose/opted for/settled on X", "rejected Y because Z"), verbatim with
+  its chosen option, reason and rejected alternative when stated; not a question, a condition or a
+  decision not taken ("haven't decided"). Its status is read as for any statement, so "let's go
+  with X" is `proposed` and a retraction can withdraw it; a decision stated as fact is replaced
+  only by a correction. An assistant sentence in the same wording with a stated reason ("because",
+  "since", "so that") is kept as its own `assistant` record even when it gives no new specific,
+  unless the exchange already holds the user's decision; it never takes the user's kind. Tool
+  output never makes a decision.
+- **Repository conventions** (kind `convention`, `memory/extract/convention.go`): from a read
+  tool's successful result only (never the disk, never a shell `cat`): a lockfile's package
+  manager (package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, Cargo.lock, go.sum, poetry.lock,
+  uv.lock, Pipfile.lock, Gemfile.lock, composer.lock), a formatter or linter config (.prettierrc*,
+  prettier.config.*, .eslintrc*, eslint.config.*, ruff.toml, rustfmt.toml, .golangci.*, gofmt
+  implied by go.mod, pyproject.toml's `[tool.ruff]`/`[tool.black]`), the indentation and line
+  settings of an .editorconfig, a GitHub workflow's `run:` lines (block scalars line by line) and a
+  Makefile's targets. The record is an observation of the file, never an instruction: "CI runs
+  `go test ./...` (repo file `.github/workflows/ci.yml`, sha256 <12 hex>)", with the path as its
+  target, the read tool as its tool and the SHA-256 prefix of what was read. A later read with the
+  same content adds nothing; one with other content supersedes it. Its encoding fields
+  (`contracts/encoding.md`) are `source: tool-observed` (a read tool showed it) and
+  `authority: repo-file`, with the file in `keys.config` and a workflow's run lines in
+  `keys.commands`.
 - **Event dates** (after past.dev's temporal anchors and `occurredAt`). A record whose text
   `ledger.ResolveRelativeDates` resolves to one absolute date ("yesterday", "on Friday", a deadline
   "by the 31st") carries it as `event_date`, a field separate from the entry time it was said at;
@@ -455,7 +503,7 @@ evidence sat wholly in the retained tail scored 57% while every other type score
   - a merge's source ids are set by code to the union of its candidates' ids;
   - a merge or supersede whose text drops a specific of its sources (`ledger.Specifics`, compared as
     whole items with `ledger.AddedSpecifics`, so `30` is not carried by `300`) is refused and the
-    sources stay; records whose fields code keeps (attempt, file, commit, note) and records with
+    sources stay; records whose fields code keeps (attempt, file, commit, note, decision, convention) and records with
     different scopes are never merged;
   - a reflection cites only records whose specifics it carries, checked against the record that
     stands for each id when it renders (a merge or label replacing it);
