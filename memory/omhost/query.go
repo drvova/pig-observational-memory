@@ -734,7 +734,8 @@ func (c *Call) history(ctx context.Context, o omwire.Options, n int) (any, error
 
 // saved answers Saved: the curated memories visible from this project ranked as the index ranks
 // them, a staged one only in the sessions that staged it and none whose forget this session
-// staged (curated.Store.ListAs), then the files the validator refused
+// staged (curated.Store.ListAs) and no held one this session did not release
+// (curated.Store.Shown), then the files the validator refused
 // with their reason.
 func (c *Call) saved(ctx context.Context, o omwire.Options, n int) (any, error) {
 	if c.Curated == nil {
@@ -745,6 +746,9 @@ func (c *Call) saved(ctx context.Context, o omwire.Options, n int) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	// A memory that weakens security is held (curated.HeldRule): listed only in a session whose
+	// user's words released it.
+	memories = store.Shown(memories, c.Curated.Source)
 	usage := store.RankUsage()
 	rows := Rows{Fields: []string{"name", "type", "scope", "updated", "description", "body", "state", "reason"}, Rows: [][]string{}, From: []string{}, To: []string{}}
 	var values []om.Memory

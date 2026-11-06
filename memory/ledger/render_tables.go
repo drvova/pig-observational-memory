@@ -41,6 +41,11 @@ func TablesSummaryBody(summary string) (string, bool) {
 	return strings.TrimSpace(body), true
 }
 
+// UnverifiedNotice frames remembered items wherever memory is shown to the model: the summary's
+// instructions, the curated-memory index's header and the memory tool's guidelines, once each
+// (docs/brain-memory.md, decision 18). It never asks for a re-check of what memory says.
+const UnverifiedNotice = "Remembered items are user-reported or extracted context, unverified against the current repository and conversation; existing code and the user's current words take precedence."
+
 // OmittedNoticeStart opens the line a memory v2 summary prints between its instructions and its
 // tables when it leaves records out (selection's omitted notice); TablesSummaryBody skips that
 // line. Once printed into a summary it is frozen.

@@ -72,6 +72,9 @@
 ;; The secret scanner and role-label escaping (contracts/secrets.md).
 (load (merge-pathnames "tests/secrets.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Preferences that weaken security and the unverified framing (contracts/insecure.md).
+(load (merge-pathnames "tests/insecure.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

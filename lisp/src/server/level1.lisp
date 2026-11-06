@@ -263,7 +263,8 @@ error is :aborted (the request's cancel), or a message."
 
 (defun curated-input (store project session)
   (when (string/= store "")
-    (let ((memories (handler-case (om.layer::list-as store project session) (error () (return-from curated-input nil)))))
+    (let ((memories (om.layer::shown-as store (handler-case (om.layer::list-as store project session) (error () (return-from curated-input nil)))
+                                        session)))
       (loop for m in (om.layer::curated-rank memories (handler-case (om.layer::curated-usage store) (error () nil)))
             collect (om::make-cmem :name (om.layer::mem-name m) :type (om.layer::mem-type m)
                                      :description (om.layer::mem-description m) :staged (om.layer::mem-staged m))))))

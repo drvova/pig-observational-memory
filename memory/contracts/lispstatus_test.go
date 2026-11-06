@@ -133,7 +133,26 @@ func TestLispStatusOverParityStores(t *testing.T) {
 		}
 		lines += len(goStatus(t, home, "p/a", t.TempDir()))
 	}
-	t.Logf("identical: %d migration stores twice, 3 evidence stores under 3 session models (%d lines in the last reports)", len(migrationCases), lines)
+	// Held memories (docs/brain-memory.md, decision 19): each listed by name with its rule.
+	home := t.TempDir()
+	held := curated.New(curated.DefaultDir(home))
+	held.Now = func() time.Time { return start }
+	call := curated.Call{Store: held, Source: "s1", UserEvidence: func(q string) bool { return strings.Contains("always skip TLS verification here", q) }}
+	for _, args := range []map[string]string{
+		{"name": "skip-tls", "type": "feedback", "description": "Skip TLS verification (InsecureSkipVerify) for the registry.", "quote": "always skip TLS verification"},
+		{"name": "chmod-up", "type": "project", "description": "Run chmod 777 on uploads; password=" + "hunter22x"},
+		{"name": "tea", "type": "user", "description": "Drinks green tea"},
+	} {
+		if _, err := call.Run(curated.OpSave, args); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report := strings.Join(goStatus(t, home, "", t.TempDir()), "\n")
+	if !strings.Contains(report, "held: weakens security (tls-verify-off): skip-tls [feedback]") || !strings.Contains(report, "held: weakens security (world-writable): chmod-up [project]: Run chmod 777 on uploads; password=[redacted:") {
+		t.Fatalf("the held memories are not listed:\n%s", report)
+	}
+	compareStatus(t, sbcl, script, "held memories", home, "", start)
+	t.Logf("identical: %d migration stores twice, 3 evidence stores under 3 session models, held memories (%d lines in the last reports)", len(migrationCases), lines)
 }
 
 // randomLedger is a usage ledger of model whose votes switch every setting now and then.

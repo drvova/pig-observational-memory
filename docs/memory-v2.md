@@ -277,6 +277,14 @@ the side of a smaller summary.
 
 ### Selection
 
+A record holding a preference that weakens security (`ledger.HeldRule`: a preference or correction,
+or a merge of the user's own, matching `contracts/insecure.md`), and a reflection citing one, is
+held: never shown, never counted as left out, dropped by no rule, and listed in `/om:status`. The
+instructions frame what follows once as unverified (`ledger.UnverifiedNotice`, decision 18 of
+`docs/brain-memory.md`): remembered items are user-reported or extracted context, unverified
+against the current repository and conversation, and existing code and the user's current words
+take precedence. No instruction asks for a re-check.
+
 Records are taken in ordered classes, newest first within a class; a record that does not fit is
 skipped and selection continues:
 
@@ -557,6 +565,11 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
 - The store under PiG's config root is shared by every session (and by an earlier release still
   running v1 on it): a name another session staged is refused to a save, and a staged memory stays
   out of the index and `saved` until promoted.
+- A memory whose description or body matches the security-weakening pattern list
+  (`contracts/insecure.md`; `docs/brain-memory.md`, decision 19) is held: kept and listed in
+  `/om:status`, but out of the index, `saved` and the level-1 input, and never promoted, in every
+  session but one whose user's words restate it (a save or helped feedback whose user quote itself
+  matches the list appends a `released` usage line for that session, until the next edit).
 - Matching a correction to a memory: the correction's subject words, hyphen-joined, are a whole
   hyphen-separated run of the memory's name, or the reverse. The flag counts corrections made after
   the memory's last save or edit, so an edit clears it; a flagged memory ranks after every other,
@@ -762,8 +775,9 @@ model's whatever origin a label kept, the rest by origin (code, model, host summ
 workers for records without one); the harness evidence is the non-empty v2 compactions since the session model's last
 level-1 offer (`rules.V2UnitsSinceProposal`): v2 has no revision pass, so the offer stands for
 "the last revision", and it resets at every offer, one that defined nothing included, as
-`rules.ProposalDue`'s baseline does. `/om:view` stays read-only and leaves out the
-reflections level 1 replaced.
+`rules.ProposalDue`'s baseline does. Each held record, reflection and curated memory
+(`contracts/insecure.md`) gets a `held: weakens security (<rule>)` line with its anchor or name.
+`/om:view` stays read-only and leaves out the reflections level 1 replaced.
 
 ## Measuring it
 

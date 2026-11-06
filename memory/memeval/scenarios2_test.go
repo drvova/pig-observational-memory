@@ -8,6 +8,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
+	"github.com/drvova/pig-observational-memory/memory/ledger"
 )
 
 // planBranch is a plan, then turns, compacted once with filler after them.
@@ -74,10 +75,10 @@ func TestScenario24OpinionWithPushbackNotARule(t *testing.T) {
 	}
 }
 
-// Scenario 25: a preference that weakens security (skip TLS verification) is held, listed in
-// /om:status, and never in the curated index.
+// Scenario 25: a preference that weakens security (skip TLS verification) is held: kept and
+// listed in /om:status (curated.Store.Held, ledger.HeldRule), never in the curated index or a
+// summary row, and shown only in the session whose user's quoted words restate it.
 func TestScenario25InsecurePreferenceHeld(t *testing.T) {
-	later(t, "phase 1: holding security-weakening preferences")
 	store := curated.New(t.TempDir())
 	quote := "always skip TLS verification for the internal registry"
 	call := curated.Call{Store: store, Source: "session-a", UserEvidence: func(q string) bool { return strings.Contains(quote, q) }}
@@ -86,6 +87,41 @@ func TestScenario25InsecurePreferenceHeld(t *testing.T) {
 	}
 	if index, _ := curated.IndexFor(store, "", 2_000); strings.Contains(index, "skip-tls") {
 		t.Fatalf("an insecure preference is in the index:\n%s", index)
+	}
+	if index, _ := curated.IndexAs(store, "", "session-b", 2_000); strings.Contains(index, "skip-tls") {
+		t.Fatalf("an insecure preference is in another session's index:\n%s", index)
+	}
+	// The session whose user's words restate it sees it; it stays listed as held.
+	if index, _ := curated.IndexAs(store, "", "session-a", 2_000); !strings.Contains(index, "skip-tls") {
+		t.Fatalf("the session whose user said it does not see it:\n%s", index)
+	}
+	if held, _ := store.Held(""); len(held) != 1 || held[0].Name != "skip-tls" || held[0].Rule != "tls-verify-off" {
+		t.Fatalf("held %+v", held)
+	}
+
+	// Level 0: the preference is recorded, but no summary row holds it (the intent section may
+	// still quote the session's own request, the user's words in this session); the other
+	// preference is a row as before.
+	entries, cut := turnsBranch(say("Let's tidy the client."), say("Always use curl -k against the internal registry."), say("Always use `make test` for the tests."))
+	c, after := compactOnce(t, entries, cut)
+	kept := false
+	for _, r := range SummaryRows(c.Summary) {
+		if strings.Contains(r.Text, "curl -k") {
+			t.Fatalf("an insecure preference is a summary row (%s):\n%s", r.Table, c.Summary)
+		}
+		kept = kept || strings.Contains(r.Text, "make test") && r.Cells["kind"] == "preference"
+	}
+	if !kept {
+		t.Fatalf("the other preference is gone:\n%s", c.Summary)
+	}
+	held := 0
+	for _, o := range ledger.FoldLedger(after, "").ActiveObservations {
+		if ledger.HeldRule(o) == "tls-verify-off" && strings.Contains(o.Content, "curl -k") {
+			held++
+		}
+	}
+	if held != 1 {
+		t.Fatalf("%d held records, want the preference kept once", held)
 	}
 }
 
