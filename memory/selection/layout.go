@@ -111,10 +111,10 @@ func (l *layout) sectionLine(group string) string {
 }
 
 // The instructions lines a kind adds once to a summary that shows one of its records (an
-// item's extra): evidence rows, and the values lists after the tables.
+// item's extra, a key no group has): evidence rows, and the values lists after the tables.
 const (
-	extraEvidence = "evidence"
-	extraValues   = "values"
+	extraEvidence = "line:evidence"
+	extraValues   = "line:values"
 	EvidenceLine  = "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.\n"
 	ValuesLine    = "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.\n"
 )

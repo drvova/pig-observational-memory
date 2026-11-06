@@ -66,6 +66,15 @@
 (defparameter +next-lines-format+
   (cat "- next: the next steps of the current work, as notes lines: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated under notes." (string #\Newline)))
 (defparameter +trailer-separator+ (format nil "~%~%---~%~%"))
+;; The instructions lines a kind adds once to a summary that shows one of its records (an item's
+;; extra, a key no group has): evidence rows, and the values lists after the tables.
+(defparameter +extra-evidence+ "line:evidence")
+(defparameter +extra-values+ "line:values")
+(defparameter +evidence-line+
+  (cat "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call." (string #\Newline)))
+(defparameter +values-line+
+  (cat "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value." (string #\Newline)))
+(defparameter +max-values-per-kind+ 40)
 (defparameter +omitted-advice+
   (cat "Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or "
        +snippet-history-search+ "."))
@@ -177,6 +186,7 @@
 (defstruct item
   role index obs ref (text "") (group "") (which "") (note-group "")
   (anchor-id "") (anchor -1) anchored (from "") (to "") (status "") (links "")
+  (extra "") (value "") (value-kind "") (count 0) (last -1)
   (cost 0) cells (line ""))
 
 (defun item-source (it) (if (item-anchored it) (item-anchor-id it) ""))
@@ -191,7 +201,7 @@
 
 (defstruct sstate
   observations reflections folded branch request-in intent-in aliases reflection-dates layout
-  items request intent positions canonical
+  items request intent positions canonical (budget 0)
   (superseded (make-set)) (by-id (make-set)) (records (make-set))
   (partners (make-set)) (superseded-by (make-set)))
 
@@ -215,7 +225,26 @@
         ((string= group "omitted") +omitted-fields+)
         (t +note-fields+)))
 
-(defun list-group-p (group) (or (string= group "files") (string= group "commits")))
+(defun list-group-p (group)
+  (or (string= group "files") (string= group "commits") (string= group "values") (has-prefix group "values.")))
+
+(defun value-group (kind) (cat "values." kind))
+
+(defun extra-line (extra)
+  (cond ((string= extra +extra-evidence+) +evidence-line+)
+        ((string= extra +extra-values+) +values-line+)
+        (t "")))
+
+(defun extra-cost (extra) (estimate-tokens (extra-line extra)))
+
+(defun value-cap (budget) (min +max-values-per-kind+ (max 1 (floor budget 200))))
+
+(defun value-before-p (a b)
+  "valueBefore: the values' rank order."
+  (cond ((/= (item-count a) (item-count b)) (> (item-count a) (item-count b)))
+        ((/= (item-last a) (item-last b)) (> (item-last a) (item-last b)))
+        ((string/= (item-value a) (item-value b)) (string< (item-value a) (item-value b)))
+        (t (< (item-index a) (item-index b)))))
 
 (defun section-line (l group)
   (cond ((string= group "intent") +intent-line+)
@@ -262,6 +291,10 @@
          (setf (item-cells it) (list (refl-id r) dates (refl-content r) source)
                (item-line it) (cat "[" (refl-id r) "]" (if (string/= dates "") (cat " (" dates ")") "")
                                    " " (refl-content r) (suffix source)))))
+      (:value
+       (setf (item-line it) (cat (item-value it) (if (> (item-count it) 1) (cat " ×" (itoa (item-count it))) "") (suffix source)))
+       (setf (item-cost it) (1+ (estimate-tokens (cat ", " (item-line it)))))
+       (return-from price))
       ((:file :commit)
        (let ((text (obs-content (item-obs it))))
          (when (eq (item-role it) :commit) (setf text (trim-prefix text "commit ")))
@@ -301,8 +334,7 @@ codec's tables instructions without a state)."
 
 (defun make-state (observations folded branch budget &key request intent reflections (format "tables") codec
                                                          aliases reflection-dates)
-  (declare (ignore budget))
-  (let ((s (make-sstate :observations observations :reflections reflections :folded folded :branch branch
+  (let ((s (make-sstate :budget budget :observations observations :reflections reflections :folded folded :branch branch
                         :request-in request :intent-in intent :aliases aliases
                         :reflection-dates (or reflection-dates (make-set))
                         :layout (new-layout format codec) :positions (entry-index-by-id branch))))
@@ -327,8 +359,17 @@ codec's tables instructions without a state)."
             do (let ((it (make-item :role :note :index i :obs o :text (obs-content o))))
                  (cond ((string= (obs-kind o) "file") (setf (item-role it) :file (item-group it) "files"))
                        ((string= (obs-kind o) "commit") (setf (item-role it) :commit (item-group it) "commits"))
+                       ((string= (obs-kind o) "value")
+                        (multiple-value-bind (kind value count ok) (value-parts o)
+                          (if ok
+                              (let ((last-id (car (last (obs-source-ids o)))))
+                                (setf (item-role it) :value (item-group it) (value-group kind) (item-extra it) +extra-values+
+                                      (item-value-kind it) kind (item-value it) value (item-count it) count
+                                      (item-last it) (or (and last-id (gethash last-id (sstate-positions s))) -1)))
+                              (setf (item-group it) "notes"))))
                        (t (let ((group (subject-table-name (canonical-subject (canonical-of (sstate-canonical s) (obs-subject o))))))
-                            (setf (item-group it) (if (string= group "") "notes" group)))))
+                            (setf (item-group it) (if (string= group "") "notes" group))
+                            (when (string= (obs-kind o) "evidence") (setf (item-extra it) +extra-evidence+)))))
                  (multiple-value-bind (id at ok) (observation-anchor o (sstate-positions s))
                    (setf (item-anchor-id it) id (item-anchor it) at (item-anchored it) ok))
                  (setf (item-from it) (record-date (obs-timestamp o)) (item-to it) (item-from it))
@@ -434,7 +475,12 @@ codec's tables instructions without a state)."
   (decf (gethash (item-group it) (sel-opened p)))
   (when (= (gethash (item-group it) (sel-opened p)) 0)
     (decf (sel-used p) (header-cost s (item-group it)))
-    (remhash (item-group it) (sel-opened p))))
+    (remhash (item-group it) (sel-opened p)))
+  (when (string/= (item-extra it) "")
+    (decf (gethash (item-extra it) (sel-opened p)))
+    (when (= (gethash (item-extra it) (sel-opened p)) 0)
+      (decf (sel-used p) (extra-cost (item-extra it)))
+      (remhash (item-extra it) (sel-opened p)))))
 
 (defun pop-last (s p)
   (loop while (sel-order p)
@@ -449,12 +495,15 @@ codec's tables instructions without a state)."
 (defun try-item (s p budget it)
   (when (or (on-p p it) (gethash (item-id it) (sel-dropped p)))
     (return-from try-item nil))
-  (let ((cost (+ (item-cost it) (if (= (opened p (item-group it)) 0) (header-cost s (item-group it)) 0))))
+  (let ((cost (+ (item-cost it) (if (= (opened p (item-group it)) 0) (header-cost s (item-group it)) 0)
+                 (if (and (string/= (item-extra it) "") (= (opened p (item-extra it)) 0)) (extra-cost (item-extra it)) 0))))
     (when (> (+ (sel-used p) cost) budget) (return-from try-item nil))
     (setf (gethash it (sel-on p)) t)
     (push it (sel-order p))
     (incf (sel-used p) cost)
     (setf (gethash (item-group it) (sel-opened p)) (1+ (opened p (item-group it))))
+    (when (string/= (item-extra it) "")
+      (setf (gethash (item-extra it) (sel-opened p)) (1+ (opened p (item-extra it)))))
     (loop for c across (item-text it) do (vector-push-extend c (sel-carried p)))
     (vector-push-extend #\Newline (sel-carried p))
     (let ((replaced (case (item-role it)
@@ -528,9 +577,25 @@ codec's tables instructions without a state)."
         (newest-first (lambda (it) (and (string/= (item-status it) +status-retracted+)
                                         (missing-specifics (item-text it) (list (coerce (sel-carried p) 'simple-string)))))
                       observations)
+        ;; 4b. The values tool output printed, ranked, a rank at a time across the kinds.
+        (let ((ranked (ranked-values s)))
+          (dotimes (rank (value-cap (sstate-budget s)))
+            (dolist (kind +value-kinds+)
+              (let ((items (gethash kind ranked)))
+                (when (and (< rank (length items))
+                           (not (gethash (obs-id (item-obs (nth rank items))) (sstate-superseded s))))
+                  (try (nth rank items)))))))
         (newest-first (lambda (it) (declare (ignore it)) t) '(:reflection))
         (newest-first (lambda (it) (declare (ignore it)) t) observations))
       p)))
+
+(defun ranked-values (s)
+  "rankedValues: the value items by kind (a table of lists), each in rank order."
+  (let ((out (make-set)))
+    (dolist (it (sstate-items s))
+      (when (eq (item-role it) :value) (push-end it (gethash (item-value-kind it) out))))
+    (maphash (lambda (k items) (setf (gethash k out) (stable-sort (copy-list items) #'value-before-p))) out)
+    out))
 
 (defun settle-drops (s p)
   (let ((shown '()) (reflections '()))
@@ -553,7 +618,7 @@ codec's tables instructions without a state)."
 (defun omission-snippets (o)
   (mapcar #'redact-secrets
    (append (mapcar #'span-row-query (omission-rows o))
-          (loop for group in '("files" "commits")
+          (loop for group in '("files" "commits" "values")
                 for tl = (gethash group (omission-tails o))
                 when tl append (tail-queries tl)))))
 
@@ -659,7 +724,7 @@ codec's tables instructions without a state)."
       (let ((where '()))
         (when (> (omission-spans o) 0)
           (push-end (cat (itoa (omission-spans o)) " " (plural (omission-spans o) "span") " under omitted") where))
-        (dolist (group '("files" "commits"))
+        (dolist (group '("files" "commits" "values"))
           (let ((tl (gethash group (omission-tails o))))
             (when tl (push-end (cat "the +" (itoa (tail-n tl)) " more of the " group " line") where))))
         (cat +omitted-notice-start+ (itoa shown) " of " (itoa (+ shown (omission-records o))) " records; "
@@ -710,6 +775,7 @@ codec's tables instructions without a state)."
 (defparameter +read-reflections+ (list "Reflections" nil))
 (defparameter +read-commits+ (list "Commits" nil))
 (defparameter +read-files+ (list "Notes" (list (cons "kind" "file"))))
+(defparameter +read-values+ (list "Notes" (list (cons "kind" "value"))))
 
 (defun fewest (n fits)
   "The fewest k in [2, n] that fits, by halving: (values k ok)."
@@ -725,7 +791,7 @@ codec's tables instructions without a state)."
   "omissions: (values omission need ok)."
   (let ((notes '()) (reflections '()) (off-notes '()) (off-reflections '())
         (note-anchors '()) (reflection-anchors '())
-        (files 0) (commits 0) (file-items '()) (commit-items '()))
+        (files 0) (commits 0) (file-items '()) (commit-items '()) (values-left 0) (value-items '()))
     (dolist (it (sstate-items s))
       (unless (gethash (item-id it) (sel-dropped p))
         (block one
@@ -736,7 +802,8 @@ codec's tables instructions without a state)."
                (if (item-anchored it) (push-end it reflections) (push-end it off-reflections)))
              (return-from one))
             (:file (push-end it file-items) (unless (on-p p it) (incf files)))
-            (:commit (push-end it commit-items) (unless (on-p p it) (incf commits))))
+            (:commit (push-end it commit-items) (unless (on-p p it) (incf commits)))
+            (:value (push-end it value-items) (unless (on-p p it) (incf values-left))))
           (push-end it note-anchors)
           (when (and (eq (item-role it) :note) (not (on-p p it)))
             (if (item-anchored it) (push-end it notes) (push-end it off-notes))))))
@@ -749,6 +816,10 @@ codec's tables instructions without a state)."
         (setf (gethash "commits" (omission-tails o))
               (make-tail :n commits :all (length commit-items) :queries (list-queries +read-commits+ commit-items p)))
         (incf (omission-records o) commits))
+      (when (> values-left 0)
+        (setf (gethash "values" (omission-tails o))
+              (make-tail :n values-left :all (length value-items) :queries (list-queries +read-values+ value-items p)))
+        (incf (omission-records o) values-left))
       (let* ((breaks (lambda (it) (and (on-p p it) (member (item-role it) '(:note :reflection)))))
              (note-rows (spans +read-notes+ note-anchors notes (sorted-anchors note-anchors) breaks))
              (reflection-rows (spans +read-reflections+ reflection-anchors reflections (sorted-anchors reflection-anchors) breaks))
@@ -804,7 +875,7 @@ codec's tables instructions without a state)."
         (setf (gethash (item-group it) newest) (item-index it))))
     (when (gethash "next" by-group) (push-end (cons "next" (gethash "next" by-group)) blocks))
     (when (gethash "reflections" by-group) (push-end (cons "reflections" (gethash "reflections" by-group)) blocks))
-    (let ((subjects (sort (remove-if (lambda (g) (member g '("reflections" "notes" "next" "files" "commits") :test #'string=))
+    (let ((subjects (sort (remove-if (lambda (g) (or (member g '("reflections" "notes" "next") :test #'string=) (list-group-p g)))
                                      groups)
                           (lambda (a b) (if (/= (gethash a newest) (gethash b newest))
                                             (< (gethash a newest) (gethash b newest))
@@ -812,13 +883,19 @@ codec's tables instructions without a state)."
       (dolist (group subjects) (push-end (cons group (gethash group by-group)) blocks)))
     (when (gethash "notes" by-group) (push-end (cons "notes" (gethash "notes" by-group)) blocks))
     (let ((lists '()))
-      (dolist (group '("files" "commits"))
-        (let ((parts (mapcar #'item-line (gethash group by-group)))
-              (tl (gethash group (omission-tails o))))
+      (dolist (group (append '("files" "commits") (mapcar #'value-group +value-kinds+) '("values")))
+        (let* ((items (gethash group by-group))
+               (items (if (has-prefix group "values.") (stable-sort (copy-list items) #'value-before-p) items))
+               (parts (mapcar #'item-line items))
+               (tl (gethash group (omission-tails o))))
           (when tl (push-end (tail-text tl) parts))
           (when parts (push-end (cat group ": " (join parts ", ")) lists))))
       (let ((text (layout-intro l))
             (lines (apply #'cat (mapcar (lambda (b) (section-line l (car b))) blocks))))
+        (dolist (extra (list +extra-evidence+ +extra-values+))
+          (when (or (> (opened p extra) 0)
+                    (and (string= extra +extra-values+) (let ((tl (gethash "values" (omission-tails o)))) (and tl (> (tail-n tl) 0)))))
+            (setf lines (cat lines (extra-line extra)))))
         (when (string/= lines "")
           (let ((at (search +request-line+ text)))
             (when at
@@ -904,7 +981,7 @@ reflection-dates a table of ReflectionDateRanges."
       (if (not ok)
           (values (make-spans-result) need nil)
           (let ((lines (mapcar #'omitted-line (omission-rows o))))
-            (dolist (group '("files" "commits"))
+            (dolist (group '("files" "commits" "values"))
               (let ((tl (gethash group (omission-tails o))))
                 (when tl (push-end (cat group ": " (tail-text tl)) lines))))
             (values (make-spans-result :lines lines :snippets (omission-snippets o) :records (omission-records o)) 0 t))))))

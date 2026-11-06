@@ -67,7 +67,15 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"synthetic-conversation", "generic", synthetic("conversation.jsonl"), "", mode, budgets},
 			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
 			parityCase{"synthetic-safety", "generic", safety, "/srv/app", mode, budgets},
+			parityCase{"synthetic-tooloutput", "generic", synthetic("tooloutput.jsonl"), "/srv/app", mode, budgets},
 		)
+	}
+	// OM_LISP_PARITY_EXTRA lists more generic transcripts (comma-separated paths) to diff, at
+	// every turn end, as a one-off check on data outside the repository.
+	if extra := os.Getenv("OM_LISP_PARITY_EXTRA"); extra != "" {
+		for _, p := range strings.Split(extra, ",") {
+			cases = append(cases, parityCase{"extra-" + filepath.Base(p), "generic", p, "/srv/app", "turns", budgets})
+		}
 	}
 	// The other summary formats and codecs, on the cases that fill every section.
 	for _, mode := range []string{"whole:lines", "whole:jsonl", "turns:lines"} {
@@ -77,6 +85,7 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"synthetic-generic", "generic", synthetic("generic.jsonl"), "/home/dev/app", mode, budgets},
 			parityCase{"synthetic-conversation", "generic", synthetic("conversation.jsonl"), "", mode, budgets},
 			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
+			parityCase{"synthetic-tooloutput", "generic", synthetic("tooloutput.jsonl"), "/srv/app", mode, budgets},
 		)
 	}
 	return cases

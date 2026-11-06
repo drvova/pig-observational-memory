@@ -130,9 +130,7 @@ func outputFactsOf(call toolCall, text string, failed bool) facts {
 	reading := state == stateRead || class == classSearch
 	if !reading {
 		testFacts(&f, lines)
-		if class == classTest || class == classBuild {
-			diagnosticFacts(&f, lines)
-		}
+		diagnosticFacts(&f, lines, class == classTest || class == classBuild)
 	}
 	if class == classSearch {
 		searchFacts(&f, call)
@@ -710,12 +708,14 @@ func segmentClass(prog, next string) int {
 			return classBuild
 		}
 	case "npm", "pnpm", "yarn", "bun", "deno":
-		if next == "test" || next == "t" {
+		// A package manager runs a test, installs, or runs a script (a build, a type check, a lint).
+		switch next {
+		case "test", "t":
 			return classTest
+		case "", "install", "i", "add", "ci", "remove", "uninstall", "update", "upgrade", "view", "info", "ls", "list", "outdated", "audit", "init", "publish", "login", "whoami", "config":
+			return classNone
 		}
-		if next == "run" || next == "build" || next == "lint" || next == "exec" || next == "tsc" {
-			return classBuild
-		}
+		return classBuild
 	case "mvn", "mvnw", "gradle", "gradlew", "dotnet", "sbt", "bazel", "make", "gmake":
 		if strings.Contains(next, "test") || next == "check" || next == "verify" {
 			return classTest
@@ -860,20 +860,21 @@ func firstWord(s string) string {
 // rustc, mypy, eslint): an error line ("file:line:col: error: message", tsc's
 // "file(line,col): error TS1234: message", rustc's "error[E0425]: message" and the first
 // "--> file:line:col" after it, eslint's "  1:2  error  message  rule") is evidence, and a
-// failure.
-func diagnosticFacts(f *facts, lines []string) {
+// failure. Only tsc's and eslint's shapes are read in any command's output (build says the
+// command is a build or a test): a grep result shares the others' shape.
+func diagnosticFacts(f *facts, lines []string, build bool) {
 	arrow := false
 	for _, line := range lines {
 		t := trimBlank(line)
 		switch {
-		case strings.HasPrefix(t, "error[") || strings.HasPrefix(t, "error:"):
+		case build && (strings.HasPrefix(t, "error[") || strings.HasPrefix(t, "error:")):
 			f.failed = true
 			f.line(t)
 			arrow = true
-		case arrow && strings.HasPrefix(t, "--> "):
+		case build && arrow && strings.HasPrefix(t, "--> "):
 			f.line(t)
 			arrow = false
-		case strings.Contains(t, ": error TS") || diagnosticSeverity(t) == "error":
+		case strings.Contains(t, ": error TS") || (build && diagnosticSeverity(t) == "error"):
 			f.failed = true
 			f.line(t)
 		case eslintError(t):
@@ -1144,7 +1145,7 @@ func errorLine(t string) bool {
 var failureStarts = []string{"error:", "error[", "fatal:", "fatal error", "panic:", "npm err!", "exception:", "make: ***", "uncaught ", "unhandled ", "err!", "error ts"}
 
 // failureContains are phrases that report a failure anywhere in a line, compared lower-cased.
-var failureContains = []string{"command not found", "no such file or directory", "permission denied", "connection refused", "traceback (most recent call last)", "segmentation fault"}
+var failureContains = []string{"command not found", "no such file or directory", "permission denied", "connection refused", "traceback (most recent call last)", "segmentation fault", "command failed with exit code", "tool execution failed"}
 
 // markerFacts reads lines that report a failure, whatever the tool printed them.
 func markerFacts(f *facts, lines []string) {
@@ -1379,6 +1380,12 @@ func pathValue(token string) (string, bool) {
 		end--
 	}
 	token = token[start:end]
+	for i := 0; i+1 < len(token); i++ {
+		// A C-style escape (git's quoted "\345\216..."): the path's real spelling is not printed.
+		if token[i] == '\\' && isDigit(token[i+1]) {
+			return "", false
+		}
+	}
 	if strings.IndexByte(token, '\\') >= 0 {
 		var b strings.Builder
 		for i := 0; i < len(token); i++ {
@@ -1728,7 +1735,7 @@ func ValueParts(o ledger.Observation) (kind, value string, count int, ok bool) {
 	}
 	count = 1
 	if strings.HasSuffix(o.Content, " times)") {
-		if k := strings.LastIndex(o.Content, " (seen "); k >= 0 {
+		if k := strings.LastIndex(o.Content, " (seen "); k >= 0 && k+len(" (seen ") <= len(o.Content)-len(" times)") {
 			if n, err := strconv.Atoi(o.Content[k+len(" (seen ") : len(o.Content)-len(" times)")]); err == nil && n > 1 {
 				count = n
 			}

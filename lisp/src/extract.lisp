@@ -118,6 +118,10 @@
   (file-events (make-set))
   (file-order '())
   (notes (make-set))
+  ;; value-states are the value states by "kind:value" (output.lisp), value-order the values seen
+  ;; in this extraction in first-seen order.
+  (value-states (make-set))
+  (value-order '())
   (subjects '())
   known-given
   (known (make-set))
@@ -186,6 +190,7 @@
                    (setf (gethash (obs-id o) (x-words x)) (attempt-words o)))))
               ((string= (obs-kind o) "file") (push-end (obs-id o) (gethash (obs-target o) (x-files x))))
               ((string= (obs-kind o) "note") (push-end (obs-id o) (gethash (obs-target o) (x-notes x)))))))
+    (x-load-values x active)
     (setf (x-subjects x) (mapcar #'obs-subject active))
     (setf (x-known-given x) (new-given (nreverse contents)))))
 
@@ -842,6 +847,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
                   (progn (dolist (id earlier) (setf (gethash id (x-superseded x)) t))
                          (remhash akey (x-unresolved x)))
                   (push-end (obs-id (rec-obs r)) (gethash akey (x-unresolved x)))))))
+        (x-output-records x call result key display)
         (unless (string= outcome "worked") (return-from x-call))
         (when patch-p
           (dolist (ev (patch-path-events patch))
@@ -1112,6 +1118,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
               do (when (source-entry-p (aref entries i)) (setf cite i) (return))))
       (when (< cite 0) (return-from extract (values '() "")))
       (x-add-file-ops x cite)
+      (x-emit-values x)
       (x-emit-files x)
       (x-merge x)
       (x-assign-ids x)
