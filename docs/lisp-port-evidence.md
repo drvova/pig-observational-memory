@@ -98,7 +98,9 @@ branch), `after-compaction` calls `record-compaction-evidence` once the answer i
 the user each notice through `host/notify`, and `compaction-harness-refusal` refuses a store with
 rules written before the layer and a model whose profile may not be the default (a v2 decode event,
 a code event on the summary, or an active switch-codec rule: `harness.ComputeWith` is not ported).
-Level 1 is still refused by the compaction event itself, so `counts` are nil there. The om path
+Level 1 runs on the image since work package 5 ([lisp-port-level1.md](lisp-port-level1.md)): its
+counts reach `record-compaction-evidence`, the held consolidation instructions are credited in
+`ranHeld`, and they are settled after the pass. The om path
 calls it from `neutral-compaction`; the neutral host has no session model
 (`neutral.Host.SessionModel` is nil in Go too), so nothing is recorded there.
 
@@ -126,7 +128,8 @@ calls it from `neutral-compaction`; the neutral host has no session model
   `after-pass` records the pass and skips evaluation.
 - **The legacy query language** in memory calls and calls of defined queries: refused at a turn end.
 - **The Go layer's held definitions** (`settleDefinitionsV2`, `layer.ClaimHeld`): not settled by the
-  image. Level 1 offers text only (decision 5), so the image holds none; ones Go held are settled by
+  image, but for the consolidation instructions level 1 holds (decision 5, text only;
+  [lisp-port-level1.md](lisp-port-level1.md)), which it credits and settles; other kinds Go held are settled by
   Go. Only held remedies are credited in `ranHeld`, the one Go kind the image applies.
 - **The profile** (`harness.Compute`, `ApplySummary`): Go reads the Lisp ledger identically; the
   image does not compute it, and refuses a compaction whose profile may not be the default.

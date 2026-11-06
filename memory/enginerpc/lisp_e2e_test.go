@@ -200,10 +200,10 @@ func TestLispMemoryTool(t *testing.T) {
 }
 
 // TestLispBeforeCompactCancellation is TestBeforeCompactCancellationCrossesTheBoundary against
-// the image: with level 1 on and a session model, the image refuses the compaction before any
-// side effect (level 1 is not ported), the Go fallback makes the level-1 request, and PiG's
-// cancellation crosses to it; the answer equals the in-process path's. The image's own
-// cancellation of a host call in flight is pig-before-compact-cancel in lisp/tests/pig.lisp.
+// the image: with level 1 on and a session model, the image makes the level-1 request itself
+// (exactly one), PiG's cancellation crosses to its models/streamResult in flight, and the answer
+// equals the in-process path's; nothing falls back. lisp/tests/level1.lisp checks the cancel's
+// crossing from the image's side (level1-cancel-crosses-to-the-stream).
 func TestLispBeforeCompactCancellation(t *testing.T) {
 	image := buildLispImage(t)
 	agentDir := settingsDir(t)
@@ -215,8 +215,7 @@ func TestLispBeforeCompactCancellation(t *testing.T) {
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("in-process %v, lisp %v", want, got)
 	}
-	lines := log.lines()
-	if len(lines) != 1 || !strings.Contains(lines[0], enginerpc.MethodSessionBeforeCompact+": not ported") || !strings.Contains(lines[0], "level 1") {
+	if lines := log.lines(); len(lines) != 0 {
 		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
 	}
 }

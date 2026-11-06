@@ -86,7 +86,8 @@ cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts 
 
 ## Not ported, and why
 
-- **Level 1** (`memory/consolidate`, `hooks/consolidate_v2.go`: the prompt, `RunSingleRequest`,
+- **Level 1** is now ported for PiG ([lisp-port-level1.md](lisp-port-level1.md)); what follows
+  is why it was left out of W5. (`memory/consolidate`, `hooks/consolidate_v2.go`: the prompt, `RunSingleRequest`,
   validation and appending). On every path the image serves today, the host hands no session
   model. That covers `om` with every harness, and on those paths Go itself skips level 1 with
   "the session model is unavailable: no session model". The image writes that same report. It

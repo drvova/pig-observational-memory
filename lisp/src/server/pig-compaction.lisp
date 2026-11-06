@@ -269,13 +269,6 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
    :cwd (scope-cwd)
    :skip-tools (conn-skip-tools c)))
 
-(defun level1-would-run-p (cfg event model own)
-  "Whether consolidateV2 would go past its skip checks to resolving the session model: level 1
-is on, not passive, not the extension's own compaction, not an overflow, and the host hands a
-session model. Such a compaction is not ported (level 1 is a later work package)."
-  (and (not (rcfg-consolidate-off cfg)) (not (rcfg-passive cfg)) (not own)
-       (string/= (om::cevent-reason event) "overflow") model t))
-
 (define-method "event/sessionBeforeCompact" (params)
   ;; engine.BeforeCompact: always a compaction on PiG's exact cut, never a decline or a
   ;; cancel; an error anywhere after the refusals is recovered into the minimal compaction; only

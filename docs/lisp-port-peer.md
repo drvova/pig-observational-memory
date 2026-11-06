@@ -171,9 +171,11 @@ compaction slot free (`runtime.TryStartCompact`):
   `fileOps` and `settings.reserveTokens`, the branch entries, the reason and the custom
   instructions.
 - **Refusals, before any side effect.** In this order: the harness hook point (a session model
-  with a store, see below); and level 1 when it would run, that is consolidation on, not passive, not the
-  extension's own compaction, not an overflow, and a session model. Level 1 is a later work
-  package, so the Go engine runs that compaction whole.
+  with a store, see below). Level 1 is no longer refused: it runs on the image
+  ([lisp-port-level1.md](lisp-port-level1.md)). (Before work package 5 it was refused when it would
+  run, that is consolidation on, not passive, not the extension's own compaction, not an overflow,
+  and a session model. Level 1 was a later work
+  package, so the Go engine ran that compaction whole.)
 - **Level 0.** Under the connection's extraction mutex, W5's `build-compaction` over the host:
   level 0 over the unextracted cut range (a fresh `host/getBranch`), the host summary, the budget
   with the session model's context window and output cap, PiG's `reserveTokens` and
@@ -218,8 +220,9 @@ goes, filled by the evidence work package ([lisp-port-evidence.md](lisp-port-evi
   - `TestLispEngineMatchesInProcess`: the scenario's compaction now runs on the image, with
     consolidation off and a session model, and the appended entries, the compaction and the
     context edits equal the in-process path's. The tool call now runs on the image too (work package 3).
-  - `TestLispBeforeCompactCancellation`: level 1 on, so the image refuses and the Go fallback's
-    level-1 request is cancelled; the answer equals the in-process path's.
+  - `TestLispBeforeCompactCancellation`: level 1 on; since work package 5 the image makes the
+    level-1 request and the cancel crosses to its `models/streamResult`; the answer equals the
+    in-process path's.
   - `TestLispCommandsAndRendering`: `/om:status` falls back; the section and four `/om:view`
     calls run on the image, with the in-process path's notifications.
   - `TestLispTriggerMatchesInProcess`: over the threshold, "Nothing to compact", the backoff at
@@ -227,8 +230,8 @@ goes, filled by the evidence work package ([lisp-port-evidence.md](lisp-port-evi
 
 ## Left
 
-- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's), `/om:status` and
-  level 1. The harness's part of a compaction runs
+- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's) and `/om:status`
+  (level 1 is work package 5's, [lisp-port-level1.md](lisp-port-level1.md)). The harness's part of a compaction runs
   at the hook point above (docs/lisp-port-evidence.md), but for a profile that may not be the
   default, which is refused.
 - A session start under a lowered kernel floor with layer data to read (docs/lisp-port-migration.md).
