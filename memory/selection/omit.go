@@ -33,6 +33,10 @@ type read struct {
 // would leave out older records of a path the summary also leaves out.
 var fileKind = read{fn: readNotes, opts: omwire.Options{Where: []omwire.Pair{{Field: "kind", Value: string(ledger.KindFile)}}}}
 
+// valueKind is the read a capped values list's snippet lists every value record with:
+// om.Notes(om.Kind(`value`)).
+var valueKind = read{fn: readNotes, opts: omwire.Options{Where: []omwire.Pair{{Field: "kind", Value: string(ledger.KindValue)}}}}
+
 // spanRow is one row of the omitted table: a span of records left out (or several, folded),
 // with its date range, record count, first and last entry id and the query that lists it.
 type spanRow struct {
@@ -72,7 +76,7 @@ func (o omission) snippets() []string {
 	for _, r := range o.rows {
 		out = append(out, secrets.Redact(r.query))
 	}
-	for _, group := range []string{groupFiles, groupCommits} {
+	for _, group := range []string{groupFiles, groupCommits, groupValues} {
 		if t, ok := o.tails[group]; ok {
 			for _, q := range t.queries {
 				out = append(out, secrets.Redact(q))
@@ -89,8 +93,8 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 	live := func(it *item) bool { return !p.dropped[it.id()] }
 	var notes, reflections, offNotes, offReflections []*item
 	var noteAnchors, reflectionAnchors []*item
-	files, commits := 0, 0
-	var fileItems, commitItems []*item
+	files, commits, values := 0, 0, 0
+	var fileItems, commitItems, valueItems []*item
 	for _, it := range s.items {
 		if !live(it) {
 			continue
@@ -117,6 +121,11 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 			if !p.on[it] {
 				commits++
 			}
+		case roleValue:
+			valueItems = append(valueItems, it)
+			if !p.on[it] {
+				values++
+			}
 		}
 		noteAnchors = append(noteAnchors, it)
 		if it.role != roleNote || p.on[it] {
@@ -136,6 +145,10 @@ func (s *state) omissions(p *selected, room int) (omission, int, bool) {
 	if commits > 0 {
 		o.tails[groupCommits] = listTail{n: commits, all: len(commitItems), queries: s.listQueries(read{fn: readCommits}, commitItems, p)}
 		o.records += commits
+	}
+	if values > 0 {
+		o.tails[groupValues] = listTail{n: values, all: len(valueItems), queries: s.listQueries(valueKind, valueItems, p)}
+		o.records += values
 	}
 	allNotes := sortedAnchors(noteAnchors)
 	allReflections := sortedAnchors(reflectionAnchors)
@@ -457,7 +470,7 @@ func OmittedSpans(in SpansInput) (spans Spans, need int, ok bool) {
 	for _, r := range o.rows {
 		spans.Lines = append(spans.Lines, omittedLine(r))
 	}
-	for _, group := range []string{groupFiles, groupCommits} {
+	for _, group := range []string{groupFiles, groupCommits, groupValues} {
 		if t, has := o.tails[group]; has {
 			spans.Lines = append(spans.Lines, group+": "+tailText(t))
 		}

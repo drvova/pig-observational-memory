@@ -96,6 +96,7 @@ const (
 	roleNote
 	roleFile
 	roleCommit
+	roleValue
 )
 
 // The groups that are not a notes table.
@@ -106,8 +107,11 @@ const (
 	groupReflections = "reflections"
 	groupFiles       = "files"
 	groupCommits     = "commits"
-	groupOmitted     = "omitted"
-	groupNotes       = "notes"
+	// groupValues is the values list's tail; each value kind's list is its own group
+	// (valueGroup).
+	groupValues  = "values"
+	groupOmitted = "omitted"
+	groupNotes   = "notes"
 )
 
 // item is one record (or the request) as selection sees it.
@@ -133,6 +137,13 @@ type item struct {
 	// status is the record's status as shown (statusOf); links the pointers its line ends
 	// with before its source (linksOf).
 	status, links string
+	// extra is the instructions line the item's kind adds once to the summary that shows one
+	// (extraLine), "" for none.
+	extra string
+	// value, valueKind and count are a value record's (extract.ValueParts); last is the branch
+	// index of its latest sighting, -1 when off the branch.
+	value, valueKind string
+	count, last      int
 	// cost is what the item adds to its group; cells or line render it.
 	cost  int
 	cells []string
@@ -279,10 +290,26 @@ func newState(in Input) *state {
 			it.role, it.group = roleFile, groupFiles
 		case ledger.KindCommit:
 			it.role, it.group = roleCommit, groupCommits
+		case ledger.KindValue:
+			if kind, value, count, ok := extract.ValueParts(o); ok {
+				it.role, it.group, it.extra = roleValue, valueGroup(kind), extraValues
+				it.valueKind, it.value, it.count = kind, value, count
+				it.last = -1
+				if n := len(o.SourceEntryIDs); n > 0 {
+					if at, ok := s.positions[o.SourceEntryIDs[n-1]]; ok {
+						it.last = at
+					}
+				}
+				break
+			}
+			it.group = groupNotes
 		default:
 			it.group = ledger.SubjectTableName(canonical[o.Subject].Subject)
 			if it.group == "" {
 				it.group = groupNotes
+			}
+			if o.Kind == ledger.KindEvidence {
+				it.extra = extraEvidence
 			}
 		}
 		it.anchorID, it.anchor, it.anchored = ledger.ObservationAnchor(o, s.positions)
@@ -488,6 +515,13 @@ func (p *selected) unselect(s *state, it *item) {
 		p.used -= s.l.headerCost(it.group)
 		delete(p.opened, it.group)
 	}
+	if it.extra != "" {
+		p.opened[it.extra]--
+		if p.opened[it.extra] == 0 {
+			p.used -= s.l.extraCost(it.extra)
+			delete(p.opened, it.extra)
+		}
+	}
 }
 
 // choose selects items under budget in the ordered classes.
@@ -501,6 +535,9 @@ func (s *state) choose(budget int) *selected {
 		if p.opened[it.group] == 0 {
 			cost += s.l.headerCost(it.group)
 		}
+		if it.extra != "" && p.opened[it.extra] == 0 {
+			cost += s.l.extraCost(it.extra)
+		}
 		if p.used+cost > budget {
 			return false
 		}
@@ -508,6 +545,9 @@ func (s *state) choose(budget int) *selected {
 		p.order = append(p.order, it)
 		p.used += cost
 		p.opened[it.group]++
+		if it.extra != "" {
+			p.opened[it.extra]++
+		}
 		p.carried.WriteString(it.text)
 		p.carried.WriteByte('\n')
 		// What the item replaces leaves the summary, and frees its room when it was shown.
@@ -601,11 +641,61 @@ func (s *state) choose(budget int) *selected {
 	newestFirst(func(it *item) bool {
 		return it.status != ledger.StatusRetracted && len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
 	}, observations...)
+	// 4b. The values tool output printed (docs/memory-v2.md, "Tool output"): each kind's values
+	// ranked by recurrence (rankedValues), at most valueCap of a kind, taken a rank at a time
+	// across the kinds in their order, so a tight budget shows the top of every kind.
+	ranked := s.rankedValues()
+	for rank := range valueCap(s.in.Budget) {
+		for _, kind := range extract.ValueKinds {
+			if items := ranked[kind]; rank < len(items) && !s.superseded[items[rank].obs.ID] {
+				try(items[rank])
+			}
+		}
+	}
 	// 5. Reflections, which drop the records they cite.
 	newestFirst(func(*item) bool { return true }, roleReflection)
 	// 6. Everything else.
 	newestFirst(func(*item) bool { return true }, observations...)
 	return p
+}
+
+// valueCap is how many values of one kind a summary of budget tokens shows at most: one per
+// 200 tokens, at most maxValuesPerKind (40 at 8,192 tokens and above, 20 at 4,096).
+func valueCap(budget int) int { return min(maxValuesPerKind, max(1, budget/200)) }
+
+// maxValuesPerKind bounds a value kind's list, as Compact-Bench's mechanical reference does.
+const maxValuesPerKind = 40
+
+// valueGroup is the list group of a value kind.
+func valueGroup(kind string) string { return groupValues + "." + kind }
+
+// rankedValues are the value items by kind, each kind's in a fixed total order: the most
+// often seen first, then the latest seen, then by value, then in ledger order.
+func (s *state) rankedValues() map[string][]*item {
+	out := map[string][]*item{}
+	for _, it := range s.items {
+		if it.role == roleValue {
+			out[it.valueKind] = append(out[it.valueKind], it)
+		}
+	}
+	for _, items := range out {
+		sort.SliceStable(items, func(a, b int) bool { return valueBefore(items[a], items[b]) })
+	}
+	return out
+}
+
+// valueBefore is the values' rank order.
+func valueBefore(a, b *item) bool {
+	if a.count != b.count {
+		return a.count > b.count
+	}
+	if a.last != b.last {
+		return a.last > b.last
+	}
+	if a.value != b.value {
+		return a.value < b.value
+	}
+	return a.index < b.index
 }
 
 // settleDrops sets p's drops to what the compaction drops for p's final choice (extract.Drops

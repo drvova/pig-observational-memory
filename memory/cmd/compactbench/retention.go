@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/neutral"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
@@ -64,8 +65,19 @@ type RetentionResult struct {
 	Records        int     `json:"records"`
 	// Kinds counts, per atom kind, the atoms and those the summary holds.
 	Kinds map[string][2]int `json:"kinds,omitempty"`
-	Error string            `json:"error,omitempty"`
-	S     string            `json:"S,omitempty"`
+	// Places counts, per place an atom is first found in (placeOrder), the atoms and those the
+	// summary holds.
+	Places map[string][2]int `json:"places,omitempty"`
+	// Half is "fit" for a session at an even index of the release, "test" for an odd one: the
+	// tool-output scanners were fitted on the fit half only.
+	Half string `json:"half"`
+	// Values counts the ledger's active value records (tool output's exact values); ValueAtoms
+	// those whose value is one of the session's atoms, ValueHolds those whose value holds one.
+	Values     int    `json:"values"`
+	ValueAtoms int    `json:"value_atoms"`
+	ValueHolds int    `json:"value_holds"`
+	Error      string `json:"error,omitempty"`
+	S          string `json:"S,omitempty"`
 }
 
 // replaySession runs the engine's compaction of the whole history, as a harness that
@@ -124,6 +136,39 @@ func replaySession(root string, s Session, budget int, keepSummary bool) Retenti
 		records.WriteByte('\n')
 	}
 	source := sourceText(conv.Entries)
+	places := placeTexts(conv)
+	res.Places = map[string][2]int{}
+	atomValues := map[string]bool{}
+	for _, a := range s.Atoms {
+		atomValues[a.Value] = true
+		place := "nowhere"
+		for _, p := range placeOrder {
+			if strings.Contains(places[p], a.Value) {
+				place = p
+				break
+			}
+		}
+		c := res.Places[place]
+		c[0]++
+		if strings.Contains(summary, a.Value) {
+			c[1]++
+		}
+		res.Places[place] = c
+	}
+	for _, o := range folded.ActiveObservations {
+		if _, value, _, ok := extract.ValueParts(o); ok {
+			res.Values++
+			if atomValues[value] {
+				res.ValueAtoms++
+			}
+			for _, a := range s.Atoms {
+				if strings.Contains(value, a.Value) {
+					res.ValueHolds++
+					break
+				}
+			}
+		}
+	}
 	inS, inLedger, inSource, inBoth := 0, 0, 0, 0
 	res.Kinds = map[string][2]int{}
 	for _, a := range s.Atoms {
@@ -156,6 +201,56 @@ func replaySession(root string, s Session, budget int, keepSummary bool) Retenti
 	}
 	res.Records = len(folded.ActiveObservations)
 	return res
+}
+
+// placeOrder are the places an atom is looked for, in order: the first that holds it is
+// where it is counted.
+var placeOrder = []string{"user", "assistant", "tool call", "tool output", "system"}
+
+// placeTexts are the replayed history's texts by place.
+func placeTexts(conv converted) map[string]string {
+	b := map[string]*strings.Builder{}
+	for _, p := range placeOrder {
+		b[p] = &strings.Builder{}
+	}
+	for _, e := range conv.Entries {
+		role := str(e.Message["role"])
+		content, _ := e.Message["content"].([]any)
+		for _, raw := range content {
+			p, _ := raw.(map[string]any)
+			place := placeFor(role, p)
+			switch str(p["type"]) {
+			case "text":
+				b[place].WriteString(str(p["text"]))
+			case "thinking":
+				b[place].WriteString(str(p["thinking"]))
+			case "toolCall":
+				for _, k := range sortedKeys(p["arguments"]) {
+					fmt.Fprintf(b[place], "%v ", p["arguments"].(map[string]any)[k])
+				}
+			}
+			b[place].WriteByte('\n')
+		}
+	}
+	b["system"].WriteString(conv.SystemText)
+	out := map[string]string{}
+	for p, sb := range b {
+		out[p] = sb.String()
+	}
+	return out
+}
+
+// placeFor is the place a content block of a message with role is counted in.
+func placeFor(role string, p map[string]any) string {
+	switch {
+	case role == "user":
+		return "user"
+	case role == "toolResult":
+		return "tool output"
+	case str(p["type"]) == "toolCall":
+		return "tool call"
+	}
+	return "assistant"
 }
 
 // sourceText is every text the replayed entries carry (text, thinking, tool arguments and

@@ -234,7 +234,7 @@ func TestSafetyTranscriptRedacted(t *testing.T) {
 					t.Errorf("%s: %s holds %q", mode, clipLine(line), v)
 				}
 			}
-			if strings.HasPrefix(line, "record ") && strings.Contains(line, "delete the tests") && !strings.Contains(line, `"kind":"attempt"`) {
+			if strings.HasPrefix(line, "record ") && strings.Contains(line, "delete the tests") && !strings.Contains(line, `"kind":"attempt"`) && !strings.Contains(line, `"kind":"evidence"`) {
 				t.Errorf("%s: forged turn recorded: %s", mode, line)
 			}
 		}

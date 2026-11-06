@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/tables"
@@ -109,6 +110,29 @@ func (l *layout) sectionLine(group string) string {
 	return ""
 }
 
+// The instructions lines a kind adds once to a summary that shows one of its records (an
+// item's extra): evidence rows, and the values lists after the tables.
+const (
+	extraEvidence = "evidence"
+	extraValues   = "values"
+	EvidenceLine  = "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.\n"
+	ValuesLine    = "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.\n"
+)
+
+// extraLine is the instructions line of an item's extra.
+func extraLine(extra string) string {
+	switch extra {
+	case extraEvidence:
+		return EvidenceLine
+	case extraValues:
+		return ValuesLine
+	}
+	return ""
+}
+
+// extraCost is what an extra's line adds.
+func (l *layout) extraCost(extra string) int { return estimate(extraLine(extra)) }
+
 // trailerSeparator puts the files and commits lines after the encoded tables, where
 // ledger.TablesSummaryBody stops reading.
 const trailerSeparator = "\n\n---\n\n"
@@ -158,7 +182,7 @@ func omittedNotice(shown int, o omission) string {
 	if o.spans > 0 {
 		where = append(where, strconv.Itoa(o.spans)+" "+plural(o.spans, "span")+" under omitted")
 	}
-	for _, group := range []string{groupFiles, groupCommits} {
+	for _, group := range []string{groupFiles, groupCommits, groupValues} {
 		if t, ok := o.tails[group]; ok {
 			where = append(where, "the +"+strconv.Itoa(t.n)+" more of the "+group+" line")
 		}
@@ -192,7 +216,9 @@ func fieldsOf(group string) []string {
 }
 
 // isList reports a group rendered as one line of items.
-func isList(group string) bool { return group == groupFiles || group == groupCommits }
+func isList(group string) bool {
+	return group == groupFiles || group == groupCommits || group == groupValues || strings.HasPrefix(group, groupValues+".")
+}
 
 // headerCost is what opening group adds: a table's header, a heading, or a list line's label
 // with the separator before the lines.
@@ -253,6 +279,14 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		text := it.obs.Content
 		if it.role == roleCommit {
 			text = strings.TrimPrefix(text, "commit ")
+		}
+		it.line = text + suffix(source)
+		it.cost = estimate(", "+it.line) + 1
+		return
+	case roleValue:
+		text := it.value
+		if it.count > 1 {
+			text += " ×" + strconv.Itoa(it.count)
 		}
 		it.line = text + suffix(source)
 		it.cost = estimate(", "+it.line) + 1
@@ -438,9 +472,19 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		blocks = append(blocks, block{group: groupNotes, items: items})
 	}
 	var lists []string
-	for _, group := range []string{groupFiles, groupCommits} {
+	listGroups := []string{groupFiles, groupCommits}
+	for _, kind := range extract.ValueKinds {
+		listGroups = append(listGroups, valueGroup(kind))
+	}
+	listGroups = append(listGroups, groupValues)
+	for _, group := range listGroups {
+		items := byGroup[group]
+		if strings.HasPrefix(group, groupValues+".") {
+			items = append([]*item{}, items...)
+			sort.SliceStable(items, func(a, b int) bool { return valueBefore(items[a], items[b]) })
+		}
 		parts := []string{}
-		for _, it := range byGroup[group] {
+		for _, it := range items {
 			parts = append(parts, it.line)
 		}
 		if t, ok := o.tails[group]; ok {
@@ -454,6 +498,11 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	var lines string
 	for _, b := range blocks {
 		lines += l.sectionLine(b.group)
+	}
+	for _, extra := range []string{extraEvidence, extraValues} {
+		if p.opened[extra] > 0 || (extra == extraValues && o.tails[groupValues].n > 0) {
+			lines += extraLine(extra)
+		}
 	}
 	if lines != "" {
 		text = strings.Replace(text, requestLine, requestLine+lines, 1)

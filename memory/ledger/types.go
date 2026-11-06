@@ -53,12 +53,19 @@ const (
 	KindCommit ObservationKind = "commit"
 	// KindNote is a note the session model wrote with the memory tool.
 	KindNote ObservationKind = "note"
+	// KindEvidence is at most eight verbatim lines of a tool result that failed or matched a
+	// failure grammar (Observation.Tool and Target are its call's, as an attempt's).
+	KindEvidence ObservationKind = "evidence"
+	// KindValue is one exact value tool output printed (Observation.Target holds "kind:value";
+	// its sources are its first and latest sighting, its content counts the results that
+	// printed it).
+	KindValue ObservationKind = "value"
 )
 
 // CodeKindValues are the kinds level-0 extraction writes beside ObservationKindValues. They
 // are read back from the ledger (ObservationFrom) but are not kinds a worker or a note schema
 // may write, so v1's prompts and validation are unchanged.
-var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote}
+var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote, KindEvidence, KindValue}
 
 // The origins of a record (Observation.Origin).
 const (

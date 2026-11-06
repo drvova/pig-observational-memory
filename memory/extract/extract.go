@@ -131,6 +131,10 @@ type extraction struct {
 	fileOrder  []string
 	// notes are the active note record ids by note name.
 	notes map[string][]string
+	// values are the value states by "kind:value" (outputRecords), valueOrder the values seen
+	// in this extraction in first-seen order.
+	values     map[string]*valueState
+	valueOrder []string
 	// subjects are the ledger's subjects, which name a record's subject (ledger.SubjectInText).
 	subjects []string
 	// knownGiven are the specifics the ledger's active records already give; known their
@@ -160,6 +164,7 @@ func Extract(in Input) Result {
 		files:      map[string][]string{},
 		fileEvents: map[string]fileEvent{},
 		notes:      map[string][]string{},
+		values:     map[string]*valueState{},
 		known:      map[string]bool{},
 		exchange:   -1,
 	}
@@ -199,6 +204,7 @@ func Extract(in Input) Result {
 		return Result{}
 	}
 	x.fileOps(cite)
+	x.emitValues()
 	x.emitFiles()
 	x.merge()
 	x.assignIDs()
@@ -243,6 +249,7 @@ func (x *extraction) loadLedger() {
 			x.notes[o.Target] = append(x.notes[o.Target], o.ID)
 		}
 	}
+	x.loadValues(active)
 	x.subjects = ledger.SubjectsOf(active)
 	x.knownGiven = ledger.NewGiven(contents)
 }

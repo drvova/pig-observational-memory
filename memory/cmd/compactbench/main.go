@@ -142,6 +142,10 @@ func retention(data string, budgets []int, limit, workers int, outPath string, k
 				defer wg.Done()
 				for i := range jobs {
 					results[i] = replaySession(root, sessions[i], budget, keep)
+					results[i].Half = "fit"
+					if i%2 == 1 {
+						results[i].Half = "test"
+					}
 				}
 			}()
 		}
@@ -192,6 +196,49 @@ func retentionReport(n int, results []RetentionResult) string {
 			100*meanOf(g, func(r RetentionResult) float64 { return r.LedgerRecall }),
 			100*meanOf(g, func(r RetentionResult) float64 { return r.SourceRecall }),
 			100*meanOf(g, func(r RetentionResult) float64 { return r.ReplayedRecall }))
+	}
+	b.WriteString("\n## by half (the tool-output scanners were fitted on the fit half: the sessions at even indexes)\n\n| variant | half | mean recall | n | ledger recall | values | value precision (is an atom) | (holds an atom) |\n|---|---|---:|---:|---:|---:|---:|---:|\n")
+	for _, v := range order {
+		for _, half := range []string{"fit", "test"} {
+			var g []RetentionResult
+			values, atoms, holds := 0, 0, 0
+			for _, r := range byV[v] {
+				if r.Half == half {
+					g = append(g, r)
+					values += r.Values
+					atoms += r.ValueAtoms
+					holds += r.ValueHolds
+				}
+			}
+			if len(g) == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "| %s | %s | %.1f%% | %d | %.1f%% | %d | %.1f%% | %.1f%% |\n", v, half,
+				100*meanOf(g, func(r RetentionResult) float64 { return r.Recall }), len(g),
+				100*meanOf(g, func(r RetentionResult) float64 { return r.LedgerRecall }),
+				values, 100*float64(atoms)/float64(max(1, values)), 100*float64(holds)/float64(max(1, values)))
+		}
+	}
+	b.WriteString("\n## first found in (atoms pooled over sessions; an atom counts at the first of user, assistant, tool call, tool output, system that holds it)\n\n| variant | half | place | in summary | atoms | share |\n|---|---|---|---:|---:|---:|\n")
+	for _, v := range order {
+		for _, half := range []string{"all", "test"} {
+			pooled := map[string][2]int{}
+			for _, r := range byV[v] {
+				if half != "all" && r.Half != half {
+					continue
+				}
+				for k, c := range r.Places {
+					p := pooled[k]
+					p[0] += c[0]
+					p[1] += c[1]
+					pooled[k] = p
+				}
+			}
+			for _, k := range append(append([]string{}, placeOrder...), "nowhere") {
+				p := pooled[k]
+				fmt.Fprintf(&b, "| %s | %s | %s | %d | %d | %.1f%% |\n", v, half, k, p[1], p[0], 100*float64(p[1])/float64(max(1, p[0])))
+			}
+		}
 	}
 	b.WriteString("\n## per atom kind (atoms pooled over sessions)\n\n| variant | kind | in summary | atoms | share |\n|---|---|---:|---:|---:|\n")
 	for _, v := range order {
