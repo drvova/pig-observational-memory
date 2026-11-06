@@ -23,13 +23,23 @@ type ChildLister struct {
 
 // List runs snippet over branch and returns the ids of the rows it lists.
 func (l *ChildLister) List(branch []session.Entry, snippet string) ([]string, error) {
+	out, err := l.run(branch, "l := "+snippet+"\nfor _, id := range l.IDs() { fmt.Println(id) }")
+	return strings.Fields(out), err
+}
+
+// Output runs snippet, an om read returning a list, over branch and returns the list as the
+// memory tool prints it.
+func (l *ChildLister) Output(branch []session.Entry, snippet string) (string, error) {
+	return l.run(branch, "l := "+snippet+"\nfmt.Print(l.String())")
+}
+
+func (l *ChildLister) run(branch []session.Entry, code string) (string, error) {
 	l.once.Do(func() {
 		l.sup = sandbox.New(sandbox.Config{Mode: sandbox.ModeNamespace, Methods: sandbox.NamespaceMethods()})
 	})
-	code := "l := " + snippet + "\nfor _, id := range l.IDs() { fmt.Println(id) }"
 	p, err := codepolicy.Check(codepolicy.Input{Code: code})
 	if err != nil {
-		return nil, fmt.Errorf("policy: %w", err)
+		return "", fmt.Errorf("policy: %w", err)
 	}
 	call := &omhost.Call{Entries: branch, Skip: []string{omtool.ToolName}}
 	res := l.sup.Run(context.Background(), sandbox.Request{Program: p}, call)
@@ -38,12 +48,12 @@ func (l *ChildLister) List(branch []session.Entry, snippet string) ([]string, er
 		res = l.sup.Run(context.Background(), sandbox.Request{Program: p}, call)
 	}
 	if res.Outcome != sandbox.OutcomeOK {
-		return nil, fmt.Errorf("%s: %s", res.Outcome, res.Err)
+		return "", fmt.Errorf("%s: %s", res.Outcome, res.Err)
 	}
 	if res.Cut > 0 {
-		return nil, fmt.Errorf("output cut by %d characters", res.Cut)
+		return "", fmt.Errorf("output cut by %d characters", res.Cut)
 	}
-	return strings.Fields(res.Out), nil
+	return res.Out, nil
 }
 
 // Close stops the child.

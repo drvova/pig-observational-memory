@@ -2,9 +2,11 @@ package memeval
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,24 +16,58 @@ import (
 
 func TestMain(m *testing.M) {
 	serialize.Location = time.UTC
-	os.Exit(m.Run())
+	code := m.Run()
+	child.Close()
+	os.Exit(code)
 }
 
-// seeds is how many seeds the Tier 0 tests run: 2 by default (fast enough for CI), more with
-// MEMEVAL_SEEDS=n.
-func seeds(t *testing.T) int {
+// testConfig is the Tier 0 measurement the tests run: DefaultConfig over 2 seeds by default,
+// fast enough for CI, or MEMEVAL_SEEDS=n seeds. Under the race detector the default is one seed
+// over 430 turns (21 compactions).
+func testConfig(t *testing.T) Config {
 	if v := os.Getenv("MEMEVAL_SEEDS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
 			t.Fatalf("MEMEVAL_SEEDS=%q", v)
 		}
-		return n
+		return DefaultConfig(n)
 	}
-	return 2
+	if raceEnabled {
+		cfg := DefaultConfig(1)
+		cfg.Turns, cfg.MaxCompactions = 430, 21
+		return cfg
+	}
+	return DefaultConfig(2)
 }
 
-// lister is the test binary's one namespace child, cached across the controls.
-var lister = &CachingLister{Lister: &ChildLister{}}
+// The test binary's one namespace child, cached across the controls.
+var (
+	child  = &ChildLister{}
+	lister = &CachingLister{Lister: child}
+)
+
+var (
+	measured    Measurement
+	measureErr  error
+	measureOnce sync.Once
+)
+
+// measurement is the Tier 0 measurement the tests share (testConfig), counting requests while
+// it runs.
+func measurement(t *testing.T) Measurement {
+	t.Helper()
+	measureOnce.Do(func() {
+		counter := testfix.CountRequests(t)
+		measured, measureErr = Measure(context.Background(), testConfig(t), lister)
+		if measureErr == nil && counter.Total() != 0 {
+			measureErr = fmt.Errorf("model requests made: %v", counter.ByStage())
+		}
+	})
+	if measureErr != nil {
+		t.Fatal(measureErr)
+	}
+	return measured
+}
 
 // noLoss are the classes the current engine never loses (shown or reachable through a printed
 // snippet after every compaction count measured): the baseline later phases must not regress
@@ -42,13 +78,9 @@ var noLoss = []Class{ClassIdentifier, ClassConstraint, ClassIntention, ClassSupe
 // compactions at level 0, zero model requests, every invariant on every compaction, no
 // printed snippet that fails to run, and the no-loss classes never lost; the curves are logged.
 func TestTier0Retention(t *testing.T) {
-	counter := testfix.CountRequests(t)
-	m, err := Measure(context.Background(), DefaultConfig(seeds(t)), lister)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counter.Total() != 0 || m.Requests != 0 {
-		t.Fatalf("requests %v (%d)", counter.ByStage(), m.Requests)
+	m := measurement(t)
+	if m.Requests != 0 {
+		t.Fatalf("%d requests", m.Requests)
 	}
 	for _, r := range m.Results {
 		if len(r.SnippetErrors) > 0 {
@@ -84,28 +116,32 @@ func TestTier0Retention(t *testing.T) {
 	t.Logf("shown / reachable / lost by compactions since the probe left the context\n%s\n%s", Table(m.Results, Counts), InvariantTable(m.Results))
 }
 
-// Determinism control: the same seed gives the same script, the same summaries byte for byte
-// and the same result.
+// Determinism control: the same seed run again gives the same script, the same summaries byte
+// for byte and the same result.
 func TestTier0Deterministic(t *testing.T) {
-	cfg := DefaultConfig(1)
-	cfg.MaxCompactions = 8
-	a, err := Measure(context.Background(), cfg, lister)
+	m := measurement(t)
+	first := m.Runs[0]
+	cfg := m.Config
+	opt := cfg.Options
+	opt.Turns = cfg.Turns
+	again, err := Simulate(context.Background(), Generate(first.Script.Seed, opt), cfg.Window, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Measure(context.Background(), cfg, lister)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(a.Runs[0].Script, b.Runs[0].Script) {
+	if !reflect.DeepEqual(first.Script, again.Script) {
 		t.Fatal("scripts differ")
 	}
-	for i := range a.Runs[0].Snapshots {
-		if a.Runs[0].Snapshots[i].Summary != b.Runs[0].Snapshots[i].Summary {
+	if len(again.Snapshots) != 8 {
+		t.Fatalf("%d compactions", len(again.Snapshots))
+	}
+	for i := range again.Snapshots {
+		if first.Snapshots[i].Summary != again.Snapshots[i].Summary {
 			t.Fatalf("compaction %d: summaries differ", i+1)
 		}
 	}
-	if !reflect.DeepEqual(a.Results, b.Results) {
+	prefix := first
+	prefix.Snapshots = first.Snapshots[:8]
+	if !reflect.DeepEqual(Evaluate(prefix, prefix.Script.Probes, lister), Evaluate(again, again.Script.Probes, lister)) {
 		t.Fatal("results differ")
 	}
 }
@@ -114,12 +150,8 @@ func TestTier0Deterministic(t *testing.T) {
 // and values) finds almost nothing, so the scorer matches the planted bytes, not the shape of
 // the turns.
 func TestTier0ShuffledGold(t *testing.T) {
-	cfg := DefaultConfig(1)
-	m, err := Measure(context.Background(), cfg, lister)
-	if err != nil {
-		t.Fatal(err)
-	}
-	other := Generate(101, Options{Turns: cfg.Turns, PlantEvery: cfg.Options.PlantEvery})
+	m := measurement(t)
+	other := Generate(101, Options{Turns: m.Config.Turns, PlantEvery: m.Config.Options.PlantEvery})
 	real, shuffled := hits(m.Results[0]), hits(Evaluate(m.Runs[0], other.Probes, lister))
 	t.Logf("hits: real %d of %d, shuffled gold %d of %d", real.hit, real.total, shuffled.hit, shuffled.total)
 	if real.total != shuffled.total || shuffled.hit*20 > shuffled.total || shuffled.hit*4 > real.hit {
@@ -140,15 +172,19 @@ func hits(r Result) hitCount {
 	return h
 }
 
-// Renamed-ids control: the same script with every planted name drawn again loses exactly the
+// Renamed-ids control: the same scripts with every planted name drawn again lose exactly the
 // same probes, so the curves measure the classes, not particular names. Which kept probes are
 // shown rather than reachable may shift, since names of other lengths change what fits the
-// budget; the shifts are logged.
+// budget; the shifts are logged. Under the race detector it compares 150 turns of one seed.
 func TestTier0RenamedIDs(t *testing.T) {
-	cfg := DefaultConfig(seeds(t))
-	m, err := Measure(context.Background(), cfg, lister)
-	if err != nil {
-		t.Fatal(err)
+	m := measurement(t)
+	cfg := m.Config
+	if raceEnabled && os.Getenv("MEMEVAL_SEEDS") == "" {
+		cfg.Turns, cfg.MaxCompactions = 150, 7
+		var err error
+		if m, err = Measure(context.Background(), cfg, lister); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg.Options.Rename = true
 	renamed, err := Measure(context.Background(), cfg, lister)

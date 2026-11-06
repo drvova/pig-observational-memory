@@ -19,6 +19,9 @@ import (
 // whose context passes Window-Reserve and keeps that turn.
 type Window struct {
 	Context, Reserve, Overhead, MaxOutput int
+	// SummaryMaxTokens caps the summary as the compactionSummaryMaxTokens setting does; 0 is
+	// the default (no cap beyond the window's).
+	SummaryMaxTokens int
 }
 
 // SmallWindow is the default: small enough that the ledger outgrows the summary budget within a
@@ -76,6 +79,9 @@ func UserID(i int) string { return fmt.Sprintf("u%03d", i) }
 func Simulate(ctx context.Context, script Script, w Window, maxCompactions int) (Run, error) {
 	cfg := config.Defaults
 	cfg.ConsolidateOff = true
+	if w.SummaryMaxTokens > 0 {
+		cfg.CompactionSummaryMaxTokens = w.SummaryMaxTokens
+	}
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := testfix.NewFakeHost()

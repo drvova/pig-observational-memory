@@ -290,3 +290,14 @@ func upperFirst(s string) string {
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
 }
+
+// Filler is n filler turns from seed: ordinary coding exchanges, no probes. Scenario tests put
+// their own turns before them.
+func Filler(seed int64, n int) []Turn {
+	rng := rand.New(rand.NewSource(seed))
+	out := make([]Turn, n)
+	for i := range out {
+		out[i] = fillerTurn(rng, i)
+	}
+	return out
+}
