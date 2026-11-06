@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
@@ -440,9 +441,26 @@ func QuotedByUser(entries []session.Entry, quote string, skip []string) bool {
 	return quotedIn(entries, quote, skip, true, serialize.HistoryUser)
 }
 
+// QuotedSource is the source content a staged save quoting tool output cites
+// (curated.Call.SourceOf): the curated.SourceDigest of the first tool result on the branch
+// holding quote, whitespace collapsed and case ignored; "" when none does. The calls of the
+// memory tools in skip are left out, so text the model printed through them is no source.
+func QuotedSource(entries []session.Entry, quote string, skip []string) string {
+	if text, ok := quotedText(entries, quote, skip, false, serialize.HistoryTool); ok {
+		return curated.SourceDigest(text)
+	}
+	return ""
+}
+
 // quotedIn reports whether quote is in a message on the branch whose role is one of roles; v2
 // reads it as memory v2's history does.
 func quotedIn(entries []session.Entry, quote string, skip []string, v2 bool, roles ...string) bool {
+	_, ok := quotedText(entries, quote, skip, v2, roles...)
+	return ok
+}
+
+// quotedText is the text of the first message quotedIn finds quote in.
+func quotedText(entries []session.Entry, quote string, skip []string, v2 bool, roles ...string) (string, bool) {
 	needle := strings.ToLower(strings.Join(strings.Fields(quote), " "))
 	for _, entry := range entries {
 		role, text, ok := HistoryText(entry, v2, skip)
@@ -450,8 +468,8 @@ func quotedIn(entries []session.Entry, quote string, skip []string, v2 bool, rol
 			continue
 		}
 		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), needle) {
-			return true
+			return text, true
 		}
 	}
-	return false
+	return "", false
 }

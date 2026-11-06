@@ -733,24 +733,19 @@ func (c *Call) history(ctx context.Context, o omwire.Options, n int) (any, error
 }
 
 // saved answers Saved: the curated memories visible from this project ranked as the index ranks
-// them, a staged one only in the sessions that staged it, then the files the validator refused
+// them, a staged one only in the sessions that staged it and none whose forget this session
+// staged (curated.Store.ListAs), then the files the validator refused
 // with their reason.
 func (c *Call) saved(ctx context.Context, o omwire.Options, n int) (any, error) {
 	if c.Curated == nil {
 		return nil, errCuratedOff
 	}
 	store := c.Curated.Store
-	listed, err := store.List(c.Curated.Project)
+	memories, err := store.ListAs(c.Curated.Project, c.Curated.Source)
 	if err != nil {
 		return nil, err
 	}
 	usage := store.RankUsage()
-	var memories []curated.Memory
-	for _, m := range listed {
-		if curated.SeenBy(m, c.Curated.Source) {
-			memories = append(memories, m)
-		}
-	}
 	rows := Rows{Fields: []string{"name", "type", "scope", "updated", "description", "body", "state", "reason"}, Rows: [][]string{}, From: []string{}, To: []string{}}
 	var values []om.Memory
 	for _, m := range curated.Rank(memories, usage) {

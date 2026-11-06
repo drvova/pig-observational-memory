@@ -70,7 +70,7 @@ func Index(h host.Host, pin *curated.Pin) (string, bool) {
 		return "", false
 	}
 	index, _, _ := pin.Get(func() (string, []string) {
-		return curated.IndexFor(call.Store, call.Project, cfg.CuratedMemoryIndexTokens)
+		return curated.IndexAs(call.Store, call.Project, call.Source, cfg.CuratedMemoryIndexTokens)
 	})
 	return index, true
 }

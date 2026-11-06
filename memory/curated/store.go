@@ -202,8 +202,8 @@ func (s Store) GetIn(name, project string) (Memory, error) {
 	return m, nil
 }
 
-// GetAs reads one memory as session sees it from project: GetIn, and a staged memory only in
-// the sessions that staged it.
+// GetAs reads one memory as session sees it from project: GetIn, a staged memory only in the
+// sessions that staged it, and never one whose forget this session staged (HiddenIn).
 func (s Store) GetAs(name, project, session string) (Memory, error) {
 	m, err := s.GetIn(name, project)
 	if err != nil {
@@ -212,7 +212,49 @@ func (s Store) GetAs(name, project, session string) (Memory, error) {
 	if !SeenBy(m, session) {
 		return Memory{}, ErrNotFound
 	}
+	events, err := s.UsageEvents(name)
+	if err != nil {
+		return Memory{}, err
+	}
+	if HiddenIn(m, events, session) {
+		return Memory{}, ErrNotFound
+	}
 	return m, nil
+}
+
+// ListAs is List as session sees it: a staged memory only in the sessions that staged it
+// (SeenBy), and no memory whose forget this session staged (HiddenIn).
+func (s Store) ListAs(project, session string) ([]Memory, error) {
+	listed, err := s.List(project)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.UsageEventsByName()
+	if err != nil {
+		return nil, err
+	}
+	out := []Memory{}
+	for _, m := range listed {
+		if SeenBy(m, session) && !HiddenIn(m, events[m.Name], session) {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// HiddenIn reports whether session staged a forget of m (EventForgetStaged) since m was saved:
+// the memory is hidden in that session at once and stays shared until a forget with a user's
+// words retires it (docs/memory-v2.md, "Curated memory"). events are m's usage events.
+func HiddenIn(m Memory, events []UsageEvent, session string) bool {
+	if session == "" {
+		return false
+	}
+	for _, e := range events {
+		if e.Event == EventForgetStaged && e.Session == session && !e.Time.Before(m.Created) {
+			return true
+		}
+	}
+	return false
 }
 
 // readIn is GetIn without the load check (read): what Update and Forget start from.
@@ -278,6 +320,14 @@ func (s Store) fileNames() ([]string, error) {
 // Save writes a new memory. A name already in use is refused: a name has one
 // home, so a changed fact is an edit of the existing memory, not a second one.
 func (s Store) Save(m Memory, source string) (Memory, error) {
+	return s.SaveCiting(m, source, "")
+}
+
+// SaveCiting is Save of a memory a session stages citing the source content it rests on:
+// digest is SourceDigest of that content ("" when the staging cites none). The staging's usage
+// line records the session and the digest, the evidence Settle reads for independence: two
+// sessions staging the same save count only when they cite distinct source content.
+func (s Store) SaveCiting(m Memory, source, digest string) (Memory, error) {
 	if err := ValidateName(m.Name); err != nil {
 		return Memory{}, err
 	}
@@ -340,10 +390,14 @@ func (s Store) Save(m Memory, source string) (Memory, error) {
 	if err != nil {
 		return Memory{}, err
 	}
+	line := usageLine{Name: m.Name, Event: EventSave}
 	if joined {
-		return saved, s.Record(m.Name, EventStaged)
+		line.Event = EventStaged
 	}
-	return saved, s.Record(m.Name, EventSave)
+	if saved.Staged {
+		line.Session, line.Source = source, digest
+	}
+	return saved, s.appendUsage(line)
 }
 
 // Edit is a change to a memory; nil fields are left as they are.
@@ -398,8 +452,47 @@ func (s Store) Update(name, project string, edit Edit, source string) (Memory, e
 
 // Forget retires the memory name, as seen from project (Memory.Retired), keeping the file.
 // Its usage history stays in the ledger. It reads the memory without the load check, so a
-// memory the validator refuses can still be retired.
+// memory the validator refuses can still be retired. It is the forget code evidence makes (a
+// scanner rule, a path gone); the memory tool's forget goes through Call.Run, which retires a
+// memory other sessions may see only on a user's words (ForgetQuoted) and otherwise stages the
+// forget (StageForget).
 func (s Store) Forget(name, project string) error {
+	return s.forget(name, project, usageLine{Name: name, Event: EventForget})
+}
+
+// ForgetQuoted is Forget on a user's words: the forget's usage line keeps the quote
+// (normalized) that asks for it, which bounds how many forgets one quote confirms
+// (MaxForgetsPerQuote).
+func (s Store) ForgetQuoted(name, project, quote string) error {
+	return s.forget(name, project, usageLine{Name: name, Event: EventForget, Quote: quote, User: true})
+}
+
+// StageForget records a forget of the memory name, as seen from project, that has no user's
+// words: the memory is hidden in session at once (HiddenIn) and stays shared, and a later
+// forget with a user's words retires it.
+func (s Store) StageForget(name, project, session string) error {
+	if _, err := s.readIn(name, project); err != nil {
+		return err
+	}
+	return s.appendUsage(usageLine{Name: name, Event: EventForgetStaged, Session: session})
+}
+
+// QuotedForgets counts the forgets the user's words quote (normalized) confirmed.
+func (s Store) QuotedForgets(quote string) (int, error) {
+	lines, err := s.readUsageLines()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, line := range lines {
+		if line.Event == EventForget && line.User && line.Quote == quote {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s Store) forget(name, project string, line usageLine) error {
 	err := s.locked(func() error {
 		m, err := s.readIn(name, project)
 		if err != nil {
@@ -411,7 +504,7 @@ func (s Store) Forget(name, project string) error {
 	if err != nil {
 		return err
 	}
-	return s.Record(name, EventForget)
+	return s.appendUsage(line)
 }
 
 // The usage ledger's events.
@@ -433,6 +526,9 @@ const (
 	EventCorrected = "corrected"
 	// EventPromoted is a staged memory made live on evidence (memory v2).
 	EventPromoted = "promoted"
+	// EventForgetStaged is a forget with no user's words (memory v2): it hides the memory in
+	// the session that made it (HiddenIn) and leaves it shared.
+	EventForgetStaged = "forget-staged"
 )
 
 type usageLine struct {
@@ -446,6 +542,11 @@ type usageLine struct {
 	// Record is the record id a corrected event names, or what a cited or promoted event
 	// rests on.
 	Record string `json:"record,omitempty"`
+	// Session is the session of a staging (the save or staged event of a staged memory) or of
+	// a staged forget.
+	Session string `json:"session,omitempty"`
+	// Source is a staging's SourceDigest: the source content it cites, "" for none.
+	Source string `json:"source,omitempty"`
 }
 
 func (s Store) usagePath() string { return filepath.Join(s.Dir, "usage.jsonl") }

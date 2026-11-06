@@ -158,10 +158,10 @@ func Edit(name string, opts ...EditOpt) (string, error) {
 	return s, err
 }
 
-// ForgetMemory retires a curated memory.
-func ForgetMemory(name string) (string, error) {
+// ForgetMemory forgets a curated memory for every session when Quoting gives a user's words asking for it; without them it hides the memory in this session only and stages the forget.
+func ForgetMemory(name string, opts ...SaveOpt) (string, error) {
 	var s string
-	err := call(omwire.MForgetMemory, &s, name)
+	err := call(omwire.MForgetMemory, &s, name, mergeSave(opts))
 	return s, err
 }
 

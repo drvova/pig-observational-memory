@@ -177,7 +177,7 @@ func mergeOpts(opts []Opt) omwire.Options {
 	return m
 }
 
-// SaveOpt is an option of Save.
+// SaveOpt is an option of Save; ForgetMemory takes only Quoting.
 type SaveOpt struct{ w omwire.SaveOptions }
 
 // Body sets the memory's body.
@@ -186,7 +186,7 @@ func Body(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Body: &text}}
 // Scope sets where the memory applies: "global" or "project".
 func Scope(scope string) SaveOpt { return SaveOpt{omwire.SaveOptions{Scope: &scope}} }
 
-// Quoting gives the user's words that confirm the memory, which saves it live.
+// Quoting gives the user's words that confirm the memory, which saves it live, or that ask to forget it, which forgets it for every session.
 func Quoting(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Quoting: &text}} }
 
 func mergeSave(opts []SaveOpt) omwire.SaveOptions {

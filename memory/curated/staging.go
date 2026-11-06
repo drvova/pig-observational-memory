@@ -1,6 +1,8 @@
 package curated
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -82,7 +84,8 @@ const (
 // agent_settled, session_start and after level 1, with no request. A staged memory is promoted
 // on evidence recorded since it was saved: a helped feedback whose quote is a user's words
 // (Call.UserEvidence), a level-1 citation (EventCited), or the same name and description staged
-// in another session (Memory.StagedBy). A staged memory is never deleted. A correction whose
+// in another session (Memory.StagedBy) from independent source content (independentStagings).
+// A staged memory is never deleted. A correction whose
 // subject matches a memory (SubjectMatches) and that was made after the memory was last saved
 // or edited records one corrected event per correction, which ranks the memory after the
 // others and flags it until it is edited; a pinned memory is never flagged, and nothing cools
@@ -161,10 +164,60 @@ func promotionEvidence(m Memory, events []UsageEvent) string {
 			evidence = EvidenceCitation
 		}
 	}
-	if evidence == "" && len(m.StagedBy) >= 2 {
+	if evidence == "" && independentStagings(m, events) {
 		return EvidenceSessions
 	}
 	return evidence
+}
+
+// independentStagings reports whether two of the sessions that staged m (Memory.StagedBy) did so
+// independently (docs/brain-memory.md, decision 7): each staging cites the source content it
+// rests on (its usage line's Source, a SourceDigest), and two sessions count only when they cite
+// distinct content. Two sessions that read the same file are not independent, and a staging
+// that cites nothing (every staging written before the digests were recorded among them) is no
+// evidence. The stagings counted are those since m was saved and after its last edit, so
+// sources cited for one text never promote another.
+func independentStagings(m Memory, events []UsageEvent) bool {
+	if len(m.StagedBy) < 2 {
+		return false
+	}
+	cited := map[string][]string{}
+	for _, e := range events {
+		if e.Time.Before(m.Created) {
+			continue
+		}
+		switch e.Event {
+		case EventEdit:
+			cited = map[string][]string{}
+		case EventSave, EventStaged:
+			if e.Source != "" && slices.Contains(m.StagedBy, e.Session) && !slices.Contains(cited[e.Session], e.Source) {
+				cited[e.Session] = append(cited[e.Session], e.Source)
+			}
+		}
+	}
+	for _, a := range m.StagedBy {
+		for _, b := range m.StagedBy {
+			if a == b {
+				continue
+			}
+			for _, da := range cited[a] {
+				for _, db := range cited[b] {
+					if da != db {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// SourceDigest is the digest of the source content a staging cites: the text holding its quote
+// (a tool result), whitespace collapsed, as sha256 hex. Two stagings cite the same content when
+// their digests are equal.
+func SourceDigest(text string) string {
+	sum := sha256.Sum256([]byte(oneLine(text)))
+	return hex.EncodeToString(sum[:])
 }
 
 // promote makes the staged memory name live; false when it is no longer staged.

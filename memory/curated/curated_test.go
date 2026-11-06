@@ -183,7 +183,7 @@ func TestWrites(t *testing.T) {
 	if usage, _ := c.Store.Usage(); usage["uses-pnpm"].Helped != 1 {
 		t.Fatalf("usage = %+v", usage["uses-pnpm"])
 	}
-	if got := run(OpForget, map[string]string{"name": "uses-pnpm"}); got != "Forgot memory uses-pnpm." {
+	if got := run(OpForget, map[string]string{"name": "uses-pnpm", "quote": "forget the pnpm memory"}); got != "Forgot memory uses-pnpm." {
 		t.Fatalf("forget: %s", got)
 	}
 	if _, err := c.Store.GetIn("uses-pnpm", "/repo"); err == nil {

@@ -520,6 +520,7 @@ func (v *validator) resolve(id string) string {
 // accept records a new record replacing sources. The record says which records it replaces
 // (Observation.Replaces), so every link to them is read as a link to it (ledger.Standing).
 func (v *validator) accept(record ledger.Observation, sources []string) {
+	v.leastProvenance(&record, sources)
 	record.Replaces = slices.Clone(sources)
 	record.ID = recordID(record)
 	record.TokenCount = tokens.ObservationLineTokenCount(tokens.ObservationLine{ID: record.ID, Timestamp: record.Timestamp, Relevance: string(record.Relevance), Content: record.Content})
@@ -541,6 +542,40 @@ func (v *validator) accept(record ledger.Observation, sources []string) {
 	edges := append([]string(nil), record.Supersedes...)
 	v.edges[record.ID] = edges
 	v.result.Records = append(v.result.Records, record)
+}
+
+// leastProvenance holds a record replacing sources to the least provenance among them
+// (docs/brain-memory.md, "Provenance, not detection"): its origin is never above the lowest
+// source's (model, then host, then code), and it stands for the user (FromUser) only when every
+// source does, so a merge of a tool-derived record and the user's words is not the user's. The
+// rules a merge and a label are built by already give this; it is checked here, after every
+// proposal's validation, so no later rule can raise what a summary inherits.
+func (v *validator) leastProvenance(record *ledger.Observation, sources []string) {
+	for _, id := range sources {
+		o, ok := v.shown[id]
+		if !ok {
+			continue
+		}
+		if originRank(o.Origin) < originRank(record.Origin) {
+			record.Origin = o.Origin
+		}
+		if !o.FromUser && !ledger.UserPriority(o) {
+			record.FromUser = false
+		}
+	}
+}
+
+// originRank orders origins by the authority of their text: what a model wrote (and any origin
+// this release does not know) lowest, then a host summary, then what code took verbatim from
+// the transcript.
+func originRank(origin string) int {
+	switch origin {
+	case ledger.OriginCode:
+		return 2
+	case ledger.OriginHost:
+		return 1
+	}
+	return 0
 }
 
 // reflection validates one reflection.
