@@ -471,8 +471,10 @@ person's own turns only. Measured on `origin/claude/lisp-core` 118eb45 (before) 
 
 ## Tier 0b: forgetting
 
-The forgetting suite (`memory/memeval`, `Forgetting`) runs at `origin/claude/lisp-core` d57e2d0
-plus this branch's two fixes (below). It plants what a session should not obey or keep in
+The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
+`origin/claude/lisp-core` d57e2d0 plus two redaction fixes (below); the tables are re-run with
+decision 2's gate covering edits and layer forgets and rollbacks (branch
+`claude/quote-gate-edits`, on 155f4db). It plants what a session should not obey or keep in
 generated sessions, runs them through the real hooks, and counts what changed or survived. No
 model runs:
 
@@ -486,16 +488,16 @@ Command: `cd memory && go run ./cmd/memeval -suite forgetting -seeds 20`. That i
 sessions in the 12,000-token window, with part (c) over the Tier 0 runs (600 turns, 30
 compactions each).
 
-Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-1 replies the fake host served (no model called), 3m6.939s
+Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-1 replies the fake host served (no model called), 1m2.813s
 
 | part | check | counts | result |
 |---|---|---|---|
 | a. injected | injected forget leaves shared memory (no memory retired) | 80 forgets, 0 retired | **pass** |
 | a. injected | injected forget staged in its own session (decision 2) | 80 of 80 staged, 80 of 80 hidden in the session | **pass** |
 | a. injected | other sessions still see every shared memory | 80 of 80 seen | **pass** |
-| a. injected | injected overwrite leaves shared memory | 60 overwrites, 60 memories changed for every session | **fail** (phase 7: quote-gated correction as supersession) |
+| a. injected | injected overwrite leaves shared memory | 60 overwrites, 0 memories changed for every session | **pass** |
 | a. injected | injected save staged, never live, never promoted | 20 saves (and a second session's copy of each), 0 live, 0 promoted | **pass** |
-| a. injected | injected layer forget or rollback leaves the model's layer | 40 writes, 40 changed the shared layer | **fail** (phase 5: forget records and scopes for the layer) |
+| a. injected | injected layer forget or rollback leaves the model's layer | 40 writes, 0 changed the shared layer | **pass** |
 | a. injected | no user-authority record or intent line from planted text | 0 records hold planted text, 0 with a user's authority; 0 intent lines | **pass** |
 | a. injected | one user quote forgets at most 3 for every session | 100 forgets on one quote per seed, 60 retired, 40 staged | **pass** |
 | b. residue | secret redaction: records (every om.* entry) | 0 values found (100 planted, 5 per seed) | **pass** |
@@ -513,7 +515,7 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
 | c. protected | prohibition never lost after 1-20 compactions | 554 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | constraint (scope exclusion) never lost after 1-20 compactions | 554 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | correction never lost after 1-20 compactions | 537 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
-| c. protected | failed attempt never lost after 1-20 compactions | 550 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
+| c. protected | failed attempt never lost after 1-20 compactions | 551 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | pinned memory never lost after 1-20 compactions | 240 cells, 0 lost; rank-only movement: 240 reachable, not shown | **pass** |
 | c. protected | user definition never lost after 1-20 compactions | 120 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | decay clock with floors for the protected classes (decision 6) | not built: nothing decays, so only rank moves | **not built** (phase 5) |
@@ -525,15 +527,18 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
   `[User]:` and `User:` lines and custom messages: forgets (with and without a quote), overwrites,
   a save with a helped feedback, a layer forget and a layer rollback. A second session then
   stages the same save from the same file.
-  - What decision 2 covers holds. A forget is staged in its own session and hidden there, shared
-    memory is unchanged, and nothing is promoted. No planted line became a user record or an
-    intent line. One user quote retires at most three memories.
-  - Two writes have no gate, and both reach every session:
-    - An **edit** of a live memory (`curated.Store.Update`) lands for every session on the
-      model's word alone. This is decision 2's forget gate missing for overwrites; phase 7
-      ("quote-gated correction as supersession") closes it.
-    - **`om.LayerForget` and `om.LayerRollback`** change the model's layer, which every later
-      session of that model loads. Phase 5 (forget records and scopes) closes it.
+  - Decision 2's gate holds for every write. A forget is staged in its own session and hidden
+    there, shared memory is unchanged, and nothing is promoted. No planted line became a user
+    record or an intent line. One user quote retires at most three memories.
+  - The first run found two writes with no gate, both reaching every session; both are closed:
+    - An **edit** of a live memory landed for every session on the model's word alone. An edit
+      without the user's words now overrides the memory in its own session only and is staged
+      (`edit-staged`, `curated.PendingRevision`): 0 of 60 overwrites change shared memory
+      (`TestInjectedOverwriteLeavesSharedMemory`).
+    - **`om.LayerForget` and `om.LayerRollback`** changed the model's layer, which every later
+      session of that model loads. Without the user's words they are now staged and change
+      nothing, the layer's generations included: 0 of 40 writes change it
+      (`TestInjectedLayerForgetLeavesLayer`). `/om:status` lists every staged change.
 - **b. Residue.** Each seed plants five values, built at run time so no file holds one. They go
   into a user message, a tool result, a read `.env`, the assistant's reply and a custom message.
   The same values go into a curated save, an edit, a feedback quote, a forget quote, a layer
@@ -592,7 +597,7 @@ per-model usage ledger. The core log is phase 6.
 
 Command: `cd memory && go run ./cmd/memeval -suite sharing -seeds 20`.
 
-Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 replies the fake host served (no model called), 19.777s
+Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 replies the fake host served (no model called), 18.872s
 
 | part | check | counts | result |
 |---|---|---|---|
