@@ -179,34 +179,35 @@ Phase 2C (`claude/phase2-conversation`, `docs/memory-v2.md` "Standing rules and 
 exclusions", "Keys", "Decisions" and "Repository conventions") adds the rule verbs, scope
 exclusions, substitutions, standing and process rules and team forms to level 0, records decisions
 with their reasons as kind `decision`, keeps a rule's and a decision's keys through level 1, and
-records repository conventions from read tool results. The same 20 seeds, default window (1,482
+records repository conventions from read tool results. Measured after merging phase 1 and phase 2
+part A (so the summary header carries the unverified framing too), 20 seeds, default window (1,493
 snippets run, none failing, 0 requests):
 
 | class | 1 | 2 | 4 | 5 | 8 | 10 | 16 | 20 |
 |---|---|---|---|---|---|---|---|---|
-| identifier | 100 / 0 / 0 | 97 / 3 / 0 | 90 / 10 / 0 | 85 / 15 / 0 | 61 / 39 / 0 | 59 / 41 / 0 | 47 / 53 / 0 | 38 / 62 / 0 |
+| identifier | 99 / 1 / 0 | 98 / 2 / 0 | 90 / 10 / 0 | 84 / 16 / 0 | 61 / 39 / 0 | 59 / 41 / 0 | 47 / 53 / 0 | 38 / 62 / 0 |
 | error text | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 | 0 / 0 / 100 |
 | constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
 | scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
-| decision | 95 / 5 / 0 | 85 / 15 / 0 | 70 / 30 / 0 | 51 / 49 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
-| intention | 99 / 1 / 0 | 93 / 7 / 0 | 88 / 12 / 0 | 80 / 20 / 0 | 45 / 55 / 0 | 38 / 63 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
+| decision | 96 / 4 / 0 | 86 / 14 / 0 | 65 / 35 / 0 | 43 / 57 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | 99 / 1 / 0 | 93 / 7 / 0 | 87 / 13 / 0 | 75 / 25 / 0 | 44 / 56 / 0 | 36 / 64 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
 | superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
-| probes per class | 120 | 119 | 100 | 100 | 99 | 80 | 60 | 60 |
+| probes per class | 120 | 119 | 100 | 100 | 100 | 80 | 60 | 60 |
 
-With the summary capped at 1,200 tokens (3,190 snippets, none failing):
+With the summary capped at 1,200 tokens (3,204 snippets, none failing):
 
 | class | 1 | 2 | 4 | 8 | 16 | 20 |
 |---|---|---|---|---|---|---|
-| identifier | 23 / 77 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
-| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 34 / 66 / 0 | 0 / 100 / 0 |
-| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 68 / 32 / 0 | 10 / 90 / 0 |
+| identifier | 17 / 83 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 97 / 3 / 0 | 10 / 90 / 0 | 0 / 100 / 0 |
+| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 31 / 69 / 0 | 0 / 100 / 0 |
 | decision | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
-| intention | 24 / 76 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
-| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 71 / 29 / 0 | 0 / 100 / 0 |
+| intention | 23 / 77 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 45 / 55 / 0 | 0 / 100 / 0 |
 
 - **Scope exclusions** go from 91–100% lost to 100% shown at every N in the default window, and
   are never lost under the cap.
-- **Decisions** go from 100% lost to never lost: shown at first (95% at N = 1), then reachable
+- **Decisions** go from 100% lost to never lost: shown at first (96% at N = 1), then reachable
   through the printed snippet once the ledger outgrows the budget. A decision is not a user rule,
   so it competes with the other records (class 4 with specifics, else the last class); under the
   cap it is reachable only.
@@ -214,7 +215,7 @@ With the summary capped at 1,200 tokens (3,190 snippets, none failing):
   class, so at 16 and 20 compactions the 1,200-token summary has no room for every rule: older
   constraints, exclusions and corrections move from shown to reachable (the baseline showed 97–100%
   of constraints at N = 20). None is lost, and the default window shows all of them. The
-  summary's header also names the two new kinds, a few tokens on every summary.
+  summary's header also names the two new kinds, a few tokens on every summary (and phase 1's unverified framing more).
 - **Error text** is unchanged: it belongs to the tool-output work (`claude/phase2-tool-output`).
 - The invariants held on all 600 compactions of both runs.
 
