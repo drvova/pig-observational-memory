@@ -310,9 +310,12 @@ func TestLispTriggerMatchesInProcess(t *testing.T) {
 	overLisp := func(h *testfix.FakeHost) {
 		before := len(h.Messages())
 		must(t, client.AgentSettled(h))
-		// The deferred step answers later: wait for its notification when the trigger fired.
+		// The deferred step answers later: wait for its notification when the trigger fired. It
+		// takes up to IdleRecheckAttempts × IdleRecheckDelay plus a host round trip; the deadline
+		// is generous so a loaded machine (parallel race runs) does not fail it, and the loop
+		// returns as soon as the step finishes.
 		if n := len(h.Messages()); n > before {
-			for range 500 {
+			for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 				if len(h.Messages()) > n {
 					return
 				}
