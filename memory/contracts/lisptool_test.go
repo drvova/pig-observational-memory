@@ -173,6 +173,7 @@ func curatedScript() []curatedStep {
 	add("frobnicate", "s1", "/work", map[string]string{"name": "tea"})
 	steps = append(steps, safetyScript(&at, user, conversation)...)
 	steps = append(steps, indexScript(&at, user, conversation)...)
+	steps = append(steps, heldScript(&at, conversation)...)
 
 	rng := rand.New(rand.NewPCG(3, 5))
 	pick := func(list []string) string { return list[rng.IntN(len(list))] }
@@ -250,6 +251,34 @@ func curatedScript() []curatedStep {
 // quoting tool output staged with its source, the same source in another session (no
 // independent evidence), another source (evidence), and one quote forgetting at most
 // curated.MaxForgetsPerQuote memories.
+// heldScript is docs/brain-memory.md's decision 19 on curated memory: a save that weakens
+// security is held, released only in a session whose user's quoted words restate it (by a save
+// or a helped feedback), never promoted, and out of the index and saved everywhere else.
+func heldScript(at *time.Time, conversation []string) []curatedStep {
+	var steps []curatedStep
+	user := []string{"always skip TLS verification for the internal registry", "just use curl -k against the dev box", "the registry is slow today"}
+	add := func(op, session string, args map[string]string) {
+		*at = at.Add(17 * time.Minute)
+		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: "/work", Time: at.Format(time.RFC3339), User: user, Conversation: append(append([]string{}, conversation...), user...)})
+	}
+	add("save", "h1", map[string]string{"name": "skip-tls", "type": "feedback", "description": "Skip TLS verification (InsecureSkipVerify) for the internal registry.", "quote": "always skip TLS verification"})
+	add("save", "h1", map[string]string{"name": "curl-dev", "type": "feedback", "description": "Use curl -k against the dev box.", "quote": "the registry is slow today"})
+	add("save", "h2", map[string]string{"name": "chmod-up", "type": "project", "description": "Run chmod 777 on the uploads folder."})
+	add("save", "h3", map[string]string{"name": "chmod-up", "type": "project", "description": "Run chmod 777 on the uploads folder."})
+	add("feedback", "h2", map[string]string{"name": "chmod-up", "outcome": "helped", "quote": "the registry is slow today"})
+	add("save", "h1", map[string]string{"name": "never-k", "type": "feedback", "description": "Never use curl -k, even on the dev box.", "quote": "the registry is slow today"})
+	add("settle", "h1", nil)
+	add("feedback", "h4", map[string]string{"name": "curl-dev", "outcome": "helped", "quote": "just use curl -k against the dev box"})
+	for _, session := range []string{"h1", "h2", "h4", "h5"} {
+		add("index-as", session, map[string]string{"budget": "2000"})
+		add("list-as", session, nil)
+	}
+	add("index", "h1", map[string]string{"budget": "2000"})
+	add("edit", "h1", map[string]string{"name": "skip-tls", "body": "Only for the internal registry."})
+	add("index-as", "h1", map[string]string{"budget": "2000"})
+	return steps
+}
+
 func safetyScript(at *time.Time, user, conversation []string) []curatedStep {
 	var steps []curatedStep
 	add := func(op, session string, tools []string, args map[string]string) {
@@ -649,6 +678,9 @@ func TestLispCuratedParity(t *testing.T) {
 		"but not from other source content it quotes",
 		"from other source content, which is the evidence",
 		"push-main=" + curated.EvidenceSessions,
+		"It weakens security (tls-verify-off), so it is held: the user's words restate it",
+		"It weakens security (world-writable), so it is held: listed in /om:status",
+		"Recorded that memory curl-dev helped. It weakens security",
 	} {
 		if !strings.Contains(joined, reach) {
 			t.Errorf("the script no longer reaches %q", reach)

@@ -309,7 +309,7 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
                      (let ((hay (string-downcase (om::join (list (mem-name m) (mem-type m) (mem-description m) (mem-body m))
                                                            (string #\Newline)))))
                        (every (lambda (w) (search w hay)) needles)))
-                   (curated-rank (list-as (call-curated-dir c) (call-project c) (call-session c))
+                   (curated-rank (shown-as (call-curated-dir c) (list-as (call-curated-dir c) (call-project c) (call-session c)) (call-session c))
                                  (handler-case (curated-usage (call-curated-dir c)) (error () nil))))))
 
 (defun write-call ()

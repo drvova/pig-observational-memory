@@ -40,7 +40,7 @@ const tablesBody = `
 - omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and in query the om snippet (memory tool code) that lists them.
 - The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. ` + ledger.UnverifiedNotice + ` When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 ` + ledger.TablesRecallParagraph
 
@@ -79,7 +79,7 @@ const LinesInstructions = `These are condensed memories from earlier in this ses
 - omitted lists records left out to fit, each span with its dates, count, first and last entry id and the om snippet (memory tool code) that lists them.
 - files and commits list files at their newest state and commits; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. ` + ledger.UnverifiedNotice + ` When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 ` + ledger.TablesRecallParagraph
 

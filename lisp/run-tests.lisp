@@ -75,6 +75,9 @@
 ;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0 (contracts/encoding.jsonl).
 (load (merge-pathnames "tests/encoding.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Preferences that weaken security and the unverified framing (contracts/insecure.md).
+(load (merge-pathnames "tests/insecure.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

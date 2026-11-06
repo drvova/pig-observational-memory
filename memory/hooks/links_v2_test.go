@@ -69,10 +69,10 @@ func TestV2Level1ConfirmsPossibleUpdate(t *testing.T) {
 		o.PossiblyUpdates = []string{oldID}
 	})
 	entries := []ledger.Entry{
-		userMessage("u0", "Staging deploys on port 8080"+strings.Repeat(", running the usual checks", 42)),
+		userMessage("u0", "Staging deploys on port 8080"+strings.Repeat(", running the usual checks", 40)),
 		testfix.ObservationsRecordedEntry("om-0", []ledger.Observation{old}, "u0"),
-		userMessage("u1", "Staging now uses port 9090"+strings.Repeat(", after the usual checks", 42)),
-		assistantMessage("a1", "Noted."),
+		userMessage("u1", "Staging now uses port 9090"+strings.Repeat(", after the usual checks", 40)),
+		assistantMessage("a1", "Noted"+strings.Repeat(", after the usual checks", 80)+"."),
 		testfix.ObservationsRecordedEntry("om-1", []ledger.Observation{later}, "a1"),
 		userMessage("u2", "Next please"),
 	}
@@ -97,7 +97,7 @@ func TestV2Level1ConfirmsPossibleUpdate(t *testing.T) {
 	if report == nil || !report.Applied || report.Confirmed != 1 || report.Rejected != 0 || report.Records != 0 {
 		t.Fatalf("report %+v", report)
 	}
-	if !strings.Contains(c.Summary, "port 9090") || !strings.Contains(c.Summary, "(was "+oldID+")") || strings.Contains(c.Summary, "port 8080") {
+	if !strings.Contains(c.Summary, "port 9090") || !strings.Contains(c.Summary, "(was "+oldID+")") || strings.Contains(c.Summary, "The staging deploy uses port 8080") {
 		t.Fatalf("summary:\n%s", c.Summary)
 	}
 	for _, o := range c.Details.Observations {

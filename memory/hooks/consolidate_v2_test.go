@@ -35,7 +35,7 @@ func level1Branch() []ledger.Entry {
 	return []ledger.Entry{
 		// Long enough that the summary budget (never more than the range removes) holds records.
 		userMessage("u1", "Deploy the api to staging on port 8080"+strings.Repeat(", running the usual checks", 60)),
-		assistantMessage("a1", "Deployed with the Makefile target"+strings.Repeat(", after the usual checks", 60)),
+		assistantMessage("a1", "Deployed with the Makefile target"+strings.Repeat(", after the usual checks", 65)),
 		testfix.ObservationsRecordedEntry("om-1", []ledger.Observation{port, makefile}, "a1"),
 		userMessage("u2", "Next please"),
 	}
@@ -344,5 +344,27 @@ func TestV2Level1CustomInstructionsGoToLevel1Only(t *testing.T) {
 	failed := level1CompactionOf(t, runV2Hook(rt, h, event))
 	if failed.Details.Consolidation.Applied || !strings.HasSuffix(failed.Summary, "\n\n---\n\n"+instructions) {
 		t.Fatalf("level-0 summary:\n%s", failed.Summary)
+	}
+}
+
+// A held record (ledger.HeldRule) never reaches the level-1 request, so no merge can carry a
+// security-weakening preference out of the hold under another kind (decision 19).
+func TestV2Level1LeavesHeldRecordsOut(t *testing.T) {
+	const held = "The user prefers to commit with --no-verify to skip the hooks"
+	rt, h, entries := level1Setup(t, mergeReply("Staging deploys run from the Makefile on port 8080"))
+	pref := testfix.Observation("aaaaaaaaaaa3", func(o *ledger.Observation) {
+		o.Content, o.SourceEntryIDs, o.Origin, o.Kind, o.Subject = held, []string{"u1"}, ledger.OriginCode, "preference", "git"
+	})
+	if ledger.HeldRule(pref) == "" {
+		t.Fatalf("fixture is not held: %q", held)
+	}
+	entries = append(entries[:3:3], testfix.ObservationsRecordedEntry("om-2", []ledger.Observation{pref}, "a1"), entries[3])
+	h.SetBranch(entries)
+	level1CompactionOf(t, runV2Hook(rt, h, v2Event(entries, "u2", 20_000, "manual")))
+	if len(h.ModelsFake.Streams.Requests) != 1 {
+		t.Fatalf("requests: %d", len(h.ModelsFake.Streams.Requests))
+	}
+	if messages := fmt.Sprint(h.ModelsFake.Streams.Requests[0]["messages"]); strings.Contains(messages, "--no-verify") {
+		t.Fatalf("the level-1 input holds the held record: %s", messages)
 	}
 }

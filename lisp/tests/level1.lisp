@@ -232,3 +232,28 @@
           (check (length events) 1 "one request event")
           (check (jget (cdr (first events)) "aborted") :true "logged as aborted")
           (check (find-if (lambda (a) (eq (jget (cdr a) "consolidated") :true)) (phost-appended h)) nil "nothing appended"))))))
+
+(deftest level1-leaves-held-records-out
+  ;; A held record (held-rule) never reaches the level-1 request (decision 19).
+  (let* ((branch (concatenate 'simple-vector
+                              (pig-turn "p" "I prefer to commit with --no-verify so the hooks are skipped. Deploy on port 8080.")
+                              (pig-turn "q" "Now the saver.")))
+         (h (make-phost :branch branch :model (jobject "provider" "p" "id" "m" "contextWindow" 200000 "maxTokens" 32000)))
+         (l (make-l1host :phost h)))
+    (with-pig (stream dir)
+      (write-file* (format nil "~Asettings.json" dir) "{}")
+      (setf (l1host-reply l) (lambda (request)
+                               (tool-call-message (jobject "records" (vector (jobject "id" (first (l1-candidate-ids request))
+                                                                                      "subject" "deploy" "relevance" "high"))))))
+      (l1-compact stream 1 dir l branch)
+      (let* ((held (loop for (type . data) in (phost-appended h)
+                         when (equal type "om.observations.recorded")
+                           append (loop for o across (jget data "observations")
+                                        when (search "--no-verify" (jget o "content")) collect (jget o "id"))))
+             (request (first (l1host-requests l)))
+             (text (and request (jget (aref (jget (aref (jget request "messages") 0) "content") 0) "text"))))
+        (check (and held t) t "level 0 recorded the preference")
+        (check (and request t) t "one level-1 request")
+        (dolist (id held)
+          (check (member id (l1-candidate-ids request) :test #'equal) nil "the held record is no candidate")
+          (check (search (format nil "[~A]" id) text) nil "the held record is not shown"))))))

@@ -33,7 +33,7 @@ func scenarioRun(t *testing.T, n int, lead ...Turn) Run {
 
 // tightWindow caps the summary (the compactionSummaryMaxTokens setting), so the ledger is
 // several times the summary within a few compactions.
-var tightWindow = Window{Context: 12_000, Reserve: 2_000, Overhead: 1_500, MaxOutput: 4_000, SummaryMaxTokens: 700}
+var tightWindow = Window{Context: 12_000, Reserve: 2_000, Overhead: 1_500, MaxOutput: 4_000, SummaryMaxTokens: 760}
 
 // shownOf reads the summary's omitted notice: how many records it shows of how many.
 var shownOf = regexp.MustCompile(`Shown here: (\d+) of (\d+) records`)

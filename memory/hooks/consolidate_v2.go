@@ -122,8 +122,16 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	if last := ledger.FindLastCompactionIndex(entries); last >= 0 && last < ledger.EntryIndexForID(entries, event.FirstKeptEntryID) {
 		cutIDs[entries[last].ID] = true
 	}
-	candidates, active := []ledger.Observation{}, []ledger.Observation{}
+	// A held record (ledger.HeldRule) never reaches level 1: a merge the model labelled anything
+	// but a preference would otherwise carry a security-weakening preference out of the hold
+	// (docs/brain-memory.md, decision 19). It stays in the ledger and in /om:status.
+	byID := make(map[string]ledger.Observation, len(projection.Observations))
 	for _, o := range projection.Observations {
+		byID[o.ID] = o
+	}
+	observations, reflections := ledger.WithoutHeld(projection.Observations, ledger.ActiveReflections(projection.Reflections), byID)
+	candidates, active := []ledger.Observation{}, []ledger.Observation{}
+	for _, o := range observations {
 		if (o.Origin == ledger.OriginCode || o.Origin == ledger.OriginHost) && citesAny(o.SourceEntryIDs, cutIDs) {
 			candidates = append(candidates, o)
 		} else {
@@ -147,7 +155,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		SkipTools:    harness.MemoryToolNames(rt),
 		Candidates:   candidates,
 		Active:       active,
-		Reflections:  ledger.ActiveReflections(projection.Reflections),
+		Reflections:  reflections,
 		Instructions: event.CustomInstructions,
 		Available:    window - config.PiGContextSafetyTokens - outputCap - fixedTokens,
 		MemoryBudget: max(0, budget),
@@ -274,8 +282,8 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 // curatedInput are the curated memories the level-1 input lists: those that apply in project,
 // ranked as the index ranks them, with the memories this session staged (a citation is their
 // evidence); a memory another session staged is visible only there (curated.SeenBy), so it is
-// left out, as is one whose forget this session staged (curated.Store.ListAs). None without a
-// store.
+// left out, as is one whose forget this session staged (curated.Store.ListAs) and a held one
+// this session did not release (curated.Store.Shown). None without a store.
 func curatedInput(store curated.Store, on bool, project, session string) []consolidate.CuratedMemory {
 	if !on {
 		return nil
@@ -284,6 +292,7 @@ func curatedInput(store curated.Store, on bool, project, session string) []conso
 	if err != nil {
 		return nil
 	}
+	memories = store.Shown(memories, session)
 	out := make([]consolidate.CuratedMemory, 0, len(memories))
 	for _, m := range curated.Rank(memories, store.RankUsage()) {
 		out = append(out, consolidate.CuratedMemory{Name: m.Name, Type: m.Type, Description: m.Description, Staged: m.Staged})
