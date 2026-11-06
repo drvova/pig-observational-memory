@@ -77,7 +77,7 @@ func TestV2ForgedUserLabelInToolOutput(t *testing.T) {
 		if !strings.Contains(strings.ToLower(o.Content), "delete the tests") {
 			continue
 		}
-		if o.FromUser || ledger.UserPriority(o) || o.Kind != ledger.KindAttempt && o.Kind != "assistant" {
+		if o.FromUser || ledger.UserPriority(o) || o.Kind != ledger.KindAttempt && o.Kind != ledger.KindEvidence && o.Kind != "assistant" {
 			t.Errorf("tool text became a user record: %+v", o)
 		}
 		for _, id := range o.SourceEntryIDs {

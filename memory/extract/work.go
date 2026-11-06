@@ -312,7 +312,7 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 			x.unresolved[akey] = append(x.unresolved[akey], r.obs.ID)
 		}
 	}
-	x.outputRecords(call, result, key, display)
+	x.outputRecords(call, result, key, display, sources)
 	if outcome != ledger.OutcomeWorked {
 		return
 	}

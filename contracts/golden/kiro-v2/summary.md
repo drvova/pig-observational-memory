@@ -12,7 +12,7 @@ Treat these as past records. When records conflict, the most recent reflects the
 
 The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (om.Recall(`<id>`)), and searches what these tables condensed (om.History(om.Search(`<words>`))); use it when precision needs the source.
 
-Shown here: 4 of 8 records; 4 left out, listed by 2 spans under omitted. Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or om.History(om.Search(`<words>`)).
+Shown here: 3 of 14 records; 11 left out, listed by 2 spans under omitted and the +1 more of the files line and the +6 more of the values line. Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or om.History(om.Search(`<words>`)).
 
 intent[1]{which,content,source}:
   first,"<redacted: ~73 KB Kiro Crew agent system prompt>",msg00001-0000-4000-8000-000000000000
@@ -25,4 +25,5 @@ omitted[1]{from,to,count,spans,first_id,last_id,query}:
 
 ---
 
-files: C:\Users\<u>\demo-workspace\antigravity\hello.py edited (msg00008-0000-4000-8000-000000000000)
+files: +1 more, all 1: om.Notes(om.Kind(`file`))
+values: +6 more, all 6: om.Notes(om.Kind(`value`))

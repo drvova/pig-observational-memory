@@ -191,17 +191,44 @@ func TestTier0RenamedIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A probe is compared after each compaction count both runs scored it at: names of other
+	// lengths change the summaries' sizes, so a run can reach its last compaction a turn earlier
+	// and score a late probe once fewer (logged).
+	cells := func(results []Result) map[string]Cell {
+		out := map[string]Cell{}
+		for i, r := range results {
+			for _, c := range r.Cells {
+				out[fmt.Sprintf("%d/%s/%d", i, c.Probe, c.N)] = c
+			}
+		}
+		return out
+	}
+	x, y := cells(m.Results), cells(renamed.Results)
+	compared, only := 0, 0
+	for key, c := range x {
+		d, ok := y[key]
+		if !ok {
+			only++
+			continue
+		}
+		compared++
+		if (c.Outcome == Lost) != (d.Outcome == Lost) || c.FalseCurrent != d.FalseCurrent {
+			t.Errorf("%s: %+v, renamed %+v", key, c, d)
+		}
+	}
+	only += len(y) - compared
+	if compared == 0 || only > len(x)/20 {
+		t.Fatalf("compared %d cells, %d scored in one run only", compared, only)
+	}
 	a, b := Curves(m.Results), Curves(renamed.Results)
 	for _, class := range Classes {
 		for _, n := range Counts {
-			x, y := a[class][n], b[class][n]
-			if x.Lost != y.Lost || x.Total() != y.Total() || x.FalseCurrent != y.FalseCurrent {
-				t.Errorf("%s after %d: %+v, renamed %+v", class, n, x, y)
-			} else if x != y {
-				t.Logf("%s after %d: shown %d, renamed %d (of %d)", class, n, x.Shown, y.Shown, x.Total())
+			if x, y := a[class][n], b[class][n]; x != y {
+				t.Logf("%s after %d: %+v, renamed %+v", class, n, x, y)
 			}
 		}
 	}
+	t.Logf("compared %d cells, %d scored in one run only", compared, only)
 	if m.Runs[0].Script.Probes[0].Needles[0] == renamed.Runs[0].Script.Probes[0].Needles[0] {
 		t.Fatal("rename changed nothing")
 	}

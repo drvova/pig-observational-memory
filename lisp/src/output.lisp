@@ -93,8 +93,8 @@
            (reading (or (equal state "read") (= class 3))))
       (unless reading
         (test-facts f lines)
-        (diagnostic-facts f lines (or (= class 1) (= class 2))))
-      (when (= class 3) (search-facts f call))
+        (diagnostic-facts f lines (or (= class 1) (= class 2)) failed))
+      (when (= class 3) (search-facts f call text))
       (when (= class 4) (git-facts f lines))
       (unless reading
         (stack-facts f lines)
@@ -451,7 +451,9 @@
           (loop while (and (< j n) (ox-digit-p (ox-code tx j))) do (incf j))
           (if (or (>= j n) (char/= (char tx j) #\:)) (setf j col) (incf j))))
       (let ((rest (ox-lower (ox-trim (subseq tx j)))))
-        (if (or (has-prefix rest "error") (has-prefix rest "fatal error")) "error" "")))))
+        (cond ((or (has-prefix rest "error:") (has-prefix rest "error[") (has-prefix rest "fatal error:")) "error")
+              ((or (has-prefix rest "warning:") (has-prefix rest "note:") (has-prefix rest "info:")) "other")
+              (t "none"))))))
 
 (defun eslint-error-p (tx)
   (let ((j 0) (n (length tx)))
@@ -461,7 +463,7 @@
       (loop while (and (< k n) (ox-digit-p (ox-code tx k))) do (incf k))
       (and (> k (1+ j)) (has-prefix (subseq tx k) "  error  ")))))
 
-(defun diagnostic-facts (f lines build)
+(defun diagnostic-facts (f lines build failed)
   "diagnosticFacts: tsc's and eslint's shapes in any command's output, the others in a build's
 or a test's (build)."
   (let ((arrow nil))
@@ -477,11 +479,13 @@ or a test's (build)."
               ((or (contains tx ": error TS") (and build (string= (diagnostic-severity tx) "error")))
                (setf (ofacts-failed f) t)
                (ofacts-line f tx))
+              ((and build failed (string= (diagnostic-severity tx) "none"))
+               (ofacts-line f tx))
               ((eslint-error-p tx)
                (setf (ofacts-failed f) t)
                (ofacts-line f tx)))))))
 
-(defun search-facts (f call)
+(defun search-facts (f call text)
   (let ((pattern (str (jget (tcall-args call) "pattern"))))
     (when (string= pattern "")
       (let ((command (shell-command (tcall-args call))))
@@ -494,7 +498,7 @@ or a test's (build)."
                     (setf pattern w)
                     (return)))
                 (return)))))))
-    (when (and (>= (length pattern) 3) (not (ox-digit-p (ox-code pattern 0)))
+    (when (and (>= (length pattern) 3) (not (ox-digit-p (ox-code pattern 0))) (contains text pattern)
                (every (lambda (c) (ox-ident-p (char-code c))) pattern))
       (ofacts-value f "symbol" pattern))))
 
@@ -684,9 +688,16 @@ or a test's (build)."
                             ((has-prefix (subseq line k) "http://") 7)
                             (t nil))))
           (when (and scheme (not (and (> k 0) (ox-alnum-p (ox-code line (1- k))))))
-            (let ((end (+ k scheme)))
+            (let ((end (+ k scheme)) (parens 0) (brackets 0))
+              ;; A ) or ] the URL did not open ends it: "[![b](https://x/b.svg)](https://x)".
               (loop while (and (< end n) (not (ox-blank-p (ox-code line end))) (not (find (char line end) +url-stops+)))
-                    do (incf end))
+                    do (case (char line end)
+                         (#\( (incf parens))
+                         (#\[ (incf brackets))
+                         (#\) (decf parens))
+                         (#\] (decf brackets)))
+                       (when (or (< parens 0) (< brackets 0)) (return))
+                       (incf end))
               (setf end (trim-url-end line (+ k scheme) end))
               (when (> end (+ k scheme))
                 (let ((value (subseq line k end)))
@@ -928,7 +939,7 @@ or a test's (build)."
 
 (defstruct ovalue kind value (count 0) (first-id "") (newest -1) (prior '()))
 
-(defun x-output-records (x call result key display)
+(defun x-output-records (x call result key display sources)
   "outputRecords."
   (unless (and (tresult-present result) (>= (tresult-index result) 0) (< (tresult-index result) (length (x-entries x))))
     (return-from x-output-records))
@@ -946,10 +957,10 @@ or a test's (build)."
           (incf (ovalue-count st))
           (setf (ovalue-newest st) index))))
     (when (ofacts-evidence f)
-      (x-add x (make-obs :content (cat (tcall-name call) " " (go-quote (clip display 80)) " output: "
+      (apply #'x-add x (make-obs :content (cat (tcall-name call) " " (go-quote (clip display 80)) " output: "
                                        (join (ofacts-evidence f) +evidence-separator+))
                          :kind "evidence" :tool (tcall-name call) :target key)
-             index))))
+             sources))))
 
 (defun x-load-values (x active)
   (dolist (o active)

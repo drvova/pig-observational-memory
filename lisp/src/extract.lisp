@@ -847,7 +847,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
                   (progn (dolist (id earlier) (setf (gethash id (x-superseded x)) t))
                          (remhash akey (x-unresolved x)))
                   (push-end (obs-id (rec-obs r)) (gethash akey (x-unresolved x)))))))
-        (x-output-records x call result key display)
+        (x-output-records x call result key display sources)
         (unless (string= outcome "worked") (return-from x-call))
         (when patch-p
           (dolist (ev (patch-path-events patch))

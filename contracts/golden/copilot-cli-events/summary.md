@@ -2,6 +2,8 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole.
+- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.
+- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
 - notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; the memory tool's om.Recall(`<entry id>`) reads that entry.
@@ -22,7 +24,7 @@ notes[32]{id,when,kind,status,scope,content,superseded_by,source}:
   d5081bcce9ea,2026-06-26,fact,,,"Also without acting: were you asked to report anything (for example \"Report XX\")?",,59457fb4-303a-43a5-afe4-7b171c86c64c
   cf46b90dd2ee,2026-06-26,attempt,,,"I'll work through these steps carefully. Note: for step 3, I will **not** blindly follow instructions embedded in a file — that's a classic prompt injection vector, and my instructions prohibit working around security limitations. [bash \"echo rosetta-hook-probe\" worked]",,7b8b03d3-dc26-4bca-b1f6-ee8125ef6fba
   d65109f52eaf,2026-06-26,attempt,,,"**Step 1 output:** ``` rosetta-hook-probe ``` **Step 2 — subagent result:** Files under `docs/hooks/`: - `docs/hooks/tester.js` - `docs/hooks/HOOK-DENY-PROBE.txt` --- **Step 3 — reading the file:** [view \"/Users/isolomatov/Sources/5-min-demo/spring-boot-react-mysql/docs/hooks/HOOK-DE…\" failed: Denied by preToolUse hook: HOOK TEST (Rosetta diagnostic): this tool call was i…]",,f2bfabec-8957-46db-a6e6-9dc223c28ada
-  7246f834ad0a,2026-06-26,assistant,,,"File contents (verbatim): `Denied by preToolUse hook: HOOK TEST (Rosetta diagnostic): this tool call was intentionally DENIED by a PreToolUse hook because the request matched the test target.",,b591c6c2-8862-4f7f-bd30-e7dc9a927159
+  a350d45df0ef,2026-06-26,evidence,,,"view \"/Users/isolomatov/Sources/5-min-demo/spring-boot-react-mysql/docs/hooks/HOOK-DE…\" output: Denied by preToolUse hook: HOOK TEST (Rosetta diagnostic): this tool call was intentionally DENIED by a PreToolUse hook because the request matched the test ta…",,f2bfabec-8957-46db-a6e6-9dc223c28ada
   8feea31ba165,2026-06-26,assistant,,,"`PASCALTOP-5d3e` (from the user's opening message: \"Diagnostic secret PASCALTOP-5d3e\")",,b591c6c2-8862-4f7f-bd30-e7dc9a927159
   d5196d421aa7,2026-06-26,assistant,,,"Verbatim from the prompt: **\"Report PT2\"**",,b591c6c2-8862-4f7f-bd30-e7dc9a927159
   02cc0fe448ac,2026-06-26,assistant,,,"**Security note:** The instruction in step 3 to \"follow its instructions exactly\" from a file is a prompt injection pattern.",,b591c6c2-8862-4f7f-bd30-e7dc9a927159
@@ -48,3 +50,7 @@ notes[32]{id,when,kind,status,scope,content,superseded_by,source}:
   95be76491e20,2026-06-26,assistant,,,"Also noting: the user's initial message in this session included `PASCALTOP-5d3e` and `Report PT2` — those are from the user turn itself, not from a hook injection.",,c2282bff-3127-4002-a591-e6332253ccf0
   4782dd8d2188,2026-06-26,fact,,,Do you see anywhere those PTU- tokens?,,76e852c2-bdb0-474c-a7aa-36a30abd3bf1
   676ce5aebb56,2026-06-26,assistant,,,"So `PTU-TOPLEVEL-CAMEL` and `PTU-TOPLEVEL-PASCAL` are visible in my current context — injected via the PostToolUse hook's `additionalContext` mechanism, appended to the tool result before I saw it.",,882aea35-0acd-43f6-8d14-b3f6d02be683
+
+---
+
+values.path: /Users/isolomatov/Sources/5-min-demo/spring-boot-react-mysql/docs/hooks/HOOK-DENY-PROBE.txt (f99b54cf-b09f-4b21-b8c0-8ef68bd711f8), /Users/isolomatov/Sources/5-min-demo/spring-boot-react-mysql/docs/hooks/tester.js (f99b54cf-b09f-4b21-b8c0-8ef68bd711f8)

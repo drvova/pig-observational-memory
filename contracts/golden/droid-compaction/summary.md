@@ -2,6 +2,7 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole.
+- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
 - notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; the memory tool's om.Recall(`<entry id>`) reads that entry.
@@ -22,3 +23,6 @@ notes[2]{id,when,kind,status,scope,content,superseded_by,source}:
 ---
 
 files: /home/marmutapp/needlehaystack/README.md read (9356e848-20b1-4cb0-9fd4-6a0157aa9861)
+values.path: docs/ARCHITECTURE.md (e59e65d8-2152-4983-96a4-4a0493d2c868), docs/METHODOLOGY.md (e59e65d8-2152-4983-96a4-4a0493d2c868), docs/QUICKSTART.md (e59e65d8-2152-4983-96a4-4a0493d2c868), docs/ROADMAP.md (e59e65d8-2152-4983-96a4-4a0493d2c868), experiments/my_experiment.yaml (e59e65d8-2152-4983-96a4-4a0493d2c868)
+values.url: http://127.0.0.1:8080 (e59e65d8-2152-4983-96a4-4a0493d2c868), https://badge.fury.io/py/haystackbench (e59e65d8-2152-4983-96a4-4a0493d2c868), https://badge.fury.io/py/haystackbench.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://github.com/marmutapp/needlehaystack (e59e65d8-2152-4983-96a4-4a0493d2c868), https://github.com/marmutapp/needlehaystack/actions (e59e65d8-2152-4983-96a4-4a0493d2c868), https://github.com/marmutapp/needlehaystack/actions/workflows/ci.yml/badge.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://img.shields.io/badge/License-MIT-yellow.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://img.shields.io/badge/python-3.10+-blue.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://opensource.org/licenses/MIT (e59e65d8-2152-4983-96a4-4a0493d2c868), https://www.python.org/downloads/ (e59e65d8-2152-4983-96a4-4a0493d2c868)
+values.ip: 127.0.0.1:8080 (e59e65d8-2152-4983-96a4-4a0493d2c868)

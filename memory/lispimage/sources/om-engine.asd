@@ -28,6 +28,8 @@
                              (:file "transcript")
                              (:file "end-readers")
                              (:file "extract")
+                             ;; Level 0's reading of tool output (memory/extract/output.go).
+                             (:file "output")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")

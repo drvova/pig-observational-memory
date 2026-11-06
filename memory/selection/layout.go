@@ -500,7 +500,7 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		lines += l.sectionLine(b.group)
 	}
 	for _, extra := range []string{extraEvidence, extraValues} {
-		if p.opened[extra] > 0 || (extra == extraValues && o.tails[groupValues].n > 0) {
+		if p.opened[extra] > 0 {
 			lines += extraLine(extra)
 		}
 	}

@@ -130,10 +130,10 @@ func outputFactsOf(call toolCall, text string, failed bool) facts {
 	reading := state == stateRead || class == classSearch
 	if !reading {
 		testFacts(&f, lines)
-		diagnosticFacts(&f, lines, class == classTest || class == classBuild)
+		diagnosticFacts(&f, lines, class == classTest || class == classBuild, failed)
 	}
 	if class == classSearch {
-		searchFacts(&f, call)
+		searchFacts(&f, call, text)
 	}
 	if class == classGit {
 		gitFacts(&f, lines)
@@ -860,9 +860,10 @@ func firstWord(s string) string {
 // rustc, mypy, eslint): an error line ("file:line:col: error: message", tsc's
 // "file(line,col): error TS1234: message", rustc's "error[E0425]: message" and the first
 // "--> file:line:col" after it, eslint's "  1:2  error  message  rule") is evidence, and a
-// failure. Only tsc's and eslint's shapes are read in any command's output (build says the
+// failure; so is a diagnostic with no severity (go build's "x.go:3:5: undefined: y") in a build
+// that failed. Only tsc's and eslint's shapes are read in any command's output (build says the
 // command is a build or a test): a grep result shares the others' shape.
-func diagnosticFacts(f *facts, lines []string, build bool) {
+func diagnosticFacts(f *facts, lines []string, build, failed bool) {
 	arrow := false
 	for _, line := range lines {
 		t := trimBlank(line)
@@ -877,6 +878,8 @@ func diagnosticFacts(f *facts, lines []string, build bool) {
 		case strings.Contains(t, ": error TS") || (build && diagnosticSeverity(t) == "error"):
 			f.failed = true
 			f.line(t)
+		case build && failed && diagnosticSeverity(t) == "none":
+			f.line(t)
 		case eslintError(t):
 			f.failed = true
 			f.line(t)
@@ -884,8 +887,9 @@ func diagnosticFacts(f *facts, lines []string, build bool) {
 	}
 }
 
-// diagnosticSeverity is the severity of a "file:line[:col]: severity: message" line ("error"
-// for error and fatal error), "" for a line of another shape or with none.
+// diagnosticSeverity is the severity of a "file:line[:col]: severity: message" line: "error"
+// for error: and fatal error:, "other" for warning:, note: and info:, "none" for a diagnostic
+// with no severity (go build's, go vet's), "" for a line of another shape.
 func diagnosticSeverity(t string) string {
 	k := strings.IndexByte(t, ':')
 	if k <= 0 || !strings.Contains(t[:k], ".") || strings.IndexByte(t[:k], ' ') >= 0 {
@@ -911,10 +915,13 @@ func diagnosticSeverity(t string) string {
 		}
 	}
 	rest := lowerASCII(trimBlank(t[j:]))
-	if strings.HasPrefix(rest, "error") || strings.HasPrefix(rest, "fatal error") {
+	switch {
+	case strings.HasPrefix(rest, "error:") || strings.HasPrefix(rest, "error[") || strings.HasPrefix(rest, "fatal error:"):
 		return "error"
+	case strings.HasPrefix(rest, "warning:") || strings.HasPrefix(rest, "note:") || strings.HasPrefix(rest, "info:"):
+		return "other"
 	}
-	return ""
+	return "none"
 }
 
 // eslintError reports eslint's stylish line: "12:5  error  message  rule".
@@ -936,10 +943,10 @@ func eslintError(t string) bool {
 	return strings.HasPrefix(t[k:], "  error  ")
 }
 
-// searchFacts reads the identifier a search looked for: a search tool's pattern argument, or
-// the first operand of a grep or rg command, when it is one identifier of three or more
-// characters.
-func searchFacts(f *facts, call toolCall) {
+// searchFacts reads the identifier a search looked for and found: a search tool's pattern
+// argument, or the first operand of a grep or rg command, when it is one identifier of three or
+// more characters that the result holds.
+func searchFacts(f *facts, call toolCall, text string) {
 	pattern, _ := call.args["pattern"].(string)
 	if pattern == "" {
 		if command, ok := shellCommand(call.args); ok {
@@ -958,7 +965,7 @@ func searchFacts(f *facts, call toolCall) {
 			}
 		}
 	}
-	if len(pattern) >= 3 && !isDigit(pattern[0]) {
+	if len(pattern) >= 3 && !isDigit(pattern[0]) && strings.Contains(text, pattern) {
 		for i := 0; i < len(pattern); i++ {
 			if !isIdent(pattern[i]) {
 				return
@@ -1278,7 +1285,22 @@ func urlSpans(line string) []span {
 			continue
 		}
 		end := k + scheme
+		// A ) or ] the URL did not open ends it: "[![b](https://x/b.svg)](https://x)".
+		parens, brackets := 0, 0
 		for end < len(line) && !isBlank(line[end]) && strings.IndexByte(urlStops, line[end]) < 0 {
+			switch line[end] {
+			case '(':
+				parens++
+			case '[':
+				brackets++
+			case ')':
+				parens--
+			case ']':
+				brackets--
+			}
+			if parens < 0 || brackets < 0 {
+				break
+			}
 			end++
 		}
 		end = trimURLEnd(line, k+scheme, end)
@@ -1757,8 +1779,9 @@ type valueState struct {
 }
 
 // outputRecords reads one call's result into value and evidence records, anchored to the
-// result's entry, so they fall into that entry's cut-point segment batch.
-func (x *extraction) outputRecords(call toolCall, result toolResult, key, display string) {
+// result's entry (the newest of sources, the call's and its result's), so they fall into that
+// entry's cut-point segment batch; an evidence record cites the call too, which names what ran.
+func (x *extraction) outputRecords(call toolCall, result toolResult, key, display string, sources []int) {
 	if !result.present || result.index < 0 || result.index >= len(x.in.Entries) {
 		return
 	}
@@ -1786,7 +1809,7 @@ func (x *extraction) outputRecords(call toolCall, result toolResult, key, displa
 	}
 	if len(f.evidence) > 0 {
 		content := call.name + " " + strconv.Quote(clip(display, 80)) + " output: " + strings.Join(f.evidence, EvidenceSeparator)
-		x.add(ledger.Observation{Content: content, Kind: ledger.KindEvidence, Tool: call.name, Target: key}, result.index)
+		x.add(ledger.Observation{Content: content, Kind: ledger.KindEvidence, Tool: call.name, Target: key}, sources...)
 	}
 }
 
