@@ -74,6 +74,14 @@ the reader or compiler refuses on load, and any failure of a definition of an ad
 declared `:coverage t` (none of today's two adaptables is). Within an interval a definition is not
 called after its second timeout (the breaker), until the session's next compaction.
 
+A unit records the gen of the generation that settled its digest, as the manifest reader numbers it
+(`parse-manifest`: the recorded gen, kept unique across a crash; lisp-port-tool-layer.md, "Durable
+appends"). Units are appended under the layer's lock and fsynced, a torn last unit ended first, so
+a unit of one process never lands inside another's. Settling and reverting here change the image's
+own cache at once; another process's settle or revert of the same layer reaches a session at its
+next boundary (`layer-boundary`, taken before the snapshot), so the snapshot and the interval's runs
+are of the layer the session dispatched on.
+
 ## The hook point
 
 ```lisp
@@ -119,6 +127,9 @@ calls it from `neutral-compaction`; the neutral host has no session model
   and a keep-head rule, against the in-process path: appended entries and detect events (but their
   times) equal, no fallback. This replaces the `memory/cli` image test the plan named: the om path
   has no session model in Go, so detect never runs there.
+- `TestLispAppendsAfterATornTail`: Go and the image append in turn to the usage ledger, the Go
+  manifest, the curated usage, the floor record and the neutral store, each torn between turns;
+  both read every file alike (lisp-port-tool-layer.md, "Parity and tests").
 - `TestLispEvidenceFilesValidate`: the ledger (`model-event`), the Go manifest
   (`layer-generation`), the image's manifest with a retire revert and its units validate, and Go's
   layer reads the rule.

@@ -323,7 +323,7 @@ compiled into a running child, never reverted here), the reverted ones and the r
                         #'string<))))
     (when (or manifest held)
       (remove nil
-              (list (format nil "Lisp layer (~A): generation ~D, settled: ~A; held: ~A" model (length manifest)
+              (list (format nil "Lisp layer (~A): generation ~D, settled: ~A; held: ~A" model (om.layer::manifest-generation manifest)
                             (if state (om::join (sort (mapcar #'car (copy-list state)) #'string<) ", ") "none")
                             (if held (om::join held ", ") "none"))
                     (and reverted (cat* "  reverted: " (om::join reverted "; ")))

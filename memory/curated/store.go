@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 )
@@ -469,12 +470,7 @@ func (s Store) appendUsage(entry usageLine) error {
 	}
 	entry.Time = s.Now().UTC().Format(time.RFC3339)
 	line, _ := json.Marshal(entry)
-	f, err := os.OpenFile(s.usagePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(line, '\n'))
+	_, err := jsonl.Append(s.usagePath(), line)
 	return err
 }
 

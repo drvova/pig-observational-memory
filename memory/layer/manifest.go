@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 )
 
@@ -151,12 +152,9 @@ func (s Store) appendGeneration(model string, g Generation) (Generation, error) 
 	if err := os.MkdirAll(s.modelPath(model), 0o700); err != nil {
 		return Generation{}, err
 	}
-	f, err := os.OpenFile(s.manifestPath(model), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return Generation{}, err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
+	// A torn tail is ended first and the line is synced (jsonl.Append): a crash never glues
+	// two lines, and a generation once returned is never lost and numbered again.
+	if _, err := jsonl.Append(s.manifestPath(model), line); err != nil {
 		return Generation{}, err
 	}
 	return g, nil
@@ -601,15 +599,8 @@ func (s Store) RecordFloor(l kernel.Lowering) error {
 		if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(s.floorPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := f.Write(append(line, '\n')); err != nil {
-			return err
-		}
-		return f.Sync()
+		_, err := jsonl.Append(s.floorPath(), line)
+		return err
 	})
 }
 

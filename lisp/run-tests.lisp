@@ -60,6 +60,9 @@
 ;; Level 1 on the image (docs/lisp-port-level1.md).
 (load (merge-pathnames "tests/level1.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; The layer store across processes and crashes (docs/lisp-port-tool-layer.md).
+(load (merge-pathnames "tests/layer-store.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

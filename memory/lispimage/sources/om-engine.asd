@@ -34,7 +34,9 @@
                              (:file "readers/formats")
                              (:file "readers/sqlite")
                              (:file "readers/paths")
-                             (:file "store/neutral")))
+                             (:file "store/neutral")
+                             ;; Durable appends to the append-only files (docs/lisp-port-tool-layer.md).
+                             (:file "store/append")))
                ;; om.server: the image's socket, sessions and events (docs/lisp-port-image-client.md).
                (:module "server"
                 :pathname "src/server/"

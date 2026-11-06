@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/filelock"
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
 
@@ -85,15 +86,9 @@ func (s Store) Append(after string, entry map[string]any) error {
 		return err
 	}
 	return filelock.WithLock(s.Path+".lock", func() error {
-		f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		if _, err := f.Write(append(line, '\n')); err != nil {
-			f.Close()
-			return err
-		}
-		return f.Close()
+		// A torn tail is ended first and the line is synced (jsonl.Append).
+		_, err := jsonl.Append(s.Path, line)
+		return err
 	})
 }
 

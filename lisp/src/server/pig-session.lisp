@@ -34,6 +34,16 @@
   "host.ModelID: id, else modelId."
   (let ((id (model-string model "id"))) (if (string/= id "") id (model-string model "modelId"))))
 
+;;; The Lisp layer's boundaries (src/layer/store.lisp, layer-boundary): a session start and a
+;;; compaction re-read the session model's layer when another process changed its manifest, and
+;;; pin it for the session's calls until the next one.
+
+(defun layer-session-boundary (&optional (model-key (session-model-key)))
+  "The session's boundary of its model's Lisp layer; an error is logged and changes nothing."
+  (handler-case (om.layer::layer-boundary model-key (host-string "host/sessionId"))
+    (request-cancelled (e) (error e))
+    (error (e) (log-line "layer boundary: ~A" e) nil)))
+
 (defun model-key-of (model)
   "harness.ModelKey: provider/id, or the id alone; \"\" for no model."
   (let ((id (model-id model)) (provider (model-string model "provider")))
@@ -95,6 +105,7 @@ whatever the UI). An unreadable branch settles nothing."
   (with-event (c params)
     (conn-reload-config c)
     (om.layer::pin-reset (conn-pin* c))
+    (layer-session-boundary)
     (multiple-value-bind (dir project cfg) (curated-call c)
       (declare (ignore project))
       (when dir
@@ -122,8 +133,10 @@ whatever the UI). An unreadable branch settles nothing."
 
 (define-method "event/sessionShutdown" (params)
   ;; Server.handle: the namespace reset and the detector pass stopped; the image holds neither
-  ;; (a deferred compaction trigger ends with the connection's calls).
+  ;; (a deferred compaction trigger ends with the connection's calls). The session's pins of the
+  ;; Lisp layer are dropped.
   (with-event (c params)
+    (om.layer::forget-session-pins (host-string "host/sessionId"))
     (om::jobject)))
 
 ;;; Before agent start: the system-prompt section
