@@ -194,7 +194,7 @@ then held, a later one replacing an earlier of its name. An alist name -> gdef, 
 
 ;;; Writing (layer.go PutLocked, putStamped, write; manifest.go appendGeneration)
 
-(defun go-append-generation (store model op &key kind name digest)
+(defun go-append-generation (store model op &key kind name digest session reason from held)
   (let* ((gen (1+ (length (go-generations store model))))
          (line (with-output-to-string (out)
                  (format out "{\"gen\":~D,\"time\":" gen)
@@ -203,6 +203,11 @@ then held, a later one replacing an earlier of its name. An alist name -> gdef, 
                  (when kind (write-string ",\"kind\":" out) (om::write-json-string kind out))
                  (when name (write-string ",\"name\":" out) (om::write-json-string name out))
                  (when digest (write-string ",\"digest\":" out) (om::write-json-string digest out))
+                 ;; Generation's later fields, in its order (the layer migration's lines carry them).
+                 (when (and session (string/= session "")) (write-string ",\"session\":" out) (om::write-json-string session out))
+                 (when (and reason (string/= reason "")) (write-string ",\"reason\":" out) (om::write-json-string reason out))
+                 (when (and from (string/= from "")) (write-string ",\"from\":" out) (om::write-json-string from out))
+                 (when held (write-string ",\"held\":true" out))
                  (write-char #\} out))))
     (append-line (join-path (go-model-path store model) "manifest.jsonl") line)
     gen))

@@ -107,4 +107,10 @@
                (:module "w3t"
                 :pathname "src"
                 :serial t
-                :components ((:file "server/tool")))))
+                :components ((:file "server/tool")))
+               ;; The retired names and the v1 layer migration at a session start (docs/lisp-port-migration.md)
+               (:module "migration"
+                :pathname "src"
+                :serial t
+                :components ((:file "layer/go-layer")
+                             (:file "server/migration")))))

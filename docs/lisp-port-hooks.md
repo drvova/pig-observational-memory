@@ -34,9 +34,10 @@ the Go client, which runs it after the answer, as Go's order allows there.
 
 What the settle would tell the user comes back as `notices` (an array of strings, omitted when
 empty). The client writes each one to om's log, as `neutral.Host.Notify` writes an info message
-(`memory/cli/lisp.go`). `session-start` now returns only `remaining: ["migrate-layer"]`: the
-migration writes only the layer's files, so running it after the settle changes nothing the
-answer read.
+(`memory/cli/lisp.go`). `session-start` now runs the v1 layer migration itself, before the settle
+as Go orders it ([lisp-port-migration.md](lisp-port-migration.md)), and returns no `remaining`
+step; only under a lowered kernel floor with layer data to read does it still return
+`remaining: ["migrate-layer"]` for the Go client.
 
 ## Parity
 
@@ -76,7 +77,7 @@ cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts 
 - `memory/cli/lisp.go`: `lispResult.Compaction` is a `json.RawMessage`. Without it, the client
   would re-encode the details with sorted keys, which differs from the Go engine's output.
   `runRemaining` has a `migrate-layer` step (`engine.MigrateLayer`), which `session-start`
-  returns. `lispResult.Notices` (1b) are written to om's log.
+  returns only under a lowered kernel floor. `lispResult.Notices` (1b) are written to om's log.
 - `memory/cli/cli.go`, `memory/commands/view.go`: in Lisp mode, `om view` asks the image for the
   text (method `view`, `{"text", "notice"}`). The clipboard step and the notice stay in Go:
   `commands.ShowView` is split out of `RunView`, and its behavior is unchanged.
@@ -110,8 +111,11 @@ cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts 
   summary, the file operations). The harness profile (`ApplySummary`, layout and codec from the
   layer) is still Go's default: a session model with a store is refused at the harness hook point.
   On `om`'s paths the window and headroom stay unknown, as on a neutral host.
-- **Retired defined tools** (`harness.Manager.SkipNames`). The skip list is the memory tool alone.
-  This matches Go on a store with no retired defined queries.
+- **Retired defined tools** (`harness.Manager.SkipNames`). On om's paths the skip list is the memory
+  tool alone, as in Go, where each hook is its own process and only that process's session start
+  reads the names; the image does read them at a session start for their side effect (the legacy
+  definitions moved into the layer). On PiG the connection keeps the list
+  ([lisp-port-migration.md](lisp-port-migration.md)).
 - **Time zone.** Day headers and record times are UTC (`serialize.Location` is the process's local
   zone in Go). This is the same as W1's dates.
 - **Thinning plan cache.** The plan is computed on every `context` event, not cached per

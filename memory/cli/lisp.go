@@ -280,6 +280,8 @@ func (a *app) runRemaining(s Session, steps []string) error {
 	for _, step := range steps {
 		switch step {
 		case "migrate-layer":
+			// The image migrates the layer itself; it leaves the step to Go only under a
+			// lowered kernel floor (lisp/src/server/migration.lisp).
 			engine.MigrateLayer(h)
 		case "settle-curated":
 			engine.SettleCurated(h)

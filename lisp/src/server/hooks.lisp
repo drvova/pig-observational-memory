@@ -165,9 +165,9 @@ An unreadable branch settles nothing, as GetBranch's error does."
     (om::join (nreverse parts) (concatenate 'string (string #\Newline) (string #\Newline)))))
 
 (defparameter +start-steps+ (vector "migrate-layer")
-  "engine.SessionStart's step the Go client still runs after the image answers: the v1 layer
-migration, which writes only the layer's files, so running it after the curated settle and the
-index changes nothing they read.")
+  "The step the Go client runs after the image answers when the image left the v1 layer
+migration to it (a lowered kernel floor, om-session-start-layer): it writes only the layer's
+files, so running it after the curated settle and the index changes nothing they read.")
 
 (defun with-notices (out notices)
   (when notices (setf (gethash "notices" out) (coerce notices 'simple-vector)))
@@ -176,18 +176,21 @@ index changes nothing they read.")
 ;;; Methods
 
 (define-method "session-start" (params)
-  ;; engine.SessionStart, then the start context: the pin reset, the curated settle, then the
-  ;; index rendered through the pin, as the Go engine orders them.
+  ;; engine.SessionStart, then the start context: the pin reset, the retired names read and the
+  ;; layer migrated (server/migration.lisp), the curated settle, then the index rendered through
+  ;; the pin, as the Go engine orders them.
   (check-root params)
   (let ((format (check-format params)))
     (with-session (s params)
       (om.layer::pin-reset (session-pin s))
-      (let* ((notices (settle-curated s params format))
+      (let* ((migrated (om-session-start-layer))
+             (notices (settle-curated s params format))
              (summary (if (eq (om::jget params "with_summary") :true)
                           (om::latest-summary (read-branch s params format))
                           "")))
-        (with-notices (om::jobject "text" (start-context summary (curated-index s params))
-                                   "remaining" +start-steps+)
+        (with-notices (let ((out (om::jobject "text" (start-context summary (curated-index s params)))))
+                        (unless migrated (setf (gethash "remaining" out) +start-steps+))
+                        out)
                       notices)))))
 
 (define-method "compact" (params)

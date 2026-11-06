@@ -52,7 +52,8 @@ a session model with a store, and the layer's snapshot taken (before level 1)."
       (setf (ch-snapshot ch) (om.layer:take-snapshot store model))
       (setf (om::hhost-detect h)
             (lambda (entries start end folded batches covers)
-              (om.layer:harness-detect store model entries start end folded batches covers)))))
+              (om.layer:harness-detect store model entries start end folded batches covers
+                                       :defined (and (string/= covers "") (defined-queries (ch-conn ch) store)))))))
   h)
 
 (defun after-compaction (ch)

@@ -215,8 +215,8 @@ with each host call's method and params as it arrives."
                                      "result") "edits")))
               (check (length edits) 1 "a reused message is the pristine one, edited again")
               (check (length (jget (jget (aref edits 0) "message") "content")) 2 "one header, not two"))
-            ;; With a store and a session model, a turn end runs the harness detectors; one
-            ;; over a store with retired defined tools is refused before any write.
+            ;; With a store and a session model, a turn end runs the harness detectors, also
+            ;; over a store with retired defined tools (their names are read at a session start).
             (let ((n (length appended)))
               (flet ((store-host (method params)
                        (cond ((string= method "host/configHome") (jobject "value" dir))
@@ -228,8 +228,8 @@ with each host call's method and params as it arrives."
                 (check (length appended) n "nothing new to append")
                 (om.layer::write-atomic (format nil "~A/observational-memory/memories/definitions/old.rows" dir) "x")
                 (check (jget (jget (peer-exchange stream 8 "event/turnEnd" (jobject "scope" scope) :host #'store-host)
-                                   "error") "code")
-                       -32004d0 "retired defined tools are not ported")
+                                   "result") "thinning")
+                       :true "retired defined tools in the store")
                 (check (length appended) n "nothing appended"))))
           (close stream)
           (sb-bsd-sockets:socket-close sock))))))

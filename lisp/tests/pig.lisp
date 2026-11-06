@@ -250,15 +250,18 @@ agent directory dir (settings.json there)."
           (check (search "port" (section 3)) nil "pinned")
           (peer-exchange stream 4 "event/sessionCompact" (jobject "scope" scope) :host (phost-fn h))
           (check (and (search "port" (section 5)) t) t "rendered again after a compaction"))
-        ;; A store with a v1 layer to migrate, or retired definitions, is Go's to start.
+        ;; A store with a file the layer never recorded, and a legacy definition the kernel
+        ;; refuses, starts on the image: the untracked file is left alone, the definition is
+        ;; renamed .refused (curated.Store.migrateDefinitions), and later events run.
         (write-file* (format nil "~Aharness/_2a/instructions/observer.rows" store) "x")
-        (check (jget (jget (peer-exchange stream 6 "event/sessionStart" (jobject "scope" scope) :host (phost-fn h)) "error") "code")
-               -32004d0 "the v1 layer migration is not ported")
+        (check (json-string (jget (peer-exchange stream 6 "event/sessionStart" (jobject "scope" scope) :host (phost-fn h)) "result"))
+               "{}" "an untracked instructions file")
         (write-file* (format nil "~Adefinitions/old.rows" store) "x")
-        (check (jget (jget (peer-exchange stream 7 "event/sessionStart" (jobject "scope" scope) :host (phost-fn h)) "error") "code")
-               -32004d0 "retired definitions are not read")
-        (check (jget (jget (peer-exchange stream 8 "event/turnEnd" (jobject "scope" scope) :host (phost-fn h)) "error") "code")
-               -32004d0 "the skip list is unknown for the connection's life")
+        (check (json-string (jget (peer-exchange stream 7 "event/sessionStart" (jobject "scope" scope) :host (phost-fn h)) "result"))
+               "{}" "a legacy definition")
+        (check (and (probe-file (format nil "~Adefinitions/old.rows.refused" store)) t) t "refused by the kernel check")
+        (check (jget (jget (peer-exchange stream 8 "event/turnEnd" (jobject "scope" scope) :host (phost-fn h)) "result") "thinning")
+               :true "a turn end after it")
         (check (json-string (jget (peer-exchange stream 9 "event/agentStart" (jobject "scope" scope) :host (phost-fn h)) "result"))
                "{\"thinning\":true}" "agent start")
         (check (json-string (jget (peer-exchange stream 10 "event/sessionShutdown" (jobject "scope" scope) :host (phost-fn h)) "result"))
