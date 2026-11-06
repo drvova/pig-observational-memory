@@ -242,7 +242,19 @@ for the tests.".
 
 `contracts/encoding.jsonl` holds the key-match, stale-term, bears-on, read-plan, scope-exclusion and
 replaced-rule cases, and `contracts/conversation.jsonl` the records of receipt, read-plan and
-replacement branches, which both engines check.
+replacement branches and of the rule grammar's forms, which both engines check.
+
+### Policy rules
+
+A rule level 0 reads in a policy form (docs/memory-v2.md, "Conversation facts": "never/always <any
+verb> X", "must", "is not allowed", "requires approval", "policy:", "only <verb> `X`") is encoded as
+every user rule: kind `preference`, its content verbatim, `source: user-said`, `authority: user`,
+and its keys filed with `ledger.Keys.Add` (`keys-add`) as paths or commands. Only the person's own
+turns make one: an assistant message, a tool result or a custom message stating the same words makes
+none. A one-time permission ("you can push to `main` this once") or a rule reported from someone
+else is encoded as the sentence would be without the rule form (a fact when it carries specifics,
+else nothing), never as a rule. `contracts/conversation.jsonl` holds a positive and a negative case
+for each form.
 
 ### Writer
 
