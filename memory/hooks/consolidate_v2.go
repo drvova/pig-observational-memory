@@ -359,7 +359,7 @@ func appendLevel1(ctx context.Context, h host.Host, result consolidate.Result, d
 	}
 	out := make([]ledger.Entry, 0, len(queue))
 	for n, p := range queue {
-		if err := h.AppendEntry(p.customType, p.data); err != nil {
+		if err := appendEntry(h, p.customType, p.data); err != nil {
 			debuglog.Log(ctx, "compaction.v2.level1.append_failed", map[string]any{"customType": p.customType, "errorMessage": err.Error()})
 		}
 		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-level1-%d", n), CustomType: p.customType, Data: jsonValue(p.data)})

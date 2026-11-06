@@ -17,6 +17,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/tables"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
@@ -198,7 +199,9 @@ func Render(in Input) Result {
 	// The costs bound the estimate from above, so the text normally fits as chosen; if it does
 	// not, the item chosen last is let go until it does.
 	for {
-		text := s.l.render(s, pick, omitted)
+		// Secrets are redacted in what is shown, records written before the scanner included
+		// (contracts/secrets.md).
+		text := secrets.Redact(s.l.render(s, pick, omitted))
 		if estimate(text) <= in.Budget && pick.count() > 0 {
 			return s.result(text, pick, omitted)
 		}

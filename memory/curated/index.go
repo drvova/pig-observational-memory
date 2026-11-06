@@ -7,6 +7,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/jsfmt"
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
 // IndexHeader opens the memory index in the system prompt. Memories are the
@@ -71,8 +72,11 @@ func Flagged(m Memory, e Evidence) bool { return e.Corrected > 0 && !m.Pinned }
 
 func estimateTokens(text string) int { return (jsfmt.UTF16Len(text) + 3) / 4 }
 
-// IndexLine describes one memory in the index.
-func IndexLine(m Memory) string { return "- " + m.Name + " [" + m.Type + "]: " + m.Description }
+// IndexLine describes one memory in the index. Its description's secrets are redacted
+// (secrets.Redact), a memory written before the scanner included.
+func IndexLine(m Memory) string {
+	return "- " + m.Name + " [" + m.Type + "]: " + secrets.Redact(m.Description)
+}
 
 // RenderIndex lays ranked memories out within budgetTokens, which bounds the
 // memory lines (the fixed header is extra): every memory described when all

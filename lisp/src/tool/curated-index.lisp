@@ -135,7 +135,7 @@ name. A stable sort, as sort.SliceStable."
 
 (defun index-line (m)
   "curated.IndexLine."
-  (concatenate 'string "- " (mem-name m) " [" (mem-type m) "]: " (mem-description m)))
+  (concatenate 'string "- " (mem-name m) " [" (mem-type m) "]: " (om::redact-secrets (mem-description m))))
 
 (defun render-index (ranked budget)
   "curated.RenderIndex: (values text shown-names). Every memory described when all fit in

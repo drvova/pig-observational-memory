@@ -13,6 +13,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ids"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/session"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
@@ -258,7 +259,13 @@ func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
 			obs.SourceEntryIDs = append(obs.SourceEntryIDs, id)
 		}
 	}
-	obs.Content = serialize.TruncateRecordContent(obs.Content)
+	// Secrets are redacted before the content is cut, so a cut never leaves part of one
+	// (contracts/secrets.md); the record's id and token count are of the redacted text.
+	obs.Content = serialize.TruncateRecordContent(secrets.Redact(obs.Content))
+	obs.Target = secrets.Redact(obs.Target)
+	for name, value := range obs.Fields {
+		obs.Fields[name] = secrets.Redact(value)
+	}
 	if obs.Timestamp == "" && anchor >= 0 {
 		obs.Timestamp = serialize.FormatTimestamp(entryTime(x.in.Entries[anchor]))
 	}
@@ -302,7 +309,7 @@ func (x *extraction) merge() {
 			// A part whose text names dates but no one date (ledger.NamesNoOneDate) leaves the
 			// joined text none, whichever side it is on.
 			prevUndated, partUndated := prev.undated || ledger.NamesNoOneDate(prev.obs), r.undated || ledger.NamesNoOneDate(r.obs)
-			prev.obs.Content = serialize.TruncateRecordContent(prev.obs.Content + " " + r.obs.Content)
+			prev.obs.Content = serialize.TruncateRecordContent(secrets.Redact(prev.obs.Content + " " + r.obs.Content))
 			for _, id := range r.obs.SourceEntryIDs {
 				if !slices.Contains(prev.obs.SourceEntryIDs, id) {
 					prev.obs.SourceEntryIDs = append(prev.obs.SourceEntryIDs, id)

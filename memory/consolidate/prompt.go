@@ -86,8 +86,10 @@ const (
 
 // RecordLine is how the level-1 input shows a record: its observer line (id, time, relevance,
 // text, structured fields), then an attempt's outcome and a level-0 status, so a plan is never
-// read as done.
+// read as done. Its text has its role-like labels escaped (serialize.EscapeRoleLabels): level 0
+// records tool text and user text alike, and neither may read as a turn.
 func RecordLine(o ledger.Observation) string {
+	o.Content = serialize.EscapeRoleLabels(o.Content)
 	line := ledger.ObservationToObserverLine(o)
 	if o.Outcome != "" {
 		line += " (outcome: " + o.Outcome + ")"

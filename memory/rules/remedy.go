@@ -10,6 +10,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ids"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
 )
@@ -251,7 +252,7 @@ func KeepHead(branch []ledger.Entry, flagged, chunkOrder []string, coversUpToID 
 		if head == "" {
 			continue
 		}
-		content := serialize.TruncateRecordContent("Assistant said: " + head)
+		content := serialize.TruncateRecordContent(secrets.Redact("Assistant said: " + head))
 		obsID := ids.HashID(content)
 		if seen[obsID] {
 			continue

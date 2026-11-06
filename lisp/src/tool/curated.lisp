@@ -197,10 +197,18 @@
 
 ;;; Writes
 
+(defun redact-memory (m)
+  "redactMemory: m with every secret in its description and body redacted, in place."
+  (setf (mem-description m) (om::redact-secrets (mem-description m))
+        (mem-body m) (om::redact-secrets (mem-body m)))
+  m)
+
 (defun write-memory (dir m)
+  (redact-memory m)
   (write-atomic (store-path dir (mem-name m)) (format-memory m)))
 
 (defun write-checked (dir m)
+  (redact-memory m)
   (curated-check m)
   (write-memory dir m))
 
@@ -245,6 +253,8 @@ legacy definitions directory."
   (when (string= (om::trim-space (mem-description m)) "")
     (fail "a memory needs a one-sentence description"))
   (setf (mem-pinned m) nil (mem-retired m) nil)
+  ;; Redacted before anything compares it, so a staging of the same save matches the stored one.
+  (redact-memory m)
   (unless (mem-staged m) (setf (mem-staged-by m) '()))
   (let ((saved nil) (joined nil))
     (with-store-lock (dir)
@@ -302,6 +312,7 @@ legacy definitions directory."
         (when body-p (setf (mem-body m) (om::trim-space body)))
         (setf (mem-updated m) (now)
               (mem-sources m) (add-source (mem-sources m) source))
+        (redact-memory m)
         (setf updated m)
         (write-checked dir m)))
     (append-usage dir name "edit")
