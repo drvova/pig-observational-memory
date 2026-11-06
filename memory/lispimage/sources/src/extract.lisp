@@ -612,7 +612,7 @@ subject and scope."
     ("edit" . "edited") ("editfile" . "edited") ("multiedit" . "edited") ("notebookedit" . "edited") ("replace" . "edited")
     ("delete" . "deleted") ("deletefile" . "deleted") ("remove" . "deleted") ("removefile" . "deleted")))
 (defparameter +path-args+ '("path" "file_path" "filePath" "notebook_path"))
-(defregex +exit-code+ #r§Command exited with code (\d+)§)
+(defregex +exit-code+ #r§(?:Command|Process) exited with code (\d+)§)
 
 (defun tool-key (name)
   "toolKey: ASCII lower case, without underscores or hyphens."
@@ -766,9 +766,13 @@ Kiro's write replacing a string (its command strReplace) edits the file."
 
 (defun arg-string (args name) (let ((v (jget args name))) (and (stringp v) v)))
 
+(defun shell-command (args)
+  "shellCommand: the \"command\" argument, else \"cmd\" (Codex's exec_command)."
+  (or (arg-string args "command") (arg-string args "cmd")))
+
 (defun call-target (x call)
   "callTarget: (values key display)."
-  (let ((command (arg-string (tcall-args call) "command")))
+  (let ((command (shell-command (tcall-args call))))
     (when (and command (string/= (trim-space command) ""))
       (return-from call-target (values (trim-space command) (trim-space command)))))
   (dolist (arg +path-args+)
@@ -841,7 +845,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
                 (when (and p (string/= (trim-space p) ""))
                   (x-file-event x p state "" sources)
                   (return))))))
-        (let ((command (arg-string (tcall-args call) "command")))
+        (let ((command (shell-command (tcall-args call))))
           (when command
             (dolist (ev (shell-path-events command))
               (x-file-event x (first ev) (second ev) (third ev) sources))

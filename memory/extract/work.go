@@ -66,8 +66,9 @@ func fileToolState(call toolCall) string {
 // Code's NotebookEdit's).
 var pathArgs = []string{"path", "file_path", "filePath", "notebook_path"}
 
-// exitCode reads "Command exited with code N" from a shell result.
-var exitCode = regexp.MustCompile(`Command exited with code (\d+)`)
+// exitCode reads a shell result's exit code: "Command exited with code N" (PiG) or "Process
+// exited with code N" (Codex's exec_command).
+var exitCode = regexp.MustCompile(`(?:Command|Process) exited with code (\d+)`)
 
 // toolCall is one tool call of an assistant message.
 type toolCall struct {
@@ -207,10 +208,20 @@ func (x *extraction) bashExecution(i int) {
 	x.call(i, toolCall{name: "bash", args: map[string]any{"command": command}}, toolResult{index: i, text: output, failed: failed, present: true}, "")
 }
 
+// shellCommand is a call's shell command: its "command" argument, else "cmd" (Codex's
+// exec_command).
+func shellCommand(args map[string]any) (string, bool) {
+	if command, ok := args["command"].(string); ok {
+		return command, true
+	}
+	command, ok := args["cmd"].(string)
+	return command, ok
+}
+
 // callTarget is what a call acted on: its command, else its path (resolved, for matching, and
 // as shown), else its arguments.
 func (x *extraction) callTarget(call toolCall) (key, display string) {
-	if command, ok := call.args["command"].(string); ok && strings.TrimSpace(command) != "" {
+	if command, ok := shellCommand(call.args); ok && strings.TrimSpace(command) != "" {
 		return strings.TrimSpace(command), strings.TrimSpace(command)
 	}
 	for _, arg := range pathArgs {
@@ -310,7 +321,7 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 			}
 		}
 	}
-	if command, ok := call.args["command"].(string); ok {
+	if command, ok := shellCommand(call.args); ok {
 		for _, event := range shellPathEvents(command) {
 			x.fileEvent(event.path, event.state, event.other, sources)
 		}

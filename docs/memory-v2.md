@@ -211,10 +211,13 @@ repeated compactions, which rendering from records avoids.
   - not covered, since no fixture or reader shows their shape: Cline and Roo (`write_to_file`,
     `replace_in_file`, `apply_diff`), Goose's `text_editor` (its `command`), Kimi's
     `StrReplaceFile`, Qwen's and OpenCode's or Crush's edit tools beyond the names above (they match
-    if they use them), and Codex's `exec_command`/`shell` failures other than apply_patch's (a
-    Codex shell result reports `Process exited with code N`, which is not read as a failure);
+    if they use them);
+  - a shell call's command from its `command` argument, else `cmd` (Codex's `exec_command`), so
+    its `rm`/`git mv`/`git commit` are read like any other shell call;
   - commits, as the `git commit` subject plus the hash from its result;
-  - `attempt` records whose outcome code sets: `failed` on `isError` or a nonzero exit; `worked` when
+  - `attempt` records whose outcome code sets: `failed` on `isError` or a nonzero exit (read from
+    `Command exited with code N`, or `Process exited with code N` as Codex and some other harnesses
+    write it, bracketed or not); `worked` when
     the identical command, or the same tool on the same path, later succeeds; `open` otherwise.
   The summary renders the files as a line of its own, so the list stays readable by the session model,
   after an uninstall, and after a later native PiG compaction (which drops a hook compaction's

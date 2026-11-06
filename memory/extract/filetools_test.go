@@ -136,3 +136,22 @@ func TestCodexApplyPatchThroughShell(t *testing.T) {
 	}
 	wantFiles(t, run(entries), "app.py edited", "b.py written", "c.py deleted")
 }
+
+// A shell result that reports its exit as "Process exited with code N" (Codex's exec_command,
+// and the bracketed form other harnesses write) fails on a nonzero code even when the tool
+// result is not marked an error, and its failure line skips that note.
+func TestProcessExitCode(t *testing.T) {
+	entries := []session.Entry{
+		user("u1", "Run the tests"),
+		assistant("a1", call{"c1", "exec_command", map[string]any{"cmd": "go test ./..."}}),
+		result("t1", "c1", "exec_command", "Chunk ID: 1f\nProcess exited with code 1\nOutput:\n--- FAIL: TestX (0.00s)", false),
+		assistant("a2", call{"c2", "shell", map[string]any{"command": "make lint"}}),
+		result("t2", "c2", "shell", "lint.go:3: unused x\r\n\n\n[Process exited with code 2]", false),
+		assistant("a3", call{"c3", "shell", map[string]any{"command": "echo hi"}}),
+		result("t3", "c3", "shell", "hi\r\n\n\n[Process exited with code 0]", false),
+	}
+	r := run(entries)
+	find(t, r, "attempt", `exec_command "go test ./..." failed: Chunk ID: 1f`)
+	find(t, r, "attempt", `shell "make lint" failed: lint.go:3: unused x`)
+	absent(t, r, `"echo hi" failed`)
+}

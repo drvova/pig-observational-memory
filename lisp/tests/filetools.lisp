@@ -80,3 +80,14 @@
   (check (js-slug (format nil "/w/日本語/~Cx" (code-char #x1F600))) "-w-------x")
   (with-env (("KODE_CONFIG_DIR" "/k"))
     (check (kode-session-path "/w/my_app é" "s1") "/k/projects/-w-my-app--/s1.jsonl")))
+
+;; "Process exited with code N" (Codex's exec_command, and the bracketed form) is a shell exit
+;; code too, and Codex's cmd argument is the call's command (extract/filetools_test.go
+;; TestProcessExitCode).
+(deftest filetools-process-exit-code
+  (check (second (regex-find-submatch +exit-code+ (format nil "Chunk ID: 1f~%Process exited with code 1~%Output:"))) "1")
+  (check (second (regex-find-submatch +exit-code+ (format nil "hi~%~%[Process exited with code 0]"))) "0")
+  (check (failure-line (format nil "lint.go:3: unused x~%~%[Process exited with code 2]")) "lint.go:3: unused x")
+  (check (shell-command (jobject "cmd" "go test ./...")) "go test ./...")
+  (check (shell-command (jobject "command" "ls" "cmd" "pwd")) "ls")
+  (check (nth-value 1 (call-target (make-xstate) (make-tcall :name "exec_command" :args (jobject "cmd" "go test ./...")))) "go test ./..."))
