@@ -68,6 +68,28 @@ These are the owner's, accepted as the report recommended:
 14. **Multi-device sync of `~/.om` is out of scope.** If it is needed later, it will be one ordering
     primary with replicas, not CRDTs.
 
+The owner accepted seven more, after the research on working memory, long context, transparency,
+project knowledge and evaluation:
+
+15. **A raw floor and a quality trigger.** Below a per-model raw floor (about 32K tokens for an
+    unknown model), nothing is consolidated. A compaction may also be triggered by raw tokens since
+    the last compaction passing a per-model threshold. Both sit behind a setting and are set from the
+    engine's own effective-length measurements. Window-minus-reserve stays as the hard backstop.
+16. **Working memory is session-scoped,** except open intentions and the user's constraints, which the
+    next session shows first. It holds about 10 constraints and the last 5 actions; anything over
+    the cap is named in an `also:` line. Its slots render at compaction, not as per-turn cues.
+17. **Thinking is dropped only at compaction,** once its derived state exists as records, and never
+    between compactions.
+18. **Memory is framed to the model as unverified everywhere it is shown,** and there are no "are you
+    sure?" re-checks.
+19. **Preferences that weaken security are held.** A fixed pattern list finds them. They are listed in
+    `/om:status` and never indexed or applied without a fresh quoted instruction.
+20. **Project structure is derived on demand from HEAD,** cached by commit and never stored as fact.
+    No wiki is generated. Only the why (decisions with reasons and rejected alternatives, contracts the
+    code does not show, pitfalls) is kept as per-repo records with freshness verdicts.
+21. **The bench uses a fixed judge from a different model family than the answerer.** Decoy controls
+    run on every pass, and answers are matched exactly where they can be.
+
 ## Phases
 
 Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each adds schemas to
@@ -75,18 +97,19 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
 
 | Phase | Contents | Gate |
 |---|---|---|
-| 0. Measure | Tier 0 (retention after 1/5/10/20 compactions by class), 0b (forgetting), 0c (sharing) harnesses, zero model calls; the scenario tests below | Baseline curves recorded |
-| 1. Safety fixes | `ForgetMemory` quote gate with session-local staging; independence check on cross-session staging evidence; secret scan and redaction at append, curated write and render; role-label escaping; origin taken as the minimum through level-1 merges | Scenarios 10–13 and 18 pass |
-| 2. Encoding | `source`, `authority`, `hedge`, `keys`, `writer`, `scope`, `timeHint` fields; adapter-supplied repo, branch and HEAD; missing rule verbs and team forms; episode segmentation; repo-config conventions as anchored observations | Golden regenerated; scenarios 2 and 7 move |
-| 3. Retrieval | Exact key index and identifier-split tokenizer (a tokenization contract in `protocol.md`); two-level RRF, neighbour expansion, status tags; fold checkpoints | Tier 1 gains, no Tier 0 regression |
-| 4. Truth maintenance and forgetting | Believed/not-believed labels in the fold; forget records, scopes, cascade, tombstones; typed intentions; decay with floors | Scenarios 4, 17 and the forgetting suite |
-| 5. Core log | Core manifest and operations; consumed-through markers; promotion gates; contested pairs; pull at session start and compaction | Sharing suite; scenarios 14 and 19 |
-| 6. Sleep | Child-SBCL idle pass; compaction fallback; repository verification; `/om:status` lines | A/B; request count unchanged |
-| 7. Delivery and dreams | Cues for `om` harnesses; diff-chain `revision` records; optional dream section; erasure | False-promotion rate 0 |
+| 0. Measure | Tier 0 generator, invariants and controls (retention after 1/2/4/8/16/20 compactions by class, zero model calls); Compact-Bench's no-model tracks wired to level 0; a judge harness with decoys and a judge from another model family; forgetting and sharing suites; the scenario tests below | Baseline curves and Compact-Bench figures recorded |
+| 1. Safety fixes | `ForgetMemory` quote gate with session-local staging; an independence check on cross-session staging evidence; secret scan and redaction at append, curated write and render; role-label escaping; origin as the minimum through level-1 merges; holding security-weakening preferences; "unverified" framing in the index and summary header | Scenarios 10–13, 18 and 25 pass |
+| 2. Encoding | `source`, `authority`, `hedge`, `keys`, `writer`, `scope`, `timeHint` fields; adapter-supplied repo, branch and HEAD; assistant pushback kept beside user claims; missing rule verbs and team forms; episode segmentation; repo-config conventions as anchored observations | Golden regenerated; scenarios 2, 7 and 24 move |
+| 3. Working memory and trigger | Slot records rendered in `intent`/`next`, with a constraints registry after the summary body; `closedBy` receipts and `derivedFrom` staleness; the raw floor and quality trigger | Scenarios 3, 4 and 21–23; ConstraintRot rebuild; ARCBench run |
+| 4. Retrieval and project knowledge | Exact key index and identifier-split tokenizer (a tokenization contract in `protocol.md`); two-level RRF, neighbour expansion, status tags; fold checkpoints; a HEAD structure view cached by commit; per-repo project records with freshness verdicts | Tier 1 gains, no Tier 0 regression; scenario 26 |
+| 5. Truth maintenance and forgetting | Believed/not-believed labels in the fold; forget records, scopes, cascade, tombstones; typed intentions; a three-way supersession decision; decay with floors | Scenario 17 and the forgetting suite |
+| 6. Core log | Core manifest and operations; consumed-through markers; promotion gates; contested pairs; pull at session start and compaction; a per-model hint rule | Sharing suite; scenarios 14 and 19 |
+| 7. Transparency and sleep | `/om:view` per-record provenance, scope, lifecycle and "used"; `/om:status` aggregates; quote-gated correction as supersession; child-SBCL idle sleep with a compaction fallback and repository verification | A/B on Tiers 1 and 2; request count unchanged |
+| 8. Delivery and dreams | Cues for `om` harnesses with PostToolUse; diff-chain `revision` records; an optional dream section after its A/B; erasure | DreamBench-SWE bar; false-promotion rate 0 |
 
 ## Scenarios
 
-Each failure has a test that a harness can check. The full catalogue, with its evidence, is in the
+Each failure has a test that a harness can check (26 in all). The full catalogue, with its evidence, is in the
 report.
 
 | # | Failure | Expected |
@@ -111,3 +134,9 @@ report.
 | 18 | A forget is injected through tool output | Staged; shared memory unchanged |
 | 19 | A foreign scope or preference leaks | Not returned |
 | 20 | A dream hypothesis is asserted as fact | Never in fact classes |
+| 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt |
+| 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale" |
+| 23 | Compaction comes late on a 1M window | The quality trigger fires; nothing below the floor is consolidated |
+| 24 | A stored opinion becomes a rule (sycophancy) | The record keeps the claim and the pushback and is not a rule |
+| 25 | An insecure preference is stored and applied | Held, listed in `/om:status`, never in the index |
+| 26 | A project record goes stale against HEAD | Printed "gone at <sha>"; no structure line in the ledger |
