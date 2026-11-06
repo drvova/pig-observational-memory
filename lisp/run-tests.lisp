@@ -27,6 +27,9 @@
   (dolist (file '("regex" "json" "ledger" "extract" "selection"))
     (load (merge-pathnames (format nil "tests/~A.lisp" file) here))))
 
+;; W1, the memory model.
+(load (merge-pathnames "tests/memory-model.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

@@ -1,12 +1,7 @@
-;;;; memory/ledger, the parts level-0 extraction and the summary read: the record type and its
-;;;; JSON, specifics (specifics.go), the level-0 links (links.go), relative dates (reldate.go),
-;;;; the status rule, anchors, and the fold of recorded batches (fold.go, projection.go).
-;;;;
-;;;; Not ported: subject canonicalization and aliases (subjects.go, aliases.go). Level 0 only
-;;;; names a subject the ledger already holds, and only level 1 or a v1 worker writes one, so on
-;;;; a ledger level 0 alone wrote every subject is "" (docs/lisp-spike.md, "Scope"). The functions
-;;;; that would need them signal an error on a non-empty subject rather than guess. Level 1's
-;;;; replacements (replace.go) are not ported either: they come only from consolidated batches.
+;;;; memory/ledger: the record type and its JSON (types.go), specifics (specifics.go), the
+;;;; level-0 links (links.go), relative dates (reldate.go), the status rule and anchors. Subjects
+;;;; and aliases are in ledger-subjects.lisp, reflections in ledger-reflections.lisp, level 1's
+;;;; replacements in ledger-replace.lisp, and the fold and projections in ledger-fold.lisp.
 
 (in-package "OM.KERNEL")
 
@@ -21,6 +16,8 @@
   (subject "" :type string)
   (scope "" :type string)
   (supersedes '() :type list)
+  ;; fields are a note schema's own fields (Observation.Fields), an alist sorted by name.
+  (fields '() :type list)
   (origin "" :type string)
   (from-user nil)
   (outcome "" :type string)
@@ -59,6 +56,10 @@
     (unless (string= (obs-subject o) "") (field "subject" (obs-subject o)))
     (unless (string= (obs-scope o) "") (field "scope" (obs-scope o)))
     (when (obs-supersedes o) (field "supersedes" (strings (obs-supersedes o))))
+    (when (obs-fields o)
+      (let ((m (make-hash-table :test 'equal)))
+        (loop for (name . value) in (obs-fields o) do (setf (gethash name m) value))
+        (field "fields" m)))
     (unless (string= (obs-origin o) "") (field "origin" (obs-origin o)))
     (when (obs-from-user o) (field "fromUser" :true))
     (unless (string= (obs-outcome o) "") (field "outcome" (obs-outcome o)))
@@ -101,6 +102,8 @@
                  (push-end x out))))
     out))
 
+(defregex +schema-field-name+ #r§^[a-z][a-z0-9_]{0,31}$§)
+
 (defun observation-from (m)
   "ObservationFrom: a decoded observation, validated, or nil."
   (when (hash-table-p m)
@@ -130,7 +133,12 @@
                 (obs-replaces o) (link-ids (jget m "replaces") (obs-id o))
                 (obs-supersedes o) (link-ids (jget m "supersedes") (obs-id o)))
           (when (hash-table-p (jget m "fields"))
-            (error "ledger: schema fields are not ported"))
+            (let ((fields '()))
+              (maphash (lambda (name value)
+                         (when (and (stringp value) (string/= value "") (regex-match-p +schema-field-name+ name))
+                           (push (cons name value) fields)))
+                       (jget m "fields"))
+              (setf (obs-fields o) (sort fields #'string< :key #'car))))
           o)))))
 
 (defun user-priority-p (o)
@@ -170,28 +178,6 @@
       (values "" -1 nil)
       (let* ((id (first (obs-source-ids o))) (at (gethash id positions)))
         (if at (values id at t) (values id -1 nil)))))
-
-;;; Subjects (only the empty subject; see the header)
-
-(defun subject-in-text (text subjects)
-  (declare (ignore text))
-  (if (every (lambda (s) (string= s "")) subjects)
-      ""
-      (error "ledger: subjects are not ported")))
-
-(defun canonical-subject (subject)
-  "The canonical subject and extra scope of subject: none for the empty subject."
-  (if (string= subject "")
-      (values "" "")
-      (error "ledger: subject canonicalization is not ported")))
-
-(defun subject-table-name (subject)
-  (if (string= subject "") "" (error "ledger: subject tables are not ported")))
-
-(defun canonical-scope (scope extra)
-  (cond ((string= extra "") scope)
-        ((string= scope "") extra)
-        (t (cat scope "; " extra))))
 
 ;;; Specifics
 
@@ -370,6 +356,27 @@
     (some (lambda (s) (and (gethash s shared) (not (eq (gethash s na) (gethash s nb)))))
           (specifics b))))
 
+;;; UpdatedSpecifics: the specifics of earlier that later's update replaces.
+(defun updated-specifics (later earlier)
+  "UpdatedSpecifics: a set of the specifics of earlier (Specifics items) that later's update
+replaces."
+  (let ((mine (typed-specifics later)) (theirs (typed-specifics earlier)) (parts (make-set)) (out (make-set)))
+    (maphash (lambda (kind values)
+               (let ((other (gethash kind mine)))
+                 (when (and other (plusp (hash-table-count other)) (has-outside-p values other) (has-outside-p other values))
+                   (maphash (lambda (value v)
+                              (declare (ignore v))
+                              (unless (gethash value other)
+                                (setf (gethash value parts) t)
+                                (dolist (n (regex-find-all-strings +specific-number+ value))
+                                  (setf (gethash (remove #\, n) parts) t))
+                                (dolist (w (regex-find-all-strings +specific-token+ value))
+                                  (setf (gethash (to-lower (trim-right w ".")) parts) t))))
+                            values))))
+             theirs)
+    (dolist (s (specifics earlier) out)
+      (when (gethash s parts) (setf (gethash s out) t)))))
+
 ;;; Relative dates
 
 (defparameter +rel-number+ "(\\d{1,3}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)")
@@ -506,68 +513,3 @@
 (defun names-no-one-date-p (o)
   (and (string= (obs-event-date o) "") (regex-match-p +date-annotation+ (obs-content o))))
 
-;;; The fold of recorded batches
-
-(defstruct folded
-  (observations '())
-  (active '())
-  (dropped (make-set))
-  (by-id (make-set)))
-
-(defun recorded-data (e)
-  "ObservationsRecordedDataFrom of an om.observations.recorded entry: (values observations
-covers-up-to-id), or nil."
-  (when (and (string= (entry-type e) "custom") (string= (entry-custom-type e) "om.observations.recorded"))
-    (let* ((data (entry-data e)) (list (jget data "observations")) (covers (jget data "coversUpToId")))
-      (when (jtrue-p (jget data "consolidated")) (error "ledger: consolidated batches are not ported"))
-      (when (and (vectorp list) (not (stringp list)) (plusp (length list)) (stringp covers) (string/= covers ""))
-        (let ((observations (map 'list #'observation-from list)))
-          (unless (member nil observations)
-            (values observations covers)))))))
-
-(defun dropped-data (e)
-  (when (and (string= (entry-type e) "custom") (string= (entry-custom-type e) "om.observations.dropped"))
-    (let* ((data (entry-data e)) (ids (non-empty-strings (jget data "observationIds"))) (covers (jget data "coversUpToId")))
-      (and ids (stringp covers) (string/= covers "") (values ids covers)))))
-
-(defun check-unported-entry (e)
-  (when (string= (entry-type e) "custom")
-    (when (member (entry-custom-type e) '("om.reflections.recorded" "om.subjects.aliased") :test #'string=)
-      (error "ledger: ~A entries are not ported" (entry-custom-type e)))))
-
-(defun fold-ledger (entries)
-  "FoldLedger through the tip, without level 1's replacements (none on a level-0 ledger)."
-  (let ((f (make-folded)) (observations '()))
-    (loop for e across entries
-          do (check-unported-entry e)
-             (multiple-value-bind (list covers) (recorded-data e)
-               (when covers
-                 (dolist (o list)
-                   (unless (gethash (obs-id o) (folded-by-id f))
-                     (setf (gethash (obs-id o) (folded-by-id f)) o)
-                     (push o observations)))))
-             (multiple-value-bind (ids covers) (dropped-data e)
-               (when covers (dolist (id ids) (setf (gethash id (folded-dropped f)) t)))))
-    (setf (folded-observations f) (nreverse observations))
-    (setf (folded-active f) (remove-if (lambda (o) (gethash (obs-id o) (folded-dropped f))) (folded-observations f)))
-    f))
-
-(defun full-projection (entries)
-  "FullProjection through the tip: the records of batches whose coverage claim is on the branch,
-first valid record winning, minus the folded drops."
-  (let* ((index (entry-index-by-id entries))
-         (tip (1- (length entries)))
-         (covered (lambda (id) (let ((at (gethash id index))) (and at (>= at 0) (>= tip 0) (<= at tip)))))
-         (seen (make-set)) (observations '()) (dropped (make-set)))
-    (loop for e across entries
-          do (multiple-value-bind (list covers) (recorded-data e)
-               (if covers
-                   (when (funcall covered covers)
-                     (dolist (o list)
-                       (unless (gethash (obs-id o) seen)
-                         (setf (gethash (obs-id o) seen) t)
-                         (push o observations))))
-                   (multiple-value-bind (ids dcovers) (dropped-data e)
-                     (when (and dcovers (funcall covered dcovers))
-                       (dolist (id ids) (setf (gethash id dropped) t)))))))
-    (remove-if (lambda (o) (gethash (obs-id o) dropped)) (nreverse observations))))

@@ -22,6 +22,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/selection"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/session"
+	"github.com/drvova/pig-observational-memory/memory/tables"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
 	"github.com/drvova/pig-observational-memory/memory/transcript"
 )
@@ -60,6 +61,16 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"claude-code-preserved", "claude-code", real("claude-code-preserved.jsonl"), "/Users/dev/atuin", mode, budgets},
 			parityCase{"openclaude-preserved-segment", "claude-code", real("openclaude-preserved-segment.jsonl"), "/tmp", mode, budgets},
 			parityCase{"openclaude-snip", "claude-code", real("openclaude-snip.jsonl"), "/tmp", mode, budgets},
+			parityCase{"synthetic-claude-code", "claude-code", synthetic("claude-code.jsonl"), "/home/dev/shop", mode, budgets},
+			parityCase{"synthetic-generic", "generic", synthetic("generic.jsonl"), "/home/dev/app", mode, budgets},
+			parityCase{"synthetic-conversation", "generic", synthetic("conversation.jsonl"), "", mode, budgets},
+			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
+		)
+	}
+	// The other summary formats and codecs, on the cases that fill every section.
+	for _, mode := range []string{"whole:lines", "whole:jsonl", "turns:lines"} {
+		cases = append(cases,
+			parityCase{"claude-code-preserved", "claude-code", real("claude-code-preserved.jsonl"), "/Users/dev/atuin", mode, budgets},
 			parityCase{"synthetic-claude-code", "claude-code", synthetic("claude-code.jsonl"), "/home/dev/shop", mode, budgets},
 			parityCase{"synthetic-generic", "generic", synthetic("generic.jsonl"), "/home/dev/app", mode, budgets},
 			parityCase{"synthetic-conversation", "generic", synthetic("conversation.jsonl"), "", mode, budgets},
@@ -221,6 +232,16 @@ func goPipeline(t *testing.T, c parityCase) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A mode may name the summary's format or codec after a colon (rows tables by default).
+	mode, variant, _ := strings.Cut(c.mode, ":")
+	summaryFormat := ledger.FormatTables
+	var codec tables.Codec
+	switch variant {
+	case "lines":
+		summaryFormat = ledger.FormatLines
+	case "jsonl":
+		codec = tables.JSONLines
+	}
 	var lines []string
 	for _, e := range entries {
 		lines = append(lines, "entry "+marshal(t, e.ToMap()))
@@ -239,7 +260,7 @@ func goPipeline(t *testing.T, c parityCase) []string {
 		run++
 	}
 	for _, e := range entries {
-		if c.mode == "turns" && len(branch) > 0 && e.Type == "message" && e.MessageRole() == "user" {
+		if mode == "turns" && len(branch) > 0 && e.Type == "message" && e.MessageRole() == "user" {
 			extractNow()
 		}
 		branch = append(branch, e)
@@ -259,7 +280,8 @@ func goPipeline(t *testing.T, c parityCase) []string {
 			Branch:       branch,
 			Intent:       intent,
 			Budget:       budget,
-			Format:       ledger.FormatTables,
+			Format:       summaryFormat,
+			Codec:        codec,
 		})
 		// Normalization: an empty Result (nothing fits, or nothing to show) has nil snippets,
 		// which json writes as null; the port writes every list as [].
@@ -380,7 +402,12 @@ func diffLines(t *testing.T, want, got []string) {
 			kinds[kind]++
 			continue
 		}
-		t.Fatalf("line %d differs (Go %d lines, Lisp %d lines):\n go:   %s\n lisp: %s", i+1, len(want), len(got), clipLine(w), clipLine(g))
+		at := 0
+		for at < len(w) && at < len(g) && w[at] == g[at] {
+			at++
+		}
+		from := max(0, at-300)
+		t.Fatalf("line %d differs at byte %d (Go %d lines, Lisp %d lines):\n go:   %s\n lisp: %s", i+1, at, len(want), len(got), clipLine(w[from:]), clipLine(g[from:]))
 	}
 	t.Logf("identical: %d entries, %d records, %d summaries", kinds["entry"], kinds["record"], kinds["summary"])
 }

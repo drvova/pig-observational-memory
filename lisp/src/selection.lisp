@@ -1,7 +1,7 @@
-;;;; memory/selection: level 0's summary (selection.go, layout.go, omit.go) in the tables format
-;;;; with the native rows codec (tables/rows_encode.go), and the om snippet formatter it prints
-;;;; (om/snippet.go FormatRead). Not ported: reflections (only level 1 and v1 write them; one in
-;;;; the input signals an error), the lines format and the other codecs.
+;;;; memory/selection: the level-0 summary (selection.go, layout.go, omit.go) in the tables and
+;;;; lines formats, with reflections, subject tables and OmittedSpans; the codecs it encodes
+;;;; tables in (tables/rows_encode.go, tables/jsonl.go); and the om snippet formatter it prints
+;;;; (om/snippet.go FormatRead). Not ported: a codec a model declared (tables/declared.go).
 
 (in-package "OM.ENGINE")
 
@@ -42,12 +42,29 @@
 
 (defparameter +tables-instructions+ (cat +tables-summary-intro+ +rows-format-line+ +tables-body+))
 
+(defparameter +lines-instructions+
+  (cat (nl "These are condensed memories from earlier in this session, one record per line under a heading."
+           ""
+           "- request: the opening request of the turn this compaction cut through; the turn continues after this summary."
+           "- reflections: stable facts about the user, project, decisions, and constraints, as [id] (dates) content."
+           "- notes.<subject> and notes: records as [id] date kind status content, oldest first. kind is fact, event, preference, plan, correction, assistant, attempt (a tool call and its outcome) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted. A line may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict."
+           (cat "- Every line ends with the entry id it was picked from, in parentheses; the memory tool's " +snippet-recall-entry+ " reads that entry.")
+           "- omitted lists records left out to fit, each span with its dates, count, first and last entry id and the om snippet (memory tool code) that lists them."
+           "- files and commits list files at their newest state and commits; +N more, all M ends a list with the om snippets that list the whole list."
+           ""
+           "Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks."
+           ""
+           "")
+       +tables-recall-paragraph+))
+
 (defparameter +request-line+
   (cat "- request: the opening request of the turn this compaction cut through; the turn continues after this summary." (string #\Newline)))
 (defparameter +intent-line+
   (cat "- intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole." (string #\Newline)))
 (defparameter +next-line+
   (cat "- next: the next steps of the current work: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated in the notes tables." (string #\Newline)))
+(defparameter +next-lines-format+
+  (cat "- next: the next steps of the current work, as notes lines: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated under notes." (string #\Newline)))
 (defparameter +trailer-separator+ (format nil "~%~%---~%~%"))
 (defparameter +omitted-advice+
   (cat "Something missing from this summary may still be in memory: before saying it was not mentioned or is unknown, run the om snippet that lists what was left out or "
@@ -56,10 +73,11 @@
 
 (defparameter +request-fields+ '("content" "source"))
 (defparameter +intent-fields+ '("which" "content" "source"))
+(defparameter +reflection-fields+ '("id" "dates" "content" "source"))
 (defparameter +note-fields+ '("id" "when" "kind" "status" "scope" "content" "superseded_by" "source"))
 (defparameter +omitted-fields+ '("from" "to" "count" "spans" "first_id" "last_id" "query"))
 
-;;; tables: the rows codec
+;;; Codecs: the rows codec (rows_encode.go) and JSON lines (jsonl.go). A codec is :rows or :jsonl.
 
 (defun needs-quote-p (s)
   (or (string= s "")
@@ -84,18 +102,52 @@
 
 (defstruct rtable name fields (rows '()) (absent '()))
 
+(defun cell-absent-p (absent c) (nth c absent))
+
 (defun encode-table (tb)
+  "The rows codec's encoding of one table."
   (with-output-to-string (out)
     (format out "~A[~D]{~A}:" (rtable-name tb) (length (rtable-rows tb)) (join (rtable-fields tb) ","))
-    (loop for row in (rtable-rows tb) for absent in (rtable-absent tb)
+    (loop for row in (rtable-rows tb) for i from 0
+          for absent = (nth i (rtable-absent tb))
           do (write-string (format nil "~%  ") out)
              (loop for c from 0 below (length (rtable-fields tb))
                    do (when (> c 0) (write-char #\, out))
-                      (cond ((and (< c (length row)) (not (nth c absent))) (write-string (quote-value (nth c row)) out))
+                      (cond ((and (< c (length row)) (not (cell-absent-p absent c))) (write-string (quote-value (nth c row)) out))
                             ((= (length (rtable-fields tb)) 1) (write-string "\"\"" out)))))))
 
-(defun encode-tables (tables)
-  (join (mapcar #'encode-table tables) (string #\Newline)))
+(defun encode-jsonl-table (tb)
+  "The JSON-lines codec's encoding of one table: a header line, then one array per row."
+  (let ((lines (list (cat "{\"table\":" (json-string (rtable-name tb) :escape-html nil)
+                          ",\"fields\":" (json-string (coerce (rtable-fields tb) 'simple-vector) :escape-html nil) "}"))))
+    (loop for row in (rtable-rows tb) for i from 0
+          for absent = (nth i (rtable-absent tb))
+          do (push-end (json-string (coerce (loop for c from 0 below (length (rtable-fields tb))
+                                                  collect (if (and (< c (length row)) (not (cell-absent-p absent c)))
+                                                              (nth c row)
+                                                              :null))
+                                            'simple-vector)
+                                    :escape-html nil)
+                       lines))
+    (join lines (string #\Newline))))
+
+(defun codec-encode (codec tables)
+  (join (mapcar (if (eq codec :jsonl) #'encode-jsonl-table #'encode-table) tables) (string #\Newline)))
+
+(defun encode-tables (tables) (codec-encode :rows tables))
+
+(defun codec-name (codec) (if (eq codec :jsonl) "jsonl" "rows"))
+
+(defun codec-spec-first-line (codec)
+  (if (eq codec :jsonl)
+      "A table is a header line {\"table\":\"name\",\"fields\":[\"field1\",\"field2\"]} followed by one line per row: a JSON array with one string per field, in header order, null for none."
+      "A table is name[N]{field1,field2,...}: followed by exactly N rows, each on its own line indented two spaces, values separated by commas in header order with no space after a comma."))
+
+(defun tables-instructions-for (codec)
+  "TablesInstructionsFor."
+  (if (or (null codec) (eq codec :rows))
+      +tables-instructions+
+      (cat +tables-summary-intro+ " in the " (codec-name codec) " format. " (trim-space (codec-spec-first-line codec)) +tables-body+)))
 
 (defun absent-empty (cells)
   (loop for cell in cells for i from 0 collect (and (> i 0) (string= cell ""))))
@@ -123,21 +175,25 @@
 ;;; Items and state
 
 (defstruct item
-  role index obs (text "") (group "") (which "") (note-group "")
+  role index obs ref (text "") (group "") (which "") (note-group "")
   (anchor-id "") (anchor -1) anchored (from "") (to "") (status "") (links "")
   (cost 0) cells (line ""))
 
 (defun item-source (it) (if (item-anchored it) (item-anchor-id it) ""))
 
 (defun item-id (it)
-  (if (member (item-role it) '(:request :intent)) "" (obs-id (item-obs it))))
+  (case (item-role it)
+    (:reflection (refl-id (item-ref it)))
+    ((:request :intent) "")
+    (t (obs-id (item-obs it)))))
+
+(defstruct layout (tables t) (codec :rows) (intro "") (empty (make-set)) (notice t))
 
 (defstruct sstate
-  observations folded branch request-in intent-in budget
-  items request intent positions
+  observations reflections folded branch request-in intent-in aliases reflection-dates layout
+  items request intent positions canonical
   (superseded (make-set)) (by-id (make-set)) (records (make-set))
-  (partners (make-set)) (superseded-by (make-set))
-  (empty-costs (make-set)))
+  (partners (make-set)) (superseded-by (make-set)))
 
 (defun record-date (timestamp)
   (if (and (>= (length timestamp) 10) (iso-date-p (subseq timestamp 0 10))) (subseq timestamp 0 10) ""))
@@ -155,40 +211,57 @@
 (defun fields-of (group)
   (cond ((string= group "request") +request-fields+)
         ((string= group "intent") +intent-fields+)
+        ((string= group "reflections") +reflection-fields+)
         ((string= group "omitted") +omitted-fields+)
         (t +note-fields+)))
 
 (defun list-group-p (group) (or (string= group "files") (string= group "commits")))
 
-(defun section-line (group)
+(defun section-line (l group)
   (cond ((string= group "intent") +intent-line+)
-        ((string= group "next") +next-line+)
+        ((string= group "next") (if (layout-tables l) +next-line+ +next-lines-format+))
         (t "")))
 
-(defun empty-cost (s group)
-  (or (gethash group (sstate-empty-costs s))
-      (setf (gethash group (sstate-empty-costs s))
-            (estimate-tokens (encode-table (make-rtable :name group :fields (fields-of group)))))))
+(defun empty-cost (l group)
+  (or (gethash group (layout-empty l))
+      (setf (gethash group (layout-empty l))
+            (estimate-tokens (codec-encode (layout-codec l) (list (make-rtable :name group :fields (fields-of group))))))))
 
-(defun row-cost (s group cells)
-  (- (+ (estimate-tokens (encode-table (make-rtable :name group :fields (fields-of group)
-                                                    :rows (list cells) :absent (list (absent-empty cells)))))
-        1)
-     (empty-cost s group)))
+(defun row-cost (l group cells)
+  (if (not (layout-tables l))
+      0
+      (- (+ (estimate-tokens (codec-encode (layout-codec l)
+                                           (list (make-rtable :name group :fields (fields-of group)
+                                                              :rows (list cells) :absent (list (absent-empty cells))))))
+            1)
+         (empty-cost l group))))
+
+(defun section-header-cost (l group)
+  (cond ((list-group-p group) (1+ (estimate-tokens (cat +trailer-separator+ group ": "))))
+        ((not (layout-tables l)) (+ (estimate-tokens (format nil "~%~%## ~A~%" group)) 2))
+        (t (+ (empty-cost l group) 2))))
 
 (defun header-cost (s group)
-  (+ (if (list-group-p group)
-         (1+ (estimate-tokens (cat +trailer-separator+ group ": ")))
-         (+ (empty-cost s group) 2))
-     (estimate-tokens (section-line group))))
+  (let ((l (sstate-layout s)))
+    (+ (section-header-cost l group) (estimate-tokens (section-line l group)))))
 
 (defun suffix (id) (if (string= id "") "" (cat " (" id ")")))
 
 (defun price (s it)
-  (let ((source (item-source it)))
+  (let ((source (item-source it)) (l (sstate-layout s)))
     (case (item-role it)
-      (:request (setf (item-cells it) (list (item-text it) source)))
-      (:intent (setf (item-cells it) (list (item-which it) (item-text it) source)))
+      (:request (setf (item-cells it) (list (item-text it) source)
+                      (item-line it) (cat "user: " (item-text it) (suffix source))))
+      (:intent (setf (item-cells it) (list (item-which it) (item-text it) source)
+                     (item-line it) (cat (item-which it) ": " (item-text it) (suffix source))))
+      (:reflection
+       (let* ((r (item-ref it))
+              (dates (if (and (string/= (item-to it) "") (string/= (item-to it) (item-from it)))
+                         (cat (item-from it) ".." (item-to it))
+                         (item-from it))))
+         (setf (item-cells it) (list (refl-id r) dates (refl-content r) source)
+               (item-line it) (cat "[" (refl-id r) "]" (if (string/= dates "") (cat " (" dates ")") "")
+                                   " " (refl-content r) (suffix source)))))
       ((:file :commit)
        (let ((text (obs-content (item-obs it))))
          (when (eq (item-role it) :commit) (setf text (trim-prefix text "commit ")))
@@ -198,42 +271,70 @@
       (t
        (let* ((o (item-obs it))
               (content (resolve-relative-dates (obs-content o) (record-anchor-day (obs-timestamp o))))
-              (scope (multiple-value-bind (subject extra) (canonical-subject (obs-subject o))
-                       (declare (ignore subject))
-                       (canonical-scope (obs-scope o) extra)))
+              (scope (canonical-scope (obs-scope o) (canonical-of (sstate-canonical s) (obs-subject o))))
               (replaced-by (join (gethash (obs-id o) (sstate-superseded-by s)) " "))
               (shown (if (string/= (item-links it) "") (cat content " " (item-links it)) content)))
-         (setf (item-cells it) (list (obs-id o) (item-from it) (obs-kind o) (item-status it) scope shown replaced-by source)))))
-    (setf (item-cost it) (row-cost s (item-group it) (item-cells it)))))
+         (setf (item-cells it) (list (obs-id o) (item-from it) (obs-kind o) (item-status it) scope shown replaced-by source))
+         (let ((line (cat "[" (obs-id o) "]")))
+           (dolist (part (list (item-from it) (obs-kind o) (item-status it)))
+             (when (string/= part "") (setf line (cat line " " part))))
+           (when (string/= scope "") (setf line (cat line " (" scope ")")))
+           (setf line (cat line " " content))
+           (when (string/= replaced-by "") (setf line (cat line " (superseded by " replaced-by ")")))
+           (when (string/= (item-links it) "") (setf line (cat line " " (item-links it))))
+           (setf (item-line it) (cat line (suffix source)))))))
+    (setf (item-cost it) (if (layout-tables l)
+                             (row-cost l (item-group it) (item-cells it))
+                             (1+ (estimate-tokens (item-line it)))))))
 
-(defun fixed-cost () (1+ (estimate-tokens +tables-instructions+)))
+(defun fixed-cost (&optional s)
+  "What every summary pays: the instructions and the blank line after them (the native rows
+codec's tables instructions without a state)."
+  (1+ (estimate-tokens (if s (layout-intro (sstate-layout s)) +tables-instructions+))))
+
+(defun new-layout (format codec)
+  (let ((tables (not (equal format "lines"))))
+    (make-layout :tables tables :codec (or codec :rows)
+                 :intro (if tables (tables-instructions-for codec) +lines-instructions+))))
 
 ;;; newState
 
-(defun make-state (observations folded branch budget &key request intent)
-  (when (folded-has-reflections-p folded) (error "selection: reflections are not ported"))
-  (let ((s (make-sstate :observations observations :folded folded :branch branch :budget budget
-                        :request-in request :intent-in intent :positions (entry-index-by-id branch))))
+(defun make-state (observations folded branch budget &key request intent reflections (format "tables") codec
+                                                         aliases reflection-dates)
+  (declare (ignore budget))
+  (let ((s (make-sstate :observations observations :reflections reflections :folded folded :branch branch
+                        :request-in request :intent-in intent :aliases aliases
+                        :reflection-dates (or reflection-dates (make-set))
+                        :layout (new-layout format codec) :positions (entry-index-by-id branch))))
     (maphash (lambda (id o) (setf (gethash id (sstate-records s)) o)) (folded-by-id folded))
     (dolist (o observations) (setf (gethash (obs-id o) (sstate-records s)) o))
     (let ((all (append (folded-observations folded)
-                       (remove-if (lambda (o) (gethash (obs-id o) (folded-by-id folded))) observations))))
+                       (remove-if (lambda (o) (nth-value 1 (gethash (obs-id o) (folded-by-id folded)))) observations)))
+          (items '()))
       (dolist (o all)
         (dolist (id (obs-supersedes o))
           (unless (string= id (obs-id o)) (setf (gethash id (sstate-superseded s)) t))))
-      (let ((items '()))
-        (loop for o in observations for i from 0
-              do (let ((it (make-item :role :note :index i :obs o :text (obs-content o))))
-                   (cond ((string= (obs-kind o) "file") (setf (item-role it) :file (item-group it) "files"))
-                         ((string= (obs-kind o) "commit") (setf (item-role it) :commit (item-group it) "commits"))
-                         (t (let ((group (subject-table-name (canonical-subject (obs-subject o)))))
-                              (setf (item-group it) (if (string= group "") "notes" group)))))
-                   (multiple-value-bind (id at ok) (observation-anchor o (sstate-positions s))
-                     (setf (item-anchor-id it) id (item-anchor it) at (item-anchored it) ok))
-                   (setf (item-from it) (record-date (obs-timestamp o)) (item-to it) (item-from it))
-                   (push it items)
-                   (setf (gethash (obs-id o) (sstate-by-id s)) it)))
-        (setf (sstate-items s) (nreverse items)))
+      (loop for r in reflections for i from 0
+            do (let ((it (make-item :role :reflection :index i :ref r :text (refl-content r) :group "reflections")))
+                 (multiple-value-bind (id at ok) (reflection-anchor r (folded-by-id folded) (sstate-positions s))
+                   (setf (item-anchor-id it) id (item-anchor it) at (item-anchored it) ok))
+                 (multiple-value-bind (from to ranged) (cut (gethash (refl-id r) (sstate-reflection-dates s) "") " to ")
+                   (setf (item-from it) from (item-to it) (if ranged to from)))
+                 (push it items)
+                 (setf (gethash (refl-id r) (sstate-by-id s)) it)))
+      (setf (sstate-canonical s) (observation-subjects observations aliases))
+      (loop for o in observations for i from 0
+            do (let ((it (make-item :role :note :index i :obs o :text (obs-content o))))
+                 (cond ((string= (obs-kind o) "file") (setf (item-role it) :file (item-group it) "files"))
+                       ((string= (obs-kind o) "commit") (setf (item-role it) :commit (item-group it) "commits"))
+                       (t (let ((group (subject-table-name (canonical-subject (canonical-of (sstate-canonical s) (obs-subject o))))))
+                            (setf (item-group it) (if (string= group "") "notes" group)))))
+                 (multiple-value-bind (id at ok) (observation-anchor o (sstate-positions s))
+                   (setf (item-anchor-id it) id (item-anchor it) at (item-anchored it) ok))
+                 (setf (item-from it) (record-date (obs-timestamp o)) (item-to it) (item-from it))
+                 (push it items)
+                 (setf (gethash (obs-id o) (sstate-by-id s)) it)))
+      (setf (sstate-items s) (nreverse items))
       (let ((retracted (retracted-ids all)))
         (dolist (it (sstate-items s))
           (when (eq (item-role it) :note)
@@ -262,8 +363,6 @@
                 (push-end it (sstate-intent s))))))))
     s))
 
-(defun folded-has-reflections-p (folded) (declare (ignore folded)) nil)
-
 (defun mark-next (s)
   (let ((start -1) (ids '()))
     (when (sstate-request-in s) (push-end (car (sstate-request-in s)) ids))
@@ -273,13 +372,14 @@
         (when (and at (> at start)) (setf start at))))
     (when (< start 0) (return-from mark-next))
     (dolist (it (sstate-items s))
-      (let ((o (item-obs it)))
-        (unless (or (not (eq (item-role it) :note)) (not (item-anchored it)) (< (item-anchor it) start)
-                    (gethash (obs-id o) (sstate-superseded s)) (string= (item-status it) +status-retracted+))
-          (let* ((attempt (string= (obs-kind o) "attempt"))
-                 (open (and attempt (member (obs-outcome o) '("open" "failed") :test #'string=))))
-            (when (or open (and (not attempt) (string= (item-status it) +status-proposed+)))
-              (setf (item-note-group it) (item-group it) (item-group it) "next"))))))))
+      (when (eq (item-role it) :note)
+        (let ((o (item-obs it)))
+          (unless (or (not (item-anchored it)) (< (item-anchor it) start)
+                      (gethash (obs-id o) (sstate-superseded s)) (string= (item-status it) +status-retracted+))
+            (let* ((attempt (string= (obs-kind o) "attempt"))
+                   (open (and attempt (member (obs-outcome o) '("open" "failed") :test #'string=))))
+              (when (or open (and (not attempt) (string= (item-status it) +status-proposed+)))
+                (setf (item-note-group it) (item-group it) (item-group it) "next")))))))))
 
 (defun link-items (s)
   (flet ((join-partner (a b)
@@ -295,7 +395,7 @@
                    (let ((shown '()))
                      (dolist (id ids)
                        (let ((other (gethash id (sstate-by-id s))))
-                         (when (and other (not (eq other it)) (funcall live other))
+                         (when (and other (not (eq other it)) (not (eq (item-role other) :reflection)) (funcall live other))
                            (join-partner it other)
                            (join-partner other it)
                            (push-end id shown))))
@@ -357,13 +457,17 @@
     (setf (gethash (item-group it) (sel-opened p)) (1+ (opened p (item-group it))))
     (loop for c across (item-text it) do (vector-push-extend c (sel-carried p)))
     (vector-push-extend #\Newline (sel-carried p))
-    (let ((replaced (and (item-obs it) (obs-supersedes (item-obs it)))))
+    (let ((replaced (case (item-role it)
+                      (:reflection (refl-supporting (item-ref it)))
+                      ((:request :intent) '())
+                      (t (obs-supersedes (item-obs it))))))
       (maphash (lambda (id v)
                  (declare (ignore v))
                  (unless (string= id (item-id it))
                    (setf (gethash id (sel-dropped p)) t)
                    (let ((other (gethash id (sstate-by-id s))))
-                     (when (and other (on-p p other)) (unselect s p other)))))
+                     (when (and other (not (eq (item-role other) :reflection)) (on-p p other))
+                       (unselect s p other)))))
                (drop-closure replaced (sstate-observations s) (sstate-records s))))
     t))
 
@@ -424,13 +528,17 @@
         (newest-first (lambda (it) (and (string/= (item-status it) +status-retracted+)
                                         (missing-specifics (item-text it) (list (coerce (sel-carried p) 'simple-string)))))
                       observations)
+        (newest-first (lambda (it) (declare (ignore it)) t) '(:reflection))
         (newest-first (lambda (it) (declare (ignore it)) t) observations))
       p)))
 
 (defun settle-drops (s p)
-  (let ((shown (loop for it in (sstate-items s) when (on-p p it) collect (item-obs it))))
+  (let ((shown '()) (reflections '()))
+    (dolist (it (sstate-items s))
+      (when (on-p p it)
+        (if (eq (item-role it) :reflection) (push-end (item-ref it) reflections) (push-end (item-obs it) shown))))
     (setf (sel-dropped p) (make-set))
-    (dolist (id (drops (sstate-observations s) shown (sstate-records s)))
+    (dolist (id (drops (sstate-observations s) shown (sstate-records s) reflections))
       (setf (gethash id (sel-dropped p)) t))))
 
 ;;; Omissions
@@ -511,8 +619,7 @@
         (setf (span-row-query r) (snippet source (length all))))
     r))
 
-(defun list-queries (s base all p)
-  (declare (ignore s))
+(defun list-queries (base all p)
   (if (<= (length all) +max-limit+)
       (list (snippet base (length all)))
       (let ((left (remove-if (lambda (it) (or (on-p p it) (not (item-anchored it)))) all))
@@ -543,6 +650,8 @@
                                                    (funcall (span-row-in-range r) (span-row-first-at r) (span-row-last-at r))))))
     (append out (nthcdr k rows))))
 
+(defun plural (n noun) (if (= n 1) noun (cat noun "s")))
+
 (defun omitted-notice (shown o)
   (if (= (omission-records o) 0)
       ""
@@ -555,21 +664,40 @@
         (cat +omitted-notice-start+ (itoa shown) " of " (itoa (+ shown (omission-records o))) " records; "
              (itoa (omission-records o)) " left out, listed by " (join where " and ") ". " +omitted-advice+))))
 
-(defun plural (n noun) (if (= n 1) noun (cat noun "s")))
-
-(defun notice-cost (shown o)
+(defun notice-cost (s shown o)
   (let ((notice (omitted-notice shown o)))
-    (if (string= notice "") 0 (1+ (estimate-tokens (cat (format nil "~%~%") notice))))))
+    (if (or (not (layout-notice (sstate-layout s))) (string= notice ""))
+        0
+        (1+ (estimate-tokens (cat (format nil "~%~%") notice))))))
 
 (defun omitted-cells (r)
   (list (span-row-from r) (span-row-to r) (itoa (span-row-count r))
         (if (> (span-row-spans r) 1) (itoa (span-row-spans r)) "")
         (span-row-first-id r) (span-row-last-id r) (span-row-query r)))
 
+(defun omitted-line (r)
+  "omittedLine: a span row in the lines format."
+  (let ((line (cond ((and (string/= (span-row-from r) "") (string/= (span-row-to r) "") (string/= (span-row-from r) (span-row-to r)))
+                     (cat (span-row-from r) ".." (span-row-to r) ": "))
+                    ((string/= (span-row-from r) "") (cat (span-row-from r) ": "))
+                    (t ""))))
+    (setf line (cat line (itoa (span-row-count r)) " " (plural (span-row-count r) "record")))
+    (when (> (span-row-spans r) 1) (setf line (cat line " in " (itoa (span-row-spans r)) " spans")))
+    (when (string/= (span-row-first-id r) "")
+      (setf line (cat line ", " (span-row-first-id r)))
+      (when (and (string/= (span-row-last-id r) "") (string/= (span-row-last-id r) (span-row-first-id r)))
+        (setf line (cat line " to " (span-row-last-id r)))))
+    (cat line ": " (span-row-query r))))
+
 (defun omitted-cost (s rows)
   (if (null rows)
       0
-      (+ (header-cost s "omitted") (loop for r in rows sum (row-cost s "omitted" (omitted-cells r))))))
+      (let ((l (sstate-layout s)))
+        (+ (header-cost s "omitted")
+           (loop for r in rows
+                 sum (if (layout-tables l)
+                         (row-cost l "omitted" (omitted-cells r))
+                         (1+ (estimate-tokens (omitted-line r)))))))))
 
 (defun tail-text (tl)
   (cat "+" (itoa (tail-n tl)) " more, all " (itoa (tail-all tl)) ": " (join (tail-queries tl) "; ")))
@@ -578,63 +706,82 @@
   (+ (1+ (estimate-tokens (cat ", " (tail-text tl)))) (if opened 0 (header-cost s group))))
 
 (defparameter +read-notes+ (list "Notes" nil))
+(defparameter +read-reflections+ (list "Reflections" nil))
 (defparameter +read-commits+ (list "Commits" nil))
 (defparameter +read-files+ (list "Notes" (list (cons "kind" "file"))))
 
+(defun fewest (n fits)
+  "The fewest k in [2, n] that fits, by halving: (values k ok)."
+  (if (or (< n 2) (not (funcall fits n)))
+      (values 0 nil)
+      (let ((lo 2) (hi n))
+        (loop while (< lo hi)
+              do (let ((mid (floor (+ lo hi) 2)))
+                   (if (funcall fits mid) (setf hi mid) (setf lo (1+ mid)))))
+        (values lo t))))
+
 (defun omissions (s p room)
   "omissions: (values omission need ok)."
-  (let ((notes '()) (off-notes '()) (note-anchors '()) (files 0) (commits 0) (file-items '()) (commit-items '()))
+  (let ((notes '()) (reflections '()) (off-notes '()) (off-reflections '())
+        (note-anchors '()) (reflection-anchors '())
+        (files 0) (commits 0) (file-items '()) (commit-items '()))
     (dolist (it (sstate-items s))
       (unless (gethash (item-id it) (sel-dropped p))
-        (case (item-role it)
-          (:file (push-end it file-items) (unless (on-p p it) (incf files)))
-          (:commit (push-end it commit-items) (unless (on-p p it) (incf commits))))
-        (push-end it note-anchors)
-        (when (and (eq (item-role it) :note) (not (on-p p it)))
-          (if (item-anchored it) (push-end it notes) (push-end it off-notes)))))
+        (block one
+          (case (item-role it)
+            (:reflection
+             (push-end it reflection-anchors)
+             (unless (on-p p it)
+               (if (item-anchored it) (push-end it reflections) (push-end it off-reflections)))
+             (return-from one))
+            (:file (push-end it file-items) (unless (on-p p it) (incf files)))
+            (:commit (push-end it commit-items) (unless (on-p p it) (incf commits))))
+          (push-end it note-anchors)
+          (when (and (eq (item-role it) :note) (not (on-p p it)))
+            (if (item-anchored it) (push-end it notes) (push-end it off-notes))))))
     (let ((o (make-omission)))
       (when (> files 0)
         (setf (gethash "files" (omission-tails o))
-              (make-tail :n files :all (length file-items) :queries (list-queries s +read-files+ file-items p)))
+              (make-tail :n files :all (length file-items) :queries (list-queries +read-files+ file-items p)))
         (incf (omission-records o) files))
       (when (> commits 0)
         (setf (gethash "commits" (omission-tails o))
-              (make-tail :n commits :all (length commit-items) :queries (list-queries s +read-commits+ commit-items p)))
+              (make-tail :n commits :all (length commit-items) :queries (list-queries +read-commits+ commit-items p)))
         (incf (omission-records o) commits))
-      (let* ((all-notes (sorted-anchors note-anchors))
-             (breaks (lambda (it) (and (on-p p it) (eq (item-role it) :note))))
-             (note-rows (spans +read-notes+ note-anchors notes all-notes breaks))
-             (off-rows (when off-notes (list (off-path-row +read-notes+ off-notes note-anchors)))))
-        (dolist (r (append note-rows off-rows))
+      (let* ((breaks (lambda (it) (and (on-p p it) (member (item-role it) '(:note :reflection)))))
+             (note-rows (spans +read-notes+ note-anchors notes (sorted-anchors note-anchors) breaks))
+             (reflection-rows (spans +read-reflections+ reflection-anchors reflections (sorted-anchors reflection-anchors) breaks))
+             (off-rows (append (when off-reflections (list (off-path-row +read-reflections+ off-reflections reflection-anchors)))
+                               (when off-notes (list (off-path-row +read-notes+ off-notes note-anchors))))))
+        (dolist (r (append note-rows reflection-rows off-rows))
           (incf (omission-records o) (span-row-count r))
           (incf (omission-spans o) (span-row-spans r)))
-        (let ((tails-cost (notice-cost (shown-count s p) o)))
+        (let ((tails-cost (notice-cost s (shown-count s p) o)))
           (maphash (lambda (group tl) (incf tails-cost (tail-cost s group tl (> (opened p group) 0))))
                    (omission-tails o))
-          (labels ((layout (note-fold) (append (fold-rows note-rows note-fold) off-rows))
+          (labels ((layout (note-fold reflection-fold)
+                     (append (fold-rows reflection-rows reflection-fold) (fold-rows note-rows note-fold) off-rows))
                    (try (rows)
                      (let ((cost (+ tails-cost (omitted-cost s rows)))
                            (out (copy-omission o)))
                        (setf (omission-rows out) rows
                              (omission-folded out) (count-if (lambda (r) (> (span-row-spans r) 1)) rows))
                        (values out cost (<= cost room))))
-                   (fits (k) (nth-value 2 (try (layout k)))))
-            (multiple-value-bind (out cost ok) (try (layout 0))
+                   (fits (rows) (nth-value 2 (try rows))))
+            (multiple-value-bind (out cost ok) (try (layout 0 0))
               (declare (ignore cost))
               (when ok (return-from omissions (values out 0 t))))
-            (let ((n (length note-rows)))
-              (when (and (>= n 2) (fits n))
-                (let ((lo 2) (hi n))
-                  (loop while (< lo hi)
-                        do (let ((mid (floor (+ lo hi) 2)))
-                             (if (fits mid) (setf hi mid) (setf lo (1+ mid)))))
-                  (return-from omissions (values (try (layout lo)) 0 t)))))
-            (try (layout (length note-rows)))))))))
+            (let ((n (length note-rows)) (m (length reflection-rows)))
+              (multiple-value-bind (k ok) (fewest n (lambda (k) (fits (layout k 0))))
+                (when ok (return-from omissions (values (try (layout k 0)) 0 t))))
+              (multiple-value-bind (k ok) (fewest m (lambda (k) (fits (layout n k))))
+                (when ok (return-from omissions (values (try (layout n k)) 0 t))))
+              (try (layout n m)))))))))
 
 ;;; Rendering
 
 (defun render-text (s p o)
-  (let ((blocks '()) (by-group (make-set)) (groups '()))
+  (let ((l (sstate-layout s)) (blocks '()) (by-group (make-set)) (newest (make-set)) (groups '()))
     (when (string/= (sel-request-text p) "")
       (let ((it (copy-item (sstate-request s))))
         (setf (item-text it) (sel-request-text p))
@@ -652,10 +799,16 @@
     (dolist (it (sstate-items s))
       (when (on-p p it)
         (unless (gethash (item-group it) by-group) (push-end (item-group it) groups))
-        (push-end it (gethash (item-group it) by-group))))
+        (push-end it (gethash (item-group it) by-group))
+        (setf (gethash (item-group it) newest) (item-index it))))
     (when (gethash "next" by-group) (push-end (cons "next" (gethash "next" by-group)) blocks))
-    (when (some (lambda (g) (not (member g '("reflections" "notes" "next" "files" "commits") :test #'string=))) groups)
-      (error "selection: subject tables are not ported"))
+    (when (gethash "reflections" by-group) (push-end (cons "reflections" (gethash "reflections" by-group)) blocks))
+    (let ((subjects (sort (remove-if (lambda (g) (member g '("reflections" "notes" "next" "files" "commits") :test #'string=))
+                                     groups)
+                          (lambda (a b) (if (/= (gethash a newest) (gethash b newest))
+                                            (< (gethash a newest) (gethash b newest))
+                                            (string< a b))))))
+      (dolist (group subjects) (push-end (cons group (gethash group by-group)) blocks)))
     (when (gethash "notes" by-group) (push-end (cons "notes" (gethash "notes" by-group)) blocks))
     (let ((lists '()))
       (dolist (group '("files" "commits"))
@@ -663,39 +816,60 @@
               (tl (gethash group (omission-tails o))))
           (when tl (push-end (tail-text tl) parts))
           (when parts (push-end (cat group ": " (join parts ", ")) lists))))
-      (let ((text +tables-instructions+)
-            (lines (apply #'cat (mapcar (lambda (b) (section-line (car b))) blocks))))
+      (let ((text (layout-intro l))
+            (lines (apply #'cat (mapcar (lambda (b) (section-line l (car b))) blocks))))
         (when (string/= lines "")
           (let ((at (search +request-line+ text)))
-            (setf text (cat (subseq text 0 at) +request-line+ lines (subseq text (+ at (length +request-line+)))))))
+            (when at
+              (setf text (cat (subseq text 0 at) +request-line+ lines (subseq text (+ at (length +request-line+))))))))
         (let ((notice (omitted-notice (shown-count s p) o)))
-          (when (string/= notice "") (setf text (cat text (format nil "~%~%") notice))))
-        (let ((out '()))
-          (dolist (b blocks)
-            (let ((tb (make-rtable :name (car b) :fields (fields-of (car b)))))
-              (dolist (it (cdr b))
-                (push-end (item-cells it) (rtable-rows tb))
-                (push-end (absent-empty (item-cells it)) (rtable-absent tb)))
-              (push-end tb out)))
-          (when (omission-rows o)
-            (let ((tb (make-rtable :name "omitted" :fields +omitted-fields+)))
-              (dolist (r (omission-rows o))
-                (let ((cells (omitted-cells r)))
-                  (push-end cells (rtable-rows tb))
-                  (push-end (absent-empty cells) (rtable-absent tb))))
-              (push-end tb out)))
-          (when out (setf text (cat text (format nil "~%~%") (encode-tables out))))
-          (when lists (setf text (cat text +trailer-separator+ (join lists (string #\Newline)))))
-          text)))))
+          (when (and (layout-notice l) (string/= notice "")) (setf text (cat text (format nil "~%~%") notice))))
+        (if (layout-tables l)
+            (let ((out '()))
+              (dolist (b blocks)
+                (let ((tb (make-rtable :name (car b) :fields (fields-of (car b)))))
+                  (dolist (it (cdr b))
+                    (push-end (item-cells it) (rtable-rows tb))
+                    (push-end (absent-empty (item-cells it)) (rtable-absent tb)))
+                  (push-end tb out)))
+              (when (omission-rows o)
+                (let ((tb (make-rtable :name "omitted" :fields +omitted-fields+)))
+                  (dolist (r (omission-rows o))
+                    (let ((cells (omitted-cells r)))
+                      (push-end cells (rtable-rows tb))
+                      (push-end (absent-empty cells) (rtable-absent tb))))
+                  (push-end tb out)))
+              (when out (setf text (cat text (format nil "~%~%") (codec-encode (layout-codec l) out)))))
+            (progn
+              (dolist (b blocks)
+                (setf text (cat text (format nil "~%~%## ~A~%" (car b)) (join (mapcar #'item-line (cdr b)) (string #\Newline)))))
+              (when (omission-rows o)
+                (setf text (cat text (format nil "~%~%## omitted~%") (join (mapcar #'omitted-line (omission-rows o)) (string #\Newline)))))))
+        (when lists (setf text (cat text +trailer-separator+ (join lists (string #\Newline)))))
+        text))))
 
-(defstruct summary (text "") (observations '()) (omitted 0) (spans 0) (folded 0) (snippets '()))
+(defstruct summary (text "") (observations '()) (reflections '()) (request nil)
+  (omitted 0) (spans 0) (folded 0) (snippets '()))
 
-(defun render-summary (observations folded branch budget &key request intent)
-  "selection.Render in the tables format with the rows codec. request is (entry-id . text) or
-nil; intent a list of (which entry-id text)."
-  (when (or (<= budget 0) (null observations)) (return-from render-summary (make-summary)))
-  (let* ((s (make-state observations folded branch budget :request request :intent intent))
-         (fixed (fixed-cost)) (reserve 0) (pick nil) (omitted nil))
+(defun summary-result (s text pick omitted)
+  (make-summary :text text
+                :observations (loop for it in (sstate-items s)
+                                    when (and (on-p pick it) (not (eq (item-role it) :reflection))) collect (item-obs it))
+                :reflections (loop for it in (sstate-items s)
+                                   when (and (on-p pick it) (eq (item-role it) :reflection)) collect (item-ref it))
+                :request (string/= (sel-request-text pick) "")
+                :omitted (omission-records omitted) :spans (omission-spans omitted)
+                :folded (omission-folded omitted) :snippets (omission-snippets omitted)))
+
+(defun render-summary (observations folded branch budget &rest options
+                       &key request intent reflections format codec aliases reflection-dates)
+  "selection.Render. request is (entry-id . text) or nil; intent a list of (which entry-id
+text); format \"tables\" (the default) or \"lines\"; codec :rows (the default) or :jsonl;
+reflection-dates a table of ReflectionDateRanges."
+  (declare (ignore request intent format codec aliases reflection-dates))
+  (when (or (<= budget 0) (and (null observations) (null reflections))) (return-from render-summary (make-summary)))
+  (let* ((s (apply #'make-state observations folded branch budget options))
+         (fixed (fixed-cost s)) (reserve 0) (pick nil) (omitted nil))
     (loop repeat (+ (length (sstate-items s)) 2)
           do (setf pick (choose s (- budget fixed reserve)))
              (settle-drops s pick)
@@ -706,10 +880,29 @@ nil; intent a list of (which entry-id text)."
     (loop
       (let ((text (render-text s pick omitted)))
         (when (and (<= (estimate-tokens text) budget) (> (sel-count pick) 0))
-          (return (make-summary :text text
-                                :observations (loop for it in (sstate-items s) when (on-p pick it) collect (item-obs it))
-                                :omitted (omission-records omitted) :spans (omission-spans omitted)
-                                :folded (omission-folded omitted) :snippets (omission-snippets omitted))))
+          (return (summary-result s text pick omitted)))
         (unless (pop-last s pick) (return (make-summary)))
         (settle-drops s pick)
         (setf omitted (omissions s pick (- budget fixed (sel-used pick))))))))
+
+;;; OmittedSpans
+
+(defstruct spans-result (lines '()) (snippets '()) (records 0))
+
+(defun omitted-spans (observations reflections listed folded branch room)
+  "OmittedSpans: (values spans need ok); listed is a set of the record ids shown elsewhere."
+  (let* ((s (make-state observations folded branch 0 :reflections reflections :format "lines"
+                                                      :reflection-dates (reflection-date-ranges (folded-reflections folded)
+                                                                                                (folded-by-id folded))))
+         (p (make-sel)))
+    (setf (layout-notice (sstate-layout s)) nil)
+    (dolist (it (sstate-items s))
+      (when (gethash (item-id it) listed) (setf (gethash it (sel-on p)) t)))
+    (multiple-value-bind (o need ok) (omissions s p room)
+      (if (not ok)
+          (values (make-spans-result) need nil)
+          (let ((lines (mapcar #'omitted-line (omission-rows o))))
+            (dolist (group '("files" "commits"))
+              (let ((tl (gethash group (omission-tails o))))
+                (when tl (push-end (cat group ": " (tail-text tl)) lines))))
+            (values (make-spans-result :lines lines :snippets (omission-snippets o) :records (omission-records o)) 0 t))))))

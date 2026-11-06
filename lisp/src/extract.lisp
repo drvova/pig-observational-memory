@@ -425,7 +425,7 @@
       (values (make-ctarget) nil)))
 
 (defun conversation-record (x sentence kind status day)
-  (let ((o (make-obs :content sentence :kind kind :status status :subject (subject-in-text sentence (x-subjects x)))))
+  (let ((o (make-obs :content sentence :kind kind :status status :subject (subject-in-text sentence (x-subjects x) (folded-aliases (x-ledger x))))))
     (when day
       (setf (obs-content o) (resolve-relative-dates sentence day))
       (setf (obs-event-date o) (event-date sentence day)))
@@ -575,44 +575,34 @@
     (setf (x-records x) (nreverse kept))))
 
 (defun link-records (x)
-  ;; Only a record with a subject links, and level 0 alone records none (ledger.lisp, header).
-  (dolist (r (x-records x))
-    (let ((o (rec-obs r)))
-      (when (and (conversational-p (obs-kind o)) (string/= (obs-status o) +status-retracted+) (string/= (obs-subject o) ""))
-        (error "extract: links between records with subjects are not ported")))))
-
-;;; Subject words (ContainsWords reads them for a named retraction)
-
-(defun in-word-symbol-p (r) (find r "'+#&"))
-
-(defun subject-words (subject)
-  (let ((subject (replace-all (to-lower subject) "’" "'")) (out '()))
-    (dolist (f (fields-func subject (lambda (r) (and (not (letter-p r)) (not (digit-p r)) (not (in-word-symbol-p r))))))
-      (let ((f (trim-suffix (trim f "'") "'s")))
-        (when (find-if (lambda (r) (or (letter-p r) (digit-p r))) f)
-          (push-end f out))))
-    out))
-
-(defun singular-candidates (word)
-  (let ((out '()))
-    (flet ((add (c) (when (and (>= (length c) 3) (string/= c word)) (push-end c out))))
-      (when (has-suffix word "ies") (add (cat (subseq word 0 (- (length word) 3)) "y")))
-      (when (has-suffix word "ses") (add (cat (subseq word 0 (- (length word) 3)) "sis")))
-      (when (has-suffix word "es")
-        (let ((stem (subseq word 0 (- (length word) 2))))
-          (when (some (lambda (end) (has-suffix stem end)) '("s" "x" "z" "ch" "sh")) (add stem))))
-      (when (has-suffix word "s")
-        (let ((stem (subseq word 0 (1- (length word)))))
-          (when (and (not (has-suffix stem "s")) (>= (length stem) 4)) (add stem)))))
-    out))
-
-(defun contains-words-p (whole part)
-  (let ((words (make-set)))
-    (dolist (w (subject-words whole))
-      (setf (gethash w words) t)
-      (dolist (c (singular-candidates w)) (setf (gethash c words) t)))
-    (every (lambda (w) (or (gethash w words) (some (lambda (c) (gethash c words)) (singular-candidates w))))
-           (subject-words part))))
+  "linkRecords: possibly_updates and conflicts between conversation records on one canonical
+subject and scope."
+  (let* ((active (folded-active (x-ledger x)))
+         (subjects (subjects-of active)))
+    (dolist (r (x-records x))
+      (let ((subject (obs-subject (rec-obs r))))
+        (when (and (string/= subject "") (not (member-str subject subjects)))
+          (setf subjects (append subjects (list subject))))))
+    (let ((canonical (canonical-subjects subjects (folded-aliases (x-ledger x)))) (earlier '()))
+      (labels ((key (o)
+                 (let ((subject (canonical-subject (canonical-of canonical (obs-subject o)))))
+                   (if (string= subject "") "" (cat subject (string (code-char 0)) (normalize-scope (obs-scope o))))))
+               (linkable (o)
+                 (and (conversational-p (obs-kind o)) (string/= (obs-status o) +status-retracted+) (string/= (obs-subject o) ""))))
+        (dolist (o active)
+          (when (and (linkable o) (not (gethash (obs-id o) (x-superseded x))))
+            (push-end o earlier)))
+        (dolist (r (x-records x))
+          (let ((o (rec-obs r)))
+            (when (linkable o)
+              (dolist (e earlier)
+                (unless (or (gethash (obs-id e) (x-superseded x)) (string/= (key e) (key o))
+                            (member-str (obs-id e) (obs-supersedes o)))
+                  (when (and (may-supersede-p (obs-status o) (obs-status e)) (updates-specific-p (obs-content o) (obs-content e)))
+                    (push-end (obs-id e) (obs-possibly-updates o)))
+                  (when (negation-conflict-p (obs-content o) (obs-content e))
+                    (push-end (obs-id e) (obs-conflicts o)))))
+              (push-end o earlier))))))))
 
 ;;; work.go
 
@@ -1042,11 +1032,14 @@
                          (setf queue (append queue (list next))))))))))
     out))
 
-(defun drops (active rendered by-id)
-  "Drops, with no reflections."
+(defun drops (active rendered by-id &optional rendered-reflections)
+  "Drops: the active records a rendered record supersedes or a rendered reflection cites,
+transitively, that are not rendered themselves."
   (let ((direct '()) (shown (make-set)))
     (dolist (o rendered)
       (dolist (id (obs-supersedes o)) (unless (string= id (obs-id o)) (push-end id direct))))
+    (dolist (r rendered-reflections)
+      (setf direct (append direct (refl-supporting r))))
     (dolist (o rendered) (setf (gethash (obs-id o) shown) t))
     (let ((replaced (drop-closure direct active by-id)))
       (loop for o in active

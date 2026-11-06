@@ -9,25 +9,6 @@
 
 (in-package "OM.ENGINE")
 
-(defun coverage-index (entries index)
-  "ExtractionProgressIndex: the furthest entry an om.observations.recorded or om.extracted
-marker covers, or -1."
-  (let ((latest -1))
-    (loop for e across entries
-          do (let ((covers (cond ((nth-value 1 (recorded-data e)))
-                                 ((and (string= (entry-type e) "custom") (string= (entry-custom-type e) "om.extracted"))
-                                  (let ((c (jget (entry-data e) "coversUpToId"))) (and (stringp c) (string/= c "") c))))))
-               (when covers
-                 (let ((at (gethash covers index)))
-                   (when (and at (> at latest)) (setf latest at))))))
-    latest))
-
-(defun extraction-start-index (entries)
-  "ExtractionStartIndex on a branch with no compaction (the readers ported write none)."
-  (when (find "compaction" entries :key #'entry-type :test #'string=)
-    (error "pipeline: compaction entries are not ported"))
-  (max (1+ (coverage-index entries (entry-index-by-id entries))) 0))
-
 (defun custom-entry (id custom-type data)
   (make-entry :type "custom" :id id :custom-type custom-type :data data))
 
@@ -61,8 +42,13 @@ when the last batch stops short of what the extraction read. Ids are the harness
     out))
 
 (defun run-pipeline (format path cwd mode budgets out)
+  "mode is turns or whole, optionally followed by :lines or :jsonl for the summary's format or
+codec (rows tables by default)."
+  (multiple-value-bind (mode variant) (cut mode ":")
   (let* ((entries (coerce (read-transcript format path) 'simple-vector))
-         (branch (vector)) (run 0))
+         (branch (vector)) (run 0)
+         (summary-format (if (string= variant "lines") "lines" "tables"))
+         (codec (if (string= variant "jsonl") :jsonl :rows)))
     (loop for e across entries
           do (format out "entry ~A~%" (json-string (entry-to-map e))))
     (flet ((extract-now ()
@@ -79,16 +65,18 @@ when the last batch stops short of what the extraction read. Ids are the harness
     (let ((records (full-projection branch)) (folded (fold-ledger branch)) (intent (pipeline-intent branch)))
       (dolist (o records) (format out "record ~A~%" (obs-json o)))
       (dolist (budget budgets)
-        (let ((r (render-summary records folded branch budget :intent intent)))
+        (let ((r (render-summary records folded branch budget :intent intent :format summary-format :codec codec)))
           (format out "summary ~D ~A~%" budget (json-string (summary-text r)))
           (format out "stats ~D ~A~%" budget
                   (json-string (jobject "shown" (coerce (mapcar #'obs-id (summary-observations r)) 'simple-vector)
                                         "omitted" (summary-omitted r) "spans" (summary-spans r)
                                         "folded" (summary-folded r)
-                                        "snippets" (coerce (summary-snippets r) 'simple-vector)))))))))
+                                        "snippets" (coerce (summary-snippets r) 'simple-vector))))))))))
 
 (defun main ()
   "sbcl --script lisp/parity.lisp <format> <transcript> <cwd> <whole|turns> <budget>..."
   (destructuring-bind (format path cwd mode &rest budgets) (rest sb-ext:*posix-argv*)
-    (run-pipeline format path (if (string= cwd "-") "" cwd) mode (mapcar #'parse-integer budgets) *standard-output*)
+    (if (string= format "ledger")
+        (run-ledger-pipeline path (if (string= cwd "-") "" cwd) (mapcar #'parse-integer budgets) *standard-output*)
+        (run-pipeline format path (if (string= cwd "-") "" cwd) mode (mapcar #'parse-integer budgets) *standard-output*))
     (finish-output)))
