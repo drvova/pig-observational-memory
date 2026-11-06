@@ -13,12 +13,14 @@ import (
 )
 
 // TestLispImageEndToEnd builds the real engine image (lisp/build-image.sh), runs a Claude Code
-// session (SessionStart, Stop twice, PreCompact, SessionStart after it, the MCP server) and a
-// generic one (turn-end twice, compact) with OM_ENGINE=lisp, and compares everything printed and
-// stored with the same sequence on the Go engine. The image runs level 0 at each turn end; the
-// rest is not ported yet and falls back to the Go engine, over the store the image wrote, so
-// every later output depends on the image's records being Go's. Ids and the times entries were
-// appended at are normalized; nothing else is.
+// session (SessionStart, Stop twice, PreCompact, SessionStart after it, the MCP server), a
+// generic one (turn-end twice, compact, om view, a turn end after the compaction, a second
+// compact, session-start) and a Pi one (session-start, turn-end, before-compact on Pi's cut over
+// a session file with Pi's own compactions) with OM_ENGINE=lisp, and compares everything printed
+// and stored with the same sequence on the Go engine. The image runs the hooks and compactions
+// (from the generic view on with OM_LISP_FALLBACK=0, so nothing falls back); the MCP server is
+// not ported yet and falls back to the Go engine, over the store the image wrote. Ids and the
+// times entries were appended at are normalized; nothing else is.
 func TestLispImageEndToEnd(t *testing.T) {
 	if os.Getenv("OM_LISP_PARITY") != "1" {
 		t.Skip("set OM_LISP_PARITY=1 to build the SBCL engine image and run hooks against it")

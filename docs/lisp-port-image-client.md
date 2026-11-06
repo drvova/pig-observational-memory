@@ -84,9 +84,7 @@ only the protocol's events.
 |---|---|
 | `initialize`, `ping`, `status`, `shutdown` | ported |
 | `turn-end` | level 0 ported (`hooks.OnTurnEnd` on a neutral host: passive, the store, `neutral.Branch`, `ExtractionStartIndex`, `extract.Extract`, `appendExtraction`); `remaining: ["settle-curated"]` |
-| `prompt` | level 0 when `run_level0`; not ported with `summary_on_prompt` |
-| `session-start`, `compact`, `before-compact`, `context` | not ported (curated index, compaction hook: W4, W5) |
-| `turn-end` on a branch with a compaction, or a format other than `generic` and `claude-code` | not ported (W1/W5, W2) |
+| `prompt`, `session-start`, `compact`, `before-compact`, `context`, `view`, and `turn-end` after a compaction and in every format | ported by W5 ([lisp-port-hooks.md](lisp-port-hooks.md)); a curated store holding memories is still not ported |
 | `mcp` (`{"message": …}` → `{"message": answer}`) | MCP `ping` ported; every other MCP method is not ported (W4) |
 | `call` | not ported (W4) |
 | the engine-rpc methods (`event/*`, `tool/*`, `command/run`) | listed, not ported |

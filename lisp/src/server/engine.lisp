@@ -3,10 +3,10 @@
 ;;;; settings level 0 reads, and the turn-end extraction (hooks/extract_v2.go extractTurnV2 and
 ;;;; appendExtraction). Every om:: reference of the server is in this file.
 ;;;;
-;;;; Not here yet, and answered "not ported" (methods.lisp): a branch with a compaction (the
-;;;; spike's ExtractionStartIndex has no fold boundary), the transcript formats the spike does not
-;;;; read, the detectors (no v2 rules exist on a neutral host's fresh store) and curated memory,
-;;;; whose settle step the Go client still runs ("remaining").
+;;;; Every transcript format W2's readers know is read here (ported-formats). Not here: the
+;;;; detectors (no v2 rules exist on a neutral host's fresh store) and curated memory, whose settle
+;;;; step the Go client still runs ("remaining"). The compaction and the other events are in
+;;;; hooks.lisp (W5).
 
 (in-package "OM.SERVER")
 
