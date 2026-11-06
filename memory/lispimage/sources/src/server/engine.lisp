@@ -124,9 +124,11 @@ grain and a rewrite of the same size within it would read stale."
 ;;; Level 0 at a turn end
 
 (defun append-entry (session tip custom-type data-json)
-  "neutral.Host.AppendEntry after tip: returns the new entry's id."
+  "neutral.Host.AppendEntry after tip, its string values' secrets redacted (hooks' appendEntry):
+returns the new entry's id."
   (let ((id (new-entry-id)))
-    (append-line (session-store-path session) (custom-entry-line tip custom-type data-json id tip (utc-stamp)))
+    (append-line (session-store-path session)
+                 (custom-entry-line tip custom-type (om::redact-json-text data-json) id tip (utc-stamp)))
     id))
 
 (defun recorded-data-json (observations covers)

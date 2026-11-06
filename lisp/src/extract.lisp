@@ -148,7 +148,10 @@
         (let ((id (entry-id (entry-at x i))))
           (when (and (string/= id "") (not (member-str id (obs-source-ids o))))
             (push-end id (obs-source-ids o))))))
-    (setf (obs-content o) (truncate-record-content (obs-content o)))
+    ;; Secrets are redacted before the content is cut (contracts/secrets.md).
+    (setf (obs-content o) (truncate-record-content (redact-secrets (obs-content o)))
+          (obs-target o) (redact-secrets (obs-target o))
+          (obs-fields o) (mapcar (lambda (f) (cons (car f) (redact-secrets (cdr f)))) (obs-fields o)))
     (when (and (string= (obs-timestamp o) "") (>= anchor 0))
       (setf (obs-timestamp o) (format-timestamp (entry-time (entry-at x anchor)))))
     (setf (obs-relevance o) +code-relevance+)
@@ -771,14 +774,19 @@ Kiro's write replacing a string (its command strReplace) edits the file."
   (or (arg-string args "command") (arg-string args "cmd")))
 
 (defun call-target (x call)
-  "callTarget: (values key display)."
+  "callTarget: (values key display), any secret in them redacted."
+  (multiple-value-bind (key display) (raw-call-target x call)
+    (values (redact-secrets key) (redact-secrets display))))
+
+(defun raw-call-target (x call)
+  "rawCallTarget: (values key display)."
   (let ((command (shell-command (tcall-args call))))
     (when (and command (string/= (trim-space command) ""))
-      (return-from call-target (values (trim-space command) (trim-space command)))))
+      (return-from raw-call-target (values (trim-space command) (trim-space command)))))
   (dolist (arg +path-args+)
     (let ((p (arg-string (tcall-args call) arg)))
       (when (and p (string/= (trim-space p) ""))
-        (return-from call-target (values (path-key x p) (path-display x p))))))
+        (return-from raw-call-target (values (path-key x p) (path-display x p))))))
   (multiple-value-bind (patch patch-p) (patch-of call)
     (when patch-p
       (let ((keys '()) (shown '()))
@@ -786,7 +794,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
           (unless (string= (second ev) "moved from")
             (push-end (path-key x (first ev)) keys)
             (push-end (path-display x (first ev)) shown)))
-        (when keys (return-from call-target (values (join keys " ") (join shown " ")))))))
+        (when keys (return-from raw-call-target (values (join keys " ") (join shown " ")))))))
   ;; JSONStringify of the call's arguments map: a nil map is boxed, so it encodes as null.
   (let ((args (if (tcall-args call) (json-string (tcall-args call) :escape-html nil) "null")))
     (values args args)))
@@ -1038,7 +1046,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
           (let* ((prev (first merged)) (po (rec-obs prev)) (ro (rec-obs r))
                  (prev-undated (or (rec-undated prev) (names-no-one-date-p po)))
                  (part-undated (or (rec-undated r) (names-no-one-date-p ro))))
-            (setf (obs-content po) (truncate-record-content (cat (obs-content po) " " (obs-content ro))))
+            (setf (obs-content po) (truncate-record-content (redact-secrets (cat (obs-content po) " " (obs-content ro)))))
             (dolist (id (obs-source-ids ro))
               (unless (member-str id (obs-source-ids po)) (push-end id (obs-source-ids po))))
             (setf (rec-anchor prev) (max (rec-anchor prev) (rec-anchor r)))

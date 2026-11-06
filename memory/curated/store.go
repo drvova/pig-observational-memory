@@ -26,6 +26,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 	"github.com/drvova/pig-observational-memory/memory/layer"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
 // The memory types: the operator's own word (user, feedback) ranks first.
@@ -338,6 +339,8 @@ func (s Store) SaveCiting(m Memory, source, digest string) (Memory, error) {
 		return Memory{}, errors.New("a memory needs a one-sentence description")
 	}
 	m.Pinned, m.Retired = false, time.Time{}
+	// Redacted before anything compares it, so a staging of the same save matches the stored one.
+	m = redactMemory(m)
 	if !m.Staged {
 		m.StagedBy = nil
 	}
@@ -441,6 +444,7 @@ func (s Store) Update(name, project string, edit Edit, source string) (Memory, e
 		}
 		m.Updated = s.Now().UTC()
 		m.Sources = addSource(m.Sources, source)
+		m = redactMemory(m)
 		updated = m
 		return s.writeChecked(m)
 	})
@@ -625,15 +629,25 @@ func (s Store) Locked(fn func() error) error { return s.locked(fn) }
 
 // --- files ---------------------------------------------------------------------
 
-// writeChecked writes m after the store's validator (Check).
+// writeChecked writes m after the store's validator (Check), its secrets redacted first.
 func (s Store) writeChecked(m Memory) error {
+	m = redactMemory(m)
 	if err := Check(m); err != nil {
 		return err
 	}
 	return s.write(m)
 }
 
+// redactMemory is m with every secret in its description and body redacted (secrets.Redact):
+// no stored memory holds one, whichever write stores it.
+func redactMemory(m Memory) Memory {
+	m.Description = secrets.Redact(m.Description)
+	m.Body = secrets.Redact(m.Body)
+	return m
+}
+
 func (s Store) write(m Memory) error {
+	m = redactMemory(m)
 	tmp := s.path(m.Name) + ".tmp"
 	if err := os.WriteFile(tmp, []byte(format(m)), 0o600); err != nil {
 		return err

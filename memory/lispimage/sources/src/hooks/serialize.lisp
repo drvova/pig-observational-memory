@@ -118,7 +118,7 @@ or an empty one."
   (dolist (e entries (values "" ""))
     (when (and (string= (entry-type e) "message") (entry-message e) (equal (entry-role e) "user"))
       (let ((text (trim-space (text-only (jget (entry-message e) "content")))))
-        (when (string/= text "") (return (values text (entry-id e))))))))
+        (when (string/= text "") (return (values (redact-secrets text) (entry-id e))))))))
 
 (defun request-line (text id)
   (let ((line (cat "user: " (one-line text))))
@@ -128,9 +128,9 @@ or an empty one."
   (when (hash-table-p arguments)
     (flet ((ok (v) (and (stringp v) (string/= (trim-space v) "") v)))
       (dolist (k +brief-key-args+)
-        (let ((v (ok (gethash k arguments)))) (when v (return-from key-arg (one-line v)))))
+        (let ((v (ok (gethash k arguments)))) (when v (return-from key-arg (redact-secrets (one-line v))))))
       (dolist (k (sort (loop for k being the hash-keys of arguments collect k) #'string<))
-        (let ((v (ok (gethash k arguments)))) (when v (return-from key-arg (one-line v)))))))
+        (let ((v (ok (gethash k arguments)))) (when v (return-from key-arg (redact-secrets (one-line v))))))))
   "")
 
 (defun tool-call-lines (entries skip-tools)

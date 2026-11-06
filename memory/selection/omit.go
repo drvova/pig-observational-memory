@@ -7,6 +7,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
 	"github.com/drvova/pig-observational-memory/memory/omhost"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
 // OffPathLabel follows an entry id that is not on the current branch (docs/memory-v2.md,
@@ -69,11 +70,13 @@ type omission struct {
 func (o omission) snippets() []string {
 	out := []string{}
 	for _, r := range o.rows {
-		out = append(out, r.query)
+		out = append(out, secrets.Redact(r.query))
 	}
 	for _, group := range []string{groupFiles, groupCommits} {
 		if t, ok := o.tails[group]; ok {
-			out = append(out, t.queries...)
+			for _, q := range t.queries {
+				out = append(out, secrets.Redact(q))
+			}
 		}
 	}
 	return out

@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
 
@@ -143,7 +144,7 @@ func appendHostSummaryV2(ctx context.Context, h host.Host, entries []ledger.Entr
 		return ledger.Entry{}, false
 	}
 	data := ledger.BuildObservationsRecordedData([]ledger.Observation{record}, coversUpToID)
-	err := h.AppendEntry(ledger.OMObservationsRecorded, data)
+	err := appendEntry(h, ledger.OMObservationsRecorded, data)
 	logData := map[string]any{"record": record.ID, "compaction": record.SourceEntryIDs[0], "coversUpToId": coversUpToID, "tokens": record.TokenCount}
 	if err != nil {
 		logData["errorMessage"] = err.Error()
@@ -174,11 +175,19 @@ func appendExtraction(h host.Host, result extract.Result, write bool) ([]ledger.
 	var appendErr error
 	for n, p := range queue {
 		if write && appendErr == nil {
-			appendErr = h.AppendEntry(p.customType, p.data)
+			appendErr = appendEntry(h, p.customType, p.data)
 		}
 		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-extracted-%d", n), CustomType: p.customType, Data: jsonValue(p.data)})
 	}
 	return out, appendErr
+}
+
+// appendEntry appends one om.* entry with every secret in its string values redacted
+// (secrets.RedactData, contracts/secrets.md): level 0 redacts its records as it builds them, and
+// this is the last stop for everything else the engine writes. Data with nothing to redact is
+// appended as it is.
+func appendEntry(h host.Host, customType string, data any) error {
+	return h.AppendEntry(customType, secrets.RedactData(data))
 }
 
 // jsonValue is v as decoded JSON, the shape entries read back from the session carry.
@@ -217,7 +226,7 @@ func dropByRule(ctx context.Context, h host.Host, ids []string, coversUpToID str
 	if data == nil {
 		return
 	}
-	err := h.AppendEntry(ledger.OMObservationsDropped, data)
+	err := appendEntry(h, ledger.OMObservationsDropped, data)
 	logData := map[string]any{"count": len(ids), "coversUpToId": coversUpToID}
 	if err != nil {
 		logData["errorMessage"] = err.Error()

@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/legacyquery"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
@@ -219,8 +220,14 @@ func shellCommand(args map[string]any) (string, bool) {
 }
 
 // callTarget is what a call acted on: its command, else its path (resolved, for matching, and
-// as shown), else its arguments.
+// as shown), else its arguments, with any secret in them redacted (secrets.Redact), so a
+// record's target never holds one and a later call on the same command still matches it.
 func (x *extraction) callTarget(call toolCall) (key, display string) {
+	key, display = x.rawCallTarget(call)
+	return secrets.Redact(key), secrets.Redact(display)
+}
+
+func (x *extraction) rawCallTarget(call toolCall) (key, display string) {
 	if command, ok := shellCommand(call.args); ok && strings.TrimSpace(command) != "" {
 		return strings.TrimSpace(command), strings.TrimSpace(command)
 	}

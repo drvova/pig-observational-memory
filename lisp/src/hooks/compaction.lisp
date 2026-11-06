@@ -160,7 +160,7 @@ not back, or nil."
     (when (< index 0) (return-from host-summary nil))
     (let ((c (aref entries index)))
       (when (or (memory-details-from (entry-details c)) (string= (entry-id c) "")) (return-from host-summary nil))
-      (let ((summary (one-line (if (stringp (entry-summary c)) (entry-summary c) ""))))
+      (let ((summary (redact-secrets (one-line (if (stringp (entry-summary c)) (entry-summary c) "")))))
         (when (string= summary "") (return-from host-summary nil))
         (dolist (o (folded-observations folded))
           (when (member-str (entry-id c) (obs-source-ids o)) (return-from host-summary nil)))

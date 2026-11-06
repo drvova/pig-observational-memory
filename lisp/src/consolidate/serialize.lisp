@@ -2,6 +2,7 @@
 ;;;; SerializeBranchEntries and SerializeSourceAddressedBranchEntries (serialize.go), the
 ;;;; source-addressed blocks the level-1 input shows of the compacted conversation. Timestamps
 ;;;; are rendered in UTC, as every other Lisp rendering is (docs/lisp-port-hooks.md, "Time zone").
+;;;; Role-like labels in everything but the user's own text are escaped (escape-role-labels).
 
 (in-package "OM")
 
@@ -79,11 +80,11 @@
     (cond ((equal role "user") (cat "[User @ " ts "]: " (text-only (jget msg "content"))))
           ((equal role "assistant")
            (let ((body (non-empty-lines (text-and-placeholders (without-tool-calls (jget msg "content") skip-tools)))))
-             (if (string= body "") "" (cat "[Assistant @ " ts "]: " body))))
+             (if (string= body "") "" (cat "[Assistant @ " ts "]: " (escape-role-labels body)))))
           ((equal role "bashExecution")
-           (if (eq (jget msg "excludeFromContext") :true) "" (cat "[Bash @ " ts "]: " (bash-execution-text msg))))
+           (if (eq (jget msg "excludeFromContext") :true) "" (cat "[Bash @ " ts "]: " (escape-role-labels (bash-execution-text msg)))))
           ((skipped-tool-result-p msg skip-tools) "")
-          (t (cat "[Tool result for " (js-string (jget msg "toolName")) " @ " ts "]: " (text-only (jget msg "content")))))))
+          (t (cat "[Tool result for " (js-string (jget msg "toolName")) " @ " ts "]: " (escape-role-labels (text-only (jget msg "content"))))))))
 
 (defun entry-timestamp-value (e) (if (string= (entry-timestamp e) "") nil (entry-timestamp e)))
 
@@ -98,9 +99,9 @@
                               ((and (vectorp c) (not (stringp c))) (text-only c))
                               (t ""))))
              (cat "[" (if (string= (entry-custom-type e) "") "Custom" (cat "Custom (" (entry-custom-type e) ")"))
-                  " @ " (format-timestamp (entry-timestamp-value e)) "]: " text)))
+                  " @ " (format-timestamp (entry-timestamp-value e)) "]: " (escape-role-labels text))))
           ((and (string= type "branch_summary") (stringp (entry-summary e)))
-           (cat "[Branch summary @ " (format-timestamp (entry-timestamp-value e)) "]: " (entry-summary e)))
+           (cat "[Branch summary @ " (format-timestamp (entry-timestamp-value e)) "]: " (escape-role-labels (entry-summary e))))
           (t ""))))
 
 (defun source-renderable-p (e) (member-str (entry-type e) '("message" "custom_message" "branch_summary")))

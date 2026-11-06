@@ -180,7 +180,7 @@ its records; known the memory before it)."
                 (multiple-value-bind (text ok) (assistant-text (aref branch index))
                   (let ((head (and ok (opening text))))
                     (when (and head (string/= head ""))
-                      (let* ((content (om::truncate-record-content (concatenate 'string "Assistant said: " head)))
+                      (let* ((content (om::truncate-record-content (om::redact-secrets (concatenate 'string "Assistant said: " head))))
                              (obs-id (om::hash-id content)))
                         (unless (gethash obs-id seen)
                           (setf (gethash obs-id seen) t)

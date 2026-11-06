@@ -551,10 +551,11 @@ codec's tables instructions without a state)."
 (defstruct omission (rows '()) (tails (make-set)) (records 0) (spans 0) (folded 0))
 
 (defun omission-snippets (o)
-  (append (mapcar #'span-row-query (omission-rows o))
+  (mapcar #'redact-secrets
+   (append (mapcar #'span-row-query (omission-rows o))
           (loop for group in '("files" "commits")
                 for tl = (gethash group (omission-tails o))
-                when tl append (tail-queries tl))))
+                when tl append (tail-queries tl)))))
 
 (defun sorted-anchors (items)
   (sort (loop for it in items when (item-anchored it) collect (item-anchor it)) #'<))
@@ -878,7 +879,8 @@ reflection-dates a table of ReflectionDateRanges."
                (when (or ok (<= need reserve) (> need (- budget fixed))) (return))
                (setf reserve need)))
     (loop
-      (let ((text (render-text s pick omitted)))
+      ;; Secrets are redacted in what is shown (contracts/secrets.md).
+      (let ((text (redact-secrets (render-text s pick omitted))))
         (when (and (<= (estimate-tokens text) budget) (> (sel-count pick) 0))
           (return (summary-result s text pick omitted)))
         (unless (pop-last s pick) (return (make-summary)))

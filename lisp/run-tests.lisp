@@ -69,6 +69,9 @@
 ;; Phase 1's safety gates: the forget gate, staging independence, level-1 provenance.
 (load (merge-pathnames "tests/safety.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; The secret scanner and role-label escaping (contracts/secrets.md).
+(load (merge-pathnames "tests/secrets.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

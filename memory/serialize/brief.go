@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/session"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
 )
@@ -94,7 +95,7 @@ func openingRequest(entries []session.Entry) (string, string) {
 			continue
 		}
 		if text := strings.TrimSpace(textOnly(entry.Message["content"])); text != "" {
-			return text, entry.ID
+			return secrets.Redact(text), entry.ID
 		}
 	}
 	return "", ""
@@ -147,7 +148,7 @@ func keyArg(arguments any) string {
 	}
 	for _, key := range briefKeyArgs {
 		if s, ok := args[key].(string); ok && strings.TrimSpace(s) != "" {
-			return oneLine(s)
+			return secrets.Redact(oneLine(s))
 		}
 	}
 	keys := make([]string, 0, len(args))
@@ -157,7 +158,7 @@ func keyArg(arguments any) string {
 	sort.Strings(keys)
 	for _, key := range keys {
 		if s, ok := args[key].(string); ok && strings.TrimSpace(s) != "" {
-			return oneLine(s)
+			return secrets.Redact(oneLine(s))
 		}
 	}
 	return ""
