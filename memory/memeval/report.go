@@ -10,7 +10,7 @@ import (
 )
 
 // Counts are the compaction counts the curves report.
-var Counts = []int{1, 2, 4, 8, 16, 20}
+var Counts = []int{1, 2, 4, 5, 8, 10, 16, 20}
 
 // Config is one Tier 0 measurement.
 type Config struct {
@@ -157,6 +157,11 @@ func Table(results []Result, counts []int) string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("| probes per class |")
+	for _, n := range counts {
+		fmt.Fprintf(&b, " %d |", curves[ClassIdentifier][n].Total())
+	}
+	b.WriteString("\n")
 	return b.String()
 }
 

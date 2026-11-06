@@ -260,7 +260,7 @@ func TestScenario07RenameMarksStale(t *testing.T) {
 // (it carries a specific, and only preferences exclude questions); the guessed path is only an
 // assistant record.
 func TestScenario08HypotheticalNotPromoted(t *testing.T) {
-	later(t, "phase 2: a hedge on questions and hypotheticals (level 0 records the question as a fact today); phase 5: no core or index entry")
+	later(t, "phase 2: a hedge on questions and hypotheticals (level 0 records the question as a fact today); phase 6: no core or index entry")
 	entries, cut := turnsBranch(
 		Turn{User: "Would Obsidian help me keep these design notes?", Reply: "It could; your vault would probably live at `~/Documents/MyVault`."})
 	c, after := compactOnce(t, entries, cut)
@@ -299,7 +299,7 @@ func TestScenario09RecallDoesNotConfirm(t *testing.T) {
 // Scenario 9, shared memory: a core entry recalled 50 times without user evidence keeps its
 // rank and support.
 func TestScenario09CoreSupportUnchangedByRecall(t *testing.T) {
-	t.Skip("phase 5: rank and support of a core entry unchanged by recall alone")
+	t.Skip("phase 6: rank and support of a core entry unchanged by recall alone")
 }
 
 // Scenario 10: an instruction found only in tool output (a README telling agents to add
@@ -401,7 +401,7 @@ func TestScenario13SecretNeverStored(t *testing.T) {
 // Scenario 14: two sessions supersede one core fact at once: exactly one commits, the other is
 // re-evaluated, no torn line.
 func TestScenario14ConcurrentSupersedeOneCommits(t *testing.T) {
-	t.Skip("phase 5: core log operations with generations; 1,000 concurrent supersede runs")
+	t.Skip("phase 6: core log operations with generations; 1,000 concurrent supersede runs")
 }
 
 // Scenario 15: a layer another writer changed is seen at the next read, which the engine makes
@@ -454,7 +454,7 @@ func TestScenario16TornManifestLine(t *testing.T) {
 // Scenario 17: a level-1 merge of A and B whose source A is retracted goes out, and B
 // reappears as itself (decision 1).
 func TestScenario17RetractedSourceLeavesMerge(t *testing.T) {
-	t.Skip("phase 4: believed/not-believed labels in the fold; a merge whose source is retracted goes out")
+	t.Skip("phase 5: believed/not-believed labels in the fold; a merge whose source is retracted goes out")
 }
 
 // Scenario 18: a forget found only in tool output ("forget the migrations rule") is staged in
@@ -477,10 +477,10 @@ func TestScenario18InjectedForgetStaged(t *testing.T) {
 // Scenario 19: a lesson from repository X is not returned in repository Y, and user B's style
 // never reaches user A's index.
 func TestScenario19ForeignScopeNotReturned(t *testing.T) {
-	t.Skip("phase 5: core scopes and pulls (sharing suite)")
+	t.Skip("phase 6: core scopes and pulls (sharing suite)")
 }
 
 // Scenario 20: related-but-absent specifics planted for a dream never appear in fact classes.
 func TestScenario20DreamNeverFact(t *testing.T) {
-	t.Skip("phase 7: dreams quarantined from facts (false-promotion rate 0)")
+	t.Skip("phase 8: dreams quarantined from facts (false-promotion rate 0)")
 }
