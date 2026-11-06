@@ -59,8 +59,8 @@ exact value a result printed (path, error type, SHA, URL, `KEY=value`, address, 
 branch, searched symbol, version) and an `evidence` record of at most 8 verbatim lines when a result
 failed or matched a failure grammar. The summary lists the values after the tables, ranked by how
 many results printed them, at most one per 200 tokens and 40 of a kind, with one om snippet listing
-the rest. Same adapter, data release and scoring as above; measured on 2026-11-06 at the merge of
-`origin/claude/lisp-core` 3180846 into `claude/phase2-tool-output` (the "before" column is
+the rest. Same adapter, data release and scoring as above; measured on 2026-11-06 on `claude/phase2-tool-output` after merging
+`origin/claude/lisp-core` b7fddac (phase 1 and phase 2 parts A and C) (the "before" column is
 `origin/claude/lisp-core` 3cb517a, the table above).
 
 The scanners were fitted on half the sessions (the release's even indexes, "fit") and are reported
@@ -68,17 +68,17 @@ on the other half ("test") as well as on all 146.
 
 | Budget | Mean recall before | after (all) | after (fit / test) | Ledger recall before / after | Mean summary chars before / after |
 |---|---|---|---|---|---|
-| 4,096 | 16.5% | **25.8%** | 24.6% / 27.0% | 22.9% / 49.6% | 13,710 / 14,600 |
-| 8,192 | 19.9% | **37.4%** | 36.8% / 38.1% | 23.0% / 49.7% | 19,762 / 22,287 |
-| 16,384 | 21.8% | **41.0%** | 40.7% / 41.4% | 23.0% / 49.7% | 24,840 / 28,533 |
-| engine's own | 23.0% | **42.5%** | 42.9% / 42.2% | 23.0% / 49.7% | 37,651 / 42,413 |
+| 4,096 | 16.5% | **25.7%** | 24.5% / 26.9% | 22.9% / 49.6% | 13,710 / 14,631 |
+| 8,192 | 19.9% | **37.4%** | 36.8% / 38.1% | 23.0% / 49.7% | 19,762 / 22,343 |
+| 16,384 | 21.8% | **41.0%** | 40.7% / 41.4% | 23.0% / 49.7% | 24,840 / 28,613 |
+| engine's own | 23.0% | **42.5%** | 42.9% / 42.2% | 23.0% / 49.7% | 37,651 / 42,506 |
 
 Test-half recall before was 18.6%, 22.1%, 23.7% and 24.3% at the four budgets, so the test half
-gains 8.4, 16.0, 17.7 and 17.9 points, about what the fit half gains (10.3, 19.0, 20.8, 21.2).
+gains 8.3, 16.0, 17.7 and 17.9 points, about what the fit half gains (10.2, 19.0, 20.8, 21.2).
 
 - **Atoms only tool output holds** (16,384 tokens; placed at the first of user, assistant, tool
   call, tool output, system that holds the atom): **0.7% → 40.8%** of 3,007 (test half 35.2% of
-  1,510); 15.2% at 4,096 and 41.6% at the engine's budget. The values also hold atoms that a user or
+  1,510); 15.0% at 4,096 and 41.6% at the engine's budget. The values also hold atoms that a user or
   assistant message named first: user atoms 53.9% → 58.1%, assistant 53.4% → 72.3%, tool-call
   arguments 34.0% → 64.1%. System-only atoms stay at 0% (not replayed). The adapter now computes this placement
   itself (`first found in` in its report); it puts 579 atoms first in tool-call arguments where the
@@ -99,9 +99,10 @@ gains 8.4, 16.0, 17.7 and 17.9 points, about what the fit half gains (10.3, 19.0
   summaries byte for byte (`OM_LISP_PARITY=1`, including fifteen of these sessions converted to the
   generic format through `OM_LISP_PARITY_EXTRA`). No model request is made.
 
-memeval (docs/brain-memory-baseline.md, phase 2 part B): error text, 100% lost before, is 99% shown
+memeval (docs/brain-memory-baseline.md, phase 2 part B): error text, 100% lost before, is 98% shown
 one compaction after its turn left the context and never lost (reachable through the printed
-snippet from N = 8), with the identifier and intention curves within a few points of before.
+snippet from N = 8); the evidence rows move some decisions and intentions from shown to reachable
+at N = 4 to 5, and lose none.
 
 Reproduce: as above; the report's "by half", "value precision by value kind" and "first found in"
 tables give the rows here.
