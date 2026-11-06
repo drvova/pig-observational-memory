@@ -28,6 +28,8 @@
                              (:file "transcript")
                              (:file "end-readers")
                              (:file "extract")
+                             ;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0.
+                             (:file "encoding")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")

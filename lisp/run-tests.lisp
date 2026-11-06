@@ -72,6 +72,9 @@
 ;; The secret scanner and role-label escaping (contracts/secrets.md).
 (load (merge-pathnames "tests/secrets.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0 (contracts/encoding.jsonl).
+(load (merge-pathnames "tests/encoding.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

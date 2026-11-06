@@ -53,12 +53,21 @@ const (
 	KindCommit ObservationKind = "commit"
 	// KindNote is a note the session model wrote with the memory tool.
 	KindNote ObservationKind = "note"
+	// KindDecision is a choice the user stated in fixed wording ("we decided to X", "let's go
+	// with X because Y"), verbatim: the chosen option, and the reason and the rejected
+	// alternatives when stated. Corrections replace it like a fact.
+	KindDecision ObservationKind = "decision"
+	// KindConvention is what a repository file the session read sets (a lockfile's package
+	// manager, a formatter or linter config, CI run lines, make targets), with the file's path
+	// (Observation.Target) and a hash of what was read. It is an observation of the file, never
+	// an instruction.
+	KindConvention ObservationKind = "convention"
 )
 
 // CodeKindValues are the kinds level-0 extraction writes beside ObservationKindValues. They
 // are read back from the ledger (ObservationFrom) but are not kinds a worker or a note schema
 // may write, so v1's prompts and validation are unchanged.
-var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote}
+var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote, KindDecision, KindConvention}
 
 // The origins of a record (Observation.Origin).
 const (

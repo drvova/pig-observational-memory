@@ -74,7 +74,7 @@ const (
 	ReasonSelf           = "supersedes itself"
 	ReasonNoSupport      = "cites no record whose specifics it carries"
 	ReasonMalformed      = "is not an object"
-	ReasonCodeKind       = "merges an attempt, file, commit or note record, whose fields code keeps"
+	ReasonCodeKind       = "merges an attempt, file, commit, note, decision or convention record, whose fields code keeps"
 	ReasonMergeStatuses  = "merges records with different statuses (proposed, hypothetical, retracted or stated as fact)"
 	ReasonNotLink        = "names a pair the input did not list as a possible update"
 	ReasonVerdict        = "has no verdict: confirm or reject"
@@ -306,7 +306,7 @@ func (v *validator) merge(index int, item any) {
 		return
 	}
 	for _, o := range sources {
-		if dropsSpecifics(o.Content, content) {
+		if dropsRecord(o, content) {
 			v.refuse("merge", index, ReasonDropsSpecifics)
 			return
 		}
@@ -428,7 +428,7 @@ func (v *validator) label(index int, item any) {
 }
 
 // applyLabels sets the fields a label may set on record. A kind is set only from the kinds a
-// model may write, and never on a record whose kind code set (attempt, file, commit, note) or
+// model may write, and never on a record whose kind code set (attempt, file, commit, note, decision, convention) or
 // on a user correction or preference (which selection ranks by that kind); an outcome only on
 // an attempt; a subject as the kernel stores it (ledger.RecordableSubject).
 func (v *validator) applyLabels(record *ledger.Observation, m map[string]any, label bool) {
@@ -474,7 +474,7 @@ func (v *validator) supersedes(raw any, sources []string, record ledger.Observat
 			return nil, ReasonCrossScope
 		case !ledger.MaySupersede(record, target):
 			return nil, ReasonStatusReplace
-		case dropsSpecifics(target.Content, record.Content):
+		case dropsRecord(target, record.Content):
 			return nil, ReasonDropsSpecifics
 		case v.reaches(t, sources):
 			return nil, ReasonCycle
@@ -598,7 +598,7 @@ func (v *validator) reflection(index int, item any) {
 	support := func(id string, known bool) {
 		resolved := v.resolve(id)
 		cited, found := v.record(resolved)
-		if (!found && known) || (found && dropsSpecifics(cited.Content, content)) || slices.Contains(supporting, resolved) {
+		if (!found && known) || (found && dropsRecord(cited, content)) || slices.Contains(supporting, resolved) {
 			return
 		}
 		supporting = append(supporting, resolved)
@@ -840,7 +840,7 @@ func Union(result Result, records []ledger.Observation) (drop []string, reflecti
 			continue
 		}
 		r, ok := byID[replacement]
-		if !ok || replacement == o.ID || dropsSpecifics(o.Content, r.Content) {
+		if !ok || replacement == o.ID || dropsRecord(o, r.Content) {
 			keptBack++
 			continue
 		}
@@ -852,7 +852,7 @@ func Union(result Result, records []ledger.Observation) (drop []string, reflecti
 		supporting := make([]string, 0, len(r.SupportingObservationIDs))
 		for _, id := range r.SupportingObservationIDs {
 			// A support that is not an active record drops nothing when the reflection renders.
-			if o, active := byID[id]; active && dropsSpecifics(o.Content, r.Content) {
+			if o, active := byID[id]; active && dropsRecord(o, r.Content) {
 				keptBack++
 				continue
 			}
@@ -877,6 +877,14 @@ func dropsSpecificsBesidesUpdate(earlier, later string) bool {
 		}
 	}
 	return false
+}
+
+// dropsRecord is dropsSpecifics for record o, which replacement also drops when o is a rule, a
+// correction or a decision (ledger.KeepsKeys) and replacement misses one of its keys, the path,
+// tool or command it quotes (ledger.MissingKeys): such a record often carries no specific, and
+// it must never be merged or summarized into words that no longer name what it is about.
+func dropsRecord(o ledger.Observation, replacement string) bool {
+	return dropsSpecifics(o.Content, replacement) || ledger.KeepsKeys(o) && len(ledger.MissingKeys(o.Content, replacement)) > 0
 }
 
 // dropsSpecifics reports whether replacement drops a specific of source (ledger.Specifics):

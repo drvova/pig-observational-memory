@@ -17,8 +17,8 @@
 (defparameter +kernel-consolidate-rules+ "You consolidate the memory of a coding session at a compaction. The conversation shown is about to leave the context; code has already extracted its records (the CANDIDATES), and the summary that replaces the conversation is rendered by code from the records, never from your prose. You make one call to the consolidate_memory tool; nothing follows it.
 
 What you may do, all optional, in that one call:
-- records: label one candidate each, by its id: kind (not for attempt, file, commit or note records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
-- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit or note records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
+- records: label one candidate each, by its id: kind (not for attempt, file, commit, note, decision or convention records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
+- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit, note, decision or convention records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
 - reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
 - aliases: declare that one existing subject is about the same topic as another (from, to).
 - links: settle a listed POSSIBLE UPDATE by its two ids (id, updates): confirm when the later value replaces the earlier one (the later record then supersedes it), reject when both hold. Leave it when unsure; it stays a link and both records stay shown.
@@ -76,7 +76,7 @@ Rules code enforces (a proposal that breaks one is refused and the records it na
 
 (defun label-properties ()
   (jobject
-   "kind" (schema-enum +observation-kinds+ "What the record is. Ignored for attempt, file, commit and note records, whose kind code set, and for user corrections and preferences.")
+   "kind" (schema-enum +observation-kinds+ "What the record is. Ignored for attempt, file, commit, note, decision and convention records, whose kind code set, and for user corrections and preferences.")
    "relevance" (schema-enum +relevance-values+ "How long the record matters.")
    "subject" (jobject "type" "string" "description" "Short lowercase noun phrase; a path a/b/c nests it under a broader subject. Reuse listed subjects.")
    "scope" (jobject "type" "string" "description" "The qualifier that tells two figures apart; records with different scopes never replace each other.")
@@ -97,7 +97,7 @@ no detectors or remedies; evidence is the harness evidence text."
          (description "Labels, merges, reflections, subject aliases, verdicts on possible updates and citations of curated memories for the memory of the compacted conversation. Every field is optional; cite only ids and names printed in the input."))
     (setf (gethash "id" record) (jobject "type" "string" "description" "The candidate's id.")
           (gethash "outcome" record) (schema-enum '("failed" "worked" "open") "An attempt record's outcome.")
-          (gethash "ids" merge) (schema-string-array "The ids of the two or more records the merged line replaces: never attempt, file, commit or note records, nor records with different scopes.")
+          (gethash "ids" merge) (schema-string-array "The ids of the two or more records the merged line replaces: never attempt, file, commit, note, decision or convention records, nor records with different scopes.")
           (gethash "content" merge) (jobject "type" "string" "description" "One line carrying every specific of the merged records."))
     (let ((properties
             (jobject

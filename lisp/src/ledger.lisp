@@ -34,7 +34,7 @@
 (defparameter +status-retracted+ "retracted")
 (defparameter +status-values+ '("proposed" "hypothetical" "retracted"))
 (defparameter +observation-kinds+ '("fact" "event" "preference" "plan" "correction" "assistant"))
-(defparameter +code-kinds+ '("attempt" "file" "commit" "note"))
+(defparameter +code-kinds+ '("attempt" "file" "commit" "note" "decision" "convention"))
 (defparameter +relevance-values+ '("low" "medium" "high" "critical"))
 
 (defun write-obs-json (o out)

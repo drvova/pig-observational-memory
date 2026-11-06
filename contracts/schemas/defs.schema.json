@@ -43,7 +43,7 @@
         "tokenCount": { "type": "integer", "minimum": 0 },
         "kind": {
           "description": "ObservationKindValues and CodeKindValues.",
-          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note"]
+          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note", "decision", "convention"]
         },
         "subject": { "type": "string" },
         "scope": { "type": "string" },
