@@ -19,6 +19,8 @@
                              (:file "end-base")
                              (:file "entry")
                              (:file "ledger")
+                             ;; Phase 2: the encoding fields (contracts/encoding.md).
+                             (:file "ledger-encoding")
                              (:file "ledger-subjects")
                              (:file "ledger-reflections")
                              (:file "ledger-replace")

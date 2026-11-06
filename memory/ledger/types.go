@@ -141,6 +141,30 @@ type Observation struct {
 	// settled possible update's one record, a merge's sources. Links to those records are read
 	// as links to this one (Standing). Code sets it; none for every other record.
 	Replaces []string `json:"replaces,omitempty"`
+	// The encoding fields (docs/brain-memory.md, "Encoding"; contracts/encoding.md) are set by
+	// code at write time and are not part of the record's id, so a record keeps its id whichever
+	// engine or session wrote it. Every one is "" or zero, and omitted, for a record written
+	// before they existed.
+	//
+	// Source is where the record's text came from (SourceValues), from the transcript role and
+	// tool of its first source entry.
+	Source string `json:"source,omitempty"`
+	// Authority is how far the record may be trusted (AuthorityValues), from its Source; level 1
+	// only ever lowers it (LeastAuthority).
+	Authority string `json:"authority,omitempty"`
+	// Hedge is how the record's own sentence states it (HedgeValues, HedgeOf).
+	Hedge string `json:"hedge,omitempty"`
+	// TimeHint is "after:<date>" for a plan and "before:<date>" for a reported past event with no
+	// event date, the date being the one the record was said on (TimeHintOf).
+	TimeHint string `json:"timeHint,omitempty"`
+	// Episode is the id of the episode the record belongs to; segmentation comes later.
+	Episode string `json:"episode,omitempty"`
+	// Keys are the exact strings the record can be looked up by (Keys.Add).
+	Keys Keys `json:"keys,omitzero"`
+	// Frame is where in a repository the record was made (the adapter's host.Repo).
+	Frame Frame `json:"frame,omitzero"`
+	// Writer is who wrote the record: the harness, the session, the session model and the engine.
+	Writer Writer `json:"writer,omitzero"`
 }
 
 // The statuses of a record (Observation.Status), which memory v2's level 0 reads from fixed
@@ -475,6 +499,7 @@ func ObservationFrom(v any) (Observation, bool) {
 	observation.PossiblyUpdates = observation.linkIDs(m["possiblyUpdates"])
 	observation.Conflicts = observation.linkIDs(m["conflicts"])
 	observation.Replaces = observation.linkIDs(m["replaces"])
+	observation.readEncoding(m)
 	// Each supersedes element is checked on its own, so one bad element drops
 	// only itself.
 	switch list := m["supersedes"].(type) {

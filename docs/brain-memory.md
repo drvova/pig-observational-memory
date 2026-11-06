@@ -122,6 +122,32 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
   classes per pass (void above 1 of 12 accepted), paired gained and lost with McNemar and a
   bootstrap interval, a both-passed control set and the ship rule. Tested with scripted judges only.
 
+### Phase 2 status: the encoding fields (part A)
+
+- **Fields: built** ([contracts/encoding.md](../contracts/encoding.md)). Level-0 and level-1
+  records carry `source`, `authority`, `hedge`, `timeHint`, `episode`, `keys`, `frame` and
+  `writer` (`memory/ledger/encoding.go`, `lisp/src/ledger-encoding.lisp`), optional and omitted
+  when empty, so records written before keep their bytes. `scope` also accepts `session`,
+  `project:<repoId>`, `user` and `global`; level 0 does not set one yet.
+- **Ids: unchanged.** No encoding field enters a record's id, so the Go engine and the image, and
+  engines from before and after phase 2, give the same record the same id. The writer's engine
+  (`go` or `lisp`) is the one member the engines write differently; the parity tests compare it
+  as one.
+- **Authority and hedge through level 1.** A merge is `model-inferred`, starts at authority `user`
+  and takes the least of its sources' (one with none leaves none), and takes the most hedged of
+  its text and its sources: the least-provenance rule, extended.
+- **Project identity: the adapter's.** `host.RepoReader` (engine RPC `host/repo`; the om command's
+  `repo` param to the image) returns the canonical work-tree root, the common git directory, the
+  normalized origin remote, the root commit, the branch and HEAD, read with git by
+  `memory/gitrepo` in the PiG adapter and the om command; `repoId` hashes the remote and the root
+  commit. The engine reads it once per compaction and never runs git.
+- **Keys:** commands, paths, a failure's first line and `name@version` tokens from what level 0
+  already reads; `ledger.Keys.Add` (`keys-add`) is the helper the tool-output and conversation
+  extractors call for the other kinds. `symbol` and `bodyHash` stay empty.
+- **Rendering: unchanged.** The summary, its snippets and the golden summaries are byte-identical;
+  only `records.jsonl` and `compaction.jsonl` of the golden corpus gained the fields. The Tier 0
+  baseline is unchanged ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 2 part A").
+
 ## Scenarios
 
 Each failure has a test that a harness can check (26 in all). The full catalogue, with its evidence, is in the

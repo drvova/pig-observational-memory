@@ -59,6 +59,9 @@ func HostSummary(entries []ledger.Entry, folded ledger.FoldedLedger) (record led
 		SourceEntryIDs: []string{compaction.ID},
 		TokenCount:     tokens.EstimateStringTokens(summary),
 		Origin:         ledger.OriginHost,
+		Source:         ledger.SourceHostSummary,
+		Authority:      ledger.AuthorityModel,
+		Hedge:          ledger.HedgeOf(summary),
 	}
 	record.ID = ids.HashID(ledger.OriginHost + "\x00" + compaction.ID)
 	return record, entries[boundary-1].ID, true

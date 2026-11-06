@@ -169,7 +169,8 @@ not back, or nil."
           (when (< boundary 1) (return-from host-summary nil))
           (let ((o (make-obs :content summary :timestamp (format-timestamp (entry-time c))
                              :relevance +code-relevance+ :source-ids (list (entry-id c))
-                             :token-count (estimate-tokens summary) :origin "host")))
+                             :token-count (estimate-tokens summary) :origin "host"
+                             :source "host-summary" :authority "model" :hedge (hedge-of summary))))
             (setf (obs-id o) (hash-id (cat "host" (string (code-char 0)) (entry-id c))))
             (values o (entry-id (aref entries (1- boundary))))))))))
 

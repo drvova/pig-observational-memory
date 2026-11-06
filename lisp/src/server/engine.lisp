@@ -163,7 +163,8 @@ inside the extraction is recovered (extraction never fails a turn) and named in 
     (handler-case
         (let ((start (om::extraction-start-index branch)))
           (multiple-value-bind (batches covers)
-              (om::extract branch start (length branch) (om::fold-ledger branch) :cwd (param-string params "cwd"))
+              (let ((om::*encoding* (neutral-encoding params)))
+                (om::extract branch start (length branch) (om::fold-ledger branch) :cwd (param-string params "cwd")))
             (om::jobject "appended" (append-extraction session branch batches covers))))
       (error (e)
         (format *error-output* "om engine: turn-end level 0 recovered: ~A~%" e)

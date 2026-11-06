@@ -225,6 +225,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Links:       prompt.Links,
 		Curated:     prompt.Curated,
 		Branch:      entries,
+		Writer:      writerOf(h),
 	}
 	if offer != nil && prompt.HarnessShown {
 		in.Offer = offer

@@ -61,6 +61,12 @@ entropy test) and role-label escaping, which every engine applies byte for byte;
 and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secrets ./serialize
 -args -write`.
 
+## Record encoding fields
+
+[encoding.md](encoding.md) specifies the fields code sets on each record at write time (source,
+authority, hedge, time hint, keys, frame, writer), the hedge lexicon and the project identity;
+`encoding.jsonl` holds the cases both engines check.
+
 ## Golden corpus
 
 `golden/<fixture>/` holds, for each real transcript in `memory/transcript/testdata/real` (the SQL

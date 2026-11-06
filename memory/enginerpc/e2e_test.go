@@ -178,6 +178,10 @@ func newHost(entries []session.Entry) *testfix.FakeHost {
 	h := testfix.NewFakeHost(slices.Clone(entries)...)
 	h.Model = testfix.Model("test-provider", "session", map[string]any{"contextWindow": 200_000, "maxTokens": 32_000})
 	h.ModelsFake.Add(h.Model, testfix.KeyAuth("test-key"))
+	// The writer and frame cross the boundary (host/harness, host/repo) and are written alike.
+	h.HarnessName = "pig"
+	h.RepoInfo = &host.Repo{ID: "0123456789ab", Root: h.Cwd(), CommonDir: h.Cwd() + "/.git", Remote: "example.org/team/project",
+		RootCommit: "1111111111111111111111111111111111111111", Branch: "main", Head: "2222222222222222222222222222222222222222"}
 	return h
 }
 
@@ -278,6 +282,9 @@ func compareTranscripts(t *testing.T, name string, want, got transcript) {
 	if len(want.Appended.([]any)) == 0 {
 		t.Fatal("level 0 appended nothing: the scenario tests nothing")
 	}
+	if appended, _ := json.Marshal(want.Appended); !strings.Contains(string(appended), `"path":"loader.go","repoId":"0123456789ab"`) || !strings.Contains(string(appended), `"harness":"pig","model":"test-provider/session"`) {
+		t.Fatalf("level 0 wrote no frame or writer: the encoding fields are untested\n%s", clip(appended))
+	}
 	if !strings.Contains(fmt.Sprint(want.Context), "[thinned]") {
 		t.Fatal("the context event thinned nothing: the scenario tests nothing")
 	}
@@ -292,7 +299,7 @@ func compareTranscripts(t *testing.T, name string, want, got transcript) {
 		{"tool details", want.Tool, got.Tool},
 		{"tool text", want.ToolText, got.ToolText},
 	} {
-		if !reflect.DeepEqual(field.want, field.got) {
+		if !reflect.DeepEqual(asGo(field.want), asGo(field.got)) {
 			a, _ := json.MarshalIndent(field.want, "", " ")
 			b, _ := json.MarshalIndent(field.got, "", " ")
 			t.Errorf("%s differ:\nin-process %s\n%-10s %s", field.name, clip(a), name, clip(b))

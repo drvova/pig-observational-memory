@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +117,7 @@ func TestLispGolden(t *testing.T) {
 			}
 			text, _ := res["text"].(string)
 			g := normalizeIDs(t, golden{records: string(turn), compaction: string(all[len(turn):]), summary: text + "\n"}, all)
+			g = sameEngine(g)
 			for name, content := range map[string]string{recordsFile: g.records, compactionFile: g.compaction, summaryFile: g.summary} {
 				want, err := os.ReadFile(filepath.Join(goldenDir, f.name(), name))
 				if err != nil {
@@ -127,4 +129,12 @@ func TestLispGolden(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sameEngine reads the image's records as the Go engine's: the one member the engines write
+// differently by design is the writer's engine (contracts/encoding.md), so "lisp" is compared as
+// "go"; every other byte must be the same.
+func sameEngine(g golden) golden {
+	swap := func(s string) string { return strings.ReplaceAll(s, `"engine":"lisp"`, `"engine":"go"`) }
+	return golden{records: swap(g.records), compaction: swap(g.compaction), summary: swap(g.summary)}
 }

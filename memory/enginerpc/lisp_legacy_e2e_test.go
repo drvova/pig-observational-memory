@@ -104,12 +104,12 @@ func TestLispLegacyMemoryCallsMatchInProcess(t *testing.T) {
 	if strings.Contains(string(encoded), "Never saved") {
 		t.Fatalf("a failed legacy save became a note:\n%s", encoded)
 	}
-	if !reflect.DeepEqual(wantAppended, gotAppended) {
+	if !reflect.DeepEqual(asGo(wantAppended), asGo(gotAppended)) {
 		a, _ := json.MarshalIndent(wantAppended, "", " ")
 		b, _ := json.MarshalIndent(gotAppended, "", " ")
 		t.Errorf("appended differ:\nin-process %s\nlisp       %s", clip(a), clip(b))
 	}
-	if !reflect.DeepEqual(wantLedger, gotLedger) {
+	if !reflect.DeepEqual(asGo(wantLedger), asGo(gotLedger)) {
 		t.Errorf("ledgers differ:\nin-process %s\nlisp       %s", strings.Join(wantLedger, "\n"), strings.Join(gotLedger, "\n"))
 	}
 	if lines := log.lines(); len(lines) != 0 {

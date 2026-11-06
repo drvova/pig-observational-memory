@@ -80,7 +80,7 @@ evidence unit (record-compaction-evidence), on the layer's snapshot taken before
          (store (and (string/= model "") (curated-on-p) (curated-dir)))
          (snapshot (and store (om.layer::take-snapshot store model)))
          (marker (funcall (om::hhost-append h) "om.cut" (om::json-string (om::jobject "reason" reason))))
-         (c (om::compact-on h cfg reason marker 0)))
+         (c (let ((om::*encoding* (neutral-encoding params))) (om::compact-on h cfg reason marker 0))))
     (store-compaction session params format c)
     (when snapshot
       (let ((branch (read-branch session params format)))
@@ -91,7 +91,8 @@ evidence unit (record-compaction-evidence), on the layer's snapshot taken before
 
 (defun neutral-compaction-at (session params format reason first-kept tokens-before)
   "neutral.Host.CompactionAt: on the harness's own cut, returned and not stored."
-  (om::compact-on (session-host session params format) (hook-config params) reason first-kept tokens-before))
+  (let ((om::*encoding* (neutral-encoding params)))
+    (om::compact-on (session-host session params format) (hook-config params) reason first-kept tokens-before)))
 
 (defun param-int (params key)
   (let ((v (om::jget params key))) (if (realp v) (truncate v) 0)))

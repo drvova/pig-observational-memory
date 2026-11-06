@@ -93,6 +93,8 @@
 (defstruct rec
   obs
   (anchor -1)
+  ;; first is the branch index of the record's first source entry, whose role gives its source.
+  (first -1)
   (exchange -1)
   correction
   retraction
@@ -141,22 +143,24 @@
 (defun normalized (text) (to-lower (one-line text)))
 
 (defun x-add (x o &rest sources)
-  (let ((anchor -1) (n (length (x-entries x))))
+  (let ((anchor -1) (first -1) (n (length (x-entries x))))
     (dolist (i sources)
       (when (and (>= i 0) (< i n))
         (setf anchor (max anchor i))
+        (when (< first 0) (setf first i))
         (let ((id (entry-id (entry-at x i))))
           (when (and (string/= id "") (not (member-str id (obs-source-ids o))))
             (push-end id (obs-source-ids o))))))
     ;; Secrets are redacted before the content is cut (contracts/secrets.md).
     (setf (obs-content o) (truncate-record-content (redact-secrets (obs-content o)))
           (obs-target o) (redact-secrets (obs-target o))
-          (obs-fields o) (mapcar (lambda (f) (cons (car f) (redact-secrets (cdr f)))) (obs-fields o)))
+          (obs-fields o) (mapcar (lambda (f) (cons (car f) (redact-secrets (cdr f)))) (obs-fields o))
+          (obs-keys o) (redact-keys (obs-keys o)))
     (when (and (string= (obs-timestamp o) "") (>= anchor 0))
       (setf (obs-timestamp o) (format-timestamp (entry-time (entry-at x anchor)))))
     (setf (obs-relevance o) +code-relevance+)
     (when (string= (obs-origin o) "") (setf (obs-origin o) "code"))
-    (let ((r (make-rec :obs o :anchor anchor :exchange (x-exchange x))))
+    (let ((r (make-rec :obs o :anchor anchor :first first :exchange (x-exchange x))))
       (push-end r (x-records x))
       r)))
 
@@ -812,6 +816,27 @@ Kiro's write replacing a string (its command strReplace) edits the file."
         (when (string/= reason "") (setf line (cat line ": " (clip reason +brief-key-arg-runes+))))))
     line))
 
+(defun call-keys (x call outcome result-text)
+  "extraction.callKeys: the call's shell command, else its paths, and a failure's first line."
+  (let ((keys '()) (command (shell-command (tcall-args call))))
+    (cond ((and command (string/= (trim-space command) ""))
+           (setf keys (keys-add keys "commands" (trim-space command))))
+          ((call-path call) (setf keys (keys-add keys "paths" (path-key x (call-path call)))))
+          (t (multiple-value-bind (patch patch-p) (patch-of call)
+               (when patch-p
+                 (dolist (ev (patch-path-events patch))
+                   (unless (string= (second ev) "moved from")
+                     (setf keys (keys-add keys "paths" (path-key x (first ev))))))))))
+    (when (string= outcome "failed")
+      (setf keys (keys-add keys "errors" (clip (failure-line result-text) +brief-key-arg-runes+))))
+    keys))
+
+(defun call-path (call)
+  "callPath: the first non-blank path argument, nil for none."
+  (dolist (arg +path-args+ nil)
+    (let ((p (arg-string (tcall-args call) arg)))
+      (when (and p (string/= (trim-space p) "")) (return p)))))
+
 (defun x-call (x i call result words)
   (let ((sources (if (and (tresult-present result) (/= (tresult-index result) i)) (list i (tresult-index result)) (list i))))
     (multiple-value-bind (key display) (call-target x call)
@@ -828,6 +853,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
           (let ((line (attempt-line (tcall-name call) display outcome (tresult-text result)))
                 (o (make-obs :kind "attempt" :outcome outcome :tool (tcall-name call) :target key))
                 (said '()))
+            (setf (obs-keys o) (call-keys x call outcome (tresult-text result)))
             (when (string= outcome "worked")
               (setf (obs-supersedes o) (append (obs-supersedes o) earlier))
               (dolist (id earlier)
@@ -894,7 +920,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
     (let* ((ev (gethash key (x-file-events x)))
            (content (cat (fevent-display ev) " " (fevent-state ev)
                          (if (string/= (fevent-other ev) "") (cat " " (fevent-other ev)) "")))
-           (o (make-obs :content content :kind "file" :target key)))
+           (o (make-obs :content content :kind "file" :target key :keys (keys-add '() "paths" key))))
       (dolist (id (gethash key (x-files x)))
         (unless (member-str id (obs-supersedes o)) (push-end id (obs-supersedes o))))
       (apply #'x-add x o (fevent-sources ev))))
@@ -1119,6 +1145,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
       (resolve-retractions x)
       (resolve-corrections x (lambda (r) (and (rec-correction r) (eq (rec-correction r) (rec-fallback r)))))
       (link-records x)
+      (x-encode x)
       (values (x-batches x cite) (if (>= last 0) (entry-id (aref entries last)) "")))))
 
 ;;; drop.go
@@ -1151,3 +1178,66 @@ transitively, that are not rendered themselves."
       (loop for o in active
             when (and (gethash (obs-id o) replaced) (not (gethash (obs-id o) shown)))
               collect (obs-id o)))))
+
+;;; encode.go: the encoding fields (contracts/encoding.md)
+
+(defvar *encoding* nil
+  "extract.Input's Writer, Frame and RepoRoot as a plist (:writer alist :frame alist :root string),
+bound by the caller that knows the session and its repository; nil writes neither.")
+
+(defun redact-keys (keys)
+  (let ((out '()))
+    (dolist (pair keys out)
+      (dolist (v (cdr pair)) (setf out (keys-add out (car pair) (redact-secrets v)))))))
+
+(defun encode-hedge (o)
+  "hedgeOf."
+  (cond ((member-str (obs-kind o) '("file" "commit")) "stated")
+        ((string= (obs-kind o) "attempt") (hedge-of (attempt-words o)))
+        (t (hedge-of (obs-content o)))))
+
+(defun repo-path (path root)
+  "repoPath: path relative to root when inside it."
+  (if (or (string= root "") (not (path-abs-p path)))
+      path
+      (let ((rel (path-rel root path)))
+        (if (or (null rel) (string= rel "..") (has-prefix rel "../")) path rel))))
+
+(defun encode-record (o source &optional (encoding *encoding*))
+  "Encode: o's empty encoding fields filled."
+  (when (string= (obs-source o) "") (setf (obs-source o) source))
+  (when (string= (obs-authority o) "") (setf (obs-authority o) (authority-of (obs-source o))))
+  (when (string= (obs-hedge o) "") (setf (obs-hedge o) (encode-hedge o)))
+  (when (string= (obs-time-hint o) "") (setf (obs-time-hint o) (time-hint-of o)))
+  (dolist (v (versions-in (obs-content o))) (setf (obs-keys o) (keys-add (obs-keys o) "versions" v)))
+  (when (null (obs-writer o)) (setf (obs-writer o) (getf encoding :writer)))
+  (let ((frame (getf encoding :frame)))
+    (when (and (null (obs-frame o)) (string/= (alist-member frame "repoId") ""))
+      (let ((paths (keys-get (obs-keys o) "paths")))
+        (setf (obs-frame o)
+              (make-record-frame :repo-id (alist-member frame "repoId") :branch (alist-member frame "branch")
+                                 :head (alist-member frame "head")
+                                 :path (if (= (length paths) 1) (repo-path (first paths) (or (getf encoding :root) "")) ""))))))
+  o)
+
+(defun entry-source (e)
+  "EntrySource."
+  (cond ((string= (entry-type e) "custom_message")
+         (let ((s (source-of-custom-type (entry-custom-type e)))) (if (string/= s "") s "external-untrusted")))
+        ((or (string/= (entry-type e) "message") (null (entry-message e))) "")
+        (t (let ((role (jget (entry-message e) "role")))
+             (cond ((equal role "user") "user-said")
+                   ((equal role "assistant") "assistant-claim")
+                   ((member role '("toolResult" "bashExecution") :test #'equal) "tool-observed")
+                   (t ""))))))
+
+(defun x-source-of (x r)
+  (let ((kind (obs-kind (rec-obs r))))
+    (cond ((member-str kind '("attempt" "file" "commit")) "tool-observed")
+          ((string= kind "note") "assistant-claim")
+          ((or (< (rec-first r) 0) (>= (rec-first r) (length (x-entries x)))) "")
+          (t (entry-source (entry-at x (rec-first r)))))))
+
+(defun x-encode (x)
+  (dolist (r (x-records x))
+    (encode-record (rec-obs r) (x-source-of x r))))
