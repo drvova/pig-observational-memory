@@ -15,7 +15,11 @@
 (defstruct hhost
   "What the hook reads and writes: read returns the merged branch (a vector), append stores a
 custom entry after the tip from its type and its data's JSON text and returns the new id."
-  read append (cwd "") (skip-tools (list +memory-tool+)))
+  read append (cwd "") (skip-tools (list +memory-tool+))
+  ;; detect, when set, is the harness's detectV2 (om.layer:harness-detect over the session model
+  ;; and store): a function of (entries start end folded batches covers) returning the batches and
+  ;; a function that records the run, called once the extraction landed on a fresh branch.
+  (detect nil))
 
 (defstruct hconfig
   "The settings the hook reads (config.Config): passive, consolidate, compactionSummaryMaxTokens,
@@ -177,7 +181,7 @@ not back, or nil."
 
 (defun extract-cut (h event)
   "extractCutV2: the branch with the cut range's extraction (and any host summary) after it."
-  (let ((entries (cevent-branch event)))
+  (let ((entries (cevent-branch event)) (fresh nil))
     (when (< (entry-index-for-id entries (cevent-first-kept event)) (compaction-range-start-index entries))
       (let* ((branch (or (ignore-errors (hhost-branch h)) entries))
              (host (append-host-summary h branch (fold-ledger branch))))
@@ -185,7 +189,7 @@ not back, or nil."
     (let ((branch (ignore-errors (hhost-branch h))))
       (when branch
         (let ((cut (entry-index-for-id branch (cevent-first-kept event))))
-          (when (and (>= cut 0) (>= cut (compaction-range-start-index branch))) (setf entries branch)))))
+          (when (and (>= cut 0) (>= cut (compaction-range-start-index branch))) (setf entries branch fresh t)))))
     (let* ((range-start (compaction-range-start-index entries))
            (cut (entry-index-for-id entries (cevent-first-kept event)))
            (start (extraction-start-index entries))
@@ -194,7 +198,14 @@ not back, or nil."
              (multiple-value-bind (batches covers)
                  (extract entries start cut folded :skip-tools (hhost-skip-tools h) :cwd (hhost-cwd h)
                                                    :file-ops (cevent-file-ops event) :file-ops-from range-start)
-               (append-extraction-entries h batches covers)))
+               (let ((record nil))
+                 (when (hhost-detect h)
+                   (multiple-value-setq (batches record) (funcall (hhost-detect h) entries start cut folded batches covers)))
+                 (let ((out (append-extraction-entries h batches covers)))
+                   ;; Counted only for an extraction that landed on a range measured on the fresh
+                   ;; branch, as extractCutV2 records it.
+                   (when (and out fresh record) (funcall record))
+                   out))))
            (host (append-host-summary h entries folded)))
       (when host (setf appended (append appended (list host))))
       (if appended (concatenate 'simple-vector entries appended) entries))))

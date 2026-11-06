@@ -84,9 +84,11 @@ it instead.
 - **`event/turnEnd`.** It runs `EnsureConfig`. When passive it does nothing. Otherwise it runs
   level 0 over `host/getBranch` and appends through `host/appendEntry` (`appendExtraction`,
   stopping at the first append that fails), then answers `{"thinning": bool}`.
-  - **`detectV2` and keep-head are not ported.** With a store and a session model, Go runs the
-    harness detectors inside the extraction (detect events, keep-head notes), so that turn end
-    is refused before anything is appended.
+  - **`detectV2` and keep-head run in the image** (docs/lisp-port-evidence.md). With a store and
+    a session model the harness detectors run over what the extraction read, the keep-head
+    rule's notes ride in its batches, and the detect event is recorded once the extraction
+    landed. A store with retired defined tools or rules written before the layer, and a branch
+    with a memory call in the removed query language, are refused before anything is appended.
   - An extraction that fails before its first append is refused too.
 - **`event/context`.** It follows Go's rules:
   - `seq`/`base`/`reuse`, with `-32001` for a base the image does not hold;
@@ -190,18 +192,23 @@ compaction slot free (`runtime.TryStartCompact`):
 ### The harness hook point
 
 `lisp/src/server/compaction-harness.lisp` is the one place the harness's part of a compaction
-goes, for the evidence work package to fill:
+goes, filled by the evidence work package ([lisp-port-evidence.md](lisp-port-evidence.md)):
 
-- `compaction-harness-refusal` runs before the compaction's first side effect. Today it refuses a
-  session model with a store, for which Go reads the model's profile, records the pass event,
-  settles held definitions and starts the detector pass.
+- `compaction-harness-refusal` runs before the compaction's first side effect. For a session
+  model with a store it refuses only a store with rules written before the layer and a model
+  whose profile may not be the default (a v2 decode event, a code event on the summary or an
+  active switch-codec rule in its ledger: the profile is not ported).
+- `harness-hook-host` takes the layer's snapshot and gives the hook's host the harness
+  detectors, so the cut range's extraction runs `detectV2` and records it on a fresh branch.
 - `after-compaction` runs once the answer is built, before it is sent, unless the request was
   cancelled. It receives a `compaction-harness` struct: the connection, the session model and its
   key, the store directory, the configuration, the decoded event, the branch the compaction folded
-  (level 0's batches included), the cut range's source entries and the result. It does nothing
-  yet. An error in it is logged and never changes the answer.
+  (level 0's batches included), the cut range's source entries and the result. It calls
+  `record-compaction-evidence` (the pass event, the rules, settling and the retire rule) and
+  tells the user each transition and settle through `host/notify`. An error in it is logged and
+  never changes the answer.
 
-`event/turnEnd`'s refusal for a store with a session model (detect and keep-head) is unchanged.
+`event/turnEnd` with a store and a session model runs the detectors too.
 
 ### Gate and results
 
@@ -219,10 +226,12 @@ goes, for the evidence work package to fill:
 
 ## Left
 
-- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's), `/om:status`, level 1 and the harness's part of a compaction (the
-  hook point above).
-- The store cases: `turnEnd` with a store and a session model (detect, keep-head), and a store
-  with retired defined tools or a v1 layer to migrate (the names and the migration are not read).
+- `tool/renderCall` and `tool/renderResult` (`tool/call` is work package 3's), `/om:status` and
+  level 1. The harness's part of a compaction runs
+  at the hook point above (docs/lisp-port-evidence.md), but for a profile that may not be the
+  default, which is refused.
+- The store cases: a store with retired defined tools or a v1 layer to migrate (the names and
+  the migration are not read).
 - A failed append inside the compaction is dropped, and the appends after it are still made; Go
   stops the extraction's appends at the first failure.
 - The `$/acted` notice for the image's direct store writes (the curated settle writes the store

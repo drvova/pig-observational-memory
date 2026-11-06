@@ -51,6 +51,9 @@
 ;; Compaction on PiG and the remaining PiG events.
 (load (merge-pathnames "tests/pig.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Evidence and retirement (docs/lisp-port-evidence.md).
+(load (merge-pathnames "tests/evidence.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

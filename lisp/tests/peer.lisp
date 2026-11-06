@@ -215,15 +215,21 @@ with each host call's method and params as it arrives."
                                      "result") "edits")))
               (check (length edits) 1 "a reused message is the pristine one, edited again")
               (check (length (jget (jget (aref edits 0) "message") "content")) 2 "one header, not two"))
-            ;; With a store and a session model, a turn end is refused before any write.
+            ;; With a store and a session model, a turn end runs the harness detectors; one
+            ;; over a store with retired defined tools is refused before any write.
             (let ((n (length appended)))
               (flet ((store-host (method params)
                        (cond ((string= method "host/configHome") (jobject "value" dir))
                              ((string= method "host/sessionModel") (jobject "model" (jobject "provider" "p" "id" "m")))
                              (t (host method params)))))
                 (check (jget (jget (peer-exchange stream 7 "event/turnEnd" (jobject "scope" scope) :host #'store-host)
+                                   "result") "thinning")
+                       :true "detect runs at a turn end")
+                (check (length appended) n "nothing new to append")
+                (om.layer::write-atomic (format nil "~A/observational-memory/memories/definitions/old.rows" dir) "x")
+                (check (jget (jget (peer-exchange stream 8 "event/turnEnd" (jobject "scope" scope) :host #'store-host)
                                    "error") "code")
-                       -32004d0 "detect is not ported")
+                       -32004d0 "retired defined tools are not ported")
                 (check (length appended) n "nothing appended"))))
           (close stream)
           (sb-bsd-sockets:socket-close sock))))))

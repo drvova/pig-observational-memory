@@ -358,9 +358,9 @@ variable, or without `sbcl`, they are skipped.
 - **Adaptable functions.** Only `rank-notes` and `phrase-note` exist. W5 wires in the ones the design
   names for the summary's budget choice, which turns extraction looks at, and detectors, using
   `define-adaptable`.
-- **Evidence records.** Recording the compaction pass event (`ranHeld`, the failure counts) and calling
-  `layer-settle` after it are the compaction hook's work (W5). This package provides
-  `layer-take-evidence` and `layer-settle`.
+- **Evidence records.** The compaction pass event, `layer-settle` on it and the retire rule are in
+  [lisp-port-evidence.md](lisp-port-evidence.md) (`record-compaction-evidence`). A held definition's
+  evidence is now the compaction's snapshot of the layer, and its failures are kept per session.
 - **Level-1 proposals.** Proposing a definition inside the level-1 request is W5's. The memory tool's
   `define` holds one now.
 - **Go-stored definitions.** Definitions stored as Go are not run here. The image's layer is a separate
@@ -369,10 +369,11 @@ variable, or without `sbcl`, they are skipped.
   child" below), where a timeout is a process kill and a heap exhausted is the child's. Adaptable
   definitions still run in the image's own threads: a CL function that runs long without calling
   model code (a bignum product, a `sort` of a huge list, a `compile`) reaches no check there, so only
-  the last resort stops it, and the image then needs a restart. Detector passes do not exist in the
-  image yet; when they do, they take the child runner. Heap limits in the image stay image-wide.
-- **Settled failures.** A settled definition that later fails falls back on each call and is counted, but
-  nothing retires it. The Go harness has no retirement of written definitions either.
+  the last resort stops it, and the image then needs a restart. Passes of model-written detectors
+  do not run in the image yet; when they do, they take the child runner. Heap limits in the image
+  stay image-wide.
+- **Settled failures.** A settled definition that keeps failing is reverted by the retire rule
+  ([lisp-port-evidence.md](lisp-port-evidence.md)); the Go harness retires no written definition.
 
 ## The curated index (1b)
 

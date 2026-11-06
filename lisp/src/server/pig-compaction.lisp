@@ -303,7 +303,7 @@ session model. Such a compaction is not ported (level 1 is a later work package)
           (handler-case
               (multiple-value-bind (result entries cut)
                   (sb-thread:with-mutex ((conn-extract-mutex c))
-                    (om::build-compaction (pig-hook-host c) event (pig-hook-config cfg)
+                    (om::build-compaction (harness-hook-host ch (pig-hook-host c)) event (pig-hook-config cfg)
                                           :model model :own-trigger own
                                           :context-window (model-int model "contextWindow")
                                           :max-output (model-max-tokens model)))

@@ -4,13 +4,20 @@
 ;;;; default), in the sandbox, and its result is checked; a result that fails the check, an error
 ;;;; or a timeout falls back to the default for that call and counts against the definition. A
 ;;;; held definition runs beside the primary on a copy of the arguments, its result checked and
-;;;; discarded: it never replaces the default's result until it settles, and the run is the
-;;;; evidence (ranHeld, and adaptable-failed:<name> on a failure) the next compaction records.
+;;;; discarded: it never replaces the default's result until it settles. What each run did is
+;;;; kept per session in its interval (rules/evidence.lisp): a held one's failures
+;;;; (adaptable-failed:<name> in the next pass), a settled one's runs and failures (the retire
+;;;; rule's units), and the timeouts after the second of which a definition is not called again
+;;;; until the session's next compaction. A held definition's evidence is the compaction's
+;;;; snapshot of the layer (ranHeld), not its calls.
 
 (in-package "OM.LAYER")
 
 (defstruct adaptable
-  (name "") (symbol nil) (arity 0) (default nil) (check nil) (doc ""))
+  (name "") (symbol nil) (arity 0) (default nil) (check nil) (doc "")
+  ;; coverage: the function decides what the source coverage holds (which entries a record
+  ;; cites, which ones level 0 reads), so any failure of its settled definition reverts it at once.
+  (coverage nil))
 
 (defvar *adaptables* (make-hash-table :test 'equal) "Name -> adaptable.")
 
@@ -18,11 +25,11 @@
 
 (pushnew '*definition-timeout* +inherited-specials+)
 
-(defmacro define-adaptable (name lambda-list (&key check) &body body)
+(defmacro define-adaptable (name lambda-list (&key check coverage) &body body)
   "Defines the adaptable function name (a symbol, its package om.engine's): its default is body
 over lambda-list (required parameters only), and check, a function of the result and the
-arguments, returns nil for a result the kernel accepts or a reason it refuses it. name itself
-becomes the dispatcher."
+arguments, returns nil for a result the kernel accepts or a reason it refuses it. coverage marks
+a function whose failure touches source coverage. name itself becomes the dispatcher."
   (let ((doc (if (and (stringp (car body)) (cdr body)) (car body) ""))
         (default (intern (concatenate 'string (symbol-name name) "-DEFAULT") (symbol-package name))))
     (when (intersection lambda-list lambda-list-keywords)
@@ -32,7 +39,7 @@ becomes the dispatcher."
        (setf (gethash ,(string-downcase (symbol-name name)) *adaptables*)
              (make-adaptable :name ,(string-downcase (symbol-name name)) :symbol ',name
                              :arity ,(length lambda-list) :default #',default
-                             :check ,(or check '(constantly nil)) :doc ,doc))
+                             :check ,(or check '(constantly nil)) :doc ,doc :coverage ,(and coverage t)))
        (defun ,name ,lambda-list
          ,doc
          (call-adaptable ,(string-downcase (symbol-name name)) (list ,@lambda-list)))
@@ -77,40 +84,22 @@ compiles it: sets d's name and fn. Signals refused."
             (setf (ldef-fn d) fn))
           d)))))
 
-;;; Evidence the next compaction records
-
-(defvar *evidence* (make-hash-table :test 'equal) "Model -> (ran-held-ids . counts hash).")
-(defvar *evidence-lock* (sb-thread:make-mutex :name "om.layer evidence"))
-
-(defun evidence-of (model)
-  (or (gethash model *evidence*)
-      (setf (gethash model *evidence*) (cons '() (make-hash-table :test 'equal)))))
-
-(defun note-ran-held (d)
-  (sb-thread:with-mutex (*evidence-lock*)
-    (let ((e (evidence-of (ldef-model d))))
-      (pushnew (ldef-held-id d) (car e) :test #'string=))))
-
-(defun count-failure (d)
-  (sb-thread:with-mutex (*evidence-lock*)
-    (incf (gethash (adaptable-failed-key (ldef-name d)) (cdr (evidence-of (ldef-model d))) 0))))
+;;; Evidence the next compaction records (kept per session: rules/evidence.lisp)
 
 (defun layer-ran-held (model)
-  "The held ids of the model's definitions that ran since the evidence was last taken, sorted."
-  (sb-thread:with-mutex (*evidence-lock*)
-    (sort (copy-list (car (evidence-of model))) #'string<)))
+  "The held ids a compaction of model would credit now: every held definition in its layer."
+  (sort (mapcar #'ldef-held-id (layer-held model)) #'string<))
 
 (defun layer-failures (model)
-  "The adaptable-failed:<name> counts since the evidence was last taken, an alist."
-  (sb-thread:with-mutex (*evidence-lock*)
-    (let ((out '()))
-      (maphash (lambda (k v) (push (cons k v) out)) (cdr (evidence-of model)))
-      (sort out #'string< :key #'car))))
+  "The adaptable-failed:<name> counts of model's held definitions in the current session's
+interval, an alist."
+  (interval-failures (current-session) model))
 
 (defun layer-take-evidence (model)
-  "(values ran-held failures) for the compaction pass, and starts a new unit."
+  "(values ran-held failures) for a compaction pass of the current session, and starts its new
+interval."
   (let ((ran (layer-ran-held model)) (failures (layer-failures model)))
-    (sb-thread:with-mutex (*evidence-lock*) (remhash model *evidence*))
+    (take-interval (current-session) model)
     (values ran failures)))
 
 ;;; Dispatch
@@ -119,15 +108,15 @@ compiles it: sets d's name and fn. Signals refused."
 
 (defun run-definition (d a args)
   "Runs definition d of adaptable a on args in the sandbox and checks the result:
-(values ok value reason)."
+(values ok value reason status), status the run's (:ok, :timeout, :error...)."
   (multiple-value-bind (status value)
       (run-sandboxed (lambda () (apply (ldef-fn d) (mapcar #'copy-arg args)))
                      :timeout *definition-timeout* :package (model-package (ldef-model d)))
     (if (eq status :ok)
         (let ((why (handler-case (apply (adaptable-check a) value args)
                      (error (e) (format nil "the check signalled ~A" e)))))
-          (if why (values nil value why) (values t value nil)))
-        (values nil nil (if (stringp value) value (string-downcase (symbol-name status)))))))
+          (if why (values nil value why :ok) (values t value nil :ok)))
+        (values nil nil (if (stringp value) value (string-downcase (symbol-name status))) status))))
 
 (defvar *last-fallback* nil "The last fallback: (model name reason), for status and tests.")
 
@@ -139,19 +128,21 @@ compiles it: sets d's name and fn. Signals refused."
         (let* ((l (load-layer model))
                (settled (find name (loaded-settled l) :key #'ldef-name :test #'string=))
                (held (find name (loaded-held l) :key #'ldef-name :test #'string=))
-               (result (if settled
-                           (multiple-value-bind (ok value reason) (run-definition settled a args)
+               (result (if (and settled (not (breaker-open-p settled)))
+                           (multiple-value-bind (ok value reason status) (run-definition settled a args)
+                             (note-run settled ok status)
                              (if ok
                                  value
-                                 (progn (count-failure settled)
-                                        (setf *last-fallback* (list model name reason))
+                                 (progn (setf *last-fallback* (list model name reason))
+                                        (when (adaptable-coverage a)
+                                          (revert-settled model name (ldef-digest settled)
+                                                          (format nil "it failed on source coverage: ~A" reason)))
                                         (apply (adaptable-default a) args))))
                            (apply (adaptable-default a) args))))
-          (when held
-            (note-ran-held held)
-            (multiple-value-bind (ok value reason) (run-definition held a args)
+          (when (and held (not (breaker-open-p held)))
+            (multiple-value-bind (ok value reason status) (run-definition held a args)
               (declare (ignore value))
+              (note-run held ok status)
               (unless ok
-                (count-failure held)
                 (setf *last-fallback* (list model name reason)))))
           result))))

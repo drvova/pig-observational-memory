@@ -73,6 +73,15 @@
                              (:file "tool/curated-index")
                              ;; W3t: the fixed texts the image hands with the Lisp forms
                              (:file "tool/lisp-texts")))
+               ;; W4 next steps, evidence and retirement (docs/lisp-port-evidence.md)
+               (:module "rules"
+                :pathname "src"
+                :serial t
+                :components ((:file "rules/rows")
+                             (:file "rules/golayer")
+                             (:file "rules/rules")
+                             (:file "rules/detect")
+                             (:file "rules/evidence")))
                ;; W5, hooks (docs/lisp-port-hooks.md)
                (:module "w5"
                 :pathname "src"

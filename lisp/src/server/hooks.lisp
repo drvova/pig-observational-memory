@@ -57,14 +57,36 @@ a positive integer, else 2,000."
     (append-line (session-store-path session) (compaction-entry-line tip c id tip (utc-stamp)))
     id))
 
+(defun neutral-session-model (params)
+  "neutral.Host.SessionModel: none, so the harness never records a neutral compaction (harness.For
+is false there, as in Go)."
+  (declare (ignore params))
+  "")
+
+(defun compaction-cut-ids (branch first-kept)
+  "The ids of the source entries a compaction on first-kept removes (v2CutRange's source entries)."
+  (let ((start (om::compaction-range-start-index branch)) (cut (om::entry-index-for-id branch first-kept)))
+    (and (>= cut start)
+         (loop for i from start below cut
+               when (om::source-entry-p (aref branch i)) collect (om::entry-id (aref branch i))))))
+
 (defun neutral-compaction (session params format reason)
   "neutral.Host.Compaction: the cut marker at the tip, the compaction of everything before it,
-stored after it."
+stored after it. With a session model (none on a neutral host) the compaction is recorded as its
+evidence unit (record-compaction-evidence), on the layer's snapshot taken before it ran."
   (let* ((h (session-host session params format))
          (cfg (hook-config params))
+         (model (neutral-session-model params))
+         (store (and (string/= model "") (curated-on-p) (curated-dir)))
+         (snapshot (and store (om.layer::take-snapshot store model)))
          (marker (funcall (om::hhost-append h) "om.cut" (om::json-string (om::jobject "reason" reason))))
          (c (om::compact-on h cfg reason marker 0)))
     (store-compaction session params format c)
+    (when snapshot
+      (let ((branch (read-branch session params format)))
+        (om.layer::record-compaction-evidence
+         :store store :model model :session (session-id session) :entries branch
+         :cut-ids (compaction-cut-ids branch marker) :snapshot snapshot)))
     c))
 
 (defun neutral-compaction-at (session params format reason first-kept tokens-before)

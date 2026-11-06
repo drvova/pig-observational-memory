@@ -174,12 +174,21 @@ agent directory dir (settings.json there)."
                                 (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h))))
           (check (jget (jget (jget (jget (jget (jget r "result") "result") "compaction") "details") "consolidation") "reason")
                  "an overflow compaction runs level 0 only, so recovery is not delayed"))
-        ;; A session model with a curated store: the harness's part is refused first.
+        ;; A session model with a curated store: the harness records the compaction as the
+        ;; model's evidence unit (docs/lisp-port-evidence.md).
         (setf (phost-home h) dir (phost-appended h) '())
-        (let ((r (peer-exchange stream 5 "event/sessionBeforeCompact"
-                                (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h))))
-          (check (jget (jget r "error") "code") -32004d0 "the harness hook point refuses")
-          (check (phost-appended h) '() "nothing appended"))))))
+        (let* ((r (peer-exchange stream 5 "event/sessionBeforeCompact"
+                                 (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h)))
+               (ledger (format nil "~A/observational-memory/memories/models/p_2fm.jsonl" (string-right-trim "/" dir))))
+          (check (and (jget (jget r "result") "result") t) t "the harness runs at the compaction")
+          (check (om.layer::ev-string (car (last (om.layer::read-model-events ledger))) "kind") "pass" "the pass event")
+          ;; A model whose profile may not be the default is refused before any write.
+          (om.layer::append-line ledger "{\"time\":\"2026-11-02T09:00:00Z\",\"model\":\"p/m\",\"kind\":\"decode\",\"outcome\":\"error\",\"codec\":\"rows\",\"engine\":\"v2\"}")
+          (setf (phost-appended h) '())
+          (let ((r (peer-exchange stream 6 "event/sessionBeforeCompact"
+                                  (jobject "scope" scope "data" (before-compact-data branch "qu" :reason "overflow")) :host (phost-fn h))))
+            (check (jget (jget r "error") "code") -32004d0 "the profile is not ported")
+            (check (phost-appended h) '() "nothing appended")))))))
 
 (deftest pig-before-compact-cancel
   ;; PiG cancels the compaction while the image waits on host/getBranch: the image passes the
