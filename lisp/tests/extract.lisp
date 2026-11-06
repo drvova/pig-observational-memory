@@ -102,9 +102,12 @@
       (check covers "r3")
       (check (mapcar #'obs-content records)
              '("Running the tests. [bash \"make test\" failed: boom]"
+               "bash \"make test\" output: boom"
                "a.go written"
                "Running the tests. [bash \"make test\" worked]"))
-      (check (obs-supersedes (third records)) (list (obs-id (first records))))
+      (check (obs-kind (second records)) "evidence")
+      (check (obs-source-ids (second records)) '("a1" "r1"))
+      (check (obs-supersedes (fourth records)) (list (obs-id (first records))))
       (check (obs-source-ids (first records)) '("a1" "r1"))
       (check (obs-timestamp (first records)) "2026-05-01 10:02")
       (check (obs-id (first records)) (hash-id (cat (obs-content (first records)) (string (code-char 0)) "a1,r1"))))))
