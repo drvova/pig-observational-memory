@@ -43,7 +43,9 @@
    "*LAYER-ROOT*" "LAYER-HOLD" "LAYER-SETTLED" "LAYER-HELD" "LAYER-FORGET" "LAYER-ROLLBACK"
    "LAYER-SETTLE" "LAYER-RAN-HELD" "LAYER-FAILURES" "SETTLE-V2" "READ-MODEL-EVENTS"
    ;; the curated store
-   "CURATED-RUN" "CURATED-CHECK" "CURATED-DESCRIBE"))
+   "CURATED-RUN" "CURATED-CHECK" "CURATED-DESCRIBE"
+   ;; cooperative limits and the image's health (layer/limits.lisp)
+   "*FUEL-STEPS*" "*STOP-GRACE-SECONDS*" "IMAGE-NEEDS-RESTART"))
 
 (unless (find-package "OM.ENGINE")
   (make-package "OM.ENGINE" :use '("COMMON-LISP")))

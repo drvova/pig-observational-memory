@@ -55,6 +55,7 @@
                 :pathname "src"
                 :serial t
                 :components ((:file "tool/package")
+                             (:file "layer/limits")
                              (:file "tool/files")
                              (:file "tool/curated")
                              (:file "layer/reader")
@@ -63,7 +64,9 @@
                              (:file "layer/store")
                              (:file "layer/adaptable")
                              (:file "tool/reads")
-                             (:file "layer/lock")))
+                             (:file "layer/lock")
+                             ;; 1b, the curated ranked index (docs/lisp-port-tool-layer.md)
+                             (:file "tool/curated-index")))
                ;; W5, hooks (docs/lisp-port-hooks.md)
                (:module "w5"
                 :pathname "src"

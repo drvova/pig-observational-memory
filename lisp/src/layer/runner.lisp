@@ -1,13 +1,14 @@
 ;;;; Running model code (docs/lisp-core.md, "The safe reader", "Running"): each run is a thread
-;;;; with a timeout and a heap check, killed when it runs away; its output is captured; the
-;;;; memory tool shows the last value only when nothing was printed (the output rule).
+;;;; under a budget it checks itself (limits.lisp), stopped at its next check when it runs away
+;;;; and terminated only as a last resort; its output is captured; the memory tool shows the
+;;;; last value only when nothing was printed (the output rule).
 
 (in-package "OM.LAYER")
 
 (defvar *timeout-seconds* 5 "How long one run of model code may take.")
 
 (defvar *heap-limit-bytes* (* 512 1024 1024)
-  "How far the heap may grow over its size when a run starts before the run is killed.")
+  "How far the heap may grow over its size when a run starts before the run is stopped.")
 
 (defvar *output-limit* 100000 "The characters of output a run keeps.")
 
@@ -53,90 +54,120 @@
   (check-control control)
   (error 'simple-error :format-control control :format-arguments args))
 
-;;; Allocation: one allocation of model code holds at most +max-elements+ elements, so a
-;;; mistaken size fails at once instead of exhausting the heap before the heap check sees it.
-
-(defparameter +max-elements+ (* 16 1024 1024))
-
-(defun check-size (dimensions)
-  (let ((n (if (listp dimensions) (reduce #'* dimensions) dimensions)))
-    (unless (and (integerp n) (<= 0 n +max-elements+))
-      (refuse "an allocation of ~A elements (at most ~D)" n +max-elements+))))
-
-(defun safe-make-array (dimensions &rest args)
-  (check-size dimensions)
-  (apply #'make-array dimensions args))
-
-(defun safe-make-string (size &rest args)
-  (check-size size)
-  (apply #'make-string size args))
-
-(defun safe-make-list (size &rest args)
-  (check-size size)
-  (apply #'make-list size args))
+;;; Allocation: the checked MAKE-ARRAY, MAKE-STRING, MAKE-LIST and MAKE-HASH-TABLE are in
+;;; limits.lisp, their caps derived from the dynamic space.
 
 ;;; Running
 
 (defparameter +inherited-specials+
-  '(*now* *layer-root* *timeout-seconds* *heap-limit-bytes* *output-limit*)
+  '(*now* *layer-root* *timeout-seconds* *heap-limit-bytes* *output-limit* *fuel-steps*
+    *stop-grace-seconds* *allocation-fraction* *stack-reserve-fraction*)
   "The settings a run's thread sees as the caller sees them (a new thread sees only global
 values). *definition-timeout* is added by adaptable.lisp.")
 
-(defun heap-usage () (sb-kernel:dynamic-usage))
+(defun seconds-since (start) (/ (- (get-internal-real-time) start) internal-time-units-per-second))
 
-(defun run-sandboxed (fn &key (timeout *timeout-seconds*) (heap-limit *heap-limit-bytes*) (package nil))
+(defun run-sandboxed (fn &key (timeout *timeout-seconds*) (heap-limit *heap-limit-bytes*) (package nil)
+                           (steps *fuel-steps*))
   "Runs fn in its own thread with *call* and *session-model* bound as now, its output
-captured. Returns (values status value output), status one of :ok, :error (value is the
-message), :timeout or :heap (the thread was killed)."
+captured, under a budget (limits.lisp): steps of fuel, a deadline of timeout seconds and a heap
+allowance. Returns (values status value output), status one of :ok, :error (value is the
+message), :timeout, :fuel, :heap or :stack.
+
+The run stops itself: the code the safe reader compiled checks the budget at its loop heads,
+function entries and calls, and throws to the run's catch tag when it is spent; waits run under
+sb-sys:with-deadline. The supervisor (this thread) only asks: past the timeout or the heap
+allowance it marks the budget stopped, which the next check sees. A thread that has not ended
+*stop-grace-seconds* after that is terminated as the last resort, logged, and the image marked
+as needing a restart (image-needs-restart)."
   (let* ((call *call*) (model *session-model*)
          (inherited (mapcar (lambda (s) (cons s (symbol-value s))) +inherited-specials+))
          (out (make-string-output-stream))
          (status nil) (value nil)
          (package (or package *package*))
+         (budget (make-run-budget :timeout timeout :heap-limit heap-limit :steps steps))
          (thread
            (sb-thread:make-thread
             (lambda ()
               (progv (mapcar #'car inherited) (mapcar #'cdr inherited)
-              (let ((*call* call) (*session-model* model) (*standard-output* out)
-                    (*package* package) (*read-eval* nil) (*print-readably* nil)
-                    (*print-circle* t) (*print-length* 200) (*print-level* 20) (*print-case* :downcase))
-                (handler-case
-                    (setf value (funcall fn) status :ok)
-                  (storage-condition (c)
-                    (setf status :error value (format nil "storage exhausted: ~A" (type-of c))))
-                  (error (c)
-                    (setf status :error
-                          value (handler-case (princ-to-string c)
-                                  (error () (format nil "an error of type ~(~A~)" (type-of c))))))))))
+                (let ((*call* call) (*session-model* model) (*standard-output* out)
+                      (*package* package) (*read-eval* nil) (*print-readably* nil)
+                      (*print-circle* t) (*print-length* 200) (*print-level* 20) (*print-case* :downcase)
+                      (*budget* budget) (exhausted nil))
+                  (setf (budget-stack-floor budget) (stack-floor))
+                  (let ((stopped
+                          (catch (budget-tag budget)
+                            (handler-bind ((sb-sys:deadline-timeout
+                                             (lambda (c) (declare (ignore c)) (stop-run budget :timeout))))
+                              (sb-sys:with-deadline (:seconds timeout :override t)
+                                (handler-case
+                                    (progn (setf value (funcall fn) status :ok) nil)
+                                  (storage-condition (c)
+                                    (when (typep c 'sb-kernel::control-stack-exhausted) (setf exhausted t))
+                                    (setf status :error value (format nil "storage exhausted: ~A" (type-of c)))
+                                    nil)
+                                  (error (c)
+                                    (setf status :error
+                                          value (handler-case (princ-to-string c)
+                                                  (error () (format nil "an error of type ~(~A~)" (type-of c)))))
+                                    nil)))))))
+                    (when stopped (setf status stopped value nil))
+                    (when exhausted (rearm-stack-guard))))))
             :name "om model code"))
-         (start (get-internal-real-time))
-         (base (heap-usage)))
-    (loop
-      (multiple-value-bind (result outcome) (sb-thread:join-thread thread :timeout 0.002 :default nil)
-        (declare (ignore result))
-        (unless (eq outcome :timeout)
-          (return)))
-      (let ((elapsed (/ (- (get-internal-real-time) start) internal-time-units-per-second)))
-        (cond ((> elapsed timeout) (setf status :timeout) (kill thread) (return))
-              ((> (- (heap-usage) base) heap-limit) (setf status :heap) (kill thread) (return)))))
+         (forced (supervise thread budget timeout heap-limit)))
+    (when forced (setf status forced))
     (let ((text (get-output-stream-string out)))
       (values (or status :error)
               (case status
-                (:timeout (format nil "the code ran past its ~As limit and was stopped" timeout))
-                (:heap (format nil "the code grew the heap past ~D MB and was stopped" (floor heap-limit (* 1024 1024))))
+                (:timeout (format nil "the code ran past its ~As limit and was ~A" timeout (if forced "terminated" "stopped")))
+                (:fuel (format nil "the code ran past its ~D steps and was ~A" steps (if forced "terminated" "stopped")))
+                (:heap (format nil "the code grew the heap past ~D MB and was ~A" (floor heap-limit (* 1024 1024)) (if forced "terminated" "stopped")))
+                (:stack "the code recursed deeper than its stack allows and was stopped")
                 ((nil) "the code ended without a result")
                 (t value))
               (if (> (length text) *output-limit*) (subseq text 0 *output-limit*) text)))))
 
-(defun kill (thread)
-  (ignore-errors (sb-thread:terminate-thread thread))
-  (handler-case (sb-thread:join-thread thread :timeout 2 :default nil)
-    (error () nil))
-  (when (sb-thread:thread-alive-p thread)
-    (warn "om.layer: a runaway thread of model code could not be stopped")))
+(defun supervise (thread budget timeout heap-limit)
+  "Waits for the run's thread, asking it to stop past its timeout or heap allowance. Returns
+nil when the thread ended by itself, or the reason it was terminated (the last resort). Its own
+waits are under no deadline: a supervisor running inside another run (a definition called from
+model code) must not be unwound while its thread runs."
+  (let ((start (get-internal-real-time)) (asked nil))
+    (sb-sys:with-deadline (:seconds nil :override t)
+      (loop
+        (multiple-value-bind (result outcome) (sb-thread:join-thread thread :timeout 0.002 :default nil)
+          (declare (ignore result))
+          (unless (eq outcome :timeout) (return nil)))
+        (cond (asked
+               (when (> (seconds-since asked) *stop-grace-seconds*)
+                 (let ((why (or (budget-stop budget) :timeout)))
+                   (last-resort thread why)
+                   (return why))))
+              ((budget-stop budget) (setf asked (get-internal-real-time)))
+              ((> (seconds-since start) timeout)
+               (setf (budget-stop budget) :timeout asked (get-internal-real-time)))
+              ((> (- (heap-usage) (budget-heap-base budget)) heap-limit)
+               (setf (budget-stop budget) :heap asked (get-internal-real-time))))))))
+
+(defun last-resort (thread why)
+  "Terminates a thread of model code that ignored its stop: logs it and marks the image as
+needing a restart, since the unwind is asynchronous (only model code can be running: every
+OM.TOOL call defers interrupts)."
+  (let ((line (format nil "om.layer: model code ignored its ~(~A~) stop for ~As; its thread was terminated and the image needs a restart"
+                      why *stop-grace-seconds*)))
+    (note-restart-needed line)
+    (ignore-errors (format *error-output* "~&~A~%" line) (force-output *error-output*))
+    (ignore-errors (sb-thread:terminate-thread thread))
+    (handler-case (sb-thread:join-thread thread :timeout 2 :default nil)
+      (error () nil))
+    (when (sb-thread:thread-alive-p thread)
+      (note-restart-needed "om.layer: a terminated thread of model code is still running")
+      (ignore-errors (format *error-output* "~&om.layer: a terminated thread of model code is still running~%")))))
 
 (defun compile-form (form)
-  "A function of no arguments that runs form: compiled by the runner, never by model code."
+  "A function of no arguments that runs form: compiled by the runner, never by model code. The
+compile runs in the run's thread, so the run's timeout covers it; the budget is checked before."
+  (tick)
   (handler-bind ((warning #'muffle-warning))
     (compile nil (list 'lambda '() form))))
 
@@ -174,7 +205,7 @@ is what the code printed, or, when it printed nothing, its last value."
                    (destructuring-bind (form . source) f
                      (setf last
                            (if (and (consp form) (eq (car form) 'om.tool:define))
-                               (let ((d (layer-hold model source)))
+                               (let ((d (progn (tick) (layer-hold model source))))
                                  (push d held)
                                  (format nil "Held definition ~(~A~) for ~A: it runs beside the default at the next compactions and replaces it once the evidence settles it."
                                          (ldef-name d) model))

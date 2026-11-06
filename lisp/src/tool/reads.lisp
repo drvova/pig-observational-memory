@@ -270,11 +270,12 @@ rows holding every word."
 ;;; Saved and the curated writes
 
 (defun om.tool:saved ()
-  "The curated memories this project and session see, in name order."
+  "The curated memories this project and session see, ranked as the index ranks them."
   (let ((c (the-call)))
     (unless (call-curated-dir c) (tool-fail "curated memory is off"))
-    (remove-if-not (lambda (m) (seen-by-p m (call-session c)))
-                   (list-memories (call-curated-dir c) (call-project c)))))
+    (curated-rank (remove-if-not (lambda (m) (seen-by-p m (call-session c)))
+                                 (list-memories (call-curated-dir c) (call-project c)))
+                  (handler-case (curated-usage (call-curated-dir c)) (error () nil)))))
 
 (defun write-call ()
   (let ((c (the-call)))

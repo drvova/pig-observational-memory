@@ -18,8 +18,79 @@
 
 (defun one-line-json (s) (om::json-string s))
 
+(defparameter +usage-junk+
+  (format nil "~{~A~^~%~}"
+          '("{\"name\":\"m0-note\",\"event\":\"view\",\"time\":5}"
+            "not json"
+            "{\"name\":\"\",\"event\":\"view\"}"
+            "{\"NAME\":\"m5-note\",\"Event\":\"view\",\"time\":\"2026-11-01T09:00:00Z\"}"
+            "{\"name\":\"m5-note\",\"event\":\"view\",\"user\":\"yes\"}"
+            "{\"name\":\"m5-note\",\"event\":\"helped\",\"user\":true,\"quote\":null}"
+            "[1,2]"
+            "null"
+            "{\"name\":\"m5-note\",\"event\":\"view\"")))
+
+(defun utc-rfc3339 (time) (format-rfc3339 (cons (car time) 0)))
+
+(defun index-step (n op dir step args pin)
+  "The index ops of the curated script, as lisptool_test.go's goCurated prints them."
+  (let ((project (or (om::jget step "project") ""))
+        (budget (let ((b (gethash "budget" args))) (if b (parse-integer b) 0))))
+    (cond
+      ((string= op "record")
+       (append-usage dir (gethash "name" args) (gethash "event" args)
+                     :record (and (string= (gethash "event" args) "cited") (gethash "record" args)))
+       (line "~D recorded" n))
+      ((string= op "junk")
+       (ensure-dir dir)
+       (with-open-file (out (usage-path dir) :direction :output :if-exists :append :if-does-not-exist :create
+                                             :external-format :utf-8)
+         (write-string +usage-junk+ out))
+       (line "~D junk" n))
+      ((string= op "user-pin")
+       (let ((path (store-path dir (gethash "name" args))))
+         (write-atomic path (replace-first (read-file path) (format nil "~%---~%") (format nil "~%pinned: true~%---~%")))
+         (line "~D pinned" n)))
+      ((string= op "usage")
+       (let ((usage (curated-usage dir)) (names '()))
+         (maphash (lambda (k v) (declare (ignore v)) (push k names)) usage)
+         (line "~D usage ~A" n
+               (om::join (loop for name in (sort names #'string<)
+                               for e = (gethash name usage)
+                               collect (format nil "~A:~D/~D/~D/~D/~D/~A" name (ev-views e) (ev-helped e) (ev-harmed e)
+                                               (ev-edits e) (ev-corrected e)
+                                               (if (zero-time-p (ev-last e)) "" (utc-rfc3339 (ev-last e)))))
+                         " "))))
+      ((string= op "rank")
+       (let ((usage (curated-usage dir)))
+         (line "~D rank ~A" n
+               (om::join (loop for m in (curated-rank (list-memories dir project) usage)
+                               collect (if (curated-flagged-p m (usage-of usage (mem-name m)))
+                                           (concatenate 'string (mem-name m) "!")
+                                           (mem-name m)))
+                         ","))))
+      ((string= op "index")
+       (multiple-value-bind (text shown) (index-for dir project budget)
+         (line "~D index ~A ~A" n (om::join shown ",") (one-line-json text))))
+      ((string= op "pin")
+       (when (equal (gethash "reset" args) "true") (pin-reset pin))
+       (multiple-value-bind (text shown rendered) (pin-get pin (lambda () (index-for dir project budget)))
+         (line "~D pin ~A ~A ~A ~A" n (if rendered "true" "false") (om::join shown ",")
+               (om::join (pin-shown-names pin) ",") (one-line-json text))))
+      ((string= op "settle")
+       (let ((corrections (loop for c across (or (om::jget step "corrections") #())
+                                collect (make-correction :id (om::jget c "id") :subject (om::jget c "subject")
+                                                         :nanos (car (parse-rfc3339 (om::jget c "time")))))))
+         (multiple-value-bind (promoted flagged) (curated-settle dir project corrections)
+           (line "~D settle ~A | ~A" n
+                 (one-line-json (om::join (loop for (name . evidence) in promoted collect (format nil "~A=~A" name evidence)) ";"))
+                 (om::join flagged ",")))))
+      (t (return-from index-step nil)))
+    t))
+
 (defun run-curated (dir script)
-  (loop for step across script
+  (loop with pin = (make-pin)
+        for step across script
         for n from 1
         do (let* ((op (om::jget step "op"))
                   (time (parse-rfc3339 (om::jget step "time")))
@@ -36,6 +107,7 @@
                           (when (hash-table-p a) (maphash (lambda (k v) (setf (gethash k h) v)) a))
                           h)))
              (cond
+               ((index-step n op dir step args pin))
                ((string= op "describe")
                 (handler-case (line "~D describe ~A" n (one-line-json (curated-describe (get-memory dir (gethash "name" args)))))
                   (curated-error (e) (line "~D error ~A" n (one-line-json (curated-error-message e))))))

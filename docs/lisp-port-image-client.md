@@ -73,9 +73,11 @@ half done.
 - Event fields: `reason`, `first_kept_entry_id`, `tokens_before`, and the registry's decisions as
   flags: `with_summary`, `run_level0`, `summary_on_prompt`.
 
-The answer is `{"text"?, "compaction"?, "remaining"?}`. `remaining` lists Go steps the image has
+The answer is `{"text"?, "compaction"?, "remaining"?, "notices"?}`. `remaining` lists Go steps the image has
 not ported, which the client runs afterwards under the session's engine lock. Today the only one
-is `settle-curated`, because `engine.SettleCurated` follows every turn end.
+is `settle-curated`, because `engine.SettleCurated` follows every turn end. `notices` are info
+messages the image's own steps would tell the user (the curated settle at a session start, see
+[lisp-port-hooks.md](lisp-port-hooks.md)); the client writes them to om's log.
 
 The Go client keeps the harness registry and its payload decoding (`decodeHookPayload`,
 `recordTurn`, the Codex rollout lookup, `writeContext`). These stay in Go by design. The image sees

@@ -197,6 +197,9 @@ type lispResult struct {
 	Remaining  []string        `json:"remaining"`
 	// Notice marks a view answer that is a note or the usage line, shown and never copied.
 	Notice bool `json:"notice"`
+	// Notices are the info messages the image's own steps would tell the user (the curated
+	// settle's, harness.NotifySettled), written to om's log as neutral.Host.Notify writes them.
+	Notices []string `json:"notices"`
 }
 
 // sessionParams are the session fields every event carries, plus the client's environment the
@@ -234,6 +237,11 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 	}
 	if err != nil {
 		return res, true, err
+	}
+	if a.log != nil {
+		for _, notice := range res.Notices {
+			fmt.Fprintln(a.log, notice)
+		}
 	}
 	return res, true, a.runRemaining(s, res.Remaining)
 }

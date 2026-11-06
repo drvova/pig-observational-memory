@@ -15,23 +15,28 @@ The Go engine is unchanged. CI neither builds nor runs the Lisp.
 would call `delete-file`, an infinite loop, an allocation of a billion elements, or a definition that
 breaks rendering. Model code runs inside the same SBCL image as the engine. Someone who controls the model
 and is determined to do harm can still damage the image, its memory and anything the image's user can
-reach. Run the image only where you would run the model's own tools.
+reach. Run the image only where you would run the model's own tools. The cooperative limits below make
+the image's own stops safe for its stores; they do not change this.
 
 ## Files
 
 | File | What it is |
 |---|---|
 | `lisp/src/tool/package.lisp` | `OM.TOOL`, the API model code may name, and `OM.LAYER`, the machinery behind it. `OM.ENGINE` is created here only when no other file has created it. |
-| `lisp/src/tool/files.lisp` | Go's `time.Time` as RFC 3339 reads and writes it (nanoseconds, zone offset kept), a clock that tests can pin, atomic writes, and the store's lock. The lock is `flock(2)` on the same `.lock` file that Go locks, so the Go engine and the image serialize their writes to one store. |
+| `lisp/src/layer/limits.lisp` | The cooperative limits: a run's budget and its checks, the OM.TOOL entry point, the image's restart flag, the allocation caps, and the checks against circular lists. |
+| `lisp/src/tool/files.lisp` | Go's `time.Time` as RFC 3339 reads and writes it (nanoseconds, zone offset kept), a clock that tests can pin, atomic writes, and the store's lock. The lock is `flock(2)` on the same `.lock` file that Go locks, so the Go engine and the image serialize their writes to one store. It is held with interrupts deferred. |
 | `lisp/src/tool/curated.lisp` | `memory/curated`: the memory file (`format`, `parse`), `Check`, `Save`, `Update`, `Forget`, the usage ledger, `Describe`, and `Call.Run` with its texts. |
 | `lisp/src/layer/reader.lisp` | The safe reader. |
-| `lisp/src/layer/runner.lisp` | The sandboxed run: a thread, a timeout, a heap check and captured output. It also holds the checked wrappers for `format`, `error` and the allocating functions, and the output rule. |
+| `lisp/src/layer/runner.lisp` | The sandboxed run: a thread under a budget, its supervisor and the last resort, and captured output. It also holds the checked wrappers for `format` and `error`, and the output rule. |
 | `lisp/src/layer/settle.lisp` | `rules.SettleV2` and `settleCodeDetector` over usage-ledger events. |
 | `lisp/src/layer/store.lisp` | The layer on disk: hold, settle, revert, forget, rollback, and loading. |
 | `lisp/src/layer/adaptable.lisp` | `define-adaptable`, reading a definition, dispatch, fallback, and the evidence a compaction records. |
 | `lisp/src/tool/reads.lisp` | `om.tool`: notes, history, recall, saved, the curated writes, and the layer calls. It also defines the two adaptable functions the reads use. |
-| `lisp/src/layer/lock.lisp` | Locks `OM.TOOL` once its API is defined. |
+| `lisp/src/layer/lock.lisp` | Makes every `OM.TOOL` function an entry point (`tool-entry`), then locks `OM.TOOL`. |
+| `lisp/src/tool/curated-index.lisp` | The ranked index and its evidence check (1b): the usage ledger read back, `Usage`, `UsageEventsByName`, `Rank`, `Flagged`, `RenderIndex`, `Pin`, `IndexFor`, `Settle` with `promotionEvidence`, `SubjectMatches` and `promote`, `harness.Corrections`, `harness.NotifySettled`'s texts and `harness.ProjectRoot`. |
 | `lisp/tests/tool-layer.lisp` | 16 tests. |
+| `lisp/tests/curated-index.lisp` | 9 tests (one a cleanup) of the index, the pin, the usage fold, `Settle`, the corrections and the project root. |
+| `lisp/tests/safe-stops.lisp` | 8 tests of the cooperative limits and the escape routes. |
 | `lisp/tool-parity.lisp`, `memory/contracts/lisptool_test.go` | The Go parity checks. |
 | `contracts/schemas/lisp-layer-generation.schema.json` | The layer manifest's line. |
 
@@ -49,7 +54,9 @@ dotted pairs, strings, numbers, characters, `'`, backquote with `,` and `,@`, `#
 - **Nested backquotes,** and commas outside a backquote.
 - **Symbols outside the allowed set.** A token resolves in this order:
   1. The allowed set: the CL operators in `+allowed-cl+`, `OM.TOOL`'s exports, and the checked wrappers
-     that `format`, `error`, `make-array`, `make-string` and `make-list` read as.
+     in `+wrapped+` that some CL names read as (see "Stopping runaway code"): `format`, `error`,
+     the allocating functions, the looping and defining forms, `funcall`, `apply`, `ignore-errors`,
+     `coerce`, `expt`, `setf`, `psetf`, `nconc`, `mapcan`, `mapcon`, `merge`, `string` and the trims.
   2. A symbol the model's own package already has.
   3. A new symbol interned in the model's package.
 
@@ -63,7 +70,7 @@ dotted pairs, strings, numbers, characters, `'`, backquote with `,` and `,@`, `#
   So a typo for a denied operator is caught when the code is read.
 
 After reading, a defining form (`defun`, `defvar`, `defparameter`, `defconstant`) must name a symbol of
-the model's own package.
+the model's own package, and a `handler-case` may have clauses only on `error` and `:no-error`.
 
 The model's package is `OM.LAYER.<model dir>`, where the model directory is named as `layer.ModelDir`
 names it. The package uses CL and `OM.TOOL` only so that values print without package prefixes. The
@@ -71,9 +78,11 @@ reader never hands back an inherited symbol it has not first resolved through th
 is package-locked, so model code cannot redefine its functions or rebind them with `flet`.
 
 **Gaps.** The control strings of `format` and `error` are checked: `~/` and `~?` call or read code, so
-they are refused. The rest of format is not limited. Model code may still change the string that
-`(string 'sym)` returns, which is the symbol's own name. `string` is allowed because it is also a type
-name.
+they are refused. The rest of format is not limited (a `~{` over a huge list, or a wide `~v` padding,
+is bounded only by the heap check). `string`, `string-trim`, `string-left-trim` and
+`string-right-trim` return a copy of a symbol's name (they used to return the name itself, which model
+code could change), and every string an `OM.TOOL` function returns is a copy. A wrapped name in quoted
+data prints as its wrapper (`'loop` prints as `om.layer::safe-loop`), as `'format` already did.
 
 ## Running
 
@@ -81,13 +90,18 @@ name.
 
 - **Setup.** The call context and the settings are re-bound in the thread. Output is captured,
   `*print-circle*` is on, and print length and depth are bounded.
-- **Watching.** A watchdog joins the thread every 2 ms. It kills the thread when it runs past
-  `*timeout-seconds*` (5 by default; 2 for one run of a definition) or when the heap grows more than
-  `*heap-limit-bytes*` (512 MB) past its size at the start.
-- **Errors.** An error, including control-stack exhaustion, becomes the run's error text. The image
-  keeps running.
-- **Allocation.** One allocation by model code holds at most 16M elements. A mistaken size therefore fails
-  at once, before it can outgrow the heap check.
+- **Budget.** The run carries a budget (`limits.lisp`): `*fuel-steps*` steps (2^30), a deadline of
+  `*timeout-seconds*` (5 by default; 2 for one run of a definition) and a heap allowance of
+  `*heap-limit-bytes*` (512 MB) over the heap's size at the start. The code checks it itself and stops
+  (see "Stopping runaway code").
+- **Watching.** A supervisor joins the thread every 2 ms. Past the timeout, or when the heap has grown
+  past the allowance, it marks the budget stopped, which the code's next check sees. It never unwinds the
+  thread itself, except as the last resort.
+- **Errors.** An error, or a storage condition raised inside CL's own code, becomes the run's error text.
+  The image keeps running.
+- **Allocation.** One allocation by model code takes at most 1/16 of the dynamic space
+  (`*allocation-fraction*` of `sb-ext:dynamic-space-size`), counted in bytes for its element type: 64 MB,
+  so 8M elements of `t`, on a 1 GB heap; 32 MB on `build-image.sh`'s 512 MB. A mistaken size fails at once.
 
 `run-tool-code` is the memory tool:
 
@@ -99,6 +113,89 @@ name.
 
 Functions the model defines with `defun` stay in its package for its later calls in this image. They are
 not stored on disk.
+
+## Stopping runaway code
+
+SBCL's manual says unknown code can never safely be terminated with `terminate-thread`, and an interrupt
+that lands in an `unwind-protect` cleanup skips it. The runner used to poll and terminate the thread on a
+timeout or a heap rise. A termination that landed inside an `OM.TOOL` call holding the curated store's
+flock or a layer lock could leave the lock held or a file half-written. The runner now stops runaway code
+cooperatively, in three layers.
+
+**1. API calls run with interrupts deferred.** Every exported `OM.TOOL` function is wrapped, once its API
+is defined, in `tool-entry`: one budget check, then the call under `sb-sys:without-interrupts` with its
+deadline off (`with-deadline :seconds nil :override t`). An asynchronous unwind can therefore land only
+in model code. The store lock (`call-locked`) is taken and held with interrupts deferred as well, whoever
+calls it. Its only wait, the retry of `flock(LOCK_EX|LOCK_NB)`, is the one place that checks the run's
+budget and sleeps under the run's deadline (`wait-pause`), with `allow-with-interrupts` around it. A run
+stopped there ends before it holds the flock. Under an `OM.TOOL` call the outer scope keeps interrupts
+off, so that wait ends only cooperatively.
+
+**2. Model code checks a budget.** The reader reads the forms that can go on for ever as wrappers that
+check the run's budget:
+
+| Model code writes | Checked at |
+|---|---|
+| `loop` | every iteration (simple loop: before the body; extended loop: a `for` step clause prepended) |
+| `do`, `do*`, `dolist`, `dotimes`, `tagbody` | the start of the body and after every tag |
+| `defun`, `labels`, `flet`, `lambda` (and `#'(lambda ...)`) | every entry, with the stack check |
+| `funcall`, `apply` | every call |
+| any `OM.TOOL` function | every call |
+| a held or settled definition | every entry |
+
+A check costs one step of fuel. Every 1024 steps, and at once when the supervisor has marked the budget,
+it also reads the clock and the heap. A spent budget throws to a catch tag the runner set up. Model code
+can name neither `catch` nor `unwind-protect`, and no `handler-case` sees a throw, so the code cannot
+keep going. The run ends with `:fuel`, `:timeout` or `:heap`. Blocking points use `sb-sys:with-deadline`:
+the run's body runs under the deadline, which covers `compile`'s world lock (the runner compiles each form
+in the run's thread, so the timeout covers compiling too), and a `deadline-timeout` becomes the same stop.
+The supervisor's own waits are under no deadline, so a supervisor inside another run (a definition
+called from model code) is never unwound while its thread runs.
+
+**Recursion and the stack.** A function entry also compares the stack pointer with a floor that leaves
+1/8 of the thread's control stack (at least 256 KB). Deep recursion is stopped there (`:stack`) before
+it reaches the guard page. A probe found that SBCL 2.2.9 recycles a finished thread's stack, and that a
+second thread hitting a guard page that was hit before and not re-protected kills the whole image
+(`control_stack_guard_page_protected not NIL`). The old runner would have died this way on the second
+deep recursion in an image. A stack exhausted inside CL's own code (a `copy-tree` of a million-deep list)
+is still handled as a storage condition. The run then re-arms the guard page before its thread ends: it
+recurses into the return guard page and back, which is what makes SBCL protect the guard page again.
+
+**Handlers.** Model code's `error` names, as a type, `safe-error`: `(and error (not storage-condition))`.
+`ignore-errors` reads as `safe-ignore-errors`, which catches only that. A `handler-case` clause on
+anything else (`t`, `condition`, `serious-condition`, `storage-condition`, a compound type, a model
+name) is refused at read time. `handler-bind` and the restart forms are outside the allowed set. The
+limit stops are throws, not conditions, so nothing model code can write catches them, and a stack or
+heap exhaustion ends the run.
+
+**3. The last resort.** A thread that has not ended `*stop-grace-seconds*` (2) after it was asked to stop
+is not running checked code. It might be in a long bignum product or in a `compile`. Only then does the
+supervisor call `terminate-thread`. It logs a line to `*error-output*`, records it in `*runaway-log*`,
+and sets the image's restart flag. `(om.layer:image-needs-restart)` returns that reason, or nil. Nothing
+here drains or restarts the image: that is the server's to do. The run's message then says "terminated"
+instead of "stopped".
+
+### The escape routes
+
+Each route the sandboxing notes list was probed against the reader and runner, and each has a test in
+`lisp/tests/safe-stops.lisp`.
+
+| Route | Result |
+|---|---|
+| `~/` and `~?` in `format` or `error`, including control strings built at run time, through `funcall 'format` or `apply #'format` | refused at run time, as before |
+| `check-type` with a `~/` type string | not a route: the string is printed with `~A` |
+| `coerce` of a lambda list to `function` | **got through** (it compiled the list); now refused for any function type |
+| `satisfies` in `typep`, `check-type` or `deftype` | refused at read time: `satisfies` and `deftype` are outside the allowed set |
+| `read-from-string`, `read` | refused at read time |
+| package prefixes, including `foo::(a b)` and `:foo:bar` | refused at read time |
+| rebinding `*package*`, `*readtable*`, `*read-eval*` or a `*print-*` variable | refused at read time |
+| `progv`, `symbol-value`, `set`, `boundp`, `macro-function`, `fdefinition` | refused at read time |
+| `make-instance`, `defclass`, `defmethod`, `defgeneric`, `find-class`, `slot-value`, `defstruct`, `define-condition`, `make-condition` | refused at read time |
+| a `handler-case` clause on `t` or a compound type | **got through**; now refused at read time |
+| deep recursion | stopped by the stack check, even under `ignore-errors` or an `error` handler; a CL-internal exhaustion re-arms the guard page (above) |
+| huge allocations | refused relative to the heap: `make-array`, `make-string`, `make-list`, `make-hash-table` (`:size`, `:rehash-size`), `vector-push-extend`'s extension, and an exact `expt` whose result would exceed the cap |
+| circular structures | **got through**: a CDR cycle made CL's `length` loop with no check. A `setf` or `psetf` of `cdr`, `rest`, `cddr`, `cdddr` or `cdar` that would close a cycle, an `nconc` or `merge` of lists that share a cons, and `mapcan` or `mapcon` results that do, are refused. `loop`'s `nconc` clause collects as `append`. A CAR cycle prints under `*print-circle*`, and recursion over it is stopped by the stack check. |
+| a symbol's name through `string` (`(fill (string 'notes) #\X)`) | **got through** (it renamed `OM.TOOL:NOTES` in the image); now a copy |
 
 ## Adaptable functions and dispatch
 
@@ -198,8 +295,8 @@ The behavior follows omhost:
 
 ## Parity and tests
 
-`sbcl --non-interactive --load lisp/run-tests.lisp` runs the spike's tests and W4's together: 41 tests,
-387 checks.
+`sbcl --non-interactive --load lisp/run-tests.lisp` runs every package's tests together: 97 tests,
+901 checks, 8 of the tests the cooperative limits'.
 
 W4's tests cover the following:
 
@@ -209,6 +306,11 @@ W4's tests cover the following:
 - the `OM.TOOL` lock;
 - the output rule;
 - timeouts, stack exhaustion, the allocation cap and the heap check, with the image going on afterwards;
+- the cooperative limits (`safe-stops.lisp`): fuel stops each looping form that never yields; no model
+  handler catches a stop, a stack exhaustion or a heap stop; a stop between saves and a stop in the
+  flock wait leave the store lock free and every memory file whole; the last resort waits for an
+  `OM.TOOL` call to finish its write and sets the restart flag; allocations are refused relative to the
+  dynamic space; and every escape route above;
 - `settle-v2` on every branch, including sub-millisecond ordering;
 - dispatch for held, settled, reverted, forgotten and rolled-back definitions;
 - fallback on a bad result, an error and a timeout;
@@ -244,10 +346,9 @@ variable, or without `sbcl`, they are skipped.
     `Contains`, `SortBy`, `ByEvent` and `AsOf` are not ported. Neither are the next-page snippets, the
     `Partial` notice, `Reflections`, `Files`, `Commits`, `Attempts`, `Dropped`, `Subjects`, `Info` and
     `CitedBy`.
-- **Curated memory.** Not ported: `Settle` (promotion on evidence and correction flags), the ranked index,
-  `saved`'s index order (here it is name order), and the retired defined queries. Those are only
-  detected: a name one holds is refused for a save, and forgetting or giving feedback on one is refused
-  rather than handled.
+- **Curated memory.** Not ported: the retired defined queries. They are only detected: a name one holds
+  is refused for a save, and forgetting or giving feedback on one is refused rather than handled. The
+  ranked index and `Settle` are ported (see "The curated index" below).
 - **Adaptable functions.** Only `rank-notes` and `phrase-note` exist. W5 wires in the ones the design
   names for the summary's budget choice, which turns extraction looks at, and detectors, using
   `define-adaptable`.
@@ -258,5 +359,53 @@ variable, or without `sbcl`, they are skipped.
   `define` holds one now.
 - **Go-stored definitions.** Definitions stored as Go are not run here. The image's layer is a separate
   directory from the Go layer (`<store>/harness`).
+- **Runaway code.** Model code runs in the image's own threads. A CL function that runs long without
+  calling model code (a bignum product, a `sort` of a huge list, a `compile`) reaches no check, so only
+  the last resort stops it, and the image then needs a restart. Running detector passes and long
+  memory-tool programs in a child SBCL, where a timeout is a process kill, is the owner's decision
+  (it narrows decision 2). Heap limits stay image-wide: SBCL has no per-thread quota, and a heap
+  exhausted inside GC is fatal.
 - **Settled failures.** A settled definition that later fails falls back on each call and is counted, but
   nothing retires it. The Go harness has no retirement of written definitions either.
+
+## The curated index (1b)
+
+`lisp/src/tool/curated-index.lisp` ports the rest of `memory/curated` that the start context needs:
+
+- **The usage fold.** `read-usage-lines` is `readUsageLines`: every complete line of `usage.jsonl` that
+  decodes into Go's `usageLine` and has a name. A member of the wrong JSON type skips the whole line, and
+  keys match ignoring case, as `encoding/json` matches them. A last line with no newline yet is left out.
+  `curated-usage` is `Store.Usage` (views, helped, harmed, edits, corrected since the last save or edit,
+  everything cleared by a forget, the latest time). `usage-events-by-name` is `UsageEventsByName`.
+- **Rank and render.** `curated-rank` is `Rank`, a stable sort with Go's comparator: flagged last unless
+  pinned, then user and feedback memories, then 3·helped + views − 3·harmed, then the type, then the
+  newest update, then the name. `render-index` is `RenderIndex` (UTF-16 token estimates, half the budget
+  for described lines, an `also:` line, an "N more" line with `jsfmt.Locale`), and `index-for` is
+  `IndexFor`, which leaves staged memories out and answers `EmptyIndex` when none is left.
+- **Pin.** `make-pin`, `pin-get`, `pin-shown-names` and `pin-reset` are `curated.Pin`. The image keeps one
+  pin per conversation (harness and session id, `lisp/src/server/hooks.lisp`) and resets it at
+  `session-start` and before a summary is handed, which follows a compaction.
+- **Settle.** `curated-settle` is `Store.Settle`: a staged memory is promoted on a user's quoted helped
+  feedback, a citation, or a second staging session, counting only events since it was saved and after
+  its last save or edit. A correction whose subject names a memory that applies in the project, made
+  after its last update, records one `corrected` event per correction id. Pinned memories are never
+  flagged. `branch-corrections` is `harness.Corrections` over the branch (W1's fold), with each
+  correction timed by its first source entry to the nanosecond. `settled-notices` are
+  `harness.NotifySettled`'s two messages.
+- **The project.** `project-root` is `harness.ProjectRoot`: `filepath.Clean`, symlinks resolved, then the
+  nearest ancestor holding `.git`.
+- **`saved`.** `om.tool:saved` now ranks the memories as the index does, as `omhost`'s `saved` does.
+
+`TestLispCuratedParity` now runs 387 steps. The fixed part adds 51 steps that save memories of every
+type, record views, feedback and citations, append usage lines Go's decoder skips or matches ignoring
+case (and a partial line the next append completes), render the index at budgets from 0 to 2,000, pin
+and reset it, stage memories promoted on each kind of evidence, settle corrections (repeated ids,
+corrections before the last update, a sub-millisecond time), pin a memory by hand and edit a flagged one.
+The random part also draws `record`, `index`, `rank`, `settle`, `pin` and `usage` steps with random
+corrections. Every line, the usage fold, the rank with its flags, every rendered index with the names it
+shows, and every file both stores wrote are identical: 18 indexes with an `also:` line, 8 with names left
+out, 2 settles promoting and 7 flagging. The test fails if the script stops reaching any of those.
+
+Gaps: `promote` treats a memory that became unreadable between the listing and the promotion as not
+promoted, where Go's `Settle` stops with the error. The image does not cache the usage ledger between
+reads (`appendCache`); it reads the whole file each time, with the same result.

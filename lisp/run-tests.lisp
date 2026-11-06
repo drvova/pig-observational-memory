@@ -37,6 +37,11 @@
 
 ;; W5: the hooks.
 (load (merge-pathnames "tests/hooks.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Cooperative limits for model code (docs/lisp-port-tool-layer.md, "Stopping runaway code").
+(load (merge-pathnames "tests/safe-stops.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; 1b: the curated ranked index and Settle.
+(load (merge-pathnames "tests/curated-index.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
 ;; W6: the two-way peer.
 (load (merge-pathnames "tests/peer.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))

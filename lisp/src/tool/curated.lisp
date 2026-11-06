@@ -4,8 +4,8 @@
 ;;;; Call.Run, Describe). The files are the Go store's, in the same directory and under the same
 ;;;; lock, so the Go engine and the image read each other's memories.
 ;;;;
-;;;; Not ported (docs/lisp-port-tool-layer.md): Settle (promotion on evidence and correction
-;;;; flags), the ranked index, and the retired defined queries, which are only detected: a name
+;;;; The ranked index, the usage fold and Settle are in curated-index.lisp. Not ported
+;;;; (docs/lisp-port-tool-layer.md): the retired defined queries, which are only detected: a name
 ;;;; one holds is refused for a save, and forgetting or giving feedback on one is refused here.
 
 (in-package "OM.LAYER")

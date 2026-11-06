@@ -14,7 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,14 @@ type curatedStep struct {
 	Time         string            `json:"time"`
 	User         []string          `json:"user"`
 	Conversation []string          `json:"conversation,omitempty"`
+	// Corrections are a settle step's user corrections (curated.SettleInput.Corrections).
+	Corrections []stepCorrection `json:"corrections,omitempty"`
+}
+
+type stepCorrection struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+	Time    string `json:"time"`
 }
 
 // quotedIn is omhost's quotedIn over plain texts: what both sides' evidence reads.
@@ -139,6 +149,7 @@ func curatedScript() []curatedStep {
 	add("save", "s1", "/work", map[string]string{"name": "tea", "type": "user", "description": "Saved again after a forget"})
 	add("list", "s1", "/work", map[string]string{"project": "/work"})
 	add("frobnicate", "s1", "/work", map[string]string{"name": "tea"})
+	steps = append(steps, indexScript(&at, user, conversation)...)
 
 	rng := rand.New(rand.NewPCG(3, 5))
 	pick := func(list []string) string { return list[rng.IntN(len(list))] }
@@ -150,7 +161,7 @@ func curatedScript() []curatedStep {
 	bodies := []string{"", "Why: it matters.", "  padded body  ", strings.Repeat("x", 9990)}
 	for i := 0; i < 300; i++ {
 		args := map[string]string{"name": pick(names)}
-		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "feedback", "describe", "list"})
+		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "feedback", "describe", "list", "record", "index", "rank", "settle", "pin", "usage"})
 		switch op {
 		case "save":
 			args["type"], args["description"], args["scope"] = pick(types), pick(descriptions), pick(scopes)
@@ -177,9 +188,91 @@ func curatedScript() []curatedStep {
 			args["outcome"], args["quote"] = pick([]string{"helped", "harmed", "meh"}), pick(quotes)
 		case "list":
 			args["project"] = pick([]string{"/work", ""})
+		case "record":
+			args["event"] = pick([]string{"view", "view", "view", "cited", "indexed", "save", "edit", "forget"})
+			if args["event"] == "cited" {
+				args["record"] = pick([]string{"r1", "r1,r2"})
+			}
+		case "index":
+			args["budget"] = pick([]string{"0", "5", "40", "60", "120", "400", "2000"})
+		case "pin":
+			if rng.IntN(3) == 0 {
+				args["reset"] = "true"
+			}
+			args["budget"] = pick([]string{"40", "2000"})
 		}
 		add(op, pick([]string{"s1", "s2"}), pick([]string{"/work", "/work", ""}), args)
+		if op == "settle" {
+			last := &steps[len(steps)-1]
+			for k := rng.IntN(4); k > 0; k-- {
+				offset := []time.Duration{-48 * time.Hour, -time.Minute, time.Second, time.Hour}[rng.IntN(4)]
+				last.Corrections = append(last.Corrections, stepCorrection{
+					ID:      fmt.Sprintf("c%d", rng.IntN(6)),
+					Subject: pick([]string{"tea", "the Build", "ok 1", "x9 thing", "", "A-B", "long name"}),
+					Time:    at.Add(offset).Format(time.RFC3339Nano),
+				})
+			}
+		}
 	}
+	return steps
+}
+
+// indexScript is the fixed part of the curated script that ranks, renders, pins and settles: a
+// store of memories of every type with views, helped and harmed feedback, staged memories
+// promoted on each kind of evidence, corrections that flag a memory until its edit, a memory the
+// user pinned, and usage lines Go's decoder skips or matches ignoring case.
+func indexScript(at *time.Time, user, conversation []string) []curatedStep {
+	var steps []curatedStep
+	add := func(op, session, project string, args map[string]string, corrections ...stepCorrection) {
+		*at = at.Add(17 * time.Minute)
+		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: project, Time: at.Format(time.RFC3339), User: user, Conversation: conversation, Corrections: corrections})
+	}
+	add("index", "s1", "/work", map[string]string{"budget": "2000"})
+	for i, ty := range []string{"lesson", "reference", "project", "feedback", "user", "lesson", "reference", "project"} {
+		add("save", "s1", "/work", map[string]string{"name": fmt.Sprintf("m%d-note", i), "type": ty, "description": fmt.Sprintf("Memory %d of type %s, with a description long enough to cost tokens", i, ty), "quote": "the build runs with make all"})
+	}
+	add("save", "s1", "/work", map[string]string{"name": "rafaga-free", "type": "lesson", "description": "Ráfaga 😀 notes count as two UTF-16 units each", "quote": "the build runs with make all"})
+	add("index", "s1", "/work", map[string]string{"budget": "2000"})
+	add("rank", "s1", "/work", nil)
+	for _, name := range []string{"m0-note", "m0-note", "m7-note", "m2-note"} {
+		add("record", "s1", "/work", map[string]string{"name": name, "event": "view"})
+	}
+	add("feedback", "s1", "/work", map[string]string{"name": "m1-note", "outcome": "helped", "quote": "deploys go out on Tuesdays"})
+	add("feedback", "s1", "/work", map[string]string{"name": "m6-note", "outcome": "harmed", "quote": "deploys go out on Tuesdays"})
+	add("junk", "s1", "/work", nil)
+	add("usage", "s1", "/work", nil)
+	add("rank", "s1", "/work", nil)
+	for _, budget := range []string{"0", "1", "20", "60", "90", "150", "300"} {
+		add("index", "s1", "/work", map[string]string{"budget": budget})
+	}
+	// Staged memories: promoted on a user's quote, on a citation, on a second session; one
+	// whose evidence came before an edit is not.
+	add("save", "s1", "/work", map[string]string{"name": "staged-quote", "type": "user", "description": "Staged then confirmed"})
+	add("save", "s1", "/work", map[string]string{"name": "staged-cite", "type": "project", "description": "Staged then cited"})
+	add("save", "s1", "/work", map[string]string{"name": "staged-twice", "type": "reference", "description": "Staged in two sessions"})
+	add("save", "s2", "/work", map[string]string{"name": "staged-twice", "type": "reference", "description": "staged in TWO sessions"})
+	add("save", "s1", "/work", map[string]string{"name": "staged-edited", "type": "lesson", "description": "Cited before an edit"})
+	add("index", "s1", "/work", map[string]string{"budget": "2000"})
+	add("feedback", "s1", "/work", map[string]string{"name": "staged-quote", "outcome": "helped", "quote": "always drink green tea"})
+	add("record", "s1", "/work", map[string]string{"name": "staged-cite", "event": "cited", "record": "r1,r2"})
+	add("record", "s1", "/work", map[string]string{"name": "staged-edited", "event": "cited", "record": "r3"})
+	add("edit", "s1", "/work", map[string]string{"name": "staged-edited", "body": "Edited after the citation."})
+	add("pin", "s1", "/work", map[string]string{"budget": "2000"})
+	add("settle", "s1", "/work", nil,
+		stepCorrection{ID: "c1", Subject: "m3 note", Time: at.Add(time.Minute).Format(time.RFC3339Nano)},
+		stepCorrection{ID: "c2", Subject: "note", Time: at.Add(-72 * time.Hour).Format(time.RFC3339Nano)},
+		stepCorrection{ID: "c3", Subject: "M4", Time: at.Add(time.Minute + 500*time.Microsecond).Format(time.RFC3339Nano)})
+	add("pin", "s1", "/work", map[string]string{"budget": "2000"})
+	add("pin", "s1", "/work", map[string]string{"budget": "2000", "reset": "true"})
+	add("settle", "s1", "/work", nil, stepCorrection{ID: "c1", Subject: "m3 note", Time: at.Add(time.Minute).Format(time.RFC3339Nano)})
+	add("usage", "s1", "/work", nil)
+	add("rank", "s1", "/work", nil)
+	add("user-pin", "s1", "/work", map[string]string{"name": "m4-note"})
+	add("rank", "s1", "/work", nil)
+	add("edit", "s1", "/work", map[string]string{"name": "m3-note", "body": "Fixed after the correction."})
+	add("rank", "s1", "/work", nil)
+	add("index", "s1", "/work", map[string]string{"budget": "60"})
+	add("index", "s1", "", map[string]string{"budget": "2000"})
 	return steps
 }
 
@@ -188,6 +281,7 @@ func curatedScript() []curatedStep {
 func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
 	t.Helper()
 	var lines []string
+	var pin curated.Pin
 	for n, s := range steps {
 		at, err := time.Parse(time.RFC3339, s.Time)
 		if err != nil {
@@ -199,6 +293,101 @@ func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
 			call.Evidence = quotedIn(s.Conversation)
 		}
 		switch s.Op {
+		case "record":
+			if s.Args["event"] == "cited" {
+				err = store.RecordCited(s.Args["name"], s.Args["record"])
+			} else {
+				err = store.Record(s.Args["name"], s.Args["event"])
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d recorded", n+1))
+		case "junk":
+			f, err := os.OpenFile(filepath.Join(dir, "usage.jsonl"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteString(usageJunk)
+			f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d junk", n+1))
+		case "user-pin":
+			path := filepath.Join(dir, s.Args["name"]+".md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(strings.Replace(string(data), "\n---\n", "\npinned: true\n---\n", 1)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d pinned", n+1))
+		case "usage":
+			usage, err := store.Usage()
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := []string{}
+			for name := range usage {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			parts := []string{}
+			for _, name := range names {
+				e := usage[name]
+				last := ""
+				if !e.Last.IsZero() {
+					last = e.Last.UTC().Format(time.RFC3339)
+				}
+				parts = append(parts, fmt.Sprintf("%s:%d/%d/%d/%d/%d/%s", name, e.Views, e.Helped, e.Harmed, e.Edits, e.Corrected, last))
+			}
+			lines = append(lines, fmt.Sprintf("%d usage %s", n+1, strings.Join(parts, " ")))
+		case "rank":
+			ms, err := store.List(s.Project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			usage := store.RankUsage()
+			names := []string{}
+			for _, m := range curated.Rank(ms, usage) {
+				name := m.Name
+				if curated.Flagged(m, usage[m.Name]) {
+					name += "!"
+				}
+				names = append(names, name)
+			}
+			lines = append(lines, fmt.Sprintf("%d rank %s", n+1, strings.Join(names, ",")))
+		case "index":
+			budget, _ := strconv.Atoi(s.Args["budget"])
+			text, shown := curated.IndexFor(store, s.Project, budget)
+			lines = append(lines, fmt.Sprintf("%d index %s %s", n+1, strings.Join(shown, ","), quoted(text)))
+		case "pin":
+			if s.Args["reset"] == "true" {
+				pin.Reset()
+			}
+			budget, _ := strconv.Atoi(s.Args["budget"])
+			text, shown, rendered := pin.Get(func() (string, []string) { return curated.IndexFor(store, s.Project, budget) })
+			lines = append(lines, fmt.Sprintf("%d pin %t %s %s %s", n+1, rendered, strings.Join(shown, ","), strings.Join(pin.Shown(), ","), quoted(text)))
+		case "settle":
+			in := curated.SettleInput{Project: s.Project}
+			for _, c := range s.Corrections {
+				when, err := time.Parse(time.RFC3339Nano, c.Time)
+				if err != nil {
+					t.Fatal(err)
+				}
+				in.Corrections = append(in.Corrections, curated.Correction{ID: c.ID, Subject: c.Subject, Time: when})
+			}
+			settled, err := store.Settle(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			promoted := []string{}
+			for _, p := range settled.Promoted {
+				promoted = append(promoted, p.Name+"="+p.Evidence)
+			}
+			lines = append(lines, fmt.Sprintf("%d settle %s | %s", n+1, quoted(strings.Join(promoted, ";")), strings.Join(settled.Flagged, ",")))
 		case "describe":
 			m, err := store.Get(s.Args["name"])
 			if err != nil {
@@ -226,6 +415,42 @@ func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
 		}
 	}
 	return lines
+}
+
+// usageJunk are usage lines Go's decoder skips (a member of the wrong type, no name, not JSON)
+// or matches ignoring case, and a line still being written, which the next append completes
+// into one the decoder skips.
+const usageJunk = `{"name":"m0-note","event":"view","time":5}
+not json
+{"name":"","event":"view"}
+{"NAME":"m5-note","Event":"view","time":"2026-11-01T09:00:00Z"}
+{"name":"m5-note","event":"view","user":"yes"}
+{"name":"m5-note","event":"helped","user":true,"quote":null}
+[1,2]
+null
+{"name":"m5-note","event":"view"`
+
+// dropUsageJunk removes the lines the script's junk step wrote (usageJunk, its unfinished last
+// line completed by the next append) from the usage ledger at path, so what the store itself
+// wrote is checked against the schema.
+func dropUsageJunk(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	junk := strings.Split(usageJunk, "\n")
+	partial := junk[len(junk)-1]
+	kept := []string{}
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if line == "" || slices.Contains(junk[:len(junk)-1], strings.TrimSuffix(line, "\n")) || strings.HasPrefix(line, partial) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // storeFiles are the files under dir but the lock, by relative path.
@@ -292,11 +517,12 @@ func TestLispCuratedParity(t *testing.T) {
 	for name := range lispFiles {
 		t.Errorf("%s: only the Lisp store wrote it", name)
 	}
+	dropUsageJunk(t, filepath.Join(lispDir, "usage.jsonl"))
 	seen := validateTree(t, loadSchemas(t), filepath.Join(root, "lisp"))
 	if seen["curated-memory.schema.json"] == 0 || seen["curated-usage-line.schema.json"] == 0 {
 		t.Errorf("the Lisp store wrote no memory or usage file (%v)", seen)
 	}
-	oks, errs := 0, 0
+	oks, errs, also, more, promoted, flagged := 0, 0, 0, 0, 0, 0
 	for _, w := range want {
 		_, rest, _ := strings.Cut(w, " ")
 		switch {
@@ -304,9 +530,27 @@ func TestLispCuratedParity(t *testing.T) {
 			oks++
 		case strings.HasPrefix(rest, "error "):
 			errs++
+		case strings.HasPrefix(rest, "index "):
+			if strings.Contains(rest, `\nalso: `) {
+				also++
+			}
+			if strings.Contains(rest, " more memor") {
+				more++
+			}
+		case strings.HasPrefix(rest, "settle "):
+			if !strings.HasPrefix(rest, `settle "" |`) {
+				promoted++
+			}
+			if !strings.HasSuffix(rest, "| ") {
+				flagged++
+			}
 		}
 	}
-	t.Logf("identical: %d steps (%d writes done, %d refused), %d files", len(want), oks, errs, len(names))
+	t.Logf("identical: %d steps (%d writes done, %d refused; %d indexes with an also line, %d with more left out; %d settles promoting, %d flagging), %d files",
+		len(want), oks, errs, also, more, promoted, flagged, len(names))
+	if also == 0 || more == 0 || promoted == 0 || flagged == 0 {
+		t.Error("the script no longer reaches every branch of the index and the settle")
+	}
 }
 
 // settleCase is one held definition and the usage ledger events it is settled on.

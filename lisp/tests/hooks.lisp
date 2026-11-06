@@ -194,14 +194,14 @@
                                                     extra)))))))
         (let ((r (jget (call "session-start" "with_summary" :true) "result")))
           (check (has-prefix (jget r "text") "The memory tool (MCP server om, tool memory):") t "no summary yet")
-          (check (coerce (jget r "remaining") 'list) '("migrate-layer" "settle-curated")))
+          (check (coerce (jget r "remaining") 'list) '("migrate-layer")))
         (call "turn-end")
         (let ((summary (jget (jget (call "compact" "reason" "manual") "result") "text")))
           (check (and (stringp summary) (string/= summary "") t) t "the summary")
           (check (jget (jget (call "session-start" "with_summary" :true) "result") "text")
-                 (om.server::start-context summary) "the summary at the next start")
+                 (om.server::start-context summary om.layer::+empty-index+) "the summary at the next start")
           (check (jget (jget (call "prompt" "summary_on_prompt" :true) "result") "text")
-                 (om.server::start-context summary) "handed once")
+                 (om.server::start-context summary om.layer::+empty-index+) "handed once")
           (check (jget (jget (call "prompt" "summary_on_prompt" :true) "result") "text") nil "not twice"))
         (let* ((store (store-load (format nil "~Asessions/w5/s1.jsonl" dir)))
                (types (mapcar (lambda (s) (or (jget (stored-entry s) "customType") (jget (stored-entry s) "type"))) store)))
@@ -213,7 +213,20 @@
           (check (jget r "thinned") 0d0)
           (check (jget (aref (jget (aref (jget r "messages") 0) "content") 0) "text") "[Sent on Friday 2026-05-01]"))
         (check (jget (jget (call "view" "args" "full") "result") "notice") :false)
-        ;; A curated store with a memory is not ported: answered before any side effect.
+        ;; A curated store with memories: the index ranks them, after a settle that promotes the
+        ;; staged one a user's words confirmed and tells the client so (1b).
         (ensure-directories-exist (format nil "~Aobservational-memory/memories/" dir))
         (write-lines (format nil "~Aobservational-memory/memories/x.md" dir) '("---"))
-        (check (jget (jget (call "session-start") "error") "code") -32004d0 "a curated index")))))
+        (write-lines (format nil "~Aobservational-memory/memories/tea.md" dir)
+                     '("---" "type: user" "description: Drinks green tea" "created: 2026-05-01T09:00:00Z"
+                       "updated: 2026-05-01T09:00:00Z" "staged: true" "staged-by: s0" "---"))
+        (write-lines (format nil "~Aobservational-memory/memories/build.md" dir)
+                     '("---" "type: project" "description: Builds with make" "created: 2026-05-01T09:00:00Z"
+                       "updated: 2026-05-01T09:00:00Z" "---"))
+        (write-lines (format nil "~Aobservational-memory/memories/usage.jsonl" dir)
+                     '("{\"time\":\"2026-05-01T09:30:00Z\",\"name\":\"tea\",\"event\":\"helped\",\"quote\":\"green tea\",\"user\":true}"))
+        (let ((r (jget (call "session-start") "result")))
+          (check (has-suffix (jget r "text") (format nil "~%~%- tea [user]: Drinks green tea~%- build [project]: Builds with make")) t
+                 "the index")
+          (check (coerce (jget r "notices") 'list)
+                 '("Observational memory: staged memory tea is now live (a user's words quoted in feedback); it enters the memory index at its next render")))))))
