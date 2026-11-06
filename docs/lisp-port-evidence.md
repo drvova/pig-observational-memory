@@ -88,10 +88,17 @@ called after its second timeout (the breaker), until the session's next compacti
 ```
 
 It returns the notices to show: rule transition messages and `(name written-p reason)` lists for
-settled, reverted and retired definitions. Call it where Go calls `recordCompactionV2`, only while
-the request is live and once per compaction. The compaction's own extraction (`extractCutV2`)
-should run `harness-detect` like the turn end, recording only for a range measured on a fresh
-branch. The om path calls it from `neutral-compaction`; the neutral host has no session model
+settled, reverted and retired definitions.
+
+On PiG it is wired in `lisp/src/server/compaction-harness.lisp`: `harness-hook-host` takes the
+snapshot before the compaction and gives the hook's host the detectors (so `extract-cut`, the port
+of `extractCutV2`, runs `harness-detect` and records the run only for a range measured on a fresh
+branch), `after-compaction` calls `record-compaction-evidence` once the answer is built and tells
+the user each notice through `host/notify`, and `compaction-harness-refusal` refuses a store with
+rules written before the layer and a model whose profile may not be the default (a v2 decode event,
+a code event on the summary, or an active switch-codec rule: `harness.ComputeWith` is not ported).
+Level 1 is still refused by the compaction event itself, so `counts` are nil there. The om path
+calls it from `neutral-compaction`; the neutral host has no session model
 (`neutral.Host.SessionModel` is nil in Go too), so nothing is recorded there.
 
 ## Parity
@@ -121,7 +128,7 @@ branch. The om path calls it from `neutral-compaction`; the neutral host has no 
   image. Level 1 offers text only (decision 5), so the image holds none; ones Go held are settled by
   Go. Only held remedies are credited in `ranHeld`, the one Go kind the image applies.
 - **The profile** (`harness.Compute`, `ApplySummary`): Go reads the Lisp ledger identically; the
-  image does not compute it yet (the compaction port's).
+  image does not compute it, and refuses a compaction whose profile may not be the default.
 - **The reader** is narrower than Go's: rows files edited by hand into forms Go still accepts are
   skipped, and a ledger line Go's decoder refuses for a non-integer number written as `1.0` is kept.
 - **The kernel floor's name check** is not run on rule names (a hash, never kernel-owned).

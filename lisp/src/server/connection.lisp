@@ -9,10 +9,17 @@
 (in-package "OM.SERVER")
 
 (defstruct (rcfg (:constructor make-rcfg ()))
-  "The settings the ported events read (config.Config): passive and curatedMemory, and the
-project trust they were read under (:trusted, :untrusted or :unknown)."
+  "The settings the ported events read (config.Config): passive, curatedMemory, consolidate,
+compactionSummaryMaxTokens, curatedMemoryIndexTokens and memoryFormat, the removed worker
+`model` setting (whether one is set), and the project trust they were read under (:trusted,
+:untrusted or :unknown)."
   (passive nil)
   (curated-memory t)
+  (consolidate-off nil)
+  (summary-max 0)
+  (index-tokens 2000)
+  (memory-format "tables")
+  (worker-model nil)
   (trust :unknown))
 
 (defstruct (conn (:constructor %make-conn))
@@ -31,11 +38,16 @@ project trust they were read under (:trusted, :untrusted or :unknown)."
   (thin-key nil) (thin-plan nil)
   ;; branchCache: the branch last read, decoded.
   (branch #())
-  ;; runtime.CompactInFlight and CompactionBackoff.TipID (the trigger is not ported yet).
+  ;; runtime.CompactInFlight and CompactionBackoff (a backoff struct, pig-compaction.lisp).
   (compact-in-flight nil) (backoff-tip nil)
   ;; hooks.extractMu for this connection's session: a PiG process runs one session at a time,
   ;; so it is a per-session mutex, which may be held while a host call waits.
   (extract-mutex (sb-thread:make-mutex :name "om extraction"))
+  ;; Set at a session start that found retired defined tools (or v1 definitions) in the store:
+  ;; their names join Go's skip list (harness.Manager.SkipNames), which the image does not
+  ;; read, so every event that reads the skip list is refused for the connection's life (the
+  ;; list only grows within a process).
+  (retired-unknown nil)
   (ended nil))
 
 (defun make-conn (params)
@@ -139,15 +151,33 @@ ones held when it still has the last of them at its place. A simple vector of en
               (if (string/= (conn-config-dir-name c) "") (conn-config-dir-name c) ".pi"))
       (values (string-right-trim "/" (or *root* "")) ".om")))
 
+(defun positive-integer (v)
+  "config.positiveInteger: a whole number above 0, else nil."
+  (and (realp v) (> v 0) (= v (ftruncate v)) (truncate v)))
+
 (defun apply-settings (cfg path)
-  "readNamespaced(path).apply: the observational-memory object's boolean passive and
-curatedMemory."
+  "readNamespaced(path).apply: the observational-memory object's booleans (passive,
+curatedMemory, consolidate), its positive integers (compactionSummaryMaxTokens,
+curatedMemoryIndexTokens), memoryFormat, and whether the removed `model` setting is set."
   (let ((nested (om::jget (read-json-file path) "observational-memory")))
     (when (hash-table-p nested)
-      (multiple-value-bind (v present) (gethash "passive" nested)
-        (when (and present (member v '(:true :false))) (setf (rcfg-passive cfg) (eq v :true))))
-      (multiple-value-bind (v present) (gethash "curatedMemory" nested)
-        (when (and present (member v '(:true :false))) (setf (rcfg-curated-memory cfg) (eq v :true)))))))
+      (flet ((bool (key setter)
+               (multiple-value-bind (v present) (gethash key nested)
+                 (when (and present (member v '(:true :false))) (funcall setter (eq v :true))))))
+        (bool "passive" (lambda (b) (setf (rcfg-passive cfg) b)))
+        (bool "curatedMemory" (lambda (b) (setf (rcfg-curated-memory cfg) b)))
+        (bool "consolidate" (lambda (b) (setf (rcfg-consolidate-off cfg) (not b)))))
+      (let ((n (positive-integer (gethash "compactionSummaryMaxTokens" nested))))
+        (when n (setf (rcfg-summary-max cfg) n)))
+      (let ((n (positive-integer (gethash "curatedMemoryIndexTokens" nested))))
+        (when n (setf (rcfg-index-tokens cfg) n)))
+      (let ((f (gethash "memoryFormat" nested)))
+        (when (member f '("tables" "lines") :test #'equal) (setf (rcfg-memory-format cfg) f)))
+      ;; config.normalizeSettings: the removed `model` setting (memory v1's worker model) is
+      ;; kept only to migrate its layer (removedValueValid: an object with a non-empty id).
+      (let ((m (gethash "model" nested)))
+        (when (and (hash-table-p m) (stringp (gethash "id" m)) (string/= (gethash "id" m) ""))
+          (setf (rcfg-worker-model cfg) t))))))
 
 (defun load-config (c cwd trust)
   (multiple-value-bind (agent-dir dir-name) (conn-paths c)
@@ -191,3 +221,9 @@ lock; a reload during the check makes it ask again, and an unknown trust is not 
 (defun store-on-p (c)
   "harness.StoreOf's answer: curated memory on and a config home the host names."
   (and (rcfg-curated-memory (conn-cfg c)) (string/= (host-string "host/configHome") "")))
+
+(defun check-skip-tools (c what)
+  "Refuses (not ported) an event that reads the memory tool names when the connection's skip
+list holds retired defined tools the image cannot name (conn-retired-unknown)."
+  (when (sb-thread:with-mutex ((conn-mutex c)) (conn-retired-unknown c))
+    (not-ported (format nil "~A with retired defined tools in the curated store (harness.Manager.SkipNames)" what))))

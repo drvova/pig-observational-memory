@@ -15,7 +15,11 @@
 (defstruct hhost
   "What the hook reads and writes: read returns the merged branch (a vector), append stores a
 custom entry after the tip from its type and its data's JSON text and returns the new id."
-  read append (cwd "") (skip-tools (list +memory-tool+)))
+  read append (cwd "") (skip-tools (list +memory-tool+))
+  ;; detect, when set, is the harness's detectV2 (om.layer:harness-detect over the session model
+  ;; and store): a function of (entries start end folded batches covers) returning the batches and
+  ;; a function that records the run, called once the extraction landed on a fresh branch.
+  (detect nil))
 
 (defstruct hconfig
   "The settings the hook reads (config.Config): passive, consolidate, compactionSummaryMaxTokens,
@@ -94,6 +98,35 @@ preparation's messages when that id is not on the branch."
     (when (> (hconfig-summary-max cfg) 0) (setf budget (min budget (hconfig-summary-max cfg))))
     budget))
 
+(defun usage-number (v)
+  "ledger.UsageNumber: a finite number as an integer (truncated), else nil."
+  (and (realp v) (truncate v)))
+
+(defun run-input-usage (e)
+  "ledger.runInputUsage: an assistant message's input plus cache read and cache write, or nil."
+  (let ((m (entry-message e)))
+    (when (and (string= (entry-type e) "message") m (equal (jget m "role") "assistant")
+               (not (member (jget m "stopReason") '("aborted" "error") :test #'equal)))
+      (let ((usage (jget m "usage")))
+        (when (hash-table-p usage)
+          (let ((input (usage-number (jget usage "input"))))
+            (when input
+              (+ input (or (usage-number (jget usage "cacheRead")) 0) (or (usage-number (jget usage "cacheWrite")) 0)))))))))
+
+(defun next-run-headroom (entries)
+  "ledger.NextRunHeadroom: the largest growth of the input usage between the last assistant
+messages of consecutive runs since the previous compaction, a run starting at each user message."
+  (let ((runs '()) (last 0) (has nil))
+    (loop for i from (1+ (find-last-compaction-index entries)) below (length entries)
+          do (let* ((e (aref entries i)) (m (entry-message e)))
+               (when (and (string= (entry-type e) "message") m)
+                 (if (equal (jget m "role") "user")
+                     (progn (when has (push last runs)) (setf has nil))
+                     (let ((n (run-input-usage e))) (when n (setf last n has t)))))))
+    (when has (push last runs))
+    (setf runs (nreverse runs))
+    (loop for (a b) on runs while b maximize (- b a) into best finally (return (max 0 (or best 0))))))
+
 ;;; Level 0 inside the hook
 
 (defun dropped-data-json (ids covers)
@@ -148,7 +181,7 @@ not back, or nil."
 
 (defun extract-cut (h event)
   "extractCutV2: the branch with the cut range's extraction (and any host summary) after it."
-  (let ((entries (cevent-branch event)))
+  (let ((entries (cevent-branch event)) (fresh nil))
     (when (< (entry-index-for-id entries (cevent-first-kept event)) (compaction-range-start-index entries))
       (let* ((branch (or (ignore-errors (hhost-branch h)) entries))
              (host (append-host-summary h branch (fold-ledger branch))))
@@ -156,7 +189,7 @@ not back, or nil."
     (let ((branch (ignore-errors (hhost-branch h))))
       (when branch
         (let ((cut (entry-index-for-id branch (cevent-first-kept event))))
-          (when (and (>= cut 0) (>= cut (compaction-range-start-index branch))) (setf entries branch)))))
+          (when (and (>= cut 0) (>= cut (compaction-range-start-index branch))) (setf entries branch fresh t)))))
     (let* ((range-start (compaction-range-start-index entries))
            (cut (entry-index-for-id entries (cevent-first-kept event)))
            (start (extraction-start-index entries))
@@ -165,18 +198,27 @@ not back, or nil."
              (multiple-value-bind (batches covers)
                  (extract entries start cut folded :skip-tools (hhost-skip-tools h) :cwd (hhost-cwd h)
                                                    :file-ops (cevent-file-ops event) :file-ops-from range-start)
-               (append-extraction-entries h batches covers)))
+               (let ((record nil))
+                 (when (hhost-detect h)
+                   (multiple-value-setq (batches record) (funcall (hhost-detect h) entries start cut folded batches covers)))
+                 (let ((out (append-extraction-entries h batches covers)))
+                   ;; Counted only for an extraction that landed on a range measured on the fresh
+                   ;; branch, as extractCutV2 records it.
+                   (when (and out fresh record) (funcall record))
+                   out))))
            (host (append-host-summary h entries folded)))
       (when host (setf appended (append appended (list host))))
       (if appended (concatenate 'simple-vector entries appended) entries))))
 
 ;;; Level 1's report
 
-(defun level1-skip-reason (cfg event entries cut &key model)
+(defun level1-skip-reason (cfg event entries cut &key model own-trigger)
   "consolidateV2's reasons for making no request, in its order. With no session model the
-request is never made (om hands none); a model is not ported (the server refuses it first)."
+request is never made (om hands none); a model is not ported (the server refuses it first).
+own-trigger is runtime.CompactInFlight: the extension's own compaction."
   (cond ((hconfig-consolidate-off cfg) "consolidate is false")
         ((hconfig-passive cfg) "passive mode")
+        (own-trigger "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only")
         ((string= (cevent-reason event) "overflow") "an overflow compaction runs level 0 only, so recovery is not delayed")
         ((or (null cut) (< (entry-index-for-id entries (cevent-first-kept event)) 0)) "the cut range is not on the branch")
         ((null model) "the session model is unavailable: no session model")
@@ -208,21 +250,24 @@ request is never made (om hands none); a model is not ported (the server refuses
 
 ;;; The hook
 
-(defun build-compaction (h event cfg &key model)
-  "buildCompactionV2 at level 0: a cresult on the event's exact cut."
+(defun build-compaction (h event cfg &key model own-trigger (context-window 0) (max-output 0))
+  "buildCompactionV2 at level 0: a cresult on the event's exact cut, then the branch it folded
+(level 0's batches after it) and the cut range's source entries. context-window and max-output
+are the session model's (host.ModelContextWindow, ModelMaxTokens; 0 unknown)."
   (let* ((cut (source-entries (cut-range (cevent-branch event) event)))
          (entries (extract-cut h event))
          (previous (previous-summary entries event))
          (removed (+ (source-tokens cut) (estimate-tokens previous)))
          (budget (resolve-summary-budget cfg :reserve (cevent-reserve event) :tokens-before (cevent-tokens-before event)
-                                             :removed removed))
+                                             :removed removed :context-window context-window :max-output max-output
+                                             :headroom (next-run-headroom entries)))
          (fmt (if (string= (hconfig-memory-format cfg) "lines") "lines" "tables"))
          (instructions (trim-space (cevent-custom-instructions event)))
          (iblock (if (string/= instructions "") (cat (string #\Newline) (string #\Newline) "---" (string #\Newline) (string #\Newline) instructions) ""))
          (memory-budget (if (and (string/= iblock "") (> (- budget (estimate-tokens iblock)) 0))
                             (- budget (estimate-tokens iblock))
                             budget))
-         (reason (level1-skip-reason cfg event entries cut :model model))
+         (reason (level1-skip-reason cfg event entries cut :model model :own-trigger own-trigger))
          (projection (full-projection* entries (cevent-first-kept event)))
          (observations (projection-observations projection))
          (reflections (active-reflections (projection-reflections projection)))
@@ -245,10 +290,11 @@ request is never made (om hands none); a model is not ported (the server refuses
       (multiple-value-setq (summary kind) (minimal-brief cut (hhost-skip-tools h) memory-budget removed)))
     (when (and (string/= iblock "") (<= (estimate-tokens (cat summary iblock)) budget))
       (setf summary (cat summary iblock)))
-    (make-cresult :summary summary :first-kept (cevent-first-kept event) :tokens-before (cevent-tokens-before event)
-                  :kind kind
-                  :details-json (details-json observations reflections (projection-aliases projection)
-                                              (cevent-first-kept event) (consolidation-json reason) shown))))
+    (values (make-cresult :summary summary :first-kept (cevent-first-kept event) :tokens-before (cevent-tokens-before event)
+                          :kind kind
+                          :details-json (details-json observations reflections (projection-aliases projection)
+                                                      (cevent-first-kept event) (consolidation-json reason) shown))
+            entries cut)))
 
 (defun cresult-map-json (c)
   "CompactionResult.ToMap's encoding: its keys sorted, details in MemoryDetails' order."

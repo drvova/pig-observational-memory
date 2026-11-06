@@ -104,11 +104,12 @@ cd memory && OM_LISP_PARITY=1 go test -p 1 ./selection ./transcript ./contracts 
   The layer API it needs is in place.
 - **`/om:status`.** `commands.RunStatus` reads the harness, the code store, the curated store,
   rules and the runtime's state. Most of that is not in the image, so `om status` stays in Go.
-- **The PiG-only inputs** of the hook: a context window and output cap (the budget's threshold
-  bound and `ledger.NextRunHeadroom`), the harness profile (`ApplySummary`, layout and codec from
-  the layer), and a split turn's preparation. The hook takes the preparation's members
-  (`cevent`), and the window and headroom default to unknown, as on a neutral host. Only
-  `memoryFormat` and `compactionSummaryMaxTokens` from the settings shape the render.
+- **The PiG-only inputs** of the hook: on PiG (docs/lisp-port-peer.md, "Compaction on PiG") the
+  hook now takes the session model's context window and output cap, PiG's `reserveTokens`,
+  `ledger.NextRunHeadroom` and the whole preparation (a split turn's prefix, the previous
+  summary, the file operations). The harness profile (`ApplySummary`, layout and codec from the
+  layer) is still Go's default: a session model with a store is refused at the harness hook point.
+  On `om`'s paths the window and headroom stay unknown, as on a neutral host.
 - **Retired defined tools** (`harness.Manager.SkipNames`). The skip list is the memory tool alone.
   This matches Go on a store with no retired defined queries.
 - **Time zone.** Day headers and record times are UTC (`serialize.Location` is the process's local

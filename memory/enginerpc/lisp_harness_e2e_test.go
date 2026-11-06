@@ -33,6 +33,14 @@ func harnessTurns() []session.Entry {
 	}
 }
 
+// harnessTail is the next request, the compaction's first kept entry, and its reply.
+func harnessTail() []session.Entry {
+	return []session.Entry{
+		testfix.RawMessage("h7", "and the timeline?"),
+		message("h8", map[string]any{"role": "assistant", "stopReason": "stop", "content": []any{map[string]any{"type": "text", "text": "Start on Monday 9 March with Billing."}}}),
+	}
+}
+
 // harnessStore is a config home whose store holds a keep-head rule for the scenario's session
 // model, written by the Go engine at a fixed time.
 func harnessStore(t *testing.T) string {
@@ -57,6 +65,22 @@ func harnessRun(t *testing.T, d driver) (any, []string) {
 	d.turnEnd(h)
 	h.SetBranch(append(h.Entries, entries[2:]...))
 	d.turnEnd(h)
+	// A compaction before the next request: level 0 only (consolidate is off), its pass event
+	// recorded and the rules decided.
+	h.SetBranch(append(h.Entries, harnessTail()...))
+	branch, _ := h.GetBranch()
+	result := d.beforeCompact(h, map[string]any{
+		"preparation": map[string]any{
+			"firstKeptEntryId": "h7", "tokensBefore": float64(30_000), "isSplitTurn": false,
+			"settings": map[string]any{"enabled": true, "reserveTokens": float64(16_384), "keepRecentTokens": float64(20_000)},
+		},
+		"branchEntries": maps(branch),
+		"reason":        "threshold",
+	})
+	if c, _ := result["compaction"].(map[string]any); c == nil {
+		t.Fatalf("compaction %v", result)
+	}
+	h.Appended = append(h.Appended, testfix.Appended{CustomType: "compaction-result", Data: testfix.ToJSONValue(result)})
 	data, err := os.ReadFile(filepath.Join(curated.DefaultDir(h.Home), "models", layer.ModelDir("test-provider/session")+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +109,7 @@ func TestLispHarnessDetectMatchesInProcess(t *testing.T) {
 	log := &lockedLog{}
 	gotAppended, gotLedger := harnessRun(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log)})
 	encoded, _ := json.Marshal(wantAppended)
-	if !strings.Contains(string(encoded), `"origin":"code"`) || len(wantLedger) != 2 || !strings.Contains(strings.Join(wantLedger, ""), rules.DetectUncitedAssistantSpecifics) {
+	if !strings.Contains(string(encoded), `"origin":"code"`) || len(wantLedger) != 3 || !strings.Contains(wantLedger[2], `"kind":"pass"`) || !strings.Contains(strings.Join(wantLedger, ""), rules.DetectUncitedAssistantSpecifics) {
 		t.Fatalf("the scenario tests nothing:\n%s\n%s", encoded, strings.Join(wantLedger, "\n"))
 	}
 	if !reflect.DeepEqual(wantAppended, gotAppended) {
