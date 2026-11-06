@@ -24,3 +24,6 @@ v3_spec.md
 docs/animation/out/
 /out/
 docs/animation/scratch/
+
+# Compact-Bench data (memory/cmd/compactbench fetch -data bench/compactbench-data)
+/bench/compactbench-data/

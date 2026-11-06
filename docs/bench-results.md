@@ -1,4 +1,73 @@
-# LongMemEval results
+# Bench results
+
+## Compact-Bench, no-model tracks (level 0)
+
+[Compact-Bench](https://github.com/cai-jianfeng/compact-bench) (Apache-2.0, data on Hugging Face as `caijanfeng/compact-bench`) measures how much of a coding session's recurring literal details survive compaction. Its two tracks that need no model are wired to this engine by [`memory/cmd/compactbench`](../memory/cmd/compactbench/main.go), our own adapter: it reads the released data files and never runs the benchmark's code. Measured on 2026-11-06 at `c277366` (the engine is unchanged by the adapter), data release `public-v1`.
+
+**Recurring-Detail Retention** (146 sessions, 9,330 atoms). Each session's history `H` is converted to Pi-shaped entries and compacted whole through the neutral host, as `om` compacts a harness's conversation: level 0 over every entry, then `selection.Render`. No model request is made (the neutral host hands the engine no model, and level 1 is off). The score is the benchmark's own: the share of a session's atoms (paths, commits, PR numbers, error names, URLs, `KEY=value` pairs, addresses its later requests used) whose value appears verbatim in the summary, averaged over sessions.
+
+| Summarizer | Mean recall | Mean summary chars |
+|---|---|---|
+| Mechanical regex extraction (the paper's reference) | 79.1% | |
+| Best model-written summary (the paper, five production prompts) | at most 16.0% | |
+| This engine, level 0, 4,096-token budget | 16.5% | 13,710 |
+| This engine, level 0, 8,192-token budget | 19.9% | 19,763 |
+| This engine, level 0, 16,384-token budget (the benchmark's summarizer output cap) | **21.8%** | 24,841 |
+| This engine, level 0, its own budget (the removed source; no window) | 23.0% | 37,651 |
+
+- **Level 0 beats the model-written summaries but is far below mechanical extraction.** The loss is at extraction, not selection: at the engine's own budget the summary holds every atom the ledger holds (23.0% either way), and an atom the summary leaves out at 16,384 tokens is still in the ledger for the memory tool in only 1.2 more points.
+- **Where the atoms are, and what level 0 keeps** (16,384 tokens, atoms pooled; an atom is placed at the first of user, assistant, tool call, tool output, system that holds it):
+
+  | First found in | Atoms | In the summary |
+  |---|---|---|
+  | User messages | 1,420 | 53.9% |
+  | Assistant text or thinking | 1,220 | 53.4% |
+  | Tool call arguments | 652 | 34.0% |
+  | Tool output only (or tool output and system) | 3,007 | 0.7% |
+  | System messages only | 1,684 | 0% |
+  | Only in the JSON-escaped history, or nowhere | 1,347 | 0.6% |
+
+  Level 0 records conversation, the model's own words on its calls, attempts, files at their newest state and commits, never the body of a tool's output, so the 32% of atoms that only a tool's output holds are lost. System messages (harness prompts and hook context) are not replayed, since a harness transcript does not carry its system prompt as conversation. The benchmark's mechanical reference regex-scans the JSON of the whole history, system messages and escaped strings included, and keeps 40 values per kind, which is why it reaches 79.1%. Per kind at 16,384 tokens: PR numbers 73.0%, paths 20.8%, sha 15.8%, addresses 22.6%, error names 13.6%, URLs 9.2%, `KEY=value` 5.2%.
+- **Comparability.** The atoms and the verbatim test are the benchmark's, so the figure is directly comparable to its 79.1% and 16.0%. Two differences: the benchmark's model-written summaries saw a serialized transcript with each block clipped at 4,000 characters, no tool-call arguments and a 250,000-character tail, while the engine reads the whole history; and the replayed messages carry synthetic timestamps one second apart (the release has none). A run is byte-identical between runs.
+
+**Production-Chain Retention** (106 chains, 224 boundaries) **cannot be replayed through this engine.** The release holds, for each boundary, only the summary the production harness wrote (`S_k`), the atoms the following requests used (`atomsF`) and the files done before it; it holds no history before any boundary (the paper withholds the private session payloads), and no chain is among the retention sessions: no session id is shared, and no boundary's atoms overlap a retention session's by more than a quarter (Jaccard). What can be scored is the recorded production summaries themselves, with the benchmark's definition, which reproduces the paper's figure:
+
+| Boundary k | Mean R_k of the recorded summaries | Boundaries |
+|---|---|---|
+| 1 | 15.7% | 106 |
+| 2 | 19.9% | 27 |
+| 3 | 4.9% | 6 |
+| 4 | 1.8% | 1 |
+
+To score this engine on the track, the release would need each chain's raw history up to every boundary (the requests before `S_k`), in the same message format as the retention sessions.
+
+**Reproduce.**
+
+```sh
+cd memory
+go run ./cmd/compactbench fetch -data ../bench/compactbench-data      # 75 MB, SHA-256 checked; gitignored
+go run ./cmd/compactbench retention -data ../bench/compactbench-data -budgets 4096,8192,16384,0 -workers 2 [-out results.jsonl -keep-summaries]
+go run ./cmd/compactbench production -data ../bench/compactbench-data
+```
+
+Retention takes under a minute per budget on two cores. Each `-out` line carries a session's recall, its ledger and source recall, the atoms only system messages hold, per-kind counts and, with `-keep-summaries`, the summary.
+
+## Judge harness (decision 21)
+
+[`bench/longmemeval`](../bench/longmemeval/README.md) can now re-judge a finished run with a pinned judge from a different model family than the answering model, and compare two judged runs (`lme.py judge`, `lme.py compare`; logic in `judging.py`). It is built and unit-tested with scripted fake judges; no real judge pass has been run yet, so there are no numbers here. Every LongMemEval figure above was judged by the answering model itself.
+
+- **Configuration only.** The judge is `--judge-model` (PiG's model name, through the run's own agent directory) or `--judge-command` (any command that reads the prompt on stdin and prints the reply), with `--judge-family` and `--answer-family` labels that must differ; `LME_JUDGE_MODEL`, `LME_JUDGE_COMMAND`, `LME_JUDGE_FAMILY` and `LME_ANSWER_FAMILY` set them from the environment. A pass refuses the run's own answering model and a judge of the same family. Keys reach the judge only through PiG's auth or the command's environment.
+- **Code first.** An answer equal to its gold answer after normalization, or a one-number gold answer that is the only number in an answer with no negation or hedge, is scored correct without the judge (abstention, preference and temporal questions always go to the judge); a `--matchers` file adds per-question accept and reject patterns. Only a reject pattern fails an answer by code.
+- **Three runs, majority vote**, with every reply cached by prompt digest and run, so a pass resumes and is re-scored without asking again. The report counts unanimous verdicts and the verdicts that differ from the run's self-judge.
+- **Controls and decoys on every pass**, shuffled blind among the real prompts and judged with the bench's knowledge-update template: twelve authored update scenarios give 12 known-correct and 12 known-wrong controls and 12 decoys in each of TWIST's classes (the stale value stated as current; the correct answer with one detail changed; a fluent non-answer; the old and new values given unordered). **A pass is void** (exit status 3) when, in any of its three runs, the judge accepts more than 1 of 12 in a decoy class or labels fewer than 11 of 12 in either control group correctly. A judge that accepts any response containing the gold answer fails the detail-changed and unordered classes, which the tests check.
+- **Paired comparison.** `compare` reports gained and lost questions, McNemar's exact p-value and a paired-bootstrap 95% interval of the accuracy difference, the questions both arms passed (`--write-control-ids` saves them as the next comparison's control set) and the candidate's losses on a both-passed control set given with `--control-ids`. Failed or missing questions count as wrong in their arm.
+- **Ship rule** (Tier 1, from the evaluation research): net flips at least 0, the interval's lower bound at least -1 point, losses on the both-passed control set at most 1%, and both judge passes valid; a void pass makes the verdict void. The stale-as-current and over-application rates of answers need labelled stale answers this bench does not have, and are reported as not measured.
+
+```sh
+python3 bench/longmemeval/lme.py judge --out RUN --judge-model M --judge-family F --answer-family G [--workers 4]
+python3 bench/longmemeval/lme.py compare --base RUN_A --cand RUN_B --judge LABEL --control-ids both.json
+python3 -m unittest discover -s bench/longmemeval -p 'test_*.py'
+```
 
 ## Memory v2 through real PiG sessions (GPT-6-Luna)
 
