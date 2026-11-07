@@ -285,8 +285,14 @@ in [lisp-port-tool-layer.md](lisp-port-tool-layer.md), "The memory tool in a chi
   `ModelKindCode` event is recorded as `recordCode` records it.
 - **Go code.** Code that looks like Go is answered with the Lisp form to write. A Go pointer the
   summary, a thinning mark or a recall page prints (`om.Notes(...)`, `om.Files`, `om.Commits`,
-  `om.Attempts`, `om.History`, `om.Saved`, `om.Recall`, with literal options) runs as the Lisp call
-  it stands for, named on the result's first line. Definitions the Go tool kept in the code store
+  `om.Attempts`, `om.History`, `om.Saved`, `om.Recall`, `om.Head`, with literal options) runs as the
+  Lisp call it stands for, named on the result's first line.
+- **The HEAD structure view.** `(head prefix &key limit offset)` pages HEAD's files as `om.Head`
+  does (50 by default, at most 500) and `show` prints the page as `om.HeadView.String`, its next
+  page as the Go pointer above; a project record's freshness verdict is its own member
+  (`note-fresh`, as `om.Note.Fresh`), which `note-line` prints after the content as `om.Note.Line`
+  does. Both read the host's view at call time (`host/structure`, from the PiG adapter or the om
+  command), and `contracts/project-tool.jsonl` pins the bytes both tools print. Definitions the Go tool kept in the code store
   are listed in the manual as never run.
 
 ## The child process
