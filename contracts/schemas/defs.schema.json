@@ -51,7 +51,7 @@
         "tokenCount": { "type": "integer", "minimum": 0 },
         "kind": {
           "description": "ObservationKindValues and CodeKindValues but value and evidence (record-tool-output.schema.json).",
-          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note", "decision", "convention", "pushback"]
+          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note", "decision", "convention", "pushback", "forget"]
         },
         "subject": { "type": "string" },
         "scope": {
@@ -112,6 +112,22 @@
         },
         "episode": { "description": "The id of the record's episode: ledger.EpisodeID of the session and the request that opened it (contracts/encoding.md, \"Episode\").", "type": "string", "pattern": "^[a-f0-9]{12}$" },
         "derivedFrom": { "description": "The entry id of the request a plan (status proposed) was made under: the newest request the person typed at or before its newest source entry (contracts/encoding.md, \"Derived from\").", "type": "string", "minLength": 1 },
+        "intent": { "description": "A plan's type, which says how it closes (contracts/truth.md, \"Intentions\").", "enum": ["todo", "promise", "condition-wait", "deferred"] },
+        "forgets": {
+          "description": "A forget record's tombstones: what the user asked to forget, by id, kind and source entries, never by text (contracts/truth.md, \"Forget records\").",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+              "kind": { "type": "string" },
+              "sources": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+            }
+          }
+        },
         "keys": { "$ref": "#/$defs/recordKeys" },
         "frame": { "$ref": "#/$defs/recordFrame" },
         "writer": { "$ref": "#/$defs/recordWriter" }

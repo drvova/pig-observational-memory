@@ -237,6 +237,14 @@ func (x *extraction) user(i int) {
 		if isBareAck(sentence) || isMarkupOnly(sentence) || x.known[normalized(sentence)] {
 			continue
 		}
+		if named, scope, ok := forgetOf(sentence); ok {
+			if scope == ledger.ForgetScopeProject && x.in.Frame.RepoID != "" {
+				scope += ":" + x.in.Frame.RepoID
+			}
+			r := x.add(ledger.Observation{Content: sentence, Kind: ledger.KindForget, Scope: scope}, i)
+			r.forgetting, r.forget = true, named
+			continue
+		}
 		var kind ledger.ObservationKind
 		status := ""
 		target, correction := correctionOf(sentence)
@@ -544,6 +552,29 @@ func (x *extraction) resolveRetractions() {
 		}
 		earlier = append(earlier, candidate{o.ID, o.Content, o.Status, anchor})
 	}
+	// withdraw supersedes what c names: c itself, or, when c is a level-1 merge some but not all
+	// of whose sources match (narrowed by match), those sources, so the fold takes the merge out
+	// and its other sources reappear (ledger.Truth, decision 1).
+	withdraw := func(r *record, c candidate, match func(content string) bool) {
+		ids := []string{c.id}
+		if m, ok := x.in.Ledger.ObservationsByID[c.id]; ok && len(m.Replaces) > 1 && match != nil {
+			var hit []string
+			for _, id := range m.Replaces {
+				if src, ok := x.in.Ledger.ObservationsByID[id]; ok && pending(src) && match(src.Content) {
+					hit = append(hit, id)
+				}
+			}
+			if len(hit) > 0 && len(hit) < len(m.Replaces) {
+				ids = hit
+			}
+		}
+		for _, id := range ids {
+			if !slices.Contains(r.obs.Supersedes, id) {
+				r.obs.Supersedes = append(r.obs.Supersedes, id)
+			}
+		}
+		x.superseded[c.id] = true
+	}
 	kept := x.records[:0]
 	for _, r := range x.records {
 		if r.retraction {
@@ -552,34 +583,37 @@ func (x *extraction) resolveRetractions() {
 			// content words; only a retraction naming no phrase reads the sentence's specifics.
 			switch named := r.named; {
 			case named.words != "" && len(ledger.PhraseSpecifics(named.phrase)) > 0:
+				match := func(content string) bool { return ledger.CarriesPhrase(content, named.phrase) }
 				for _, c := range earlier {
-					if !x.superseded[c.id] && ledger.CarriesPhrase(c.content, named.phrase) {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+					if !x.superseded[c.id] && match(c.content) {
+						withdraw(r, c, match)
+						withdrawn = true
 					}
 				}
 			case named.words != "":
+				match := func(content string) bool { return ledger.ContainsWords(content, named.words) }
 				for i := len(earlier) - 1; i >= 0; i-- {
 					c := earlier[i]
-					if !x.superseded[c.id] && ledger.MaySupersede(r.obs, ledger.Observation{Status: c.status}) && ledger.ContainsWords(c.content, named.words) {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+					if !x.superseded[c.id] && ledger.MaySupersede(r.obs, ledger.Observation{Status: c.status}) && match(c.content) {
+						withdraw(r, c, match)
+						withdrawn = true
 						break
 					}
 				}
 			case ledger.HasSpecifics(r.obs.Content):
+				match := func(content string) bool { return len(ledger.AddedSpecifics(r.obs.Content, []string{content})) == 0 }
 				for _, c := range earlier {
-					if !x.superseded[c.id] && len(ledger.AddedSpecifics(r.obs.Content, []string{c.content})) == 0 {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+					if !x.superseded[c.id] && match(c.content) {
+						withdraw(r, c, match)
+						withdrawn = true
 					}
 				}
 			default:
 				from := x.previousExchange(r.exchange)
 				for i := len(earlier) - 1; i >= 0; i-- {
 					if c := earlier[i]; !x.superseded[c.id] && c.anchor >= from {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+						withdraw(r, c, nil)
+						withdrawn = true
 						break
 					}
 				}

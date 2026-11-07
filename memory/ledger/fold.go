@@ -24,6 +24,9 @@ type FoldedLedger struct {
 	// replace.go). FoldLedger reads every link through it to the record standing for its target
 	// (Standing); FoldLedgerUnresolved leaves the links as written.
 	ReplacedBy map[string]string
+	// Truth is what truth maintenance took out of the fold (truth.go): the forgotten records,
+	// which are in none of the lists above, and the records and reflections gone out.
+	Truth Truth
 }
 
 func foldEndIndex(entries []Entry, upToEntryID string) int {
@@ -113,6 +116,8 @@ func FoldLedgerUnresolved(entries []Entry, upToEntryID string) FoldedLedger {
 			}
 		}
 	}
+	folded.Observations, folded.Reflections, folded.Truth = maintainTruth(folded.Observations, folded.DroppedObservationIDs, replacements.by, folded.Reflections)
+	folded.keepByID()
 	folded.ReplacedBy = replacements.by
 	if folded.Observations == nil {
 		folded.Observations = []Observation{}
@@ -145,6 +150,22 @@ func ResolveFolded(folded *FoldedLedger, follow func(id string) bool) {
 	}
 	folded.Reflections = reflections
 	folded.derive()
+}
+
+// keepByID leaves in the by-id maps only the records and reflections the lists hold.
+func (folded *FoldedLedger) keepByID() {
+	if len(folded.ObservationsByID) != len(folded.Observations) {
+		folded.ObservationsByID = make(map[string]Observation, len(folded.Observations))
+		for _, o := range folded.Observations {
+			folded.ObservationsByID[o.ID] = o
+		}
+	}
+	if len(folded.ReflectionsByID) != len(folded.Reflections) {
+		folded.ReflectionsByID = make(map[string]Reflection, len(folded.Reflections))
+		for _, r := range folded.Reflections {
+			folded.ReflectionsByID[r.ID] = r
+		}
+	}
 }
 
 // derive computes the active records and CitedBy from the records and reflections.

@@ -173,23 +173,12 @@ more than one, lowercased, each once, none shorter than two bytes; none for an e
 ;;; Tags, documents and exact keys (retrieve/search.go)
 
 (defun tag-of (o superseded retracted contested)
-  "TagOf."
-  (cond ((or retracted (string= (obs-status o) +status-retracted+)) "retracted")
-        (superseded "superseded")
-        ((held-rule o) "held")
-        (contested "contested")
-        (t "believed")))
+  "TagOf: the record's label (label-of, labels.lisp)."
+  (label-of o superseded retracted contested))
 
 (defun tags-of (records)
-  "TagsOf: id -> tag over the active records in ledger order."
-  (let ((superseded (make-set)) (retracted (retracted-ids records)) (contested (contested records))
-        (out (make-set)))
-    (dolist (o records)
-      (dolist (id (obs-supersedes o)) (unless (string= id (obs-id o)) (setf (gethash id superseded) t))))
-    (dolist (o records out)
-      (setf (gethash (obs-id o) out)
-            (tag-of o (gethash (obs-id o) superseded) (gethash (obs-id o) retracted)
-                    (nth-value 1 (gethash (obs-id o) contested)))))))
+  "TagsOf: id -> tag over the active records in ledger order, their labels (labels-of)."
+  (labels-of records))
 
 (defun withdrawn-tag-p (tag) (member-str tag '("superseded" "retracted")))
 

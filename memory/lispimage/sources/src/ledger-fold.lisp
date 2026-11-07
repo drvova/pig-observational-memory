@@ -65,7 +65,9 @@
   (refl-by-id (make-set))
   (aliases '())
   (cited-by (make-set))
-  (replaced-by (make-set)))
+  (replaced-by (make-set))
+  ;; truth: what truth maintenance took out (ledger-truth.lisp, FoldedLedger.Truth).
+  (truth (make-truth)))
 
 (defun fold-end-index (entries up-to)
   (if (string= up-to "")
@@ -115,10 +117,25 @@
                        ((string= type "om.subjects.aliased")
                         (let ((aliases (subjects-aliased-data e)))
                           (when aliases (setf (folded-aliases f) (append (folded-aliases f) aliases))))))))))
-    (setf (folded-observations f) (nreverse observations)
-          (folded-reflections f) (nreverse reflections)
-          (folded-replaced-by f) (tracker-by tracker))
+    (multiple-value-bind (kept kept-refl truth)
+        (maintain-truth (nreverse observations) (folded-dropped f) (tracker-by tracker) (nreverse reflections))
+      (setf (folded-observations f) kept
+            (folded-reflections f) kept-refl
+            (folded-truth f) truth))
+    (folded-keep-by-id f)
+    (setf (folded-replaced-by f) (tracker-by tracker))
     (folded-derive f)))
+
+(defun folded-keep-by-id (f)
+  "FoldedLedger.keepByID: the by-id maps hold only the records and reflections the lists hold."
+  (unless (= (hash-table-count (folded-by-id f)) (length (folded-observations f)))
+    (let ((m (make-set)))
+      (dolist (o (folded-observations f)) (setf (gethash (obs-id o) m) o))
+      (setf (folded-by-id f) m)))
+  (unless (= (hash-table-count (folded-refl-by-id f)) (length (folded-reflections f)))
+    (let ((m (make-set)))
+      (dolist (r (folded-reflections f)) (setf (gethash (refl-id r) m) r))
+      (setf (folded-refl-by-id f) m))))
 
 (defun resolve-folded (f &optional follow)
   "ResolveFolded: every link of f read through its replacements."
@@ -209,6 +226,8 @@ replacements (Standing)."
                                 (and (>= ob 0) (<= i ob))))
                    (setf aliases (append aliases list))))))
     (setf observations (nreverse observations) reflections (nreverse reflections))
+    (multiple-value-setq (observations reflections)
+      (maintain-truth observations dropped (tracker-by tracker) reflections))
     (let ((by (tracker-by tracker)))
       (make-projection
        :observations (loop for o in observations

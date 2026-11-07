@@ -129,6 +129,10 @@ type record struct {
 	// replacesRule is the phrase a user rule says it replaces ("use X, not Y"; the Y holding a
 	// key), "" for none (resolveRuleReplacements).
 	replacesRule string
+	// forgetting marks a forget request (forgetOf), with the phrase it names (forget); it stands
+	// only once it names a record (resolveForgets).
+	forgetting bool
+	forget     namedPhrase
 }
 
 // extraction is one Extract call's state.
@@ -240,6 +244,7 @@ func Extract(in Input) Result {
 	x.assignIDs()
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil })
 	x.resolveRetractions()
+	x.resolveForgets()
 	// A phrase retraction that withdrew nothing became the correction it would have been.
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil && r.correction == r.fallback })
 	x.resolveRuleReplacements()
@@ -411,7 +416,7 @@ func (x *extraction) assignIDs() {
 		if r.obs.ID == "" {
 			r.obs.ID = recordID(r.obs)
 		}
-		if _, held := x.in.Ledger.ObservationsByID[r.obs.ID]; held || seen[r.obs.ID] {
+		if _, held := x.in.Ledger.ObservationsByID[r.obs.ID]; held || seen[r.obs.ID] || x.in.Ledger.Tombstoned(r.obs) {
 			continue
 		}
 		seen[r.obs.ID] = true

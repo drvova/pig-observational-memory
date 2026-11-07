@@ -26,6 +26,8 @@
                              (:file "ledger-subjects")
                              (:file "ledger-reflections")
                              (:file "ledger-replace")
+                             ;; Phase 5: truth maintenance (forget tombstones, the cascade).
+                             (:file "ledger-truth")
                              (:file "ledger-fold")
                              (:file "ledger-render")
                              ;; The records a preference that weakens security holds.
@@ -44,6 +46,8 @@
                              (:file "contest")
                              ;; Phase 3: working memory (receipts, staleness, rule replacements).
                              (:file "working")
+                             ;; Phase 5: the labels and the three-way supersession decision.
+                             (:file "labels")
                              ;; Phase 4: the search behind the reads (memory/retrieve).
                              (:file "retrieve")
                              (:file "selection")

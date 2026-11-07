@@ -294,6 +294,31 @@ func encodingCases() []encodingCase {
 			assistant("a3", call{"c3", "Read", map[string]any{"file_path": "/work/app/yarn.lock"}}),
 			result("r3", "c3", "Read", "# yarn v1\nleft-pad@1.3.0\n", false),
 		}, []string{"convention", "convention", "file"}},
+		// Forget requests (contracts/truth.md, "Forget records").
+		{"forget from memory", []session.Entry{
+			user("u1", "My home address is 12 Elm Street, Springfield."),
+			user("u2", "Please forget my home address from memory."),
+		}, []string{"forget"}},
+		{"stop remembering for this session", []session.Entry{
+			user("u1", "The staging password rotates every Monday at 0900."),
+			user("u2", "Stop remembering the staging password for this session."),
+		}, []string{"forget"}},
+		{"forget what I said about", []session.Entry{
+			user("u1", "I am flying to Berlin on 2026-12-03 for the offsite."),
+			user("u2", "Forget what I said about Berlin."),
+		}, []string{"forget"}},
+		{"forget in this project", []session.Entry{
+			user("u1", "The vendor API key lives in `config/vendor.env`."),
+			user("u2", "Don't remember the vendor API key in this project."),
+		}, []string{"forget"}},
+		{"forget naming nothing held", says("Please forget my blood type from memory."), nil},
+		{"forget naming no word", says("Forget that from memory."), nil},
+		{"forget as a question", says("Can you forget my address from memory?"), nil},
+		{"forget the plan stays a retraction", []session.Entry{
+			user("u1", "Next we will migrate the orders table to Postgres 16."),
+			user("u2", "Forget the Postgres plan."),
+		}, []string{"fact/proposed", "correction/retracted"}},
+		{"don't keep is no forget", says("Don't keep secrets in `config/`."), nil},
 	}
 }
 

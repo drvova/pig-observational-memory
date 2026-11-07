@@ -491,6 +491,7 @@ func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
 	var kepts []ledger.Observation
 	var tags []string
 	contested := ledger.Contested(folded.ActiveObservations)
+	labels := folded.Labels()
 	byTag := retrieve.IsTag(o.Status) && o.Status != ledger.StatusRetracted
 	for i, row := range rows.Rows {
 		id := strings.TrimSuffix(row[0], OffPathLabel)
@@ -511,7 +512,12 @@ func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
 		n := noteOf(rows.Fields, row, obs, positions, r.Off != nil)
 		n.Dropped = fn == omwire.MDropped
 		_, isContested := contested[obs.ID]
-		tag := retrieve.TagOf(obs, supersededNow(n.SupersededBy), n.Status == ledger.StatusRetracted, isContested)
+		// The fold's label (ledger.FoldedLedger.Labels), except in a point-in-time view, which
+		// reads the links that held at its bound.
+		tag, labelled := labels[obs.ID]
+		if !labelled || v != nil {
+			tag = retrieve.TagOf(obs, supersededNow(n.SupersededBy), n.Status == ledger.StatusRetracted, isContested)
+		}
 		if byTag && tag != o.Status {
 			continue
 		}

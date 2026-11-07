@@ -41,6 +41,10 @@
   (episode "" :type string)
   ;; derived-from: the entry id of the request a plan was made under (Observation.DerivedFrom).
   (derived-from "" :type string)
+  ;; intent: a plan's type (Observation.Intent, truth.lisp); forgets: a forget record's
+  ;; tombstones (Observation.Forgets), each a list (id kind sources).
+  (intent "" :type string)
+  (forgets '() :type list)
   (keys '() :type list)
   (frame '() :type list)
   (writer '() :type list))
@@ -50,7 +54,7 @@
 (defparameter +status-retracted+ "retracted")
 (defparameter +status-values+ '("proposed" "hypothetical" "retracted"))
 (defparameter +observation-kinds+ '("fact" "event" "preference" "plan" "correction" "assistant"))
-(defparameter +code-kinds+ '("attempt" "file" "commit" "note" "decision" "convention" "evidence" "value" "pushback"))
+(defparameter +code-kinds+ '("attempt" "file" "commit" "note" "decision" "convention" "evidence" "value" "pushback" "forget"))
 (defparameter +relevance-values+ '("low" "medium" "high" "critical"))
 
 (defun write-obs-json (o out)
@@ -103,6 +107,17 @@
     (unless (string= (obs-time-hint o) "") (field "timeHint" (obs-time-hint o)))
     (unless (string= (obs-episode o) "") (field "episode" (obs-episode o)))
     (unless (string= (obs-derived-from o) "") (field "derivedFrom" (obs-derived-from o)))
+    (unless (string= (obs-intent o) "") (field "intent" (obs-intent o)))
+    (when (obs-forgets o)
+      (write-string ",\"forgets\":[" out)
+      (loop for (f . rest) on (obs-forgets o)
+            do (destructuring-bind (id kind sources) f
+                 (write-string "{\"id\":" out) (write-json-string id out)
+                 (unless (string= kind "") (write-string ",\"kind\":" out) (write-json-string kind out))
+                 (when sources (write-string ",\"sources\":" out) (write-json (strings sources) out))
+                 (write-char #\} out))
+               (when rest (write-char #\, out)))
+      (write-char #\] out))
     (flet ((object (name alist writer)
              (when alist
                (write-char #\, out) (write-json-string name out) (write-char #\: out)
@@ -159,6 +174,21 @@ another record, as (plan-id closed-by receipt), the first per plan."
                      (push-end (list id by receipt) out))))))
     out))
 
+(defparameter +intent-values+ '("todo" "promise" "condition-wait" "deferred")
+  "ledger.IntentValues: the intention types (contracts/truth.md, \"Intentions\").")
+
+(defun tombstones-from (v)
+  "tombstonesFrom: a decoded forgets list read leniently, each a list (id kind sources), the first
+per id."
+  (let ((out '()))
+    (when (and (vectorp v) (not (stringp v)))
+      (loop for m across v
+            do (when (hash-table-p m)
+                 (let ((id (jget m "id")))
+                   (when (and (memory-id-p id) (not (find id out :key #'first :test #'string=)))
+                     (push-end (list id (str (jget m "kind")) (non-empty-strings (jget m "sources"))) out))))))
+    out))
+
 (defregex +schema-field-name+ #r§^[a-z][a-z0-9_]{0,31}$§)
 
 (defun observation-from (m)
@@ -198,6 +228,8 @@ another record, as (plan-id closed-by receipt), the first per plan."
           (let ((s (jget m "timeHint"))) (when (time-hint-p s) (setf (obs-time-hint o) s)))
           (when (stringp (jget m "episode")) (setf (obs-episode o) (jget m "episode")))
           (when (stringp (jget m "derivedFrom")) (setf (obs-derived-from o) (jget m "derivedFrom")))
+          (let ((s (jget m "intent"))) (when (member s +intent-values+ :test #'equal) (setf (obs-intent o) s)))
+          (setf (obs-forgets o) (tombstones-from (jget m "forgets")))
           (setf (obs-keys o) (read-keys (jget m "keys"))
                 (obs-frame o) (read-members (jget m "frame") +frame-members+)
                 (obs-writer o) (read-members (jget m "writer") +writer-members+))
