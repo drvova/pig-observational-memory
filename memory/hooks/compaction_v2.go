@@ -7,6 +7,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/debuglog"
+	"github.com/drvova/pig-observational-memory/memory/dreams"
 	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/harness"
 	"github.com/drvova/pig-observational-memory/memory/host"
@@ -116,6 +117,8 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// The records of the cut range, appended before rendering so the protection of unextracted
 	// entries holds by construction (docs/memory-v2.md, "PiG's cut, exactly").
 	entries := extractCutV2(ctx, rt, h, event)
+	// The sleep pass's compaction fallback (sleep_v2.go), before level 1 and the render.
+	entries = sleepFallbackV2(ctx, request, rt, h, entries)
 	previousSummary := v2PreviousSummary(entries, event)
 	removed := v2SourceTokens(cut) + tokens.EstimateStringTokens(previousSummary)
 	model := h.SessionModel()
@@ -214,6 +217,8 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			Slots:           V2Slots(cfg, model),
 			Freshness:       fresh.texts(),
 			Decayed:         v2Decayed(cfg, entries, projection.Observations),
+			// A record a sleep record found duplicated is never shown: its first copy stands for it.
+			Hidden: SleepHidden(entries),
 		})
 		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords
@@ -236,6 +241,13 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	if instructionsBlock != "" && tokens.EstimateStringTokens(summary+instructionsBlock) <= budget {
 		summary += instructionsBlock
 		instructionsKept = true
+	}
+	// The dream section (decision 5), behind the dreams setting: after everything else, only
+	// when it fits the budget whole.
+	if cfg.Dreams && kind == v2SummaryRecords {
+		if section := dreams.Section(entries); section != "" && tokens.EstimateStringTokens(summary+section) <= budget {
+			summary += section
+		}
 	}
 
 	data := map[string]any{
@@ -289,6 +301,7 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	}
 	if request.Err() == nil && (owner || !rt.CompactHookOwnerLive()) {
 		recordCompactionV2(ctx, rt, h, entries, cut, level1.counts, snapshot)
+		promoteCoreV2(ctx, rt, h, entries)
 		// The detector pass is built as data beside the summary, only when a detector would
 		// run, and runs in the background once the compaction is produced; a compaction PiG
 		// discards (a cancelled request) starts none.

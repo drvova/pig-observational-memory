@@ -48,7 +48,7 @@ once), t or nil. OM_TOOL_CHILD_UNSHARE=0 turns it off.")
 
 (defparameter +remote-functions+
   '(om.tool:notes om.tool:note-by-id om.tool:history om.tool:recall om.tool:saved om.tool:head
-    om.tool:save om.tool:edit om.tool:forget-memory om.tool:feedback
+    om.tool:save om.tool:edit om.tool:forget-memory om.tool:feedback om.tool:correct
     om.tool:layer om.tool:layer-forget om.tool:layer-rollback om.tool:note-line)
   "The OM.TOOL functions a child forwards to the image: every one that reads the branch, the
 curated store or the layer, writes, or dispatches on the model's layer (note-line). The
@@ -395,6 +395,10 @@ text), recording it as omhost's Record does."
                                                        :description (key-arg (rest args) :description)))
                    ((string= name "forget-memory") (rec-write rec "forget" (first args)))
                    ((string= name "feedback") (rec-write rec "feedback" (first args)))
+                   ((string= name "correct")
+                    (rec-write rec "correct" (name-of (first args))
+                               :type (if (om::has-prefix value "Recorded a correction") "quoted" "")
+                               :description (om::join (om::fields (if (stringp (second args)) (second args) "")) " ")))
                    ((string= name "layer-forget")
                     (rec-write rec "layer-forget" (format nil "~A/~A" +kind-adaptable+ (name-of (first args)))))
                    ((string= name "layer-rollback") (rec-write rec "layer-rollback" (princ-to-string (first args)))))

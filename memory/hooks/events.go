@@ -25,7 +25,9 @@ func OnAgentStart(rt *runtime.Runtime, h host.Host) {
 // (extractTurnV2).
 func OnTurnEnd(rt *runtime.Runtime, h host.Host) {
 	rt.EnsureConfig(h)
-	extractTurnV2(rt, h)
+	if extractTurnV2(rt, h) {
+		ErasePending(rt, h)
+	}
 }
 
 // OnAgentSettledEvent is the agent_settled handler: the auto-compaction-off trigger

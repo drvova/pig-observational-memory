@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.sleep entry",
+  "description": "One sleep pass's record (docs/memory-v2.md, \"Sleep\"; docs/brain-memory.md, decision 13): the duplicates it hid, the links of shared keys, the records decay lowers, the project records verified or retired against HEAD, and the checks of level-1 supersedes and lessons, each only what no earlier sleep record on the branch said. It never deletes a record. Source: memory/ledger/sleep.go (SleepData), written by memory/hooks/sleep_v2.go (RunSleep) and lisp/src/sleep.lisp.",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.sleep"
+    },
+    "data": {
+      "type": "object",
+      "required": ["version", "trigger", "throughEntryId", "records"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"const": 1},
+        "trigger": {"enum": ["compaction", "idle", "manual"]},
+        "throughEntryId": {"$ref": "defs.schema.json#/$defs/entryId"},
+        "records": {"type": "integer", "minimum": 0},
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "of", "by"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"$ref": "defs.schema.json#/$defs/recordId"},
+              "of": {"$ref": "defs.schema.json#/$defs/recordId"},
+              "by": {"enum": ["hash", "error"]}
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "ids"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {"type": "string", "minLength": 1},
+              "ids": {"type": "array", "minItems": 2, "items": {"$ref": "defs.schema.json#/$defs/recordId"}}
+            }
+          }
+        },
+        "decayed": {"type": "array", "items": {"$ref": "defs.schema.json#/$defs/recordId"}},
+        "verified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "head", "verdict"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"$ref": "defs.schema.json#/$defs/recordId"},
+              "head": {"type": "string", "minLength": 1},
+              "verdict": {"enum": ["holds", "changed"]}
+            }
+          }
+        },
+        "retired": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "head", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"$ref": "defs.schema.json#/$defs/recordId"},
+              "head": {"type": "string", "minLength": 1},
+              "reason": {"const": "gone"}
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind", "verdict"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"$ref": "defs.schema.json#/$defs/recordId"},
+              "kind": {"enum": ["supersede", "lesson"]},
+              "verdict": {"enum": ["holds", "challenged"]},
+              "by": {"type": "array", "items": {"$ref": "defs.schema.json#/$defs/recordId"}}
+            }
+          }
+        }
+      }
+    }
+  }
+}

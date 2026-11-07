@@ -12,6 +12,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
 // DetectorEntry is the function a Go detector declares and a detector run calls: it returns the
@@ -37,6 +38,22 @@ var DetectorOMNames = []string{
 // RuleDetector names a refusal of a detector's shape (CheckDetector).
 const RuleDetector = "detector"
 
+// RuleSecret names the refusal of code that holds a secret (CheckDetector): code is never
+// redacted, since a redacted literal would change what it does, so it is refused whole
+// (docs/memory-v2.md, "Erasure and the layer purge").
+const RuleSecret = "secret"
+
+// SecretInCode is the refusal of src when a secret rule (memory/secrets) finds a value in it, a
+// string literal or a comment alike; nil when none does.
+func SecretInCode(src string) error {
+	_, found := secrets.Scan(src)
+	if len(found) == 0 {
+		return nil
+	}
+	line := 1 + strings.Count(src[:min(found[0].Start, len(src))], "\n")
+	return &Refusal{Rule: RuleSecret, Line: line, Reason: fmt.Sprintf("the code holds a secret (%s): code is never redacted, so it is refused; read the value from where it lives instead of writing it into the code", found[0].Rule)}
+}
+
 // CheckDetector is the pure check of a Go detector's source (docs/code-tool.md, "Checks"): at
 // most one recall page; the whole code policy (labels and package-selector assignments
 // included); declarations only, functions, methods, types and constants, with exactly one
@@ -50,6 +67,9 @@ func CheckDetector(src string) error {
 	}
 	if n := utf8.RuneCountInString(src); n > om.RecallPageChars {
 		return &Refusal{Rule: RuleDetector, Reason: fmt.Sprintf("a detector's code is %d characters, and one is at most %d (one recall page)", n, om.RecallPageChars)}
+	}
+	if err := SecretInCode(src); err != nil {
+		return err
 	}
 	p, err := Check(Input{Code: src})
 	if err != nil {

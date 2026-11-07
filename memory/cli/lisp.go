@@ -15,7 +15,9 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/engine"
 	"github.com/drvova/pig-observational-memory/memory/enginerpc"
 	"github.com/drvova/pig-observational-memory/memory/gitrepo"
+	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
 )
 
@@ -349,7 +351,29 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 			fmt.Fprintln(a.log, notice)
 		}
 	}
+	if event == "turn-end" || event == "prompt" {
+		a.erasePending(s)
+	}
 	return res, true, a.runRemaining(s, res.Remaining)
+}
+
+// erasePending runs the erasure purge after the image's level 0 (hooks.ErasePending): the image
+// records an erase request, and the Go client purges its payloads from the engine's files under
+// the Go stores' locks. A store holding no erase request is not read past that check.
+func (a *app) erasePending(s Session) {
+	h, err := s.Host(a.root, a.log)
+	if err != nil {
+		return
+	}
+	if data, err := os.ReadFile(h.Store.Path); err != nil || !strings.Contains(string(data), ledger.ErasurePrefix) {
+		return
+	}
+	release, err := lockEngine(h)
+	if err != nil {
+		return
+	}
+	defer release()
+	hooks.ErasePending(a.rt, h)
 }
 
 // withView hands the image the repository holding cwd and its HEAD structure view, as

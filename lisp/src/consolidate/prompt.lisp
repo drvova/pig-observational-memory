@@ -22,7 +22,7 @@ What you may do, all optional, in that one call:
 - reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
 - aliases: declare that one existing subject is about the same topic as another (from, to).
 - links: settle a listed POSSIBLE UPDATE by its two ids (id, updates): confirm when the later value replaces the earlier one (the later record then supersedes it), reject when both hold. Leave it when unsure; it stays a link and both records stay shown.
-- curated: cite a listed CURATED MEMORY by name with the ids of shown records of the user's own words that bear it out (name, supportingIds). A citation is the evidence a staged memory needs to enter the memory index; it never changes a memory's text.
+- curated: cite a listed CURATED MEMORY by name with the ids of shown records of the user's own words that bear it out (name, supportingIds). A citation is recorded as the memory's use; it never promotes a staged memory into the memory index and never changes a memory's text.
 - definitions and rules: only when the input shows HARNESS EVIDENCE. Define part of your own memory harness (definitions: kind, name, text) or propose a rule (rules: a detector and a code remedy). Each is held: it applies from the next compaction and is written only once a later compaction's evidence shows it did no harm, never on this response; otherwise it is reverted and what stood before stands.
 
 Rules code enforces (a proposal that breaks one is refused and the records it names stay as they are):
@@ -91,8 +91,9 @@ no detectors or remedies; evidence is the harness evidence text."
   "The declarative text, in your own words: instructions (added after the seed, which they extend and never replace)."
   "Go's description names a detector and a remedy catalogue too; the image offers instructions only.")
 
-(defun consolidate-tool (&optional offer stale)
-  "consolidate.ToolWith: (values name description parameters); stale adds the stale verdicts."
+(defun consolidate-tool (&optional offer stale dreams)
+  "consolidate.ToolWith: (values name description parameters); stale adds the stale verdicts,
+dreams the quarantined hypotheses."
   (let* ((record (label-properties)) (merge (label-properties))
          (description "Labels, merges, reflections, subject aliases, verdicts on possible updates and citations of curated memories for the memory of the compacted conversation. Every field is optional; cite only ids and names printed in the input."))
     (setf (gethash "id" record) (jobject "type" "string" "description" "The candidate's id.")
@@ -132,6 +133,14 @@ no detectors or remedies; evidence is the harness evidence text."
                                                       "verdict" (schema-enum '("confirm") "confirm: its claim still holds at HEAD, read against its diff; it stays, checked at HEAD."))
                                 "required" (jarray "id" "verdict"))))
         (setf description (cat description " With POSSIBLY STALE records shown, also verdicts on them.")))
+      (when dreams
+        (setf (gethash "hypotheses" properties)
+              (jobject "type" "array" "items"
+                       (jobject "type" "object"
+                                "properties" (jobject "content" (jobject "type" "string" "description" "One guess the records suggest but do not state, worded as a question or a condition; it is kept apart from memory and never read as a fact.")
+                                                      "supportingIds" (schema-string-array "Ids of the shown records it is drawn from."))
+                                "required" (jarray "content" "supportingIds"))))
+        (setf description (cat description " With dreams on, also at most 3 hypotheses, guesses kept apart from memory.")))
       (when offer
         (setf (gethash "definitions" properties)
               (jobject "type" "array" "items"

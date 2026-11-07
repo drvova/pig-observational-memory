@@ -50,13 +50,17 @@ curated memories listed, the branch, and the offer (nil refuses every definition
   ;; writer is Input.Writer: who writes the new records (an alist, nil for none).
   (writer '())
   ;; stale is Input.Stale: the possibly stale records the prompt listed (stale-rec).
-  (stale '()))
+  (stale '())
+  ;; dreams is Input.Dreams: the tool offered hypotheses, read only then.
+  (dreams nil))
 
 (defstruct vresult
   "consolidate.Result. replaced is an equal hash table id -> replacing id; refusals are
 (what index reason) lists; cited (name . ids); definitions (kind name text); rules (detector . remedy)."
   records (merges 0) (replaced (make-set)) reflections aliases (unchanged 0) (confirmed 0)
-  (rejected 0) (link-records 0) cited definitions rules refusals (failure "") (rechecked 0))
+  (rejected 0) (link-records 0) cited definitions rules refusals (failure "") (rechecked 0)
+  ;; hypotheses: Result.Hypotheses, each (id content from), with dreams on only.
+  (hypotheses '()))
 
 (defun vresult-accounted (r)
   (+ (length (vresult-records r)) (vresult-unchanged r) (length (vresult-reflections r))
@@ -547,13 +551,50 @@ call it)."
     (v-curated v (json-items (jget args "curated")))
     (v-definitions v (json-items (jget args "definitions")))
     (v-rules v (json-items (jget args "rules")))
+    (when (vinput-dreams in) (v-hypotheses v (json-items (jget args "hypotheses"))))
     (let ((r (v-result v)))
       (setf (vresult-replaced r) (v-replaced v))
       (when (zerop (vresult-accounted r))
         (setf (vresult-failure r) (if (vresult-refusals r) +failure-none-valid+ +failure-nothing+)
               (vresult-records r) nil (vresult-reflections r) nil (vresult-aliases r) nil
-              (vresult-replaced r) (make-set) (vresult-cited r) nil))
+              (vresult-replaced r) (make-set) (vresult-cited r) nil (vresult-hypotheses r) nil))
       r)))
+
+;;; hypotheses.go: level 1's quarantined hypotheses (docs/memory-v2.md, "Dreams")
+
+(defconstant +max-hypotheses+ 3)
+(defconstant +hypothesis-runes+ 240)
+
+(defun hypothesis-id (content)
+  "consolidate.HypothesisID."
+  (subseq (sha256-octets (utf8-octets (cat "hypothesis" (string (code-char 0)) content))) 0 12))
+
+(defun v-hypotheses (v items)
+  (loop for item in items for i from 0
+        do (block one
+             (when (= (length (vresult-hypotheses (v-result v))) +max-hypotheses+)
+               (refuse v "hypothesis" i "at most 3 hypotheses")
+               (return-from one))
+             (let* ((content (jget item "content"))
+                    (content (if (stringp content) (trim-space content) ""))
+                    (ids (remove-if-not (lambda (x) (and (stringp x) (string/= x ""))) (json-items (jget item "supportingIds")))))
+               (when (or (string= content "") (> (length content) +hypothesis-runes+)
+                         (find #\Return content) (find #\Newline content))
+                 (refuse v "hypothesis" i "a hypothesis is one line of at most 240 characters")
+                 (return-from one))
+               (when (or (null ids) (notevery (lambda (id) (nth-value 1 (gethash id (v-shown v)))) ids))
+                 (refuse v "hypothesis" i "a hypothesis cites shown record ids")
+                 (return-from one))
+               (let ((content (redact-secrets content)))
+                 (push-end (list (hypothesis-id content) content ids) (vresult-hypotheses (v-result v))))))))
+
+(defun hypotheses-json (hypotheses covers)
+  "consolidate.HypothesesRecordedData's encoding."
+  (format nil "{\"hypotheses\":[~{~A~^,~}],\"coversUpToId\":~A}"
+          (mapcar (lambda (h) (format nil "{\"id\":~A,\"content\":~A,\"from\":[~{~A~^,~}]}"
+                                      (json-string (first h)) (json-string (second h)) (mapcar #'json-string (third h))))
+                  hypotheses)
+          (json-string covers)))
 
 (defun level1-union (result records)
   "consolidate.Union: (values drop reflections kept-back)."

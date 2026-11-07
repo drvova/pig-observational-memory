@@ -283,7 +283,7 @@ agent directory dir (settings.json there)."
         (check (and (search "No visible observations." (cdr (first (phost-notices h)))) t) t "nothing recorded: empty sections")
         (setf (phost-notices h) '())
         (peer-exchange stream 2 "command/run" (jobject "scope" scope "name" "om:view" "args" "bogus") :host (phost-fn h))
-        (check (phost-notices h) '(("info" . "Usage: /om:view [full]")) "the usage line")
+        (check (phost-notices h) '(("info" . "Usage: /om:view [full | records [page] | record <id>]")) "the usage line")
         (setf (phost-notices h) '())
         (check (json-string (jget (peer-exchange stream 3 "command/run" (jobject "scope" scope "name" "om:status") :host (phost-fn h)) "result"))
                "{}" "status runs on the image")

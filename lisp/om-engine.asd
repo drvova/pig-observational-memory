@@ -46,6 +46,8 @@
                              (:file "contest")
                              ;; Phase 3: working memory (receipts, staleness, rule replacements).
                              (:file "working")
+                             ;; Phase 8: cues after a tool call (memory/extract/cue.go).
+                             (:file "cue")
                              ;; Phase 5: the labels and the three-way supersession decision.
                              (:file "labels")
                              ;; Phase 4: the search behind the reads (memory/retrieve).
@@ -53,6 +55,8 @@
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")
+                             ;; Phase 7: the sleep pass (memory/sleep).
+                             (:file "sleep")
                              (:file "end-engine")
                              ;; W2: the transcript readers and the neutral store.
                              (:file "readers/common")
@@ -84,6 +88,8 @@
                 :components ((:file "tool/package")
                              (:file "layer/limits")
                              (:file "tool/files")
+                             ;; Phase 6: the shared core log (memory/core).
+                             (:file "core")
                              (:file "tool/curated")
                              (:file "layer/reader")
                              (:file "layer/runner")
@@ -150,6 +156,8 @@
                 :components ((:file "consolidate/serialize")
                              (:file "consolidate/prompt")
                              (:file "consolidate/validate")
+                             ;; Phase 8: the summary's optional dream section (memory/dreams).
+                             (:file "dreams")
                              (:file "consolidate/layer")
                              (:file "server/level1")))
                ;; /om:status and the remaining harness reads (docs/lisp-port-status.md)
@@ -163,4 +171,9 @@
                              (:file "harness/floor")
                              (:file "harness/retired")
                              (:file "harness/layer-status")
-                             (:file "server/status")))))
+                             (:file "server/status")))
+               ;; Phase 7: the sleep pass at the image's idle, in a child SBCL (decision 9).
+               (:module "sleep"
+                :pathname "src"
+                :serial t
+                :components ((:file "server/sleep")))))

@@ -230,6 +230,7 @@ func protectedRows(s *Suite, runs []Run, lister Lister) error {
 // tier0Runs simulates the Tier 0 runs part (c) scores, when the caller has none.
 func tier0Runs(ctx context.Context, cfg SuiteConfig) ([]Run, error) {
 	t0 := DefaultConfig(0)
+	t0.Window.SleepOff = cfg.Window.SleepOff
 	t0.Seeds = cfg.Seeds
 	if cfg.Tier0Turns > 0 {
 		t0.Turns, t0.MaxCompactions = cfg.Tier0Turns, cfg.Tier0Compactions

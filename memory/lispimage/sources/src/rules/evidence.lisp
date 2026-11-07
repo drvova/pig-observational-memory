@@ -448,7 +448,7 @@ commonest frame.repoId; the commonest path extension of their paths keys."
                               (floor (* added-turns 1000) +cost-turns-per-failure+)))
                      (figures (format nil "failures ~D under it over ~D compactions against ~D and ~D without it (spread ~D), cost ~D.~3,'0D"
                                       ft n fa fb spread (floor cost 1000) (mod cost 1000))))
-                (if (<= (- (* effect 1000) cost) (* spread 1000))
+                (if (let ((net (- (* effect 1000) cost))) (or (<= net (* 2 spread 1000)) (< net 1000)))
                     (values t nil (concatenate 'string "no net effect after cost: " figures) nil)
                     (values t t (concatenate 'string "its effect beat the null arm after cost: " figures)
                             (list (sort (remove-duplicates (mapcar #'su-repo treated) :test #'string=) #'string<)

@@ -38,7 +38,7 @@
   store (project "") floor-owner (settings-path "")
   compact-in-flight hook-in-flight
   (auto-compaction t) tokens (window 0) (reserve 0) suspension (session-key "")
-  (code-lines '()))
+  (code-lines '()) (session-id ""))
 
 (defun cat* (&rest parts) (apply #'concatenate 'string parts))
 
@@ -64,7 +64,40 @@
                     (length (om::folded-active folded)))
             (format nil "Reflections: ~D recorded / ~D standing" (length (om::folded-reflections folded))
                     (length (om::active-reflections (om::folded-reflections folded)))))
+       (aggregate-lines folded entries)
        (held-lines folded entries)))))
+
+(defun aggregate-lines (folded entries)
+  "commands.aggregateLines: the records by kind and by label, then the sleep line."
+  (if (null (om::folded-observations folded))
+      (list (sleep-status-line entries))
+      (let ((kinds (make-hash-table :test 'equal)) (labels (make-hash-table :test 'equal)) (names '()))
+        (dolist (o (om::folded-observations folded))
+          (incf (gethash (if (string= (om::obs-kind o) "") "untyped" (om::obs-kind o)) kinds 0)))
+        (maphash (lambda (k v) (declare (ignore v)) (push k names)) kinds)
+        (maphash (lambda (k l) (declare (ignore k)) (incf (gethash l labels 0))) (om::folded-labels folded))
+        (list (cat* "Records by kind: " (om::join (loop for k in (sort names #'string<) collect (format nil "~A ~D" k (gethash k kinds))) ", "))
+              (cat* "Records by label: " (om::join (loop for l in '("believed" "superseded" "retracted" "contested" "held")
+                                                       collect (format nil "~A ~D" l (gethash l labels 0)))
+                                                 ", "))
+              (sleep-status-line entries)))))
+
+(defun sleep-status-line (entries)
+  "commands.sleepStatusLine."
+  (let ((runs (loop for e across (coerce entries 'simple-vector) for d = (om::sleep-data e) when d collect d)))
+    (if (null runs)
+        "Sleep: no run on this branch"
+        (let* ((st (om::sleep-state-of (coerce entries 'simple-vector))) (last (car (last runs)))
+               (links (loop for d in runs sum (length (om::sleep-items d "links"))))
+               (decayed (loop for d in runs sum (length (om::jstrs (om::jget d "decayed")))))
+               (challenged (let ((n 0)) (maphash (lambda (k c) (declare (ignore k)) (when (equal (om::jget c "verdict") "challenged") (incf n)))
+                                                 (om::sstate*-checks st))
+                             n)))
+          (format nil "Sleep: ~D run~A (latest ~A, through ~A): ~D duplicates hidden, ~D links, ~D decayed, ~D verified, ~D retired, ~D checks (~D challenged)"
+                  (length runs) (plural-s (length runs)) (om::jget last "trigger") (om::jget last "throughEntryId")
+                  (hash-table-count (om::sstate*-duplicates st)) links decayed
+                  (hash-table-count (om::sstate*-verified st)) (hash-table-count (om::sstate*-retired st))
+                  (hash-table-count (om::sstate*-checks st)) challenged)))))
 
 (defun held-lines (folded entries)
   "commands.heldLines: the active records and standing reflections held because they weaken
@@ -124,7 +157,7 @@ security, each with its rule, its content (redacted, on one line) and its anchor
                        (om.layer::curated-error (e) (princ-to-string e)))
         when reason collect (cons name reason)))
 
-(defun curated-lines (store project)
+(defun curated-lines (store project &optional (session ""))
   (let* ((memories (om.layer::list-memories store project)) (usage (om.layer::curated-usage store))
          (live 0) (staged 0) (pinned 0) (flagged '()))
     (dolist (m memories)
@@ -145,7 +178,15 @@ security, each with its rule, its content (redacted, on one line) and its anchor
             (let ((refused (refused-memories store project)))
               (when refused
                 (list (format nil "Refused by the validator, so not loaded (~D; edit within it or forget): ~A" (length refused)
-                              (om::join (loop for (name . reason) in refused collect (cat* name " (" reason ")")) "; "))))))))
+                              (om::join (loop for (name . reason) in refused collect (cat* name " (" reason ")")) "; ")))))
+            (core-lines store session))))
+
+(defun core-lines (store session)
+  "harness.CoreStatusLines: the core log read only, none when the store holds none yet."
+  (let ((core (om.layer::core-dir store)))
+    (when (om.layer::core-exists-p core)
+      (multiple-value-bind (through ok) (om.layer::core-consumed core session)
+        (om.layer::core-status-lines (om.layer::core-read core) through ok)))))
 
 ;;; The harness (harness/status.go, rules)
 
@@ -295,7 +336,7 @@ security, each with its rule, its content (redacted, on one line) and its anchor
         (when (sx-compact-in-flight x) (add "Auto-compaction: running"))
         (when (sx-hook-in-flight x) (add "Compaction hook: running")))
       (when store
-        (apply #'add "" (curated-lines store (sx-project x)))
+        (apply #'add "" (curated-lines store (sx-project x) (sx-session-id x)))
         (apply #'add "" (shared-harness-lines x))
         (dolist (m (usage-models store))
           (add (cat* "model " m ":"))
@@ -398,7 +439,8 @@ last default an adaptable function fell back to, and the refusal counter."
                             :tokens tokens :window window :reserve reserve
                             :suspension (let ((b (active-suspension c entries))) (and b (backoff-reason b)))
                             :session-key (if store (model-key-of model) "")
-                            :code-lines (code-lines home (om.layer::project-root cwd)))))
+                            :code-lines (code-lines home (om.layer::project-root cwd))
+                            :session-id (host-string "host/sessionId"))))
           (om::join (status-lines x) (string #\Newline)))))))
 
 (defun project-settings-file-p (cwd dir-name)
@@ -437,7 +479,8 @@ model, no context usage, a fresh runtime (nothing in flight, no suspension)."
                          :project-file (project-settings-file-p cwd ".om") :removed (rcfg-removed cfg)
                          :memory-format (rcfg-memory-format cfg) :store store :project (om.layer::project-root cwd)
                          :floor-owner (list :om) :settings-path settings :auto-compaction auto
-                         :code-lines (code-lines *root* (om.layer::project-root cwd)))))
+                         :code-lines (code-lines *root* (om.layer::project-root cwd))
+                         :session-id (session-id s))))
       (om::join (status-lines x) (string #\Newline)))))
 
 (define-method "om-status" (params)

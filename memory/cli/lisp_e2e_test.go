@@ -126,8 +126,19 @@ func lispFlow(t *testing.T, image string) string {
 		}
 		c.close()
 	}
+	// Phase 8: a rule on a directory, then cues after tool calls (docs/memory-v2.md, "Cues").
+	appendClaudeRule(t, tr, "Don't touch `migrations/`.")
 	om(t, payload(""), "hook", "claude-code", "Stop")
 	section("store after the second Stop", store("claude-code", "s1"))
+	tool := func(path string) string {
+		b, _ := json.Marshal(map[string]any{"session_id": "s1", "transcript_path": tr, "cwd": proj, "hook_event_name": "PostToolUse",
+			"tool_name": "Edit", "tool_input": map[string]any{"file_path": path}, "tool_response": map[string]any{"stdout": "ok"}})
+		return string(b)
+	}
+	section("PostToolUse on a ruled path", om(t, tool("migrations/0001_users.sql"), "hook", "claude-code", "PostToolUse"))
+	section("PostToolUse again (once per compaction)", om(t, tool("migrations/0002_teams.sql"), "hook", "claude-code", "PostToolUse"))
+	section("PostToolUse on a look-alike", om(t, tool("migrations-old/0001.sql"), "hook", "claude-code", "PostToolUse"))
+	section("store after the cues", store("claude-code", "s1"))
 	section("PreCompact", om(t, payload(""), "hook", "claude-code", "PreCompact"))
 	section("SessionStart after compaction", om(t, payload("compact"), "hook", "claude-code", "SessionStart"))
 	mcp := strings.Join([]string{
@@ -167,6 +178,13 @@ func lispFlow(t *testing.T, image string) string {
 	section("view after compact", om(t, "", "view", "--harness", "mine", "--dir", home))
 	section("view full", om(t, "", "view", "--harness", "mine", "--dir", home, "full"))
 	section("view usage", om(t, "", "view", "--harness", "mine", "--dir", home, "everything"))
+	// Per-record transparency (phase 7): a page of records and one record's view.
+	section("view records", om(t, "", "view", "--harness", "mine", "--dir", home, "records"))
+	section("view records 2", om(t, "", "view", "--harness", "mine", "--dir", home, "records", "2"))
+	if id := firstRecordID(store("mine", "g1")); id != "" {
+		section("view record", om(t, "", "view", "--harness", "mine", "--dir", home, "record", id))
+	}
+	section("view record unknown", om(t, "", "view", "--harness", "mine", "--dir", home, "record", "000000000000"))
 	// Level 0 after a compaction, a second compaction, and the summary at the next start.
 	for i := 40; i < 48; i++ {
 		lines = append(lines, fmt.Sprintf(`{"id":"m%d","role":"user","text":"Host h-%d moved to region r-%d and now serves port %d.","timestamp":"2026-05-02T10:00:00Z"}`, i, i, i, 9000+i))
@@ -414,6 +432,9 @@ var (
 	// flowStampPattern is an entry's append time: neutral.Host stamps entries with the time in
 	// milliseconds, and the fixtures' own times are in May.
 	flowStampPattern = regexp.MustCompile(`"timestamp":"2026-(0[6-9]|1[0-2])-\d\dT\d\d:\d\d:\d\d\.\d{3}Z"`)
+	// flowCorePattern is a core item's id in the start context: it hashes the item's project
+	// scope, which names the run's own directory.
+	flowCorePattern = regexp.MustCompile(`\(core [0-9a-f]{12}\)`)
 )
 
 // normalizeFlow names the random entry ids by order of first appearance, blanks the append
@@ -422,9 +443,13 @@ var (
 func normalizeFlow(s, root, home string) string {
 	s = strings.ReplaceAll(s, `"engine":"lisp"`, `"engine":"<engine>"`)
 	s = strings.ReplaceAll(s, `"engine":"go"`, `"engine":"<engine>"`)
+	// /om:view record prints the writer as text.
+	s = strings.ReplaceAll(s, "engine lisp;", "engine <engine>;")
+	s = strings.ReplaceAll(s, "engine go;", "engine <engine>;")
 	s = strings.ReplaceAll(s, root, "<root>")
 	s = strings.ReplaceAll(s, home, "<home>")
 	s = flowStampPattern.ReplaceAllString(s, `"timestamp":"<now>"`)
+	s = flowCorePattern.ReplaceAllString(s, "(core <core id>)")
 	names := map[string]string{}
 	return flowIDPattern.ReplaceAllStringFunc(s, func(id string) string {
 		if n, ok := names[id]; ok {
@@ -433,4 +458,13 @@ func normalizeFlow(s, root, home string) string {
 		names[id] = fmt.Sprintf("<id%d>", len(names))
 		return names[id]
 	})
+}
+
+// firstRecordID is the first record id a store's text holds, "" for none.
+func firstRecordID(store string) string {
+	m := regexp.MustCompile(`"observations":\[\{[^{}]*?"id":"([0-9a-f]{12})"`).FindStringSubmatch(store)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }

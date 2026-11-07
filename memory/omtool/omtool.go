@@ -90,6 +90,10 @@ type Write struct {
 const (
 	WriteSave = "save"
 	WriteEdit = "edit"
+	// WriteCorrect is om.Correct's write: Name the record, Description the correction, Type
+	// CorrectQuoted when the user's words confirmed it (omhost.Call.correct).
+	WriteCorrect  = "correct"
+	CorrectQuoted = "quoted"
 )
 
 // The outcomes a call's Details carry.

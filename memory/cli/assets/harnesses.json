@@ -569,7 +569,8 @@
     "session-start": "SessionStart",
     "prompt": "UserPromptSubmit",
     "turn-end": "Stop",
-    "pre-compact": "PreCompact"
+    "pre-compact": "PreCompact",
+    "post-tool": "PostToolUse"
    },
    "transcript": "claude-code"
   },
@@ -2971,7 +2972,8 @@
     "session-start": "SessionStart",
     "prompt": "UserPromptSubmit",
     "turn-end": "Stop",
-    "pre-compact": "PreCompact"
+    "pre-compact": "PreCompact",
+    "post-tool": "PostToolUse"
    },
    "transcript": "claude-code"
   },

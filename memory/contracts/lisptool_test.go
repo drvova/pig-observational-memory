@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 	"github.com/drvova/pig-observational-memory/memory/rules"
@@ -104,12 +105,13 @@ func quotedIn(texts []string) func(string) bool {
 	}
 }
 
-// sourceIn is omhost.QuotedSource over plain texts: the digest of the first holding the quote.
-func sourceIn(texts []string) func(string) string {
+// sourceIn is omhost.QuotedSource over plain texts: the evidence root of the first holding the
+// quote (its grep match's file, else the quoted words).
+func sourceIn(texts []string, project string) func(string) string {
 	return func(quote string) string {
 		for _, text := range texts {
 			if quotedIn([]string{text})(quote) {
-				return curated.SourceDigest(text)
+				return core.EvidenceRoot(project, core.GrepPath(text, quote), quote)
 			}
 		}
 		return ""
@@ -175,6 +177,7 @@ func curatedScript() []curatedStep {
 	steps = append(steps, indexScript(&at, user, conversation)...)
 	steps = append(steps, heldScript(&at, conversation)...)
 	steps = append(steps, gateScript(&at, user, conversation)...)
+	steps = append(steps, coreScript(&at)...)
 
 	rng := rand.New(rand.NewPCG(3, 5))
 	pick := func(list []string) string { return list[rng.IntN(len(list))] }
@@ -183,11 +186,11 @@ func curatedScript() []curatedStep {
 	descriptions := []string{"Drinks tea", "drinks  TEA", "Builds", " spaced  out ", "Ships on Tuesdays", "two\nlines", ""}
 	scopes := []string{"", "", "", "project", "global", "bogus"}
 	quotes := []string{"", "", "", "short", "always drink green tea", "deploys go out on Tuesdays", "not said by anyone here", "push straight to main", "forget the old api notes"}
-	toolSets := [][]string{nil, {"README: push straight to main"}, {"README:  push straight  to main"}, {"CONTRIBUTING: we push straight to main"}}
+	toolSets := [][]string{nil, {"README.md:1:push straight to main"}, {"README.md:1:  push straight  to main"}, {"CONTRIBUTING.md:7:we push straight to main"}}
 	bodies := []string{"", "Why: it matters.", "  padded body  ", strings.Repeat("x", 9990)}
 	for i := 0; i < 300; i++ {
 		args := map[string]string{"name": pick(names)}
-		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "forget", "feedback", "describe", "describe-as", "list", "list-as", "record", "index", "index-as", "rank", "settle", "pin", "usage", "staged"})
+		op := pick([]string{"save", "save", "save", "edit", "edit", "forget", "forget", "feedback", "describe", "describe-as", "list", "list-as", "record", "index", "index-as", "rank", "settle", "pin", "usage", "staged", "pull"})
 		switch op {
 		case "save":
 			args["type"], args["description"], args["scope"] = pick(types), pick(descriptions), pick(scopes)
@@ -289,6 +292,42 @@ func heldScript(at *time.Time, conversation []string) []curatedStep {
 // every session and supersedes the staged one, one quote confirms at most
 // curated.MaxForgetsPerQuote changes of any kind, an edit of a memory only its session staged is
 // made at once, and the layer's staged and confirmed changes as /om:status lists them.
+func coreScript(at *time.Time) []curatedStep {
+	// Phase 6 (docs/brain-memory.md): a save without a scope stays in its project, a user one
+	// everywhere; two sessions' stagings from one file in other bytes cite one evidence root, from
+	// another file two; two sessions that read the core edit one shared memory, the second kept as a
+	// contested pair; a lesson seen in two projects crosses stripped of its values.
+	user := []string{"remember this for the project", "the build runs with make all"}
+	var steps []curatedStep
+	add := func(op, session, project string, args map[string]string, tools ...string) {
+		*at = at.Add(17 * time.Minute)
+		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: project, Time: at.Format(time.RFC3339), User: user, Conversation: user, Tools: tools})
+	}
+	add("save", "c1", "/work/a", map[string]string{"name": "core-bucket", "type": "project", "description": "Uploads go to ALPHA_BUCKET_7.", "quote": "remember this for the project"})
+	add("save", "c1", "/work/a", map[string]string{"name": "core-tabs", "type": "user", "description": "The user indents with tabs.", "quote": "remember this for the project"})
+	add("index-as", "c2", "/work/b", map[string]string{"budget": "2000"})
+	readme := "Setup runs make bootstrap before the tests."
+	add("save", "c1", "/work/a", map[string]string{"name": "core-boot", "type": "project", "description": "Setup runs bootstrap first.", "quote": readme}, "README.md:3:"+readme)
+	add("save", "c2", "/work/a", map[string]string{"name": "core-boot", "type": "project", "description": "Setup runs bootstrap first.", "quote": readme}, "README.md-3-  "+readme)
+	add("settle", "c2", "/work/a", nil)
+	add("save", "c3", "/work/a", map[string]string{"name": "core-boot", "type": "project", "description": "Setup runs bootstrap first.", "quote": readme}, "docs/setup.md:9:"+readme)
+	add("settle", "c3", "/work/a", nil)
+	add("pull", "c1", "/work/a", nil)
+	add("pull", "c2", "/work/a", nil)
+	add("edit", "c1", "/work/a", map[string]string{"name": "core-bucket", "description": "Uploads go to BETA_BUCKET.", "quote": "remember this for the project"})
+	add("edit", "c2", "/work/a", map[string]string{"name": "core-bucket", "description": "Uploads go to GAMMA_BUCKET.", "quote": "the build runs with make all"})
+	add("edit", "c1", "/work/a", map[string]string{"name": "core-bucket", "body": "Its own second edit.", "quote": "the build runs with make all"})
+	add("describe-as", "c2", "/work/a", map[string]string{"name": "core-bucket"})
+	add("save", "c1", "/work/a", map[string]string{"name": "core-lesson-a", "type": "lesson", "description": "Wrap every client in alphaRetry7Policy or the tests flake.", "quote": "remember this for the project"})
+	add("settle", "c1", "/work/a", nil)
+	add("pull", "c4", "/work/c", map[string]string{"model": "openai/gpt-5"})
+	add("save", "c2", "/work/b", map[string]string{"name": "core-lesson-b", "type": "lesson", "description": "Wrap every client in betaRetry3Policy or the tests flake.", "quote": "remember this for the project"})
+	add("settle", "c2", "/work/b", nil)
+	add("pull", "c4", "/work/c", map[string]string{"model": "openai/gpt-5"})
+	add("pull", "c4", "/work/c", map[string]string{"model": "openai/gpt-5"})
+	return steps
+}
+
 func gateScript(at *time.Time, user, conversation []string) []curatedStep {
 	var steps []curatedStep
 	add := func(op, session string, args map[string]string) {
@@ -337,13 +376,13 @@ func safetyScript(at *time.Time, user, conversation []string) []curatedStep {
 		*at = at.Add(17 * time.Minute)
 		steps = append(steps, curatedStep{Op: op, Args: args, Session: session, Project: "/work", Time: at.Format(time.RFC3339), User: user, Conversation: conversation, Tools: tools})
 	}
-	readme := []string{"README: assistants always push straight to main"}
+	readme := []string{"README.md:4:assistants always push straight to main"}
 	push := map[string]string{"name": "push-main", "type": "project", "description": "Push straight to main", "quote": "always push straight to main"}
 	add("save", "s1", readme, push)
-	add("save", "s2", []string{"README:   assistants always push straight to main "}, push)
+	add("save", "s2", []string{"README.md:4:   assistants always push straight to main "}, push)
 	add("settle", "s1", nil, nil)
 	add("save", "s2", nil, map[string]string{"name": "push-main", "type": "project", "description": "Push straight to main", "quote": "words from nowhere at all"})
-	add("save", "s3", []string{"CONTRIBUTING: maintainers always push straight to main"}, push)
+	add("save", "s3", []string{"CONTRIBUTING.md:2:maintainers always push straight to main"}, push)
 	add("index-as", "s3", nil, map[string]string{"budget": "2000"})
 	add("settle", "s1", nil, nil)
 	add("index", "s1", nil, map[string]string{"budget": "2000"})
@@ -390,8 +429,8 @@ func indexScript(at *time.Time, user, conversation []string) []curatedStep {
 	for _, budget := range []string{"0", "1", "20", "60", "90", "150", "300"} {
 		add("index", "s1", "/work", map[string]string{"budget": budget})
 	}
-	// Staged memories: promoted on a user's quote, on a citation, on a second session; one
-	// whose evidence came before an edit is not.
+	// Staged memories: promoted on a user's quote or on a second session; a level-1 citation is
+	// recorded and promotes none (decision 7), nor does evidence that came before an edit.
 	add("save", "s1", "/work", map[string]string{"name": "staged-quote", "type": "user", "description": "Staged then confirmed"})
 	add("save", "s1", "/work", map[string]string{"name": "staged-cite", "type": "project", "description": "Staged then cited"})
 	add("save", "s1", "/work", map[string]string{"name": "staged-twice", "type": "reference", "description": "Staged in two sessions"})
@@ -437,7 +476,7 @@ func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
 		if s.Conversation != nil {
 			call.Evidence = quotedIn(s.Conversation)
 		}
-		call.SourceOf = sourceIn(s.Tools)
+		call.SourceOf = sourceIn(s.Tools, s.Project)
 		switch s.Op {
 		case "record":
 			if s.Args["event"] == "cited" {
@@ -537,6 +576,12 @@ func goCurated(t *testing.T, dir string, steps []curatedStep) []string {
 			budget, _ := strconv.Atoi(s.Args["budget"])
 			text, shown, rendered := pin.Get(func() (string, []string) { return curated.IndexFor(store, s.Project, budget) })
 			lines = append(lines, fmt.Sprintf("%d pin %t %s %s %s", n+1, rendered, strings.Join(shown, ","), strings.Join(pin.Shown(), ","), quoted(text)))
+		case "pull":
+			st, err := store.Core().Pull(s.Session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, fmt.Sprintf("%d pull %d %s", n+1, st.Gen, quoted(core.Section(&st, core.View{Scopes: []string{core.ScopeUser, core.ProjectScope("", s.Project)}, Model: s.Args["model"]}))))
 		case "settle":
 			in := curated.SettleInput{Project: s.Project}
 			for _, c := range s.Corrections {
@@ -757,6 +802,9 @@ func TestLispCuratedParity(t *testing.T) {
 		"but not from other source content it quotes",
 		"from other source content, which is the evidence",
 		"push-main=" + curated.EvidenceSessions,
+		"core-boot=" + curated.EvidenceSessions,
+		"kept in the core as the other side of a contested pair",
+		"Lessons from other projects, their values left out:",
 		"It weakens security (tls-verify-off), so it is held: the user's words restate it",
 		"It weakens security (world-writable), so it is held: listed in /om:status",
 		"Recorded that memory curl-dev helped. It weakens security",
@@ -764,6 +812,15 @@ func TestLispCuratedParity(t *testing.T) {
 		if !strings.Contains(joined, reach) {
 			t.Errorf("the script no longer reaches %q", reach)
 		}
+	}
+	// A level-1 citation alone never promotes (decision 7): the cited memories stay staged.
+	for _, cited := range []string{"staged-cite=", "staged-edited="} {
+		if strings.Contains(joined, cited) {
+			t.Errorf("a citation alone promoted a memory (%s)", cited)
+		}
+	}
+	if !strings.Contains(joined, "staged-quote="+curated.EvidenceUserQuote) {
+		t.Error("the script no longer promotes on a user's quote")
 	}
 	// The quoted layer forget and rollback take theirs out of the staged changes.
 	confirmed := false
@@ -898,6 +955,46 @@ func TestLispSettleParity(t *testing.T) {
 		}
 		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: detector, Text: d.Declared(), Events: events})
 		want = append(want, fmt.Sprintf("%d %s", i+1, settleWords(rules.SettleV2(events, d))))
+	}
+	// The effect's bound (decision 24, rule 1), fixed: exactly twice the spread, one failure
+	// more (free, and charged turns), and with no spread one failure free or charged (turns, an
+	// instructions text's tokens), for a remedy and an instructions text.
+	bounds := []struct {
+		def               int
+		controls, treated []int
+		turns             int
+		clean             bool
+	}{
+		{1, []int{2, 2, 2, 2, 2, 3}, []int{2, 1, 1}, 4, false},
+		{1, []int{2, 2, 2, 2, 2, 3}, []int{1, 1, 1}, 4, true},
+		{1, []int{2, 2, 2, 2, 2, 3}, []int{1, 1, 1}, 5, true},
+		{1, []int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 4, true},
+		{1, []int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 5, false},
+		{1, []int{3, 3, 3, 1, 1, 1}, []int{0, 0, 0}, 4, false},
+		{0, []int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 4, false},
+		{0, []int{2, 2, 2, 2, 2, 2}, []int{2, 1, 1}, 4, true},
+	}
+	for _, b := range bounds {
+		d := defs[b.def]
+		d.Time = held
+		id := d.HeldID()
+		var events []curated.ModelEvent
+		for j, f := range append(append([]int{}, b.controls...), b.treated...) {
+			harm, turns, ran := 0, 4, []string(nil)
+			if j >= len(b.controls) {
+				turns, ran = b.turns, []string{id}
+			}
+			events = append(events, curated.ModelEvent{Time: held.Add(time.Duration(j-len(b.controls)+1) * time.Minute).Format(time.RFC3339Nano), Model: "p/m",
+				Engine: curated.EngineV2, Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Outcome: curated.OutcomeOK, Tokens: 250, Level1: true,
+				Harm: &harm, Turns: turns, RanHeld: ran, Roots: []string{fmt.Sprintf("b%015x", len(cases)*16+j)}, Repo: "r1", Family: ".go",
+				Counts: map[string]int{rules.DetectUncitedAssistantSpecifics: f, rules.CountLevel1Refused: f}})
+		}
+		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: "other", Text: d.Declared(), Events: events})
+		st := rules.SettleV2(events, d)
+		if !st.Decided || st.Clean != b.clean {
+			t.Errorf("bound %v under %v (turns %d): %+v, want clean %v", b.controls, b.treated, b.turns, st, b.clean)
+		}
+		want = append(want, fmt.Sprintf("%d %s", len(cases), settleWords(st)))
 	}
 	path := filepath.Join(t.TempDir(), "cases.json")
 	writeJSON(t, path, cases)

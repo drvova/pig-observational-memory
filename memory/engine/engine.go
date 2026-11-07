@@ -7,6 +7,7 @@ package engine
 import (
 	"github.com/drvova/pig-observational-memory/memory/commands"
 	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/harness"
 	"github.com/drvova/pig-observational-memory/memory/host"
@@ -70,9 +71,41 @@ func Index(h host.Host, pin *curated.Pin) (string, bool) {
 		return "", false
 	}
 	index, _, _ := pin.Get(func() (string, []string) {
-		return curated.IndexAs(call.Store, call.Project, call.Source, cfg.CuratedMemoryIndexTokens)
+		text, shown := curated.IndexAs(call.Store, call.Project, call.Source, cfg.CuratedMemoryIndexTokens)
+		if block := CoreBlock(h, call); block != "" {
+			text = block + "\n\n" + text
+		}
+		return text, shown
 	})
 	return index, true
+}
+
+// CoreView is what the session reads the core as (core.View): the user's scope, its project's
+// (by repoId when the host knows the repository, and by its root) and its model.
+func CoreView(h host.Host, project string) core.View {
+	scopes := []string{core.ScopeUser}
+	if reader, ok := h.(host.RepoReader); ok {
+		if repo, ok, err := reader.Repo(); err == nil && ok && repo.ID != "" {
+			scopes = append(scopes, core.ProjectScope(repo.ID, ""))
+		}
+	}
+	if project != "" {
+		scopes = append(scopes, core.ProjectScope("", project))
+	}
+	return core.View{Scopes: scopes, Model: harness.ModelKey(h.SessionModel())}
+}
+
+// CoreBlock is the session's pull of the core log (docs/brain-memory.md, phase 6), made only when
+// its start context is rendered (at its start and after each compaction, the pin's renders): the
+// consumed-through marker moves to the newest generation, and the block of the user's constraints,
+// the open intentions and the lessons from other projects it sees (core.Section) goes first in the
+// context; "" when it sees none or the core cannot be read.
+func CoreBlock(h host.Host, call curated.Call) string {
+	st, err := call.Store.Core().Pull(call.Source)
+	if err != nil {
+		return ""
+	}
+	return core.Section(&st, CoreView(h, call.Project))
 }
 
 // NewManager is the memory tool's manager over the curated store, answering om.Info with

@@ -13,7 +13,7 @@
 (defun thinning-result (c)
   (om::jobject "thinning" (if (rcfg-passive (conn-cfg c)) :false :true)))
 
-(defun host-append-extraction (batches covers)
+(defun host-append-extraction (batches covers &optional revisions)
   "hooks.appendExtraction over the host: one om.observations.recorded entry per batch with
 records, then an om.extracted marker when the last batch stops short; the appends stop at the
 first that fails. Returns how many landed."
@@ -22,6 +22,7 @@ first that fails. Returns how many landed."
       (when (and (om::batch-observations b) (string/= (om::batch-covers b) ""))
         (push (cons "om.observations.recorded" (recorded-data-json (om::batch-observations b) (om::batch-covers b)))
               queue)))
+    (when revisions (push (cons "om.revisions.recorded" (om::revisions-data-json revisions)) queue))
     (when (and (string/= covers "") (or (null batches) (string/= (om::batch-covers (car (last batches))) covers)))
       (push (cons "om.extracted" (format nil "{\"coversUpToId\":~A}" (om::json-string covers))) queue))
     (dolist (p (nreverse queue) landed)
@@ -108,24 +109,24 @@ removed query language, is refused (not ported), so the Go engine reads the turn
   (sb-thread:with-mutex ((conn-extract-mutex c))
     (let ((branch (handler-case (get-branch c)
                     (error (e) (log-line "turn end: getBranch: ~A" e) (return-from extract-turn 0))))
-          (record nil))
+          (record nil) (revisions '()))
       (multiple-value-bind (batches covers)
           (handler-case (let* ((start (om::extraction-start-index branch)) (folded (om::fold-ledger branch)))
-                          (multiple-value-bind (batches covers)
+                          (multiple-value-bind (batches covers revs)
                               (let ((om::*encoding* (session-encoding c branch)))
                                 (om::extract branch start (length branch) folded :skip-tools (conn-skip-tools c)
                                                                                   :cwd (scope-cwd)))
                             (multiple-value-bind (batches thunk)
                                 (om.layer::harness-detect store model branch start (length branch) folded batches covers
                                                           :defined (and store (string/= covers "") (defined-queries c store)))
-                              (setf record thunk)
+                              (setf record thunk revisions revs)
                               (values batches covers))))
             (om.layer::legacy-memory-call (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e)))
             (error (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e))))
         (check-cancelled)
         ;; stampV2: the new project records' body hashes from HEAD.
         (om::stamp-batches #'host-structure batches)
-        (let ((landed (host-append-extraction batches covers)))
+        (let ((landed (host-append-extraction batches covers revisions)))
           (when (and (plusp landed) record)
             (handler-case (funcall record)
               (error (e) (log-line "turn end: detect record: ~A" e))))

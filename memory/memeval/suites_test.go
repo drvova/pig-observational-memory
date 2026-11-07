@@ -2,14 +2,17 @@ package memeval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/layer"
+	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
@@ -17,14 +20,7 @@ import (
 // row passes or is not built, except the findings below, each a failing row with a test that
 // skips naming the phase that fixes it. A finding that starts to pass fails this test, so the
 // phase that fixes it deletes its entry and the skip together.
-var findings = map[string]string{
-	"secret redaction: layer files":                                      "TestLayerWriteHoldsNoSecret",
-	"no value in the shared layer":                                       "TestLayerWriteHoldsNoSecret",
-	"same evidence re-read in two sessions is not counted as two":        "TestSameEvidenceNotIndependent",
-	"a project fact saved without a scope stays out of the other repo":   "TestScenario19ForeignScopeNotReturned",
-	"a lesson crosses projects only stripped of its values (decision 8)": "TestScenario19ForeignScopeNotReturned",
-	"curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14)": "TestScenario14ConcurrentSupersedeOneCommits",
-}
+var findings = map[string]string{}
 
 // checkSuite asserts s's rows against the findings, makes sure no model was called (every
 // request logged is a scripted level-1 reply the fake host served), and logs the table.
@@ -146,10 +142,9 @@ func TestInjectedLayerForgetLeavesLayer(t *testing.T) {
 	}
 }
 
-// Finding (Tier 0b part b, Tier 0c part d): a layer definition holding a value is stored with it,
-// in the definition's file and its blob, which every session of the model reads.
+// Tier 0b part b, Tier 0c part d (phase 8): a layer definition holding a value is redacted as it
+// is written, in the definition's file and its blob, which every session of the model reads.
 func TestLayerWriteHoldsNoSecret(t *testing.T) {
-	later(t, "phase 8: secret purge (a layer write is not scanned)")
 	p := drawSecrets(5)
 	store := curated.New(t.TempDir())
 	if _, err := store.Layer().Put(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: modelKey, Text: "Keep the deploy line; SESSION_JWT=" + p.values[4] + "."}); err != nil {
@@ -160,11 +155,10 @@ func TestLayerWriteHoldsNoSecret(t *testing.T) {
 	}
 }
 
-// Finding (Tier 0c, part a): two sessions that read the same file count as independent
-// evidence when their tool results differ in bytes (line numbers, a header, a partial read), so
-// a staged save is promoted on its own copy.
+// Tier 0c, part a (decision 7): two sessions that read the same file in other bytes (line
+// numbers, a header, a partial read, a grep match) cite one evidence root, so a staged save is
+// not promoted on its own copy; another file quoting the line is a second root.
 func TestSameEvidenceNotIndependent(t *testing.T) {
-	later(t, "phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes")
 	var s Suite
 	if err := independenceRows(&s, DefaultSuiteConfig(1)); err != nil {
 		t.Fatal(err)
@@ -174,28 +168,60 @@ func TestSameEvidenceNotIndependent(t *testing.T) {
 	}
 }
 
-// Scenario 14 on the stores that exist today: two sessions edit one curated memory at once;
-// exactly one commits and the other is re-evaluated, never both told "updated" with one lost.
+// Scenario 14: two sessions that read the core at their start edit one shared curated memory at
+// once; exactly one commits and the other is re-evaluated against the new generation, kept as the
+// other side of a contested pair (curated.ErrConflict), never both told "updated" with one lost.
+// 1,000 runs, each on a fresh store.
 func TestScenario14ConcurrentSupersedeOneCommits(t *testing.T) {
-	later(t, "phase 6: core log operations with generations; 1,000 concurrent supersede runs")
-	dir := t.TempDir()
-	a, b := curated.New(dir), curated.New(dir)
-	if _, err := a.Save(curated.Memory{Name: "target", Type: curated.TypeProject, Description: "The build target is make ci."}, "owner"); err != nil {
-		t.Fatal(err)
+	runs := 1000
+	if testing.Short() {
+		runs = 100
 	}
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i, st := range []curated.Store{a, b} {
-		wg.Add(1)
-		go func(i int, st curated.Store) {
-			defer wg.Done()
-			desc := fmt.Sprintf("The build target is make ci-%d.", i)
-			_, errs[i] = st.Update("target", "", curated.Edit{Description: &desc}, fmt.Sprintf("s%d", i))
-		}(i, st)
-	}
-	wg.Wait()
-	if errs[0] == nil && errs[1] == nil {
-		t.Fatal("both edits committed; one was overwritten unseen")
+	for run := 0; run < runs; run++ {
+		dir := t.TempDir()
+		a, b := curated.New(dir), curated.New(dir)
+		if _, err := a.Save(curated.Memory{Name: "target", Type: curated.TypeProject, Description: "The build target is make ci."}, "owner"); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i, st := range []curated.Store{a, b} {
+			// Each session reads the core at its start.
+			if _, err := st.Core().Pull(fmt.Sprintf("s%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, st := range []curated.Store{a, b} {
+			wg.Add(1)
+			go func(i int, st curated.Store) {
+				defer wg.Done()
+				desc := fmt.Sprintf("The build target is make ci-%d.", i)
+				_, errs[i] = st.Update("target", "", curated.Edit{Description: &desc}, fmt.Sprintf("s%d", i))
+			}(i, st)
+		}
+		wg.Wait()
+		committed, contested := 0, 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				committed++
+			case errors.Is(err, curated.ErrConflict):
+				contested++
+			default:
+				t.Fatal(err)
+			}
+		}
+		if committed != 1 || contested != 1 {
+			t.Fatalf("run %d: %d edits committed, %d re-evaluated (%v)", run, committed, contested, errs)
+		}
+		st, err := a.Core().Read()
+		if err != nil || len(st.Items) != 2 || st.Items[0].Status != core.StatusContested || st.Items[1].Status != core.StatusContested {
+			t.Fatalf("run %d: the core holds no contested pair: %+v (%v)", run, st.Items, err)
+		}
+		m, _ := a.Get("target")
+		if want := st.Items[0].Text; m.Description != want {
+			t.Fatalf("run %d: the memory says %q, the committed edit %q", run, m.Description, want)
+		}
 	}
 }
 
@@ -203,7 +229,6 @@ func TestScenario14ConcurrentSupersedeOneCommits(t *testing.T) {
 // lesson, is not returned in repository B's index (decision 8: only lessons stripped of their
 // values cross projects).
 func TestScenario19ForeignScopeNotReturned(t *testing.T) {
-	later(t, "phase 6: core scopes and pulls (a save's scope defaults to global; lessons keep their values)")
 	store := curated.New(t.TempDir())
 	a := curated.Call{Store: store, Project: "/work/repo-a", Source: "a", UserEvidence: func(string) bool { return true }}
 	for _, st := range []map[string]string{
@@ -219,6 +244,40 @@ func TestScenario19ForeignScopeNotReturned(t *testing.T) {
 		if strings.Contains(index, v) {
 			t.Fatalf("repository A's value %s is in repository B's index:\n%s", v, index)
 		}
+	}
+	// One project's lesson does not cross; the same lesson from a second project crosses into
+	// a third, stripped of both projects' values (decision 8).
+	view := core.View{Scopes: []string{core.ScopeUser, core.ProjectScope("", "/work/repo-c")}}
+	if _, err := store.Settle(curated.SettleInput{}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := store.Core().Read()
+	if block := core.Section(&st, view); block != "" {
+		t.Fatalf("a lesson from one project crossed:\n%s", block)
+	}
+	b := curated.Call{Store: store, Project: "/work/repo-b", Source: "b", UserEvidence: func(string) bool { return true }}
+	if _, err := b.Run(curated.OpSave, map[string]string{"name": "b-lesson", "type": curated.TypeLesson, "description": "Wrap every client in betaRetry3Policy or the tests flake.", "quote": "remember this for the project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Settle(curated.SettleInput{}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = store.Core().Read()
+	block := core.Section(&st, view)
+	if !strings.Contains(block, "Wrap every client in <value> or the tests flake.") || strings.Contains(block, "Retry") {
+		t.Fatalf("the lesson did not cross stripped of its values:\n%s", block)
+	}
+	// A derived record takes the intersection of its sources' scopes: two projects share none,
+	// so it is never promoted.
+	if got := core.Intersect(core.ProjectScope("", "/work/repo-a"), core.ProjectScope("", "/work/repo-b")); got != "" {
+		t.Fatalf("intersection %q", got)
+	}
+	merge := ledger.Observation{ID: "00000000000c", Content: "Never deploy on Fridays.", Kind: "preference", Source: ledger.SourceUserSaid, Replaces: []string{"00000000000a", "00000000000b"}}
+	srcA := ledger.Observation{ID: "00000000000a", Content: "Never deploy on Fridays.", Kind: "preference", Scope: core.ProjectScope("", "/work/repo-a")}
+	srcB := ledger.Observation{ID: "00000000000b", Content: "No Friday deploys.", Kind: "preference", Scope: core.ProjectScope("", "/work/repo-b")}
+	cands := core.Candidates([]ledger.Observation{srcA, srcB, merge}, map[string]string{merge.ID: ledger.LabelBelieved}, nil, core.Session{Scope: core.ProjectScope("", "/work/repo-a")})
+	if _, verdicts, err := store.Core().PromoteAll(cands); err != nil || len(verdicts) != 1 || verdicts[0] != core.VerdictScope {
+		t.Fatalf("a merge across two projects: %v (%v)", verdicts, err)
 	}
 }
 

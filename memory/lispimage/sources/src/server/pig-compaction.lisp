@@ -282,7 +282,9 @@ its pointer form, bounded by the range, else the fallback summary."
   (om::make-hconfig :passive (rcfg-passive cfg) :consolidate-off (rcfg-consolidate-off cfg)
                     :summary-max (rcfg-summary-max cfg) :memory-format (rcfg-memory-format cfg)
                     :limits (rcfg-limits cfg) :model-limits (rcfg-model-limits cfg) :raw-floor (rcfg-raw-floor cfg)
-                    :decay (rcfg-decay cfg) :decay-horizon (rcfg-decay-horizon cfg)))
+                    :decay (rcfg-decay cfg) :decay-horizon (rcfg-decay-horizon cfg)
+                    :sleep-after (rcfg-sleep-after cfg) :sleep-max-records (rcfg-sleep-max-records cfg)
+                    :dreams (rcfg-dreams cfg)))
 
 (defun pig-hook-host (c)
   "The hook's host over engine-rpc: the branch through the cache, appends through

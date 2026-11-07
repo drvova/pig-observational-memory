@@ -97,8 +97,9 @@ func TestForgetRetires(t *testing.T) {
 }
 
 // A staged save stays out of the index and out of other sessions' view until evidence promotes
-// it: a user's words quoted in feedback, a level-1 citation, or the same save staged in another
-// session. Nothing deletes a staged memory.
+// it: a user's words quoted in feedback, or the same save staged in another session from other
+// content. A level-1 citation alone is recorded and never promotes (decision 7). Nothing deletes
+// a staged memory.
 func TestSettlePromotesStagedOnEvidence(t *testing.T) {
 	s := v2Store(t)
 	for _, name := range []string{"by-quote", "by-citation", "by-sessions", "no-evidence"} {
@@ -143,14 +144,20 @@ func TestSettlePromotesStagedOnEvidence(t *testing.T) {
 	for _, p := range settled.Promoted {
 		got[p.Name] = p.Evidence
 	}
-	if got["by-quote"] != EvidenceUserQuote || got["by-citation"] != EvidenceCitation || got["by-sessions"] != EvidenceSessions || len(got) != 3 {
+	if got["by-quote"] != EvidenceUserQuote || got["by-sessions"] != EvidenceSessions || len(got) != 2 {
 		t.Fatalf("promoted %+v", settled.Promoted)
+	}
+	if m, err := s.Get("by-citation"); err != nil || !m.Staged {
+		t.Fatalf("a level-1 citation alone promoted a memory: %+v, %v", m, err)
+	}
+	if events, err := s.UsageEventsByName(); err != nil || len(events["by-citation"]) == 0 || events["by-citation"][len(events["by-citation"])-1].Event != EventCited {
+		t.Fatalf("the citation is not recorded: %+v, %v", events["by-citation"], err)
 	}
 	if m, err := s.Get("no-evidence"); err != nil || !m.Staged {
 		t.Fatalf("a staged memory without evidence stays staged, never deleted: %+v, %v", m, err)
 	}
 	text, shown := IndexFor(s, "", 0)
-	if len(shown) != 3 || strings.Contains(text, "no-evidence") {
+	if len(shown) != 2 || strings.Contains(text, "no-evidence") || strings.Contains(text, "by-citation") {
 		t.Fatalf("index after promotion %v:\n%s", shown, text)
 	}
 	if again, _ := s.Settle(SettleInput{}); len(again.Promoted) != 0 {

@@ -591,6 +591,217 @@ Phase 5 of the brain-like memory ([brain-memory.md](brain-memory.md), decisions 
   record sharing a key) lies `decayHorizon` ticks back is taken after the others of the summary's
   classes 4 and 6. Never on wall time or retrieval, never the protected classes, never a deletion.
 
+### The core log (no request)
+
+Phase 6 of the brain-like memory ([brain-memory.md](brain-memory.md), "Shape", decisions 7, 8, 16
+and 23; `memory/core`, `lisp/src/core.lisp`; cases in `contracts/core.jsonl`):
+
+- **The log.** `<store>/core/log.jsonl` in the engine's own store (the curated store's directory
+  under PiG's config root, or `~/.om`'s), never the repository or the harness's files. It is
+  append-only, and one writer at a time appends under `<store>/core/.lock`: every decision is made
+  against the newest state under that lock (`core.Log.Commit`). Each line carries a generation, above
+  every one the log recorded before it: a line no reader decodes is skipped, but the generation it
+  began with (`{"gen":N`) and the log's line count bound the next one from below, so a torn line's
+  generation is never used again (scenario 16's rule). Text and keys are redacted.
+- **Operations.** `promote` adds an item, or adds evidence roots to the same item (the fast path);
+  `supersede` replaces an item from a writer that had read it; `contest` stores the other side of a
+  contested pair, both shown with `conflicts <id>`, never last-writer-wins; `forget` carries
+  tombstones (item and record ids, never text) and the forget request's time; `scope` changes an
+  item's scope.
+  An item is `rule`, `intention`, `lesson` or `memory` (a curated memory's shared edits).
+- **Reads.** A session reads the core only when its start context is rendered, at its start and
+  after each compaction (the index pin's renders, `engine.CoreBlock`): the pull moves its
+  consumed-through marker (`<store>/core/consumed.jsonl`) to the newest generation, and between pulls
+  it reads through that marker. So the request bytes it adds change only at those moments.
+- **The gate** (`core.Decide`, decision 7 as amended): tool output alone never promotes, nor a
+  one-time permission (decision 23, `extract.IsOneTime`), nor a record with no shared scope. A
+  candidate needs the user's words (a rule or plan the user said; a plan made under a request the
+  person typed) or two distinct evidence roots; the same item is the fast path, gaining only roots
+  it lacked, so dedup never raises support and recall never changes it (scenario 9). Against a live
+  item on its key with another value it supersedes when the user's words back it and the writer had
+  read that item, and is stored as a contested pair otherwise (scenario 14).
+- **Forgets and restatements** (`core.Restates`, `core.Restating`, `State.ForgetDue`): a tombstone
+  holds against every write but the user's own fresh words. A candidate on a tombstoned item's id
+  (so the same kind, scope, key and text) lifts it only when it is the user's words from a level-0
+  record of a user entry the person typed (`said`: never a custom message, tool output, another
+  session's text or a level-1 record), restating as the pushback contest reads one
+  (`ledger.Restater`, `ledger.RestatesClaim`: keys or specifics, no negation conflict, not a
+  concession), and said after the forget (the forget line's time, the request's; records are dated
+  to the minute, so not within its minute). Its line is via `restated`: a promote (or supersede or
+  contest) that names the tombstone by its id; the fold drops the forgotten item and makes it again
+  from the line's own text, and the forgotten record's tombstone stays. Generations are kept and
+  nothing is rewritten. A forget the log already holds, written again at a later compaction, never
+  re-tombstones a lifted id; a new forget does, and only words said after it lift it again.
+- **Evidence roots** (`core.EvidenceRoot`): the digest of the file a quote was read from (the call's
+  path argument, the file its shell read command names, a grep match's file), else of the quoted
+  words; never the tool result's bytes, the session or the reading tool. The same file read with
+  `cat -n`, `head`, a grep match or behind a header is one root; curated staging cites them too.
+- **Promotion at compaction** (`hooks.promoteCoreV2`, the image's `core-promote-ledger`): code offers
+  the fold's believed rules and open plans no receipt closed (`core.Candidates`), and each project or
+  user forget record as a forget line, so tombstones carry across sessions.
+- **Scopes** (decision 8): an item is `user`, `global` or `project:<repoId>` (the root when no
+  repository id is known); a record derived from several takes the intersection of their scopes, and
+  two projects share none. A curated save without a scope stays in its project
+  (`curated.DefaultProject`); a user or feedback memory is the user's everywhere; memories saved
+  global before stay global and listed. A lesson crosses projects only stripped of its values
+  (`core.StripValues`) and only once saved in two projects (`curated.LessonsCrossing`).
+- **Shared curated edits** (scenario 14): an edit of a live memory is a `memory` generation decided
+  against the newest one; a session that had not read the other session's change (its marker below
+  it) is re-evaluated, and an edit to other content is refused with `curated.ErrConflict` and kept in
+  the core as the other side of a contested pair.
+- **Delivery** (decision 16): the start context opens with the core's block (`core.Section`): the
+  user's constraints, then the open intentions, then the lessons from other projects, each at most
+  ten, before the curated index. An item another model family wrote carries `written by a <family>
+  model` (the per-model hint rule). `/om:status` and `om status` list the core read-only
+  (`core.StatusLines`).
+
+### Sleep (no request)
+
+Phase 7 of the brain-like memory ([brain-memory.md](brain-memory.md), "Shape" and decision 13;
+`memory/sleep`, `memory/ledger/sleep.go`, `memory/hooks/sleep_v2.go`, `lisp/src/sleep.lisp`,
+`lisp/src/server/sleep.lisp`; cases in `contracts/sleep.jsonl`, `go test ./sleep -run SleepContract
+-args -write`; schemas `entry-sleep` and `sleep-state`): the NREM pass, code only, with no model
+request (`TestSleepFallbackInCompaction` counts them with `testfix.CountRequests`).
+
+- **What one pass does.** Over the fold it finds what no earlier sleep record on the branch said:
+  - *duplicates*: believed records of no link, named by none, with the same kind, status,
+    subject, scope and content (`by: hash`), then evidence records of one tool with the same
+    normalized error lines (`retrieve.ErrorLines`, `by: error`); every copy after the first is a
+    duplicate of the first, so a statement keeps the anchor where it was first made;
+  - *links*: keys (`<kind>:<value>`, `ledger.Keys`) shared by two to eight shown records;
+  - *decayed*: what decay lowers (`ledger.Decayed`), only when the `decay` setting is on;
+  - *verified* and *retired*: the anchored project records against the HEAD structure view
+    (`project.Verdicts`): `holds` or `changed` at HEAD, or retired when the path or symbol is gone;
+    the record stays, and only a view the adapter answers is read;
+  - *checks* (decision 13): each level-1 record that replaces or supersedes records, and each
+    standing reflection (a lesson), against the code records recorded after it: a supersede is
+    challenged by a later record restating a replaced record's text or a later failed attempt on
+    one of its keys, a lesson by a later failed attempt or evidence record on a key of what it
+    cites; with no later record there is no verdict yet.
+- **What it writes.** One `om.sleep` entry (`ledger.SleepData`), through the append path every
+  om.* entry takes (`hooks.appendEntry`, the image's `redact-json-text`). It never deletes or
+  rewrites a record. The summary never shows a duplicate (`selection.Input.Hidden`): the first
+  copy stands for it and the omitted spans still list it. The fold labels a believed record whose
+  latest check challenged it `contested` (`FoldedLedger.Challenged`). Links, decay, verification and
+  retirement are read by `/om:view record` and `/om:status`.
+- **When it runs.** In a compaction once `sleepAfterCompactions` (K, default 4) compactions passed
+  with no sleep record on the branch (`ledger.CompactionsSinceSleep`), before level 1 and the render,
+  skipped over `sleepMaxRecords` active records (default 5,000) or a cancelled request. At the
+  image's idle (no client for `OM_SLEEP_IDLE_SECONDS`, default 60; `sleepIdle: false` turns it off)
+  the image starts one child SBCL (decision 9) that sleeps every session store under the root and
+  exits; a client connecting kills it. `om sleep` runs the same pass by hand. Both take
+  `<root>/sleep/.lock` and checkpoint each finished store's size in `<root>/sleep/state.json`
+  (engine-private, decision 12), so a stopped pass loses at most the store in hand. The idle and
+  manual passes over every store read each store alone (no transcript, no repository); `om sleep
+  --harness h --dir d` sleeps one session with its transcript and repository. PiG's sessions live in
+  PiG's files, so the image's idle child never writes them: their sleep runs in the compaction
+  fallback, on either engine.
+
+### Cues (no request)
+
+Phase 8 of the brain-like memory ([brain-memory.md](brain-memory.md), decision 4; `memory/extract/cue.go`,
+`lisp/src/cue.lisp`; cases in `contracts/cue.jsonl`, `go test ./extract -run CueCases -args -write`;
+schema `entry-cue`). Between compactions, an `om` harness whose hooks hand a tool's result back
+with added context gets at most one cue per tool call: one short hint plus an om snippet, never a
+set of records. The registry says which harnesses: an entry whose `hooks.events` maps `post-tool`
+(Claude Code's and OpenClaude's `PostToolUse`, answered as `additionalContext`). PiG gets no cue:
+a PiG `context`-event cue would change request bytes between compactions and needs its own owner
+exception.
+
+- **When one fires.** Only on an exact structural match of the call against a standing record's
+  keys (`ledger.Keys`): its shell command (trimmed), its path (as level 0 keys it, absolute, and
+  relative to the working directory; a record's directory key ending in `/` holds the paths inside
+  it), or a line of its output (trimmed, clipped as level 0 clips an error line) equal to a recorded
+  error line. The records it may point at are failed attempts, the user's rules and corrections,
+  decisions and repository conventions, never a held one (`ledger.HeldRule`). A look-alike (one
+  character off) never fires (scenario 28). The newest matching record wins.
+- **Bounds.** It abstains by default; a record is cued at most once per compaction, and at most
+  `cueCap` (default 3, `0` off) cues per compaction. Delivery state is derived from the branch: the
+  `om.cue` entries (`{record, key, compaction}`) after the latest compaction. A cue is appended to
+  the conversation by the harness and never removed; nothing is injected and then deleted.
+- **Its text.** `memory cue (unverified): <hint>: <the record's text, redacted, at most 120
+  characters> Read it: om.Recall(`<id>`)`, the hint saying what the record is (`this failed
+  before`, `a standing rule names this`, ...).
+- **Measured.** `memeval -suite cues` replays the Tier 0 generator's sessions and reports the cue
+  rate and the false-cue rate over one-character look-alikes ([brain-memory-baseline.md](brain-memory-baseline.md),
+  "Phase 8").
+
+### Revisions (no request)
+
+Each successful file write or edit level 0 reads becomes one small revision of its file
+(`memory/extract/revision.go`, `memory/ledger/revision.go`, `lisp/src/extract.lisp`; schema
+`entry-revisions-recorded`): the path key, the entry the call sits in, the lines it added and
+removed, its first changed line (redacted, at most 80 characters), and `prev`, the file's previous
+revision on the branch. Its `id` is the first 12 hex characters of the SHA-256 of `revision\0<prev>\0
+<path>\0<digest>\0<added>\0<removed>` (the digest being the SHA-256 of the redacted new text), so
+the ids form a hash chain per file. A revision links the standing decisions, conventions and file
+record about its file (at most 5). The revisions of a stretch go in one `om.revisions.recorded`
+entry after its batches; they are never records, never in the summary, and a later turn continues
+each file's chain from the entries on the branch (`ledger.FileRevisions`).
+
+### Dreams (setting `dreams`, off by default; no request of their own)
+
+Decision 5 ([brain-memory.md](brain-memory.md); `memory/dreams`, `memory/consolidate/hypotheses.go`,
+`lisp/src/dreams.lisp`, `lisp/src/consolidate/validate.lisp`; cases in `contracts/dreams.jsonl`,
+`go test ./dreams -args -write`; schema `entry-hypotheses-recorded`). With `dreams: true`:
+
+- **The dream section.** After everything else in a records summary, when it fits the budget
+  whole: a header saying these are hypotheses, never facts or instructions, then code-only lines,
+  each citing its records: at most 3 open intentions rehearsed (`rehearse, still open`), 2
+  hindsight relabels (a failed attempt a later success superseded was a dead end), 2
+  counterfactual skeletons (`what if <target> had not failed with <error>? unknown until a later
+  receipt`) and 2 links between standing records of different kinds that share an exact path or
+  command key.
+- **Level 1's hypotheses.** The one level-1 request's tool also offers `hypotheses`: at most 3
+  one-line guesses (240 characters) citing shown records. They are quarantined: redacted, stored
+  only in an `om.hypotheses.recorded` entry, never a record, a reflection, a fact class, the core or
+  curated memory, and shown only as `level-1 hypothesis` lines in the dream section (scenario 20).
+  A reply of hypotheses alone is no accepted output. Off, the tool, the prompt and the summary are
+  byte for byte what they were.
+- **The gate.** `memeval -dreams on` checks every compaction for a false promotion (a dream line or
+  the header in a fact class, a record or the curated store): 0 on Tier 0 and the suites
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 8"). The DreamBench-SWE bar's items
+  (`memeval -dreambench-out <file>`: each compaction with dreams off and on, with the probes'
+  questions) are written, ready, not run: answering and judging need models.
+
+### Erasure and the layer purge (no request)
+
+Decisions 10 and 11 ([brain-memory.md](brain-memory.md); `memory/erase`, `memory/ledger/erasure.go`,
+`memory/hooks/erase_v2.go`, `memory/layer/scrub.go`; the image's `erasure-request-p`; schema
+`entry-erased`).
+
+- **A layer write is scanned.** A prose definition (instructions, a remedy's catalogue) is redacted
+  as its file is written (`layer.encodeFile`, the image's `go-encode-file`), keeping the variable
+  name and its line, in the file and its blob. Code is never redacted, since a redacted literal
+  changes what it does: a code or query definition holding a secret, a Go detector's string
+  literal or comment included (`codepolicy.SecretInCode`), and an image layer form, are refused
+  with where the secret is.
+- **Existing files are purged.** `om purge` (`--check` only counts) and the sleep pass of `om sleep`,
+  under the stores' locks: a layer definition holding a value is rewritten through the store
+  (`layer.Store.Scrub`: a prose one redacted with a put generation, a code one forgotten, a blob
+  holding a value removed, so a rollback to it is refused), and every other engine file has its
+  values redacted in place.
+- **A user's erase request.** A forget request the user typed worded as an erasure (`erase`,
+  `purge` or `wipe` ... `from memory`) is a forget record whose text opens `The user asked to erase`
+  (`ledger.ErasurePrefix`); its tombstones hold ids only, as every forget's do. The user's own typed
+  words are the gate: tool output, custom messages and the assistant never make one. After level
+  0, whichever engine ran it, the Go client (`hooks.ErasePending`, om's hooks after the image's
+  turn end, the PiG adapter's process path) purges the payloads, the erased records' text and its
+  specific spans (`erase.Spans`), from every surface the engine owns, under each surface's lock:
+  om's session stores (records, value and evidence records, summaries and their details), its
+  recorded turns, the sleep checkpoints, the curated tree (memories, their usage ledger and
+  index, the per-model ledgers), the core log, the layer (through its store) and the image's layer.
+  Each copy becomes `[erased]`; one `om.erased` entry names the requests and the copies replaced
+  per surface. `om erase` purges what no purge handled yet (`--text <words>` erases words the user
+  types at the command line; `--check` reports the residue per surface and changes nothing).
+- **What stays.** The tombstones (ids only) and the `[erased]` markers, so nothing points at the
+  payload any more: that is the indirection. Crypto-shredding is not built, since backups of
+  `~/.om` are out of scope (decision 14). Under PiG the om.* entries live in PiG's session file,
+  which the engine writes only through the host: the fold leaves the erased records out for good,
+  and the purge covers the engine's own files.
+- **Outside the engine.** The harness's own transcript: the engine never writes it and cannot erase
+  from it, and `om erase` says so.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every
@@ -791,8 +1002,9 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
   "never at a keep").
 - Any other `save` is staged: visible in its session through `saved`, absent from the always-loaded
   index. Code checks evidence at `agent_settled` and `session_start`, with no request: a later user
-  quote, a level-1 citation, or the same normalized name and description staged in another session
-  from distinct source content. A save quoting tool output is staged citing it (the digest of the
+  quote, or the same normalized name and description staged in another session from distinct
+  source content (decision 7). A level-1 citation is recorded (a `cited` usage line) and never
+  promotes: it is the session model's reading of what it was shown, not evidence of its own. A save quoting tool output is staged citing it (the digest of the
   tool result holding the quote, `curated.SourceDigest`); two sessions' stagings count only when
   their digests differ (`docs/brain-memory.md`, decision 7), so two sessions that read the same file
   never corroborate each other, and a staging that cites nothing is no evidence.
@@ -802,8 +1014,7 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
   Staged memories are never deleted automatically. A later user quote is a `feedback ... outcome=helped`
   whose quote is in a user message (the assistant's words and harness markup confirm nothing); a
   level-1 citation names a listed memory with at least one shown record code picked from a user
-  message, so the model never confirms its own save; level 1 also runs the check after recording
-  citations.
+  message; level 1 also runs the check after recording citations, for the other evidence.
 - A `forget` through the memory tool retires a memory other sessions see only on a user's words
   quoted with it (`om.Quoting`, at most three memories per quote); without them it hides the memory
   in its own session at once and stages the forget, leaving shared memory unchanged
@@ -953,10 +1164,10 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
       failures F are `level1-failed` + `level1-refused` for the instructions, and
       `uncited-assistant-specifics` + `cross-scope-supersede` + `decode-failure` for the rest. It is
       rejected when T's harm is above both windows'; otherwise its effect `min(F(A), F(B)) - F(T)`
-      must beat the A-versus-A spread `|F(A) - F(B)|` after its cost, in thousandths of a failure:
-      the instructions text's tokens (as declared) over T at 1,000 tokens a failure, and the turns T
-      took beyond both windows at 10 turns a failure. Short of that it is rejected ("no net effect
-      after cost").
+      after its cost must exceed twice the A-versus-A spread `|F(A) - F(B)|`, and be at least one
+      failure when the spread is 0, in thousandths of a failure: the cost is the instructions text's
+      tokens (as declared) over T at 1,000 tokens a failure, and the turns T took beyond both windows
+      at 10 turns a failure. Short of that it is rejected ("no net effect after cost").
     - *Independence.* 2·`MinEvidence` passes under it with fewer than `MinEvidence` independent ones
       reject it: its evidence came from too few roots.
     - *Scope.* A written one records its scope on its put generation (`scope`: the repositories and
@@ -1084,6 +1295,28 @@ level-1 offer (`rules.V2UnitsSinceProposal`): v2 has no revision pass, so the of
 `rules.ProposalDue`'s baseline does. Each held record, reflection and curated memory
 (`contracts/insecure.md`) gets a `held: weakens security (<rule>)` line with its anchor or name.
 `/om:view` stays read-only and leaves out the reflections level 1 replaced.
+
+Phase 7 adds, in both engines with the same text:
+
+- **Aggregates.** After the reflections line: the records by kind, by label (contracts/truth.md's
+  five), and the sleep runs on the branch with the latest one's trigger and through id and the
+  totals of duplicates hidden, links, decayed, verified, retired and checks (challenged). Held
+  items, staged changes, the core and settlement keep their own lines.
+- **Viewing a record.** `/om:view records [page]` lists the fold's records (dropped ones included,
+  forgotten ones never) twenty a page with kind, label, source and authority and the head of the
+  content; `/om:view record <id>` shows one record's provenance (source, authority, hedge, writer,
+  frame), scope, lifecycle (label, replaced by, dropped, supersedes, conflicts), what the sleep
+  records say of it, and where it was used: the compactions whose summary showed it
+  (`details.shown`) and the memory tool calls that returned or recalled it, with their searches.
+  "Used" is a view only and never a rank input (decision 6). A forgotten record's text is never
+  shown.
+- **Correcting a record.** Slash commands stay read-only. The memory tool's `om.Correct(<id>,
+  <text>, om.Quoting(<quote>))` (the image's `correct`) records a correction write, never an edit;
+  level 0 turns it into a correction record that supersedes the record when the quote is a user's
+  words in the conversation (source `user-said`, authority `user`), and otherwise into one that only
+  possibly updates it with the model's authority, which the three-way rule (`ledger.Supersession`)
+  weighs: a model's word never replaces a user's fact. `om.Correct` is in `om.Doc`, the symbol
+  table and the manual (which lists exactly the symbol table, `TestManualListsTheOMTable`).
 
 ## Measuring it
 

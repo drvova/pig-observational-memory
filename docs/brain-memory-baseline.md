@@ -137,17 +137,17 @@ column gives that result.
 | 7 | rename marks a record stale at a commit | **pass** (phase 4: "gone at <sha>", real git) | |
 | 8 | hypothetical never a fact | skip, phases 2 and 6 | fails: the question is recorded as a fact |
 | 9 | 50 recalls leave the summary byte-identical | **pass** | |
-| 9 | core rank and support unchanged by recall | skip, phase 6 | no body yet |
+| 9 | core rank and support unchanged by recall | **pass** (phase 6: the fast path adds no root, 50 pulls leave the block) | |
 | 10 | tool-output instruction staged, never promoted | skip, phase 1 | passes with this input |
 | 11 | forged `[User]:` line in tool output | skip, phase 1 | passes with this input |
-| 12 | same poisoned save from two sessions not promoted | skip, phase 1 | fails: promoted on "the same save staged in another session" |
+| 12 | same poisoned save from two sessions not promoted | **pass** (phase 1; phase 6 keys the stagings on evidence roots) | |
 | 13 | secret in no record, summary or snippet output | skip, phase 1 | fails: the summary holds it |
-| 14 | concurrent supersede, one commits | skip, phase 6 | fails: two curated edits of one memory both commit (Tier 0c) |
+| 14 | concurrent supersede, one commits | **pass** (phase 6: 1,000 runs, one commits and one is a contested pair) | |
 | 15 | another writer's layer change is read, no stale cache | **pass** | |
 | 16 | torn manifest line, next generation intact and numbered after | **pass** | |
 | 17 | retracted source takes its merge out, and its other source reappears | **pass** (phase 5 part A) | |
 | 18 | forget injected through tool output leaves shared memory | skip, phase 1 | fails: the memory is retired |
-| 19 | foreign scope not returned | skip, phase 6 | fails: an unscoped fact and a lesson keep their values in the other repository's index (Tier 0c) |
+| 19 | foreign scope not returned | **pass** (phase 6: project default scope, stripped lessons after two projects, scope intersection) | |
 | 20 | dream never a fact | skip, phase 8 | no body yet |
 | 21 | prose does not close a plan; an edit receipt does; a read plan only on a unique line | **pass** (phase 3) | |
 | 22 | fresh requirement marks a plan "may be stale"; the registry holds the resolved set | **pass** (phase 3) | |
@@ -155,6 +155,7 @@ column gives that result.
 | 24 | an opinion with pushback is not a rule | **pass** (phase 2, episodes and pushback) | |
 | 25 | insecure preference held, not in the index | skip, phase 1 | fails: in the index |
 | 26 | project record stale against HEAD | **pass** (phase 4: "changed since", "gone at", level 1's re-check, no structure line) | |
+| 29 | a one-time permission is never a standing rule or a core item | **pass** (phase 6) | |
 | 30 | a no-op definition replayed at `MinEvidence` does not settle; no net effect after cost is rejected | **pass** (phase 5 part B; the noise arm still settles 13.9%) | |
 | 31 | repeated text and tool output never settle a definition | **pass** (phase 5 part B) | |
 | 32 | settling one definition returns those sharing its target to a hold window | **pass** (phase 5 part B) | |
@@ -633,10 +634,293 @@ failure the no-op is judged by, so the noise arm draws each compaction's
 | noise arm | decision 24, hold points with a full null arm | 440 | 61 | 13.9% |
 
 On the recorded ledgers decision 24 rejects 437 hold points for no net effect after cost, 120 for
-no null arm (fewer than six earlier compactions), and leaves 3 held. Under noise it still settles a
+no null arm (fewer than six earlier compactions), and leaves 3 held. Under noise it still settled a
 no-op at about one hold point in seven with a full null arm: three compactions beating two windows
-of three by more than their spread happens by chance. Longer windows, or the spread taken over more
-than one pair of control windows, would lower it; both are the owner's call.
+of three by more than their spread happens by chance.
+
+**Twice the spread** (branch `claude/settle-2x`, on `d93e389`). The owner accepted a wider margin:
+the effect after cost must exceed twice the spread, and be at least one failure when the spread is
+0. The same command, now with a true-effect arm: the noise arm's ledgers, with the definition
+removing half of each compaction's failures under it (`memeval.TrueEffectShare`, a compaction
+counting n keeps n/2 rounded down), so the hold points it does not settle are false negatives the
+margin costs.
+
+| ledgers | rule | hold points | settled before (one spread) | settled after (twice the spread) |
+|---|---|---|---|---|
+| recorded | decision 24 | 560 | 0 (0.0%) | 0 (0.0%) |
+| recorded | decision 24, hold points with a full null arm | 440 | 0 (0.0%) | 0 (0.0%) |
+| noise arm, no-op | decision 24 | 560 | 61 (10.9%) | 42 (7.5%) |
+| noise arm, no-op | decision 24, hold points with a full null arm | 440 | 61 (13.9%) | 42 (9.5%) |
+| noise arm, true effect | decision 24 | 560 | 192 (34.3%) | 122 (21.8%) |
+| noise arm, true effect | decision 24, hold points with a full null arm | 440 | 192 (43.6%) | 122 (27.7%) |
+
+The margin removes 31% of the no-op's settlements (61 to 42) and 36% of the true-effect
+definition's (192 to 122): at three compactions a window the spread of two noisy windows is about
+as large as a halving's effect, so the wider margin pays for its fewer false positives with about
+as large a share of false negatives. A no-op still settles at about one hold point in eleven with a
+full null arm. Longer windows, or the spread taken over more than one pair of control windows,
+would separate the two arms better; both are the owner's call. The recorded ledgers are unchanged
+(437 rejected for no net effect after cost, 120 for no null arm, 3 held).
+
+## Phase 6: the core log
+
+The shared core log (docs/brain-memory.md, "Phase 6 status: the core log"). Measured on 2026-11-07
+against the tree it merged (`claude/lisp-core` at `d859d24`), no model requests.
+
+**Tier 0 and 0b: no regression.** `go run ./cmd/memeval -suite all -seeds 20` (600 compactions,
+1,549 snippets run, 0 failed) prints the retention and invariant tables cell for cell as before
+(identifier 98 / 89 / 61 / 45 / 35% shown after 1, 4, 8, 16 and 20 compactions; constraints and
+scope exclusions 100% throughout; 0 invariant breaks) and the same Tier 0b table: the core changes
+the start context, never a summary.
+
+**Tier 0c: the phase-6 rows pass.**
+
+| check | before | after |
+|---|---|---|
+| same evidence re-read in two sessions is not counted as two | 80 of 120 pairs promoted (**fail**) | 0 of 120 (**pass**); the control still 20 of 20 |
+| a project fact saved without a scope stays out of the other repo | 20 of 20 shown (**fail**) | 0 of 20 (**pass**) |
+| a lesson crosses projects only stripped of its values | 20 of 20 shown with values (**fail**) | 0 of 20 (**pass**) |
+| two sessions editing one memory, one commits (scenario 14) | both in 40 of 40 rounds (**fail**) | one committed and one contested in 40 of 40 (**pass**) |
+| core log: one writer, generations, contested pairs | not built | 81 lines, 81 distinct generations, a contested pair in 40 of 40 rounds (**pass**) |
+| core log shared lines hold no secret | not built | 0 values (**pass**) |
+
+The layer's secret, the last Tier 0c finding, passes since phase 8.
+
+**Scenarios.** 9 (core: 50 pulls and re-offers leave its roots and block), 12, 14 (1,000 runs), 19
+and 29 pass; `TestCoreDeliveryAcrossSessions` checks decision 16's delivery (a constraint and an
+open intention of session A first in session B, not in another project, a one-time permission
+never a rule, the writer's model family named for another family) and a forget carried as a core
+tombstone.
+
+**The restatement lift and the citation that never promotes** (branch `claude/core-fixes`, on
+94d5083). `go run ./cmd/memeval` (Tier 0 default) and `-suite all -seeds 20` print every table
+cell for cell as at 94d5083, timings aside (Tier 0b's injected saves still 0 live and 0 promoted).
+`TestCoreRestatementLiftsTombstone` checks that a forgotten rule comes back on the user's own words
+in a later session and never on a file the agent read or a custom message, and that the old
+forget, offered again, leaves it; `TestV2Level1CitationNeverPromotesStagedMemory` that a citation
+alone leaves a staged memory staged.
+
+## Phase 7: transparency and sleep
+
+The sleep pass, `/om:view` per record, `/om:status` aggregates and the quote-gated correction
+(docs/brain-memory.md, "Phase 7 status: transparency and sleep"). Measured on 2026-11-07 on branch
+`claude/phase7-sleep` (e7b6f68 plus the floor-check fix below), 20 seeds, 600 compactions a run.
+`-sleep off` turns the compaction fallback off; `-sleep on` is the default
+(`sleepAfterCompactions` 4). **Every run made 0 model requests** (each Tier 0 line prints `0 model
+requests`; the sleep line prints `0 requests`); the suites' only requests are their scripted
+level-1 replies, as before (Tier 0b 140, Tier 0c 2, none to a model).
+
+Commands, from `memory/`:
+
+```sh
+go build -o "$TMP/memeval" ./cmd/memeval
+"$TMP/memeval" -seeds 20 -sleep off -sumsum
+"$TMP/memeval" -seeds 20 -sleep on -sumsum
+"$TMP/memeval" -seeds 20 -summary-max 1200 -sleep off -sumsum
+"$TMP/memeval" -seeds 20 -summary-max 1200 -sleep on -sumsum
+"$TMP/memeval" -suite all -seeds 20 -sleep off
+"$TMP/memeval" -suite all -seeds 20 -sleep on
+```
+
+| run | snippets run (failed) | sleep records | duplicates named | model requests |
+|---|---|---|---|---|
+| default, sleep off | 1,549 (0) | 0 | 0 | 0 |
+| default, sleep on | 1,615 (0) | 140 | 1,282 | 0 |
+| capped at 1,200, sleep off | 3,915 (0) | 0 | 0 | 0 |
+| capped at 1,200, sleep on | 3,915 (0) | 140 | 2,655 | 0 |
+
+All four invariants hold on all 600 compactions of every run. The old value of a superseded fact is
+never shown as current.
+
+### Tier 0 with sleep off: the phase-6 tables
+
+Sleep off prints the "Phase 3" default and capped tables (the ones phases 4 to 6 left unchanged)
+cell for cell, probe counts included.
+
+### Tier 0 with sleep on: no cell loses
+
+Default window, sleep on, with the change against sleep off (the phase-6 table) in points of
+shown. Every other cell is equal, and lost stays 0 in every cell.
+
+| class | 1 | 2 | 4 | 5 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| identifier | 98 / 2 / 0 | 97 / 3 / 0 (+1) | 89 / 11 / 0 | 84 / 16 / 0 (+3) | 61 / 39 / 0 | 59 / 41 / 0 | 45 / 55 / 0 | 35 / 65 / 0 |
+| error text | 98 / 2 / 0 | 94 / 6 / 0 (+1) | 92 / 8 / 0 | 75 / 25 / 0 (+5) | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| decision | 90 / 10 / 0 (+2) | 84 / 16 / 0 | 62 / 38 / 0 (+4) | 36 / 64 / 0 (+12) | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | 98 / 3 / 0 (+1) | 94 / 6 / 0 | 85 / 15 / 0 (+3) | 72 / 28 / 0 (+7) | 46 / 54 / 0 | 38 / 63 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| probes per class | 120 | 115 (+1) | 100 | 100 | 98 | 80 | 60 | 60 |
+
+- Seven sleep records a seed name 1,282 duplicates on the 20 final branches (sleep and duplicate
+  counts are read from each run's last branch, `memeval.SleepFigures`). Hiding them frees summary
+  room, and the records behind them in line are shown one or two compactions longer, most at
+  N = 5 (decisions +12 points). Past N = 8 the budget is spent on newer
+  records either way, so nothing changes there.
+- What sleep hides is still reachable: the summary's omitted spans list it, so snippets run rises
+  from 1,549 to 1,615 and none fails. The protected classes are never hidden (e7b6f68).
+- Capped at 1,200 tokens, sleep on prints the capped table cell for cell: the cap leaves room
+  for few rows beyond the rules, so hiding 2,655 duplicates moves no probe across the shown line.
+
+### The erosion curve: summary-of-summary against re-rendering from the ledger
+
+The arm no paper has measured (`-sumsum`, `memeval.SummaryOfSummary`): at compaction n the
+summary is summary n-1 carried verbatim behind the new rows engine summary n picked from the
+turns since compaction n-1, cut to the room summary n's own rows take. It is code only and
+generous (a model re-summarizing keeps at most that much, word for word), so it is an upper bound on
+what summary-of-summary keeps. It prints no snippet, so a probe is shown or lost. The engine
+re-renders every summary from the ledger, so its lost column is 0 throughout.
+
+Default window, sleep off. Each cell is ledger shown / reachable / lost, then summary-of-summary
+shown / lost, in percent (N = 10 added: it is where the curve falls).
+
+| class | 1 | 2 | 4 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|
+| identifier | 98/2/0 · 98/2 | 96/4/0 · 99/1 | 89/11/0 · 99/1 | 61/39/0 · **76/24** | 59/41/0 · **1/99** | 45/55/0 · **0/100** | 35/65/0 · **0/100** |
+| error text | 98/2/0 · 98/2 | 93/7/0 · 99/1 | 92/8/0 · 100/0 | 0/100/0 · **49/51** | 0/100/0 · **0/100** | 0/100/0 · **0/100** | 0/100/0 · **0/100** |
+| constraint | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **18/82** | 100/0/0 · **0/100** | 100/0/0 · **0/100** | 100/0/0 · **0/100** |
+| scope exclusion | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **14/86** | 100/0/0 · **0/100** | 100/0/0 · **0/100** | 100/0/0 · **0/100** |
+| decision | 88/12/0 · 90/10 | 84/16/0 · 94/6 | 58/42/0 · 98/2 | 0/100/0 · **41/59** | 0/100/0 · **0/100** | 0/100/0 · **0/100** | 0/100/0 · **0/100** |
+| intention | 97/3/0 · 97/3 | 94/6/0 · 98/2 | 82/18/0 · 100/0 | 46/54/0 · **44/56** | 38/63/0 · **0/100** | 25/75/0 · **0/100** | 23/77/0 · **0/100** |
+| superseded | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **36/64** | 100/0/0 · **0/100** | 100/0/0 · **0/100** | 100/0/0 · **0/100** |
+| probes per class | 120 | 114 | 100 | 98 | 80 | 60 | 60 |
+
+Capped at 1,200 tokens, sleep off, the same layout:
+
+| class | 1 | 2 | 4 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|
+| identifier | 8/92/0 · 9/91 | 0/100/0 · 9/91 | 0/100/0 · 5/95 | 0/100/0 · 1/99 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 |
+| error text | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 |
+| constraint | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **74/26** | 100/0/0 · **59/41** | 100/0/0 · **43/58** | 100/0/0 · **2/98** | 98/2/0 · **0/100** |
+| scope exclusion | 100/0/0 · 100/0 | 100/0/0 · **88/13** | 100/0/0 · **74/26** | 100/0/0 · **59/41** | 100/0/0 · **38/62** | 100/0/0 · **2/98** | 100/0/0 · **0/100** |
+| decision | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 |
+| intention | 14/86/0 · 15/85 | 0/100/0 · 16/84 | 0/100/0 · 6/94 | 0/100/0 · 5/95 | 0/100/0 · 5/95 | 0/100/0 · 1/99 | 0/100/0 · 0/100 |
+| superseded | 73/27/0 · 73/27 | 75/25/0 · 73/28 | 68/32/0 · **54/46** | 49/51/0 · 50/50 | 50/50/0 · 51/49 | 26/74/0 · **1/99** | 0/100/0 · 0/100 |
+| probes per class | 168 | 160 | 160 | 140 | 120 | 89 | 61 |
+
+- **Summary-of-summary erodes to nothing; the ledger loses nothing.** In the default window it
+  keeps every class through N = 4, often showing more than the ledger render (it carries old rows
+  word for word where the render gives newer records the room), then falls off a cliff: 14–76%
+  shown at N = 8, at most 1% at N = 10 and 0% at 16 and 20, for every class. The ledger render
+  loses 0% at every N; what leaves its summary stays reachable through a printed snippet.
+- **The cliff is the room, not the age.** Each compaction's new rows go first, so a carried row
+  survives only while the rows newer than it still fit, about nine compactions' worth here. A
+  real re-summarizer would also paraphrase, and lose exact identifiers sooner; this arm cannot.
+- **It loses the rules first under a cap.** Under 1,200 tokens it drops the user's constraints and
+  scope exclusions from N = 2–4 (74% at 4, 2% at 16, 0 at 20), where the ledger render keeps them
+  shown at 98–100% at every N (class 1a). Corrections fall from 73% to 0% by N = 16 with nothing
+  left to reach.
+- With sleep on the arm keeps more at N = 8 (identifier 81%, error text 71%, constraint 32%,
+  decision 66%, superseded 51%) because the rows it carries hold fewer duplicates, and is still at
+  0–4% by N = 10. Capped, sleep on prints the same arm cell for cell.
+
+### Tier 0b, 0c and the settle replay: no regression
+
+`-suite all -seeds 20 -sleep off` prints the phase-6 output (the core fixes' run at 17375d1) line
+for line, timings aside. With `-sleep on` every row keeps its status, the two layer-secret findings
+(phase 8) included, and Tier 0c and the no-op definition replay are unchanged line for line. The
+only Tier 0b differences:
+
+| part | check | sleep off | sleep on |
+|---|---|---|---|
+| b. residue | secret redaction: snippets' answers | 0 values left in 1,760 answers | 0 values left in 1,759 answers: **pass** |
+| c. protected | correction never lost after 1-20 compactions | 537 cells, 0 lost | 538 cells, 0 lost: **pass** |
+| c. protected | failed attempt never lost after 1-20 compactions | 551 cells, 0 lost | 552 cells, 0 lost: **pass** |
+| c. protected | decay on (compactions clock): no protected class below its floor, none lost | 2,556 cells, 0 shown less, 0 lost | 2,558 cells, 0 shown less, 0 lost: **pass** |
+| c. protected | decay on (turns clock): no protected class below its floor, none lost | 2,556 cells, 0 shown less, 0 lost | 2,557 cells, 0 shown less, 0 lost: **pass** |
+
+The decay table's decision and intention rows move as the Tier 0 table above does (decision at N = 1
+and 4 from 88 and 58% to 90 and 62% shown in every decay arm; at N = 8 decay's 1% becomes 2%).
+
+**The floor check's fix.** The first sleep-on run reported the turn-clock row as **fail**, "1 shown
+less than without decay": the turn-clock arm scored 90 corrections at N = 8 against the run
+without decay's 91, all of them shown. Sleep changes the summaries, so a seed's compactions fall at
+other turns and one late correction reached N = 8 in one arm only; the check compared raw shown
+counts. It now compares the shown share (`memeval.shownBelow`, `TestShownBelowComparesShares`),
+which still fails a shown probe that became reachable or lost. The sleep-on run above is after the
+fix; the Tier 0 and sleep-off runs were made before it, which it cannot change (it touches only this
+row, which they passed).
+
+### Tier 1/2 A/B: ready, not run
+
+`memeval -ab-out <file>` writes each compaction's tables summary beside a natural-language rendering
+of the same rows (`memeval.NaturalLanguage`), with the probes' questions and reference answers
+(`memeval.WriteABItems`). Answering them with models of several families and judging them with the
+fixed judge of decision 21 needs models, so the items are **ready, not run**; so are the format
+A/B's A-versus-A rerun, filler and NullMemory arms.
+
+## Phase 8: delivery, dreams and erasure
+
+Cues, revisions, the dream section and erasure (docs/brain-memory.md, "Phase 8 status: delivery,
+dreams and erasure"). Measured on 2026-11-07 on branch `claude/phase8-delivery`, 20 seeds, 600
+compactions a run, sleep on (the default). **Every run made 0 model requests**; the suites' only
+requests are their scripted level-1 replies, as before (Tier 0b 140, Tier 0c 2).
+
+Commands, from `memory/`:
+
+```sh
+go build -o "$TMP/memeval" ./cmd/memeval
+"$TMP/memeval" -suite all -seeds 20              # dreams off (the default)
+"$TMP/memeval" -suite all -seeds 20 -dreams on
+"$TMP/memeval" -suite cues -seeds 20
+```
+
+### Tier 0, 0b, 0c and the settle replay with dreams off: no change
+
+Dreams off prints the phase-7 sleep-on tables cell for cell (1,615 snippets run, none failed; 140
+sleep records naming 1,282 duplicates; all four invariants on all 600 compactions), and the settle
+replay line for line. Revisions sit in their own entries and never reach the summary. In Tier 0b
+and 0c every row passes: the two layer findings pass (below) and the erasure rows are built.
+
+### Dreams on: 0 false promotions, no cell loses
+
+| run | dream sections | dream lines | false promotions | snippets run (failed) | model requests |
+|---|---|---|---|---|---|
+| `-suite all -dreams on` | 560 | 2,240 | **0** | 1,613 (0) | 0 |
+
+- A false promotion is a dream line or the section's header anywhere but the section: in the
+  summary's tables before it, in any om.* entry on the branch (level 1's quarantined
+  `om.hypotheses.recorded` excepted) or in the curated store (memories, core log, layer, index),
+  checked after every compaction of Tier 0 and every suite session (`memeval.checkDreams`).
+- The section is appended after the summary, so it shows no fewer records; its tokens enter the
+  next compaction's context, which moves some compactions by a turn. Shown is equal or higher in
+  every cell (identifier +1 at N = 4, error text +1 at N = 2 and +2 at N = 5, decision +2 at N = 2
+  and +5 at N = 5, intention +3 at N = 5 and +1 at N = 8), lost stays 0, and the probe counts move
+  by one at N = 2 and 8 (114 and 97). Tier 0b's protected classes lose nothing (cells 553 / 553 /
+  530 / 551, 0 lost); the settle replay's noise arm settles 41 of 560 (7.3%, against 42).
+- Scenario 20 (a hypothesis over-generalizing clean inputs into a rule) is the hook test
+  `TestV2DreamHypothesisNeverAFact`: kept only in its entry and the dream section.
+- **The DreamBench-SWE bar** (`-dreambench-out <file>`: each compaction's summary with dreams off and
+  on, with the probes' questions) is written and **ready, not run**: answering and judging need
+  models (decision 21's judge and controls).
+
+### Cues: the cue and false-cue rates
+
+`-suite cues` replays the generator's sessions with level 0 after every turn and a compaction every
+20 turns, deciding the post-tool cue after each call; beside each call a look-alike (a letter added to
+its path's first component, ` -v` added to its command, each output line's last digit changed) is
+decided over the same branch.
+
+Cues: 20 seeds, 600 turns each, 0 model requests:
+
+| measure | count | rate |
+|---|---|---|
+| tool calls replayed | 30960 | |
+| calls an exact key of a standing record matches | 109 | 0.4% of calls |
+| cues given (cap 3 per compaction, once per record) | 109 | 0.4% of calls (cue rate), 100.0% of matched calls |
+| look-alike calls (one character changed per key) | 30960 | |
+| cues a look-alike got | 0 | 0.0% (false-cue rate) |
+| calls repeating a standing cueable record's key at the session's end | 759 | |
+| cues they got | 759 | 100.0% |
+| cues their look-alikes got | 0 | 0.0% (false-cue rate) |
+
+- The generator's own calls rarely repeat a standing cueable key (its failing runs are resolved by
+  a later success, which stops cueing them), so the cue rate on its calls is 0.4%, and each of
+  those 109 matched calls got its cue. Exact repeats of standing cueable records' keys at each
+  session's end are cued 759 of 759.
+- **False-cue rate 0**: no look-alike got a cue, over 30,960 calls and 759 repeats (scenario 28;
+  `contracts/cue.jsonl` holds the case-level look-alikes both engines decide).
 
 ## Tier 0b: forgetting
 
@@ -677,10 +961,18 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
 | b. residue | secret redaction: curated memory files | 0 values found (100 planted, 5 per seed) | **pass** |
 | b. residue | secret redaction: curated usage ledger (feedback and forget quotes) | 0 values found (100 planted, 5 per seed) | **pass** |
 | b. residue | secret redaction: curated index | 0 values found (100 planted, 5 per seed) | **pass** |
-| b. residue | secret redaction: layer files | 40 values found (100 planted, 5 per seed) | **fail** (phase 8: secret purge (a layer write is not scanned)) |
+| b. residue | secret redaction: layer files | 0 values found (100 planted, 5 per seed) | **pass** (phase 8; 40 values before) |
 | b. residue | secret redaction: level-1 merged records (scripted merge echoing a value) | 0 values left; 20 of 20 merges accepted | **pass** |
-| b. residue | erasure: purge a record's payload (decision 11) | not built | **not built** (phase 8) |
-| b. residue | erasure: purge a forgotten memory's file | a forget retires and keeps the file; 0 values left in retired files after redaction | **not built** (phase 8) |
+| b. residue | secret redaction: a forgotten memory's file | a forget retires and keeps the file; 0 values left in retired files after redaction | **pass** |
+| b. residue | erasure: core log holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: layer holds no erased payload (decision 11) | 80 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: curated memory holds no erased payload (decision 11) | 40 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: records and summaries holds no erased payload (decision 11) | 40 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: recorded turns holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: checkpoints holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: image layer holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: the erase record and om.erased hold ids only | 20 of 20 records of ids, 20 of 20 purges marked | **pass** |
+| b. residue | erasure: the harness's transcript is outside the engine (not erased, as documented) | 20 of 20 transcripts still hold the value | **pass** |
 | c. protected | prohibition never lost after 1-20 compactions | 554 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | constraint (scope exclusion) never lost after 1-20 compactions | 554 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | correction never lost after 1-20 compactions | 537 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
@@ -724,12 +1016,13 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
       verbatim (`curated.Store.appendUsage`, `append-usage`). They are redacted now, and
       `QuotedForgets` compares redacted quotes. Tests: `TestUsageLedgerRedactsQuotes`,
       `safety-usage-ledger-redacts-quotes`.
-  - One defect is left: **layer writes** are not scanned. A definition holding a value keeps it
-    in its file and its blob. Redacting a definition's text, a detector's Go code included, is
-    not a local change, so it is left for phase 8's secret purge
-    (`TestLayerWriteHoldsNoSecret`).
-  - Erasure (decision 11) is phase 8 and not built. A forget retires a memory and keeps its
-    file, which after redaction holds no value.
+  - **Layer writes** were not scanned: a definition holding a value kept it in its file and its
+    blob (40 values). Since phase 8 a prose definition is redacted as it is written and a code
+    one holding a secret is refused (`TestLayerWriteHoldsNoSecret`, 0 values).
+  - Erasure (decision 11) is built in phase 8: a user's typed erase request purges the erased
+    records' text from every surface the engine owns, 0 copies left on each (the erasure rows).
+    A forget alone still retires a memory and keeps its file, which after redaction holds no
+    value.
 - **c. Protected classes**, after 1 to 20 compactions. The cells are shown / reachable / lost,
   in percent.
   - The prohibition is "Never run X", the constraint a scope exclusion and the correction the
@@ -762,67 +1055,68 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
 
 The sharing suite (`Sharing`) checks what crosses between sessions and projects through the
 stores that exist today: the curated store and its usage ledger, the layer store and the
-per-model usage ledger. The core log is phase 6.
+per-model usage ledger, and since phase 6 the core log.
 
 Command: `cd memory && go run ./cmd/memeval -suite sharing -seeds 20`.
 
-Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 replies the fake host served (no model called), 18.872s
+Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 replies the fake host served (no model called), 16.938s
 
 | part | check | counts | result |
 |---|---|---|---|
-| a. independence | same evidence re-read in two sessions is not counted as two | 80 of 120 same-evidence pairs promoted on "the same save staged in another session" (the same bytes 0, other whitespace 0, line numbers (cat -n) 20, the first lines only (head) 20, one grep match 20, a tool header 20) | **fail** (phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes) |
+| a. independence | same evidence re-read in two sessions is not counted as two | 0 of 120 same-evidence pairs promoted on "the same save staged in another session" (the same bytes 0, other whitespace 0, line numbers (cat -n) 0, the first lines only (head) 0, one grep match 0, a tool header 0) | **pass** |
 | a. independence | control: another file quoting the line counts as a second source | 20 of 20 promoted | **pass** |
 | b. cross-project | a project-scoped value is not in the other repo's index | 0 of 20 | **pass** |
 | b. cross-project | a staged memory is not in the other repo's index | 0 of 20 | **pass** |
 | b. cross-project | no value from repo A in repo B's summaries or snippets (scenario 19) | 0 in summaries, 0 in 200 snippet answers | **pass** |
 | b. cross-project | a user preference is user-scoped: shown in both repos (decision 8) | 20 of 20 | **pass** |
-| b. cross-project | a project fact saved without a scope stays out of the other repo | 20 of 20 shown in repo B with its value | **fail** (phase 6: core scopes (a save's scope defaults to global)) |
-| b. cross-project | a lesson crosses projects only stripped of its values (decision 8) | 20 of 20 shown in repo B with its value | **fail** (phase 6: lessons stripped of values, after evidence from two projects) |
+| b. cross-project | a project fact saved without a scope stays out of the other repo | 0 of 20 shown in repo B with its value | **pass** |
+| b. cross-project | a lesson crosses projects only stripped of its values (decision 8) | 0 of 20 shown in repo B with its value | **pass** |
 | c. concurrent writers | curated store: no save, staging or ledger line lost | 80 of 80 saves, 40 of 40 stagings joined, 80 of 80 feedback lines, 0 torn lines, 0 errors | **pass** |
-| c. concurrent writers | curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14) | 40 rounds, both edits reported made in 40, 40 edits overwritten unseen (last writer wins) | **fail** (phase 6: core log operations with generations) |
+| c. concurrent writers | curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14) | 40 rounds, one committed and one kept as a contested pair in 40, both reported made in 0, 0 edits overwritten unseen, 0 other | **pass** |
 | c. concurrent writers | layer store: generations numbered once each, no definition lost | 80 of 80 generations (80 distinct numbers), 80 of 80 definitions, 0 errors | **pass** |
 | c. concurrent writers | usage ledger: no event lost, no torn line | 80 of 80 events, 80 lines | **pass** |
 | c. concurrent writers | a layer another writer changed is seen at the next compaction only (scenarios 15, 16) | 2 compactions, 0 requests between them, change seen at the next: true | **pass** |
-| c. concurrent writers | core log: one writer, generations, contested pairs | not built | **not built** (phase 6) |
+| c. concurrent writers | core log: one writer, generations, contested pairs | 81 lines, 81 distinct generations numbered 1 to 81, a contested pair in 40 of 40 rounds of two concurrent supersedes, 0 errors | **pass** |
 | d. secrets across sessions | no value in another session's index (scenario 13) | 0 values | **pass** |
 | d. secrets across sessions | no value in another session's saved searches | 0 values | **pass** |
 | d. secrets across sessions | no value in another session's summaries or snippets | 0 in summaries, 0 in 600 snippet answers | **pass** |
 | d. secrets across sessions | no value in the shared usage ledgers | 0 values | **pass** |
-| d. secrets across sessions | no value in the shared layer | 40 values | **fail** (phase 8: secret purge (a layer write is not scanned)) |
-| d. secrets across sessions | core log shared lines | not built | **not built** (phase 6) |
+| d. secrets across sessions | no value in the shared layer | 0 values | **pass** (phase 8; 40 values before) |
+| d. secrets across sessions | no value in the core log's shared lines or another session's core block | 0 values | **pass** |
 
 - **a. Independence.** Two sessions stage one save quoting one line of a README. The second
   session's read is the same file rendered differently.
   - Equal bytes and whitespace changes give one `SourceDigest`, and are not counted.
-  - A `cat -n` read, a partial read, a grep match or a tool header digest differently. Each is
-    promoted on `EvidenceSessions` as two independent sessions.
+  - A `cat -n` read, a partial read, a grep match or a tool header used to digest differently and
+    be promoted as two independent sessions; since phase 6 each cites the file's evidence root and
+    counts once.
   - The control, another file quoting the line, is promoted as it should be.
-  - The digest is of the whole tool result. Phase 6's promotion gates should digest the quoted
-    content and its file instead (`TestSameEvidenceNotIndependent`).
+  - The root is the file the read names (`core.EvidenceRoot`), never the result's bytes
+    (`TestSameEvidenceNotIndependent`).
 - **b. Cross-project.** Two repositories share one store, with session A in repo A and B in
   repo B.
   - These stay out of repo B's index, its saved searches, its summaries and their snippets:
     project-scoped values, staged memories and everything on A's branch (scenario 19 as far as
     today's scopes go). A user preference is shown in both, as decision 8 has it.
-  - Two kinds leak with their values:
-    - **A save without a scope.** It is global by default.
-    - **A lesson.** It crosses projects with its values, where decision 8 lets a lesson cross
-      only stripped of them and after evidence from two projects.
-
-    Both are phase 6's scopes (`TestScenario19ForeignScopeNotReturned`).
+  - Two kinds leaked with their values before phase 6: a save without a scope (global by
+    default) and a lesson. Since phase 6 a save without a scope stays in its project (a user or
+    feedback memory stays the user's), and a lesson crosses only stripped of its values once saved
+    in two projects (`TestScenario19ForeignScopeNotReturned`).
 - **c. Concurrent writers.** Once per run, not per seed: two `Store` values on one directory write 40 rounds from two goroutines at
   once.
   - No save, staging, feedback line, layer generation, definition or usage event is lost or
     torn.
-  - Two sessions editing one memory at once are both told it was updated, and one edit is gone.
-    That is scenario 14's lost update on the curated store, and phase 6's operations with
-    generations fix it (`TestScenario14ConcurrentSupersedeOneCommits`).
+  - Two sessions that read the core at their start edit one memory at once: exactly one commits
+    and the other is refused and kept as a contested pair (`curated.ErrConflict`); before phase 6
+    both were told it was updated and one edit was gone (`TestScenario14ConcurrentSupersedeOneCommits`).
+  - The core log: two writers supersede one item at once for 40 rounds; every generation is
+    numbered once, and every round leaves one supersede and one contested pair.
   - With level 1 on (scripted), a layer another writer changes between two compactions is in
     the second request and not the first. No request comes between compactions (scenarios 15
     and 16).
 - **d. Secrets across sessions** (scenario 13). Session A meets the values and saves and quotes
-  them. Session B's index, its saved searches, its summaries and their snippets, and the shared
-  usage ledgers hold none. The shared layer holds them: the same layer-write finding as Tier 0b.
+  them. Session B's index, its saved searches, its summaries and their snippets, the shared
+  usage ledgers, the core log's lines and B's core block hold none. The shared layer held them (the same layer-write finding as Tier 0b) until phase 8; it holds none now.
 
 The tests (`TestTier0bForgetting`, `TestTier0cSharing`, `TestSuitesDeterministic`) run the
 suites over the Tier 0 test runs. They fail when a row other than a listed finding fails, when a
@@ -848,7 +1142,10 @@ finding starts to pass, or when any request is logged besides the scripted ones.
   - `-suite constraintrot` and `-suite arcbench -arcbench-cases <file>` print the phase 3 rule
     benches (data only for ARCBench);
   - `-suite retrieval` prints the phase 4 retrieval check.
-  - `-suite settle` prints the phase 5 no-op definition replay.
+  - `-suite settle` prints the phase 5 no-op definition replay;
+  - `-sleep off` turns the sleep pass's compaction fallback off (on by default), `-sumsum` adds
+    the summary-of-summary erosion arm and `-ab-out <file>` writes the Tier 1/2 A/B items
+    (phase 7).
 
   It exits non-zero on a broken invariant, a failed snippet or any request.
 - `-suite forgetting` and `-suite sharing` print the Tier 0b and 0c tables below the retention

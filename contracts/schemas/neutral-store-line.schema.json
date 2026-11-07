@@ -30,10 +30,22 @@
           "$ref": "entry-extracted.schema.json"
         },
         {
+          "$ref": "entry-sleep.schema.json"
+        },
+        {
           "$ref": "entry-cut.schema.json"
         },
         {
           "$ref": "entry-summary-handed.schema.json"
+        },
+        {
+          "$ref": "entry-revisions-recorded.schema.json"
+        },
+        {
+          "$ref": "entry-cue.schema.json"
+        },
+        {
+          "$ref": "entry-erased.schema.json"
         },
         {
           "$ref": "entry-compaction.schema.json"

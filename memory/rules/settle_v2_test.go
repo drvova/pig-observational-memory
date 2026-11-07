@@ -49,7 +49,7 @@ func heldAt(kind, name, text string, at time.Time) layer.Definition {
 var keepHead = "catalogue[1]{detector,rank}:\n  uncited-assistant-specifics,0"
 
 // Decision 24's null arm: a held definition settles only when its failures under it beat both
-// control windows by more than their A-versus-A spread, after its cost; otherwise it is rejected.
+// control windows by more than twice their A-versus-A spread, after its cost; otherwise it is rejected.
 func TestSettleV2NullArm(t *testing.T) {
 	base := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	l := &settleLedger{base: base}
@@ -83,6 +83,36 @@ func TestSettleV2NullArm(t *testing.T) {
 	}
 }
 
+// The effect after cost must exceed twice the spread, and be at least one failure when the
+// spread is 0: an effect of exactly twice the spread is rejected, one failure more settles, and
+// with no spread one failure settles only when nothing is charged against it.
+func TestSettleV2TwiceTheSpread(t *testing.T) {
+	base := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	d := heldAt(layer.KindRemedy, RemedyKeepHead, keepHead, base.Add(6*time.Minute+30*time.Second))
+	id := []string{d.HeldID()}
+	for _, c := range []struct {
+		controls, treated []int
+		turns             int
+		clean             bool
+		figures           string
+	}{
+		{[]int{2, 2, 2, 2, 2, 3}, []int{2, 1, 1}, 4, false, "failures 4 under it over 3 compactions against 7 and 6 without it (spread 1), cost 0.000"},
+		{[]int{2, 2, 2, 2, 2, 3}, []int{1, 1, 1}, 4, true, "failures 3 under it over 3 compactions against 7 and 6 without it (spread 1), cost 0.000"},
+		{[]int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 4, true, "failures 5 under it over 3 compactions against 6 and 6 without it (spread 0), cost 0.000"},
+		{[]int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 5, false, "failures 5 under it over 3 compactions against 6 and 6 without it (spread 0), cost 0.300"},
+	} {
+		l := &settleLedger{base: base}
+		l.controls(c.controls...)
+		for _, f := range c.treated {
+			l.pass(f, 0, id, func(e *curated.ModelEvent) { e.Turns = c.turns })
+		}
+		st := SettleV2(l.events, d)
+		if !st.Decided || st.Clean != c.clean || !strings.HasSuffix(st.Reason, c.figures) {
+			t.Errorf("controls %v, under it %v (turns %d): %+v", c.controls, c.treated, c.turns, st)
+		}
+	}
+}
+
 // A no-op definition (its compactions fail as the ones without it) is rejected, and an
 // instructions definition's text is charged against it: a small effect that would settle a free
 // definition does not settle a long text.
@@ -103,7 +133,7 @@ func TestSettleV2NoOpAndCost(t *testing.T) {
 		l := &settleLedger{base: base}
 		l.controls(2, 2, 2, 2, 2, 2)
 		l.pass(1, 0, []string{d.HeldID()})
-		l.pass(2, 0, []string{d.HeldID()})
+		l.pass(1, 0, []string{d.HeldID()})
 		l.pass(2, 0, []string{d.HeldID()})
 		st := SettleV2(l.events, d)
 		if d.Text == short.Text && (!st.Decided || !st.Clean) || d.Text == long.Text && (!st.Decided || st.Clean || !strings.Contains(st.Reason, "cost 3.")) {

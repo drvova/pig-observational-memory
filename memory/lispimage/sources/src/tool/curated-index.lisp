@@ -290,15 +290,15 @@ code, not retracted), each timed by its first source entry."
 
 (defun promotion-evidence (m events)
   "curated.promotionEvidence: the evidence a staged memory is promoted on, from its usage events
-since it was saved and after its last save or edit; \"\" for none."
+since it was saved and after its last save or edit; \"\" for none. A level-1 citation is recorded
+but is never evidence (decision 7)."
   (let ((evidence ""))
     (dolist (e events)
       (unless (time-before-p (usage-event-time e) (mem-created m))
         (let ((event (ul-event e)))
           (cond ((or (string= event "save") (string= event "edit")) (setf evidence ""))
                 ((string/= evidence ""))
-                ((and (string= event "helped") (ul-user e)) (setf evidence "a user's words quoted in feedback"))
-                ((string= event "cited") (setf evidence "a compaction's citation"))))))
+                ((and (string= event "helped") (ul-user e)) (setf evidence "a user's words quoted in feedback"))))))
     (if (and (string= evidence "") (independent-stagings-p m events))
         "the same save staged in another session"
         evidence)))
@@ -363,7 +363,77 @@ promotions a list of (name . evidence)."
               (append-usage dir (mem-name m) "corrected" :record (corr-id c))
               (setf flag t)))
           (when flag (push (mem-name m) flagged)))))
+    (let ((lessons (lessons-crossing (list-all-memories dir))))
+      (when lessons (core-promote-all (core-dir dir) lessons)))
     (values (nreverse promoted) (nreverse flagged))))
+
+(defun core-block (dir session project repo-id model)
+  "engine.CoreBlock: the session's pull of the core (its marker moved to the newest generation)
+and the block it sees (core-section), \"\" when it sees none or the core cannot be read."
+  (handler-case
+      (let ((st (core-pull (core-dir dir) session)))
+        (core-section st (append (list +scope-user+)
+                                 (when (string/= repo-id "") (list (project-scope repo-id "")))
+                                 (when (string/= project "") (list (project-scope "" project))))
+                      model))
+    (error () "")))
+
+(defun index-with-core (dir project session budget repo-id model)
+  "engine.Index's render: the core's block first, then the curated index (index-as)."
+  (multiple-value-bind (text shown) (index-as dir project session budget)
+    (let ((block (core-block dir session project repo-id model)))
+      (values (if (string= block "") text (concatenate 'string block (string #\Newline) (string #\Newline) text))
+              shown))))
+
+(defun core-promote-ledger (dir entries session cwd repo-id model)
+  "hooks.promoteCoreV2: the ledger's candidates (core-candidates) offered to the core, and a forget
+line for each project or user forget record it does not hold yet. Code only."
+  (let* ((core (core-dir dir))
+         (scope (project-scope repo-id (project-root cwd)))
+         (base (nth-value 0 (core-consumed core session)))
+         (f (om::fold-ledger entries))
+         (closed (let ((out '())) (maphash (lambda (id c) (declare (ignore c)) (push id out)) (om::closed-by (om::folded-observations f))) out))
+         (cands (core-candidates (om::folded-active f) (om::folded-labels f) closed scope model session base #'om::one-time-p))
+         (raw (make-hash-table :test 'equal))
+         (forgets '()))
+    (loop for e across entries
+          do (dolist (o (om::recorded-data e))
+               (unless (nth-value 1 (gethash (om::obs-id o) raw)) (setf (gethash (om::obs-id o) raw) o))))
+    (dolist (o (om::folded-observations f))
+      (when (string= (om::obs-kind o) "forget")
+        (multiple-value-bind (line ok)
+            (forget-cline o (loop for tomb in (om::obs-forgets o)
+                                  for r = (gethash (first tomb) raw) when r collect r)
+                          scope model session base)
+          (when ok (push line forgets)))))
+    (setf forgets (nreverse forgets))
+    (when (or cands forgets)
+      (core-commit core
+                   (lambda (st emit)
+                     (dolist (fl forgets)
+                       (when (core-forget-due-p st fl)
+                         (funcall emit fl)))
+                     (dolist (c cands)
+                       (let ((line (core-decide st c))) (when line (funcall emit line)))))))))
+
+(defun lessons-crossing (memories)
+  "curated.LessonsCrossing: the live project lessons grouped by their text stripped of its values,
+each group saved in two projects or more, as core candidates of the user's scope."
+  (let ((order '()) (groups (make-hash-table :test 'equal)))
+    (dolist (m memories)
+      (when (and (string= (mem-type m) "lesson") (not (mem-staged m)) (string/= (mem-project m) "")
+                 (zero-time-p (mem-retired m)) (not (memory-held-rule m)))
+        (let* ((text (strip-values (mem-description m))) (key (norm-key text)) (g (gethash key groups)))
+          (unless g
+            (setf g (list text) (gethash key groups) g)
+            (push key order))
+          (unless (member (mem-project m) (rest g) :test #'string=)
+            (setf (gethash key groups) (append g (list (mem-project m))))))))
+    (loop for key in (nreverse order)
+          for (text . projects) = (gethash key groups)
+          when (>= (length projects) 2)
+            collect (make-ccand :kind "lesson" :key key :text text :scope +scope-user+ :via "projects"
+                                :roots (mapcar #'project-root-digest projects)))))
 
 (defun settled-notices (promoted flagged)
   "harness.NotifySettled's messages."

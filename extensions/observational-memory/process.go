@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/extensions/observational-memory/internal/sdkhost"
 	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/enginerpc"
+	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/hostinfo"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
@@ -151,9 +152,12 @@ func RegisterProcess(ext *sdk.Extension, client *enginerpc.Client) {
 		return nil, nil
 	})
 	ext.OnEvent(sdk.EventTurnEnd, func(ctx sdk.Context, _ map[string]any) (any, error) {
-		wanted, known, err := client.TurnEnd(sdkhost.New(ctx))
+		h := sdkhost.New(ctx)
+		wanted, known, err := client.TurnEnd(h)
 		report("turn_end", err)
 		syncThinning(wanted, known)
+		// The erasure purge runs in the Go client after the engine's level 0 (hooks.ErasePending).
+		hooks.ErasePending(nil, h)
 		return nil, nil
 	})
 	ext.OnEvent(sdk.EventAgentSettled, func(ctx sdk.Context, _ map[string]any) (any, error) {
@@ -204,7 +208,7 @@ func RegisterProcess(ext *sdk.Extension, client *enginerpc.Client) {
 		},
 	})
 	ext.RegisterCommand("om:view", sdk.CommandOptions{
-		Description: "Print and copy observational memory content (visible by default, full for recorded memory)",
+		Description: "Print and copy observational memory content (visible by default, full for recorded memory; records [page] and record <id> show each record's provenance, lifecycle and use)",
 		Handler: func(ctx sdk.Context, args string) error {
 			return client.Command(sdkhost.New(ctx), enginerpc.CommandView, args)
 		},

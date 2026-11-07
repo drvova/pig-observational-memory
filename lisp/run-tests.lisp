@@ -88,6 +88,12 @@
 (load (merge-pathnames "tests/truth.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 ;; Phase 4: project records and freshness verdicts (contracts/project.jsonl).
 (load (merge-pathnames "tests/project.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 6: the shared core log (contracts/core.jsonl).
+(load (merge-pathnames "tests/core.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 7: the sleep pass (contracts/sleep.jsonl).
+(load (merge-pathnames "tests/sleep.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 8: delivery, dreams and erasure (contracts/cue.jsonl, erasure.jsonl).
+(load (merge-pathnames "tests/delivery.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
 (let ((errors 0))
   (dolist (test *tests*)

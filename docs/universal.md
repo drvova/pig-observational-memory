@@ -119,8 +119,9 @@ else the default. In `entry`, `content` and install steps, `$OM` is om's path, `
 for a POSIX shell, `$OM_SH_ESCAPED` `$OM_SH` escaped for a double-quoted string, and `$HARNESS` the entry's
 name.
 
-`hooks` is the hook spec: `path`, `events` (om's `session-start`, `prompt`, `turn-end` and `pre-compact` to
-the harness's event names), `transcript` (a `memory/transcript` format), and the flags for how the family
+`hooks` is the hook spec: `path`, `events` (om's `session-start`, `prompt`, `turn-end`, `pre-compact` and
+`post-tool` to the harness's event names; `post-tool` only for a harness whose hook hands the model added
+context with a tool's result, which gets cues, memory-v2.md "Cues"), `transcript` (a `memory/transcript` format), and the flags for how the family
 writes and reads its hooks (`flat`, `topLevel`, `toml`, `key`, `timeoutMS`, `timeoutKey`, `noTimeout`,
 `noType`, `matcher`, `version`, `enable`, `env`, `noStdin`, and for context `plainContext`, `contextField`,
 `textContext`, `noContext`, `summaryOnStart`, `summaryOnPrompt`, `summaryAtPreCompact`,
@@ -189,6 +190,9 @@ QwenLM/qwen-code and MoonshotAI/kimi-cli sources, npm `@github/copilot-sdk` (gen
 
 ## How it works
 
+- **Sleep at idle.** The image sleeps every session store in a child SBCL once no client has been
+  connected for a minute, and `om sleep` does the same by hand (see [om sleep](#om-sleep)).
+
 - **The harness's files are read, never written.** `memory/transcript` reads Claude Code's session
   transcript (the active branch, across its compaction boundaries), Codex rollouts, Pi session files and
   the generic format into the Pi-shaped entries the engine reads.
@@ -206,6 +210,32 @@ QwenLM/qwen-code and MoonshotAI/kimi-cli sources, npm `@github/copilot-sdk` (gen
   hook has run it takes the newest transcript the harness wrote for the directory.
 - **One process per event.** A hook runs in a fresh `om` process; the MCP server lives as long as the
   harness session, so its namespace child keeps definitions between calls as PiG's does.
+
+## om sleep
+
+`om sleep` runs the sleep pass (memory-v2.md, "Sleep") by hand: code only, no model request,
+under `~/.om/sleep/.lock`, the lock the image's idle child takes. Without flags it sleeps every
+session store under the root that changed since its checkpoint (`~/.om/sleep/state.json`), each
+read alone, and prints one line per store it appended a sleep record to; `om sleep --harness h
+--dir d` sleeps that directory's current session with its transcript and repository, so its project
+records are verified against HEAD. A held lock prints that another pass holds it and does nothing.
+
+## Cues
+
+After each tool call on a harness whose registry entry maps `post-tool` (Claude Code's and OpenClaude's
+`PostToolUse`), `om hook <harness> PostToolUse` answers with one cue as `additionalContext` when the call's
+command, path or an output line equals a standing record's key exactly, and with nothing otherwise
+(memory-v2.md, "Cues"): at most `cueCap` (3) per compaction, each record once. It makes no model request.
+
+## om erase and om purge
+
+`om erase` purges the text of erased records (a user's typed "erase ... from memory", which level 0
+records and the next hook purges at once) from every file om owns: the session stores, the recorded
+turns, the sleep checkpoints, the curated tree, the core log and the layers, under their locks.
+`--text <words>` erases words you type at the command line, and `--check` prints the copies left per
+surface and changes nothing. `om purge` redacts secret values written before writes were scanned, the
+layer's files and blobs included (`--check` counts them); `om sleep` runs the layer's purge too. The
+harness's own transcript is outside the engine: om never writes it and cannot erase from it.
 
 ## Any other harness
 

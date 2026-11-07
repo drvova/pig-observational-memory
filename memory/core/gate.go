@@ -1,0 +1,184 @@
+package core
+
+import (
+	"slices"
+
+	"github.com/drvova/pig-observational-memory/memory/serialize"
+)
+
+// Candidate is a session record offered to the core, with what the gates read.
+type Candidate struct {
+	Kind  string `json:"kind"`
+	Key   string `json:"key,omitempty"`
+	Text  string `json:"text"`
+	Scope string `json:"scope"`
+	// Via is the user's evidence the record carries: ViaQuote (the user's own words) or
+	// ViaRequest (a plan made under a request the person typed); "" for none.
+	Via string `json:"via,omitempty"`
+	// Roots are the record's independent evidence roots (EvidenceRoot).
+	Roots []string `json:"roots,omitempty"`
+	// ToolOnly marks a record whose only source is tool output, which never promotes.
+	ToolOnly bool `json:"toolOnly,omitempty"`
+	// OneTime marks a one-time permission or instruction (decision 23), never a standing rule.
+	OneTime bool `json:"oneTime,omitempty"`
+	// Record is the session record's id.
+	Record string `json:"record,omitempty"`
+	// Said is when the user said the record, set only for one that may restate a forgotten
+	// item: a level-0 record of the words the person typed (ledger.SourceUserSaid, origin code),
+	// restating as the pushback contest reads a restatement (ledger.Restater, RestatesClaim:
+	// keys or specifics, no negation conflict, not a concession). Level 1, tool output, another
+	// session's message and a model's write never carry it.
+	Said   string `json:"said,omitempty"`
+	Writer Writer `json:"writer"`
+	// Base is the generation the session had read the core through.
+	Base int `json:"base"`
+}
+
+// The verdicts of Decide.
+const (
+	VerdictPromote   = "promote"
+	VerdictLift      = "lift"
+	VerdictFast      = "fast"
+	VerdictSame      = "same"
+	VerdictSupersede = "supersede"
+	VerdictContest   = "contest"
+	VerdictPending   = "pending"
+	VerdictTool      = "refused: tool output never promotes"
+	VerdictOneTime   = "refused: a one-time permission is never a standing rule"
+	VerdictScope     = "refused: no shared scope"
+	VerdictForgotten = "refused: forgotten"
+)
+
+// Decide is the promotion gate (decision 7, as amended) over the state as it stands: the line a
+// candidate writes, if any, and the verdict.
+//
+//   - Tool output alone never promotes, nor does a one-time permission, nor a record with no
+//     shared scope (a session's, or the empty intersection of two projects).
+//   - A tombstoned item, or one from a tombstoned record, is never promoted again, except by the
+//     user's own fresh words (Restates): a record of the words the person typed, said after the
+//     forget, on the tombstoned item's id (so carrying its kind, scope, key and text exactly, the
+//     id being their digest). Its line, via ViaRestated, lifts the tombstone and the item is
+//     born again from the restatement; the forgotten item's text is never read back.
+//   - The same item (kind, scope, key and text) is the fast path: it gains the roots it lacked
+//     and nothing else (dedup never raises support), or nothing changes.
+//   - Otherwise the candidate needs the user's words or two distinct evidence roots. With no live
+//     item on its key it is promoted. Against one with another value, it supersedes it when the
+//     user's words (or a shared edit) back it and the writer had read that item (Base at or
+//     above its generation, or the item its own session's), and is stored as the other side of a contested pair otherwise: a concurrent writer is
+//     re-evaluated against the new generation, never the last writer winning.
+func Decide(st *State, c Candidate) (Line, string) {
+	switch {
+	case c.ToolOnly:
+		return Line{}, VerdictTool
+	case c.OneTime:
+		return Line{}, VerdictOneTime
+	case c.Scope == "" || c.Scope == ScopeSession:
+		return Line{}, VerdictScope
+	}
+	key := NormKey(c.Key)
+	if key == "" {
+		key = NormKey(c.Text)
+	}
+	id := ItemID(c.Kind, c.Scope, key, c.Text)
+	lifts := false
+	switch {
+	case c.Record != "" && st.Forgotten(c.Record):
+		return Line{}, VerdictForgotten
+	case st.Forgotten(id):
+		if !Restates(st, id, c) {
+			return Line{}, VerdictForgotten
+		}
+		lifts = true
+	}
+	roots := uniqueRoots(c.Roots)
+	var writer *Writer
+	if c.Writer != (Writer{}) {
+		w := c.Writer
+		writer = &w
+	}
+	line := Line{ID: id, Kind: c.Kind, Key: key, Text: c.Text, Scope: c.Scope, Roots: roots, Record: c.Record, Base: c.Base, Writer: writer}
+	if it := st.Item(id); it != nil && it.Live() {
+		var added []string
+		for _, r := range roots {
+			if !slices.Contains(it.Roots, r) {
+				added = append(added, r)
+			}
+		}
+		if len(added) == 0 {
+			return Line{}, VerdictSame
+		}
+		line.Op, line.Via, line.Roots, line.Record = OpPromote, ViaFast, added, ""
+		return line, VerdictFast
+	}
+	via := c.Via
+	if lifts {
+		via = ViaRestated
+	}
+	if via == "" && len(roots) >= 2 {
+		via = ViaRoots
+	}
+	if via == "" {
+		return Line{}, VerdictPending
+	}
+	line.Via = via
+	live := st.LiveByKey(c.Kind, c.Scope, key)
+	if len(live) == 0 {
+		line.Op = OpPromote
+		if lifts {
+			return line, VerdictLift
+		}
+		return line, VerdictPromote
+	}
+	newest := live[len(live)-1]
+	seen := c.Base >= newest.Gen || (c.Writer.Session != "" && newest.Writer.Session == c.Writer.Session)
+	if (via == ViaQuote || via == ViaEdit || via == ViaRestated) && seen {
+		line.Op, line.Of = OpSupersede, newest.ID
+		return line, VerdictSupersede
+	}
+	line.Op, line.Of = OpContest, newest.ID
+	return line, VerdictContest
+}
+
+// Restates reports whether candidate c lifts the tombstone on id: the user's words (ViaQuote)
+// from a fresh record of the words the person typed (Said, Record), said after the forget that
+// set the tombstone (ForgotAt), both read as serialize.ParseTimestamp reads a record's time and
+// compared to the millisecond: records are dated to the minute, so a restatement in the forget's
+// own minute does not lift it. Anything else, or an unreadable time, never lifts.
+func Restates(st *State, id string, c Candidate) bool {
+	if c.Via != ViaQuote || c.Said == "" || c.Record == "" || c.ToolOnly || c.OneTime || st.Forgotten(c.Record) {
+		return false
+	}
+	said, ok := serialize.ParseTimestamp(c.Said)
+	if !ok {
+		return false
+	}
+	forgot, ok := serialize.ParseTimestamp(st.ForgotAt[id])
+	return ok && said.UnixMilli() > forgot.UnixMilli()
+}
+
+// uniqueRoots is roots without blanks and repeats, in order.
+func uniqueRoots(roots []string) []string {
+	var out []string
+	for _, r := range roots {
+		if r != "" && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// PromoteAll decides and commits candidates in order against the newest state, one writer at a
+// time: the lines written and each candidate's verdict.
+func (l Log) PromoteAll(cands []Candidate) ([]Line, []string, error) {
+	verdicts := make([]string, len(cands))
+	lines, err := l.Commit(func(st *State, emit func(Line)) {
+		for i, c := range cands {
+			line, v := Decide(st, c)
+			verdicts[i] = v
+			if line.Op != "" {
+				emit(line)
+			}
+		}
+	})
+	return lines, verdicts, err
+}

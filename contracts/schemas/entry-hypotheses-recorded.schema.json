@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.hypotheses.recorded entry",
+  "description": "Level 1's quarantined hypotheses, with the dreams setting on (docs/brain-memory.md, decision 5; docs/memory-v2.md, \"Dreams\"): at most 3 per compaction, each one redacted line citing records the prompt showed. They are never records, never in a fact class, never promoted or indexed, and shown only in the summary's dream section (scenario 20). id is the first 12 hex characters of SHA-256 of hypothesis NUL content. Source: memory/consolidate/hypotheses.go, memory/hooks/consolidate_v2.go (appendLevel1), lisp/src/consolidate/validate.lisp, lisp/src/server/level1.lisp.",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.hypotheses.recorded"
+    },
+    "data": {
+      "type": "object",
+      "required": ["hypotheses", "coversUpToId"],
+      "additionalProperties": false,
+      "properties": {
+        "hypotheses": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "content", "from"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string", "pattern": "^[0-9a-f]{12}$"},
+              "content": {"type": "string", "minLength": 1},
+              "from": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+            }
+          }
+        },
+        "coversUpToId": {"$ref": "defs.schema.json#/$defs/entryId"}
+      }
+    }
+  }
+}

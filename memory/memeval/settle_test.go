@@ -116,20 +116,25 @@ func settleBranch(lines ...string) ([]session.Entry, string) {
 // Scenario 30: a held definition settles on noise. A no-op definition replayed at MinEvidence
 // over recorded sessions does not settle, nor over the same ledgers with failure noise in most
 // hold points, where the rule before decision 24 settled every one; and one with no net effect
-// after its cost is rejected.
+// after its cost is rejected, while one that removes a share of the failures under it settles.
 func TestScenario30NoOpDefinitionDoesNotSettle(t *testing.T) {
 	cfg := DefaultConfig(1)
 	cfg.Turns, cfg.MaxCompactions = 300, 14
-	recorded, noisy, err := NoOpSettleRate(context.Background(), cfg)
+	recorded, noisy, effect, err := NoOpSettleRate(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("recorded:\n%s\nnoisy:\n%s", recorded.Table(), noisy.Table())
+	t.Logf("recorded:\n%s\nnoisy:\n%s\ntrue effect:\n%s", recorded.Table(), noisy.Table(), effect.Table())
 	if recorded.HoldPoints == 0 || recorded.Before != recorded.HoldPoints || recorded.After != 0 {
 		t.Fatalf("recorded: %+v, want every hold point settled before decision 24 and none after", recorded)
 	}
 	if noisy.Before != noisy.HoldPoints || 2*noisy.After >= noisy.HoldPoints {
 		t.Fatalf("noise settles the no-op at %d of %d hold points", noisy.After, noisy.HoldPoints)
+	}
+	// A definition that removes TrueEffectShare of the failures under it, over the same noisy
+	// ledgers, still settles, and more often than the no-op.
+	if effect.HoldPoints != noisy.HoldPoints || effect.After == 0 || effect.After <= noisy.After {
+		t.Fatalf("the true-effect definition settles at %d of %d hold points, the no-op at %d", effect.After, effect.HoldPoints, noisy.After)
 	}
 	if recorded.Reasons["no net effect after cost"] == 0 {
 		t.Fatalf("no no-op was rejected for no net effect: %v", recorded.Reasons)

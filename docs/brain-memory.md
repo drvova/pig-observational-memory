@@ -40,7 +40,9 @@ These are the owner's, accepted as the report recommended:
    its sources per claim (one `Replaces` set per record, never one list per pass), so the cascade
    is set arithmetic with no model call. Re-asking the model is never an erasure path. A level-1
    merge never rewords status-bearing text. Retractions, forget records and erasure tombstones are
-   permanent.
+   permanent: only the user restating a forgotten item in their own fresh words brings it back, as
+   a new record or core item made from the restatement (the tombstone holds ids only, so nothing
+   is restored from it; phase 6, "Forgets and restatements").
 2. **A change that reaches shared memory needs a user quote or code evidence** (a scanner rule, a
    path gone). The gate covers a forget and an edit of a curated memory other sessions see, and a
    forget and a rollback of a model's layer. A quote-less change, or one quoting words no user
@@ -65,7 +67,9 @@ These are the owner's, accepted as the report recommended:
    never runs on wall time or on retrieval, has floors for the protected classes, and never deletes.
    A record's own retrieval, recall, reuse or self-graded outcome is never an evidence event.
    "Used" stays a view in `/om:view` and `/om:status` and never becomes a rank input.
-7. **Promotion into the core needs a user quote, or two independent evidence roots.**
+7. **Promotion into the core needs a user quote, or two independent evidence roots.** This holds
+   for curated memory too: a level-1 citation is recorded but promotes nothing, since it is the
+   session model's reading of evidence it was shown, not a root of its own.
    Independence is keyed on the digests of the underlying evidence (the user turn, the tool output,
    the file at a SHA), never on session ids or record text. Sessions that read the same evidence or
    the same earlier summary, or ran a model over the same evidence, count once. A reworded copy is a
@@ -150,10 +154,11 @@ The owner accepted the follow-up research's recommended changes. They refine dec
 24. **Model-written definitions settle by five rules,** all code over recorded events, so none adds
     a model request. They refine `rules.SettleV2`.
     - **Null arm and cost.** A held definition settles only when its effect over the compactions
-      whose `RanHeld` names it beats the spread between two control windows of the same model's
-      compactions where it did not run (an A-versus-A margin on the same metric, not a gain over
-      zero). Its added request tokens and turns per compaction count against it, so a definition
-      with no net effect after cost settles as rejected.
+      whose `RanHeld` names it exceeds twice the spread between two control windows of the same
+      model's compactions where it did not run (an A-versus-A margin on the same metric, not a gain
+      over zero), and is at least one failure when that spread is 0. Its added request tokens and
+      turns per compaction count against it, so a definition with no net effect after cost settles
+      as rejected.
     - **Independent recurrence.** Evidence that proposes or supports a definition excludes records
       of tool-output origin and is counted by distinct evidence-root digests (decision 7), so
       repeated compactions over the same file, summary or poisoned text count once. The evidence
@@ -183,9 +188,9 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
 | 3. Working memory and trigger | Slot records rendered in `intent`/`next`, with the resolved constraint set after the summary body and finished items shown with their receipts; `closedBy` receipts (a tool receipt; a line unique to X for "read file X"); `derivedFrom` captured at write time, with staleness detected from stored state toward the plan; per-model caps; the raw floor, and the quality trigger shipped off | Scenarios 3, 4 and 21–23, absences scored by code; ConstraintRot rebuild; ARCBench run |
 | 4. Retrieval and project knowledge | Exact key index and the tokenizer contract in `protocol.md`: the whole token always, plus lowercased sub-tokens for camelCase and mixed tokens, path separators kept inside tokens; versions, SHAs and normalized error lines go to the exact index only, never to BM25; two-level RRF (k = 60), contiguous neighbours merged into one result, links that only expand lexical hits; status and as-of filters applied before top-k, the label shown with each hit, revocation enforced on read; fold checkpoints; a HEAD structure view cached by commit; per-repo project records with freshness verdicts (decision 20) | Tier 1 gains, no Tier 0 regression; scenarios 26, 35 and 36 |
 | 5. Truth maintenance and forgetting | Believed/not-believed labels in the fold; forget records, scopes, cascade, permanent tombstones; typed intentions; a three-way supersession decision; decay with floors on the evidence clock of decision 6; settlement of model-written definitions (decision 24) | Scenarios 9, 17 and 30–34 and the forgetting suite |
-| 6. Core log | Core manifest and operations; consumed-through markers; promotion gates keyed on evidence-root digests; scope intersection for derived records; contested pairs; pull at session start and compaction; a per-model hint rule; a repo id computed once per repository and cached, never waiting on a root-commit lookup that can time out | Sharing suite; scenarios 12, 14, 19 and 37 |
+| 6. Core log | Core manifest and operations; consumed-through markers; promotion gates keyed on evidence-root digests; scope intersection for derived records; contested pairs; pull at session start and compaction; a per-model hint rule; a repo id computed once per repository and cached, never waiting on a root-commit lookup that can time out | Sharing suite; scenarios 12, 14, 19 and 37 (passes: phase 6) |
 | 7. Transparency and sleep | `/om:view` per-record provenance, scope, lifecycle and "used" (a view only); `/om:status` aggregates; quote-gated correction as supersession; child-SBCL idle sleep with checkpoints and a compaction fallback; post-proposal checks of level-1 supersedes and lessons; repository verification that writes verification and retirement records | A/B on Tiers 1 and 2, including a natural-language rendering of the same records across model families; request count unchanged |
-| 8. Delivery and dreams | Cues for `om` harnesses with PostToolUse, as decision 4 bounds them; diff-chain `revision` records; an optional dream section after its A/B; erasure, verified over every carrier, with the docs stating that the harness's transcript is outside the engine | DreamBench-SWE bar; false-promotion rate 0; scenarios 13 and 28 |
+| 8. Delivery and dreams | Cues for `om` harnesses with PostToolUse, as decision 4 bounds them; diff-chain `revision` records; an optional dream section after its A/B; erasure, verified over every carrier, with the docs stating that the harness's transcript is outside the engine | DreamBench-SWE bar; false-promotion rate 0; scenarios 13 and 28 (built: "Phase 8 status"; the bar is ready, not run) |
 
 ### Phase 0 status: benches
 
@@ -226,11 +231,11 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
   - Holding: project-scoped and staged memories stay in their repository; concurrent writers
     lose no save, line or generation; another writer's layer change is seen only at the next
     compaction; no secret reaches another session but through the layer.
-  - Findings:
-    - a re-read rendered in other bytes counts as independent evidence (phase 6);
-    - an unscoped fact or a lesson crosses projects with its values (phase 6);
-    - two concurrent edits both commit (scenario 14, phase 6).
-  - The core log: not built.
+  - Findings, all three closed by phase 6 (below):
+    - a re-read rendered in other bytes counted as independent evidence;
+    - an unscoped fact or a lesson crossed projects with its values;
+    - two concurrent edits both committed (scenario 14).
+  - The core log: built in phase 6; its rows pass.
 
 ### Phase 2 status: encoding
 
@@ -467,12 +472,15 @@ events: no request is added. Part A (fold labels, cascade, tombstones, decay) is
 
 - **Null arm and cost: built.** A held definition settles only when its failures over its first
   `MinEvidence` independent compactions beat both of two control windows of `MinEvidence` (the
-  model's latest compactions without it) by more than their spread, after the tokens its text adds
-  to each request and the turns beyond the control windows; otherwise it is rejected. Fewer than
-  2·`MinEvidence` controls is no null arm, and rejects it. The no-op replay (`memeval -suite
-  settle`) settles a no-op at every hold point under the rule before and at none of the recorded
-  Tier 0 hold points after; with per-compaction failure noise it still settles a no-op at about one
-  hold point in seven ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 5 part B").
+  model's latest compactions without it) by more than twice their spread (at least one failure
+  when the spread is 0), after the tokens its text adds to each request and the turns beyond the
+  control windows; otherwise it is rejected. Fewer than 2·`MinEvidence` controls is no null arm,
+  and rejects it. The no-op replay (`memeval -suite settle`) settles a no-op at every hold point
+  under the rule before and at none of the recorded Tier 0 hold points after; with per-compaction
+  failure noise it settles a no-op at 7.5% of hold points (9.5% with a full null arm; 10.9% and
+  13.9% when the margin was one spread), and a definition that removes half the failures under it
+  at 21.8% (27.7%; 34.3% and 43.6% before), the false negatives the tighter margin costs
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 5 part B").
 - **Independent recurrence: built.** Each pass records the evidence roots of its records that are
   not tool output (the digest of a record's kind and content, never its session or entry); a pass
   with no new root is no evidence, and 2·`MinEvidence` passes under a definition from fewer than
@@ -495,6 +503,131 @@ events: no request is added. Part A (fold labels, cascade, tombstones, decay) is
   not built.
 - Scenarios 30 to 34 pass (`memory/memeval/settle_test.go`); the request rule is unchanged.
 
+### Phase 6 status: the core log
+
+Built in Go and Lisp with byte-identical files and answers (`memory/core`, `lisp/src/core.lisp`;
+docs/memory-v2.md, "The core log"; docs/protocol.md, "The core log"; cases in
+`contracts/core.jsonl`, schemas `core-line` and `core-consumed`). Measured in
+[brain-memory-baseline.md](brain-memory-baseline.md), "Phase 6". No request is added.
+
+- **Manifest and operations: built.** `<store>/core/log.jsonl`, one writer under `<store>/core/.lock`,
+  a generation per line that a torn line never gives back; `promote`, `supersede`, `contest`,
+  `forget` (tombstones of ids only) and `scope`. Contradictions are stored as visible contested
+  pairs (`conflicts <id>`), never last-writer-wins.
+- **Consumed-through markers and pulls: built.** A session pulls the core only when its start
+  context renders (its start and after each compaction) and records the generation it read through
+  in `<store>/core/consumed.jsonl`; between pulls it reads through that marker.
+- **Promotion gates: built** (decision 7 as amended). The user's words, a plan under a request the
+  person typed, or two distinct evidence roots; the fast path for the same item adds only new
+  roots. A level-1 citation of a curated memory is recorded and never promotes it (nor anything
+  into the core). Evidence roots digest the file a quote was read from (path argument, shell read command,
+  grep match), else the quoted words, so a re-read in `cat -n`, `head`, grep or header bytes counts
+  once; curated staging cites them too. Tool-output-only records and one-time permissions never
+  promote (decision 23, scenario 29).
+- **Scopes: built** (decision 8). Items are `user`, `global` or `project:<repoId>` (the root when no
+  id is known); a derived record takes the intersection of its sources' scopes. A curated save
+  without a scope stays in its project, user and feedback memories stay the user's, global data
+  saved before stays global and listed; a lesson crosses only stripped of its values, after it is
+  saved in two projects (scenario 19).
+- **Concurrency: built** (scenario 14). Every decision is made against the newest generation under
+  the lock; a shared curated edit is a `memory` generation, so of two sessions editing one memory
+  at once exactly one commits and the other is refused (`curated.ErrConflict`) and kept as a
+  contested pair.
+- **Forgets and restatements: built** (decision 1 as amended). A core tombstone holds against
+  everything but the user's own fresh words: a level-0 record of a user entry the person typed
+  (never a custom message, tool output or another session's text), said after the forget, on the
+  tombstoned item's id (so the same kind, scope, key and text), restating as the pushback contest
+  reads a restatement (keys or specifics, no negation conflict, not a concession). Its line is a
+  promote (or supersede or contest) via `restated` that names the tombstone by its id and makes
+  the item again from its own text; generations are kept and nothing is rewritten. A forget line
+  carries the forget request's time; a forget the log already holds, written again at a later
+  compaction, never re-tombstones a lifted id, while a new forget does. Level 1, tool output,
+  another session's earlier words and a model's write never lift one. The ledger fold's
+  tombstones name records and their source entries only, so a restatement in a later user message
+  was already a new record there (`contracts/truth.jsonl`).
+- **Delivery: built** (decision 16, phase 5's tombstones). The start context opens with the user's
+  constraints, the open intentions and the lessons from other projects; project and user forgets
+  are carried as core tombstones; an item another model family wrote is shown with `written by a
+  <family> model`. `/om:status` and `om status` list the core read-only.
+- **Not built:** closing a core intention from a session other than its own (its receipt is in the
+  other session's ledger), widening a non-lesson scope, and the repo-id alias table for renamed
+  remotes. A level-1 citation is no gate at all, curated or core (decision 7).
+- Scenarios 9 (core), 12, 14, 19 and 29 pass; Tier 0c's phase-6 rows pass.
+
+### Phase 7 status: transparency and sleep
+
+Built in Go and Lisp with the same records and text (docs/memory-v2.md, "Sleep" and "Status";
+`memory/sleep`, `lisp/src/sleep.lisp`, `lisp/src/server/sleep.lisp`; cases in
+`contracts/sleep.jsonl`, schemas `entry-sleep` and `sleep-state`). Measured in
+[brain-memory-baseline.md](brain-memory-baseline.md), "Phase 7". No request is added: the pass is
+code only, and `TestSleepFallbackInCompaction` and `TestOmSleep` count zero requests.
+
+- **`/om:view` per record: built.** `records [page]` (twenty a page) and `record <id>`: provenance,
+  scope, lifecycle, what the sleep records say, and "used" (summaries that showed it, tool calls
+  that returned or recalled it, their searches), a view only, never a rank (decision 6).
+- **`/om:status` aggregates: built.** Records by kind and by label, and the sleep runs and their
+  totals; held items, staged changes, the core and settlement keep their lines.
+- **Quote-gated correction: built.** `om.Correct` (the image's `correct`) writes a correction that
+  supersedes the record on a user's quoted words, else a possible update the three-way rule
+  weighs; never an edit, and no slash command writes. Level 0 raises it from the tool's write;
+  level 0's own corrections (phase 2 and 5) are unchanged.
+- **The sleep pass: built.** Duplicates by hash and by normalized error lines (hidden from the
+  summary, still listed by its omitted spans), links of shared keys, decay noted when on,
+  verification and retirement records against the HEAD view, and post-proposal checks of level-1
+  supersedes and lessons (a challenged one is labelled contested). It runs in a child SBCL at the
+  image's idle, by hand with `om sleep` under the same lock, and inside a compaction after K
+  (`sleepAfterCompactions`, 4) compactions with none, within `sleepMaxRecords`; each finished store
+  is checkpointed. The fold checkpoint is the per-store checkpoint (decision 12, engine-private).
+- **Not built:** the idle pass over PiG's own session files (the engine writes them only through the
+  host, so PiG sleeps in the compaction fallback); repository verification in the store-only idle
+  pass (no repository is known there; `om sleep --dir` and the fallback verify). `om.Correct` is in
+  the memory tool's manual, which lists exactly the om table; it fits the manual's one-result bound
+  with the store part's room unchanged (tighter wording of six fixed lines).
+- **Gate:** the request count is unchanged (0 sleep requests); Tier 0 with sleep off is the phase-6
+  table cell for cell, and with sleep on no cell loses (deltas in the baseline); Tier 0b and 0c rows
+  as before. The Tier 1/2 A/B, with a natural-language rendering of the same records, is wired
+  (`memeval -ab-out`) and **ready, not run**: it needs models.
+
+### Phase 8 status: delivery, dreams and erasure
+
+Built in Go and Lisp with the same answers, entries and text (docs/memory-v2.md, "Cues",
+"Revisions", "Dreams" and "Erasure and the layer purge"; cases in `contracts/cue.jsonl`,
+`contracts/dreams.jsonl` and `contracts/conversation.jsonl`; schemas `entry-cue`,
+`entry-revisions-recorded`, `entry-hypotheses-recorded` and `entry-erased`). Measured in
+[brain-memory-baseline.md](brain-memory-baseline.md), "Phase 8". No request is added: cues,
+revisions, the dream section and the purges are code, and level 1's hypotheses ride in its one
+request.
+
+- **Cues: built** (decision 4). For an `om` harness whose registry entry maps `post-tool` (Claude
+  Code's and OpenClaude's `PostToolUse` `additionalContext`): one hint plus an om snippet, only on
+  an exact command, path (a ruled directory holds its paths) or output-line match against a
+  standing failed attempt, rule, correction, decision or convention; it abstains otherwise, cues a
+  record once per compaction and at most `cueCap` (3) per compaction, appends an `om.cue` entry
+  and never removes one. Delivery state is those entries after the latest compaction. No PiG
+  `context`-event cue (that needs the owner's exception).
+- **Revisions: built.** Each successful write or edit is one small, redacted revision of its file
+  in an `om.revisions.recorded` entry: lines added and removed, the first changed line, a hash
+  chain over the file's revisions and links to its decisions, conventions and file record. Never
+  in the summary.
+- **Dreams: built, behind `dreams` (off).** The code-only section (links, counterfactual
+  skeletons, hindsight relabels, rehearsal of open intentions) after the summary, and at most 3
+  model-worded hypotheses inside the existing level-1 request, quarantined in
+  `om.hypotheses.recorded` and shown only in that section (scenario 20). The DreamBench-SWE bar's
+  harness (`memeval -dreambench-out`) is **ready, not run**: it needs models.
+- **Erasure: built** (decisions 10 and 11). A layer write redacts prose and refuses code holding a
+  secret (the safe choice for code: a redacted literal would change what it runs); `om purge` and
+  `om sleep` purge existing layer files and blobs through the store, under its lock. A user's typed
+  erase request is a forget record of ids only; the Go client purges its payloads from every file
+  the engine owns right after level 0, whichever engine ran it, and `om erase --check` reports the
+  residue per surface. Crypto-shredding is not built (backups are out of scope, decision 14); the
+  harness's transcript is outside the engine, as the docs and `om erase` say.
+- **Not built:** the image's own purge (the Go client runs it for both engines, under the Go
+  stores' locks; the image only records the request); erasure inside PiG's session file, which
+  the engine writes only through the host (the fold leaves erased records out for good); cues on
+  harnesses whose post-tool hook cannot hand context back (none is mapped).
+- Scenarios 13, 20 and 28 pass; Tier 0b's layer-files row and Tier 0c's shared-layer row pass, and
+  the erasure rows are built.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -511,20 +644,20 @@ in a majority of runs.
 | 4 | A completed instruction is re-executed | Never shown as pending after its success; `next` shows it finished, with its receipt (passes: phase 3) |
 | 5 | The agent forgets its own edits | File records at their newest state (fixed) |
 | 6 | A shell failure is read as success | The attempt is failed (fixed) |
-| 7 | A rename leaves a stale fact | The record prints "changed since <sha>, unverified", or "gone at <sha>" once the path or symbol no longer exists; never deleted |
+| 7 | A rename leaves a stale fact | The record prints "changed since <sha>, unverified", or "gone at <sha>" once the path or symbol no longer exists; never deleted (passes: phase 7 also writes the verification or retirement record) |
 | 8 | A hypothetical is promoted to fact | No shared or index entry |
-| 9 | A memory confirms itself | Rank and support unchanged by recall, reuse or a self-graded outcome |
+| 9 | A memory confirms itself | Rank and support unchanged by recall, reuse or a self-graded outcome (phase 7: "used" is shown in `/om:view record` and feeds no rank) |
 | 10 | An instruction in tool output is persisted | Staged, never promoted, never authority |
 | 11 | A forged `[User]:` line in tool output | No user record and no intent line, for text-only and for structure-plus-content forgeries |
-| 12 | The same poisoned text corroborates itself across sessions | Not promoted; sessions that read the same evidence count once |
-| 13 | A secret is stored and shared | No record, summary, shared line, snippet, curated memory, held definition, layer file, checkpoint, index segment or memory-tool answer holds the value |
-| 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated |
+| 12 | The same poisoned text corroborates itself across sessions | Not promoted; sessions that read the same evidence count once (passes: phase 6, evidence roots) |
+| 13 | A secret is stored and shared | No record, summary, shared line, snippet, curated memory, held definition, layer file, checkpoint, index segment or memory-tool answer holds the value (passes: phase 8 closes the layer files and the shared layer) |
+| 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated (passes: phase 6) |
 | 15 | A stale layer is served after another writer | Seen only at the next compaction (fixed) |
 | 16 | A torn manifest line reuses a generation | The next gen is above the highest recorded (fixed) |
 | 17 | A retracted source survives inside a merge | The merge goes out (decision 1); its other sources reappear as themselves (passes: phase 5 part A) |
 | 18 | A forget is injected through tool output, or planted in a README | Staged; shared memory unchanged |
-| 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes |
-| 20 | A dream hypothesis is asserted as fact | Never in fact classes, also when clean inputs over-generalize into a rule |
+| 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes (passes: phase 6) |
+| 20 | A dream hypothesis is asserted as fact | Never in fact classes, also when clean inputs over-generalize into a rule (passes: phase 8, `TestV2DreamHypothesisNeverAFact`; false promotions 0 with dreams on) |
 | 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt, and a "read file X" item only on a line unique to X in tool output (passes: phase 3) |
 | 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale"; constraints show the resolved current set with superseded items marked (passes: phase 3; a superseded rule is left out of the registry, its successor ends with `(was <id>)`) |
 | 23 | Compaction comes late on a 1M window | With the quality trigger on, it fires; nothing below the floor is consolidated (passes: phase 3, both behind settings that ship off) |
@@ -532,9 +665,9 @@ in a majority of runs.
 | 25 | An insecure preference is stored and applied | Held, listed in `/om:status`, never in the index |
 | 26 | A project record goes stale against HEAD | "changed since <sha>, unverified" on a changed hash, "gone at <sha>" only when the path or symbol is absent; level 1 re-checks the claim against the diff; no structure line in the ledger |
 | 27 | A test run or tool event cuts an episode | Episodes start only at person-typed requests; the test result is a field; boundary density is reported against the evenly spaced baseline (passes: phase 2 part D, `TestEpisodeBoundariesAgainstEvenBaseline`) |
-| 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction |
-| 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task |
-| 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at about one hold point in seven) |
+| 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction (passes: phase 8, `contracts/cue.jsonl` and `memeval -suite cues`) |
+| 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task (passes: phase 6, never a core rule) |
+| 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at 7.5% of hold points) |
 | 31 | A definition is supported by repeated tool output | Tool-output records do not count; compactions over the same evidence root count once; not settled (passes: phase 5 part B) |
 | 32 | Two definitions on one target are each safe but harmful together | Settling one returns the other to a hold window; the check reads their joint evidence (passes: phase 5 part B) |
 | 33 | A security-weakening definition enters the layer | Held; on detection the layer rolls back to the generation before it; listed in `/om:status` (passes: phase 5 part B) |

@@ -106,8 +106,13 @@ var entrySchemas = map[string]string{
 	ledger.OMObservationsDropped:  "entry-observations-dropped.schema.json",
 	ledger.OMSubjectsAliased:      "entry-subjects-aliased.schema.json",
 	ledger.OMExtracted:            "entry-extracted.schema.json",
+	ledger.OMSleep:                "entry-sleep.schema.json",
 	"om.cut":                      "entry-cut.schema.json",
 	"om.summary.handed":           "entry-summary-handed.schema.json",
+	"om.erased":                   "entry-erased.schema.json",
+	"om.cue":                      "entry-cue.schema.json",
+	ledger.OMRevisionsRecorded:    "entry-revisions-recorded.schema.json",
+	ledger.OMHypothesesRecorded:   "entry-hypotheses-recorded.schema.json",
 }
 
 // entrySchema is the schema of a decoded session entry the engine wrote; false for an entry
@@ -169,6 +174,8 @@ func classify(rel string) (storedFile, bool) {
 		return storedFile{mode: "skip"}, true
 	case len(parts) == 3 && parts[0] == "sessions" && strings.HasSuffix(base, ".jsonl"):
 		return storedFile{"neutral-store-line.schema.json", "lines"}, true
+	case len(parts) == 2 && parts[0] == "sleep" && base == "state.json":
+		return storedFile{"sleep-state.schema.json", "json"}, true
 	case len(parts) == 3 && parts[0] == "current" && strings.HasSuffix(base, ".json"):
 		return storedFile{"current-session.schema.json", "json"}, true
 	case len(parts) == 3 && parts[0] == "transcripts" && strings.HasSuffix(base, ".jsonl"):
@@ -183,6 +190,10 @@ func classify(rel string) (storedFile, bool) {
 			return storedFile{"curated-memory.schema.json", "frontmatter"}, true
 		case len(inner) == 1 && base == "usage.jsonl":
 			return storedFile{"curated-usage-line.schema.json", "lines"}, true
+		case len(inner) == 2 && inner[0] == "core" && base == "log.jsonl":
+			return storedFile{"core-line.schema.json", "lines"}, true
+		case len(inner) == 2 && inner[0] == "core" && base == "consumed.jsonl":
+			return storedFile{"core-consumed.schema.json", "lines"}, true
 		case len(inner) == 2 && inner[0] == "models" && strings.HasSuffix(base, ".jsonl"):
 			return storedFile{"model-event.schema.json", "lines"}, true
 		case len(inner) == 3 && inner[0] == "harness" && base == "manifest.jsonl":

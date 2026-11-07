@@ -77,6 +77,7 @@ func TestStubsCallListedMethods(t *testing.T) {
 	Edit("n", SetBody("b"))
 	ForgetMemory("n", Quoting("q"))
 	Feedback("n", "helped", "q")
+	Correct("aaaaaaaaaaaa", "t", Quoting("q"))
 	LayerForget("detector", "x")
 	LayerRollback(1)
 	Propose("detector", "x", "t")

@@ -240,7 +240,9 @@
   ;; Input.Freshness: the project records' freshness verdicts by record id, or nil.
   (freshness nil)
   ;; Input.Decayed: the ids decay lowers (decayed-records), or nil.
-  (decayed nil))
+  (decayed nil)
+  ;; Input.Hidden: the ids a sleep record hid as duplicates (sleep-hidden), never shown, or nil.
+  (hidden nil))
 
 (defun record-date (timestamp)
   (if (and (>= (length timestamp) 10) (iso-date-p (subseq timestamp 0 10))) (subseq timestamp 0 10) ""))
@@ -386,8 +388,8 @@ codec's tables instructions without a state)."
         collect (let ((n (nth i slots))) (if (and n (>= n 1)) n (nth i +default-slots+)))))
 
 (defun make-state (observations folded branch budget &key request intent reflections (format "tables") codec
-                                                         aliases reflection-dates slots freshness decayed)
-  (let ((s (make-sstate :budget budget :freshness freshness :decayed decayed :observations observations :reflections reflections :folded folded :branch branch
+                                                         aliases reflection-dates slots freshness decayed hidden)
+  (let ((s (make-sstate :budget budget :freshness freshness :decayed decayed :hidden hidden :observations observations :reflections reflections :folded folded :branch branch
                         :slots (slots-with-defaults slots)
                         :request-in request :intent-in intent :aliases aliases
                         :reflection-dates (or reflection-dates (make-set))
@@ -674,7 +676,8 @@ receipts moved into next."
 (defun opened (p group) (gethash group (sel-opened p) 0))
 
 (defun try-item (s p budget it)
-  (when (or (on-p p it) (gethash (item-id it) (sel-dropped p)))
+  (when (or (on-p p it) (gethash (item-id it) (sel-dropped p))
+            (and (sstate-hidden s) (gethash (item-id it) (sstate-hidden s))))
     (return-from try-item nil))
   (let ((cost (+ (item-cost it) (if (= (opened p (item-group it)) 0) (header-cost s (item-group it)) 0)
                  (if (and (string/= (item-extra it) "") (= (opened p (item-extra it)) 0)) (extra-cost (item-extra it)) 0))))
@@ -1170,11 +1173,11 @@ receipts moved into next."
                 :folded (omission-folded omitted) :snippets (omission-snippets omitted)))
 
 (defun render-summary (observations folded branch budget &rest options
-                       &key request intent reflections format codec aliases reflection-dates slots freshness decayed)
+                       &key request intent reflections format codec aliases reflection-dates slots freshness decayed hidden)
   "selection.Render. request is (entry-id . text) or nil; intent a list of (which entry-id
 text); format \"tables\" (the default) or \"lines\"; codec :rows (the default) or :jsonl;
 reflection-dates a table of ReflectionDateRanges; freshness a table of verdict texts by record id."
-  (declare (ignore request intent format codec aliases reflection-dates slots freshness decayed))
+  (declare (ignore request intent format codec aliases reflection-dates slots freshness decayed hidden))
   ;; A record holding a preference that weakens security is never shown, nor a reflection
   ;; resting on one (held-rule; docs/brain-memory.md, decision 19).
   (multiple-value-setq (observations reflections)

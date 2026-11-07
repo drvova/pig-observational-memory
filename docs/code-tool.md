@@ -829,7 +829,7 @@ helpers into `omhost` (see "Order of work").
 type SaveOpt struct{ /* unexported */ }
 func Body(text string) SaveOpt
 func Scope(scope string) SaveOpt      // "global" or "project"
-func Quoting(text string) SaveOpt     // a user's words that confirm it (or, for a forget or rollback, ask for it)
+func Quoting(text string) SaveOpt     // a user's words that confirm it (or, for a forget, rollback or correction, ask for it)
 
 type EditOpt struct{ /* unexported */ }
 func SetType(typ string) EditOpt
@@ -841,6 +841,7 @@ func Save(name, typ, description string, opts ...SaveOpt) (string, error) // sta
 func Edit(name string, opts ...EditOpt) (string, error)                   // never sets Pinned; see "The quote gate" below
 func ForgetMemory(name string, opts ...SaveOpt) (string, error)           // only Quoting: see "The quote gate" below
 func Feedback(name, outcome, quote string) (string, error)                // helped or harmed; the quote must be in a user or assistant message
+func Correct(id, text string, opts ...SaveOpt) (string, error)            // a correction record: supersedes the record on Quoting's user words, else possibly updates it; never an edit
 
 func LayerForget(kind, name string, opts ...SaveOpt) (string, error) // only Quoting; forgets one definition from the session model's layer; never a rule
 func LayerRollback(gen int, opts ...SaveOpt) (string, error)         // only Quoting; the session model's layer as it was at generation gen (0: before its first change); never a rule

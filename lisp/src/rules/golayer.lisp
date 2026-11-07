@@ -103,7 +103,8 @@
     (when (string/= (or (gdef-engine d) "") "")
       (setf fields (append fields '("engine")) row (append row (list (gdef-engine d)))))
     (concatenate 'string (rows-encode-row +layer-header-table+ fields row) (string #\Newline) (string #\Newline)
-                 (string-right-trim '(#\Newline) (gdef-text d)) (string #\Newline))))
+                 ;; A prose definition is redacted as it is written (decision 10, layer.encodeFile).
+                 (string-right-trim '(#\Newline) (om::redact-secrets (gdef-text d))) (string #\Newline))))
 
 (defun go-decode-file (content)
   "layer.decodeFile: the definition (its fallback in gdef-fallback), or nil."

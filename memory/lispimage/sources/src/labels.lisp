@@ -61,4 +61,7 @@
     (maphash (lambda (id v) (declare (ignore v))
                (when (nth-value 1 (gethash id out)) (setf (gethash id out) "retracted")))
              (truth-out (folded-truth f)))
+    (maphash (lambda (id challenged)
+               (when (and challenged (equal (gethash id out) "believed")) (setf (gethash id out) "contested")))
+             (folded-challenged f))
     out))

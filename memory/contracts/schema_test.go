@@ -9,6 +9,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/cli"
 	"github.com/drvova/pig-observational-memory/memory/codepolicy"
 	"github.com/drvova/pig-observational-memory/memory/codestore"
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/hostinfo"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
@@ -79,8 +80,10 @@ func TestRealOutputsValidate(t *testing.T) {
 			}
 		}
 	}
+	// The sleep pass over every store (om sleep): its records and its checkpoint.
+	om(t, "", "sleep")
 	seen := validateTree(t, set, root)
-	for _, want := range []string{"neutral-store-line.schema.json", "current-session.schema.json", "entry-observations-recorded.schema.json", "entry-extracted.schema.json", "entry-cut.schema.json", "entry-compaction.schema.json", "entry-summary-handed.schema.json"} {
+	for _, want := range []string{"neutral-store-line.schema.json", "current-session.schema.json", "entry-observations-recorded.schema.json", "entry-extracted.schema.json", "entry-cut.schema.json", "entry-compaction.schema.json", "entry-summary-handed.schema.json", "entry-sleep.schema.json", "sleep-state.schema.json"} {
 		if seen[want] == 0 {
 			t.Errorf("the run stored nothing %s checks (%v)", want, seen)
 		}
@@ -112,6 +115,22 @@ func TestStoreWritersValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.Record("staging-port", curated.EventView); err != nil {
+		t.Fatal(err)
+	}
+	// The core log: a pull's marker, a shared edit's generation, a promotion and a forget.
+	if _, err := store.Core().Pull("s1"); err != nil {
+		t.Fatal(err)
+	}
+	port := "Staging deploys listen on port 8443."
+	if _, err := store.Update("staging-port", "/work", curated.Edit{Description: &port}, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Core().PromoteAll([]core.Candidate{{Kind: core.KindRule, Text: "Never push to `main`.", Scope: "project:0a1b2c3d4e5f", Via: core.ViaQuote, Roots: []string{"ab"}, Record: "00000000000a", Writer: core.Writer{Model: model, Session: "s1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Core().Commit(func(_ *core.State, emit func(core.Line)) {
+		emit(core.Line{Op: core.OpForget, ID: "00000000000f", Tombstones: []string{"00000000000a"}, Scope: core.ScopeUser})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordFeedback("staging-port", curated.EventHelped, "it deployed"); err != nil {
@@ -168,7 +187,7 @@ func TestStoreWritersValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := validateTree(t, set, root)
-	for _, want := range []string{"curated-memory.schema.json", "curated-usage-line.schema.json", "model-event.schema.json", "layer-generation.schema.json", "layer-held-index.schema.json", "floor-lowering.schema.json", "code-units.schema.json"} {
+	for _, want := range []string{"curated-memory.schema.json", "curated-usage-line.schema.json", "core-line.schema.json", "core-consumed.schema.json", "model-event.schema.json", "layer-generation.schema.json", "layer-held-index.schema.json", "floor-lowering.schema.json", "code-units.schema.json"} {
 		if seen[want] == 0 {
 			t.Errorf("no file %s checks was written (%v)", want, seen)
 		}

@@ -76,6 +76,10 @@ type Input struct {
 	// Decayed are the records decay lowers (ledger.Decayed), by id: classes 4 and 6 take them
 	// after the others. None while the decay setting is off.
 	Decayed map[string]bool
+	// Hidden are the records a sleep record found duplicated (ledger.SleepState.Duplicates), by
+	// id: never shown, so the first copy stands for them, and listed by the omitted spans like any
+	// record left out.
+	Hidden map[string]bool
 }
 
 // Slots are the working memory's caps: how many of the user's rules and of their scope
@@ -800,7 +804,7 @@ func (p *selected) unselect(s *state, it *item) {
 func (s *state) choose(budget int) *selected {
 	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}, intentText: map[string]string{}}
 	try := func(it *item) bool {
-		if p.on[it] || p.dropped[it.id()] {
+		if p.on[it] || p.dropped[it.id()] || s.in.Hidden[it.id()] {
 			return false
 		}
 		cost := it.cost

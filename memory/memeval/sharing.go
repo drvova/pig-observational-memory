@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 	"github.com/drvova/pig-observational-memory/memory/omhost"
@@ -30,7 +32,7 @@ func sessionCall(store curated.Store, project, sessionID string, branch []sessio
 	return curated.Call{Store: store, Project: project, Source: sessionID,
 		Evidence:     func(q string) bool { return omhost.QuotedInConversation(branch, q, skip) },
 		UserEvidence: func(q string) bool { return omhost.QuotedByUser(branch, q, skip) },
-		SourceOf:     func(q string) string { return omhost.QuotedSource(branch, q, skip) },
+		SourceOf:     func(q string) string { return omhost.QuotedSource(branch, q, skip, project) },
 	}
 }
 
@@ -295,29 +297,39 @@ func concurrencyRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
 	s.add(part, "curated store: no save, staging or ledger line lost", verdict(saved == 2*rounds && staged == rounds && helped == 2*rounds && torn == 0 && writeErrs == 0),
 		"", "%d of %d saves, %d of %d stagings joined, %d of %d feedback lines, %d torn lines, %d errors", saved, 2*rounds, staged, rounds, helped, 2*rounds, torn, writeErrs)
 
-	// Two sessions edit one memory at once, each from the text it read: both are told the
-	// edit was made, and one of the two is gone without either being told (scenario 14).
-	both, lost := 0, 0
+	// Two sessions edit one memory at once, each from the core generation it read at its start
+	// (scenario 14): exactly one edit commits, and the other is re-evaluated against the new
+	// generation and kept as the other side of a contested pair (curated.ErrConflict).
+	both, lost, one, other := 0, 0, 0, 0
 	for i := 0; i < rounds; i++ {
 		var ewg sync.WaitGroup
-		ok := make([]bool, 2)
+		errs := make([]error, 2)
+		for w := range stores {
+			if _, err := stores[w].Core().Pull(fmt.Sprintf("w%d-%d", w, i)); err != nil {
+				return err
+			}
+		}
 		for w := range stores {
 			ewg.Add(1)
 			go func(w int) {
 				defer ewg.Done()
 				desc := fmt.Sprintf("The build target is make ci-%d-%d.", w, i)
-				_, err := stores[w].Update("shared-target", "", curated.Edit{Description: &desc}, fmt.Sprintf("w%d", w))
-				ok[w] = err == nil
+				_, errs[w] = stores[w].Update("shared-target", "", curated.Edit{Description: &desc}, fmt.Sprintf("w%d-%d", w, i))
 			}(w)
 		}
 		ewg.Wait()
-		if ok[0] && ok[1] {
+		switch {
+		case errs[0] == nil && errs[1] == nil:
 			both++
 			lost++ // one memory holds one description: the other edit is overwritten unseen
+		case (errs[0] == nil) != (errs[1] == nil) && (errors.Is(errs[0], curated.ErrConflict) || errors.Is(errs[1], curated.ErrConflict)):
+			one++
+		default:
+			other++
 		}
 	}
-	s.add(part, "curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14)", verdict(lost == 0), "phase 6: core log operations with generations",
-		"%d rounds, both edits reported made in %d, %d edits overwritten unseen (last writer wins)", rounds, both, lost)
+	s.add(part, "curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14)", verdict(lost == 0 && other == 0 && one == rounds), "phase 6: core log operations with generations",
+		"%d rounds, one committed and one kept as a contested pair in %d, both reported made in %d, %d edits overwritten unseen, %d other", rounds, one, both, lost, other)
 
 	// Layer: generations from two stores and distinct definitions put at once.
 	ls := []layer.Store{stores[0].Layer(), stores[1].Layer()}
@@ -379,8 +391,63 @@ func concurrencyRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
 	}
 	s.add(part, "a layer another writer changed is seen at the next compaction only (scenarios 15, 16)", verdict(seen && between == 0), "",
 		"%d compactions, %d requests between them, change seen at the next: %v", compactions, between, seen)
-	s.add(part, "core log: one writer, generations, contested pairs", NotBuilt, "phase 6", "not built")
+	coreGens, distinct, pairs, rounds2, coreErrs := coreLogRounds(dir, rounds)
+	s.add(part, "core log: one writer, generations, contested pairs", verdict(coreErrs == 0 && distinct == coreGens && pairs == rounds2), "",
+		"%d lines, %d distinct generations numbered 1 to %d, a contested pair in %d of %d rounds of two concurrent supersedes, %d errors", coreGens, distinct, coreGens, pairs, rounds2, coreErrs)
 	return nil
+}
+
+// coreLogRounds runs two core writers on one log for rounds rounds: each round both read the log's
+// generation and supersede one rule at once with different text. It reports the lines written,
+// their distinct generations (all of 1 to n when each is numbered once), the rounds that left
+// exactly one supersede and one contest, the rounds and the errors.
+func coreLogRounds(dir string, rounds int) (lines, distinct, pairs, n, errs int) {
+	logs := []core.Log{core.In(filepath.Join(dir, "corelog")), core.In(filepath.Join(dir, "corelog"))}
+	base := core.Candidate{Kind: core.KindRule, Key: "target", Text: "The deploy target is staging.", Scope: core.ScopeUser, Via: core.ViaQuote}
+	if _, _, err := logs[0].PromoteAll([]core.Candidate{base}); err != nil {
+		return 0, 0, 0, rounds, 1
+	}
+	for i := 0; i < rounds; i++ {
+		st, err := logs[0].Read()
+		if err != nil {
+			errs++
+			continue
+		}
+		var wg sync.WaitGroup
+		verdicts := make([]string, 2)
+		failed := make([]bool, 2)
+		for w := range logs {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				c := base
+				c.Text, c.Base, c.Writer = fmt.Sprintf("The deploy target is staging-%d-%d.", w, i), st.Gen, core.Writer{Session: fmt.Sprintf("w%d-%d", w, i)}
+				_, v, err := logs[w].PromoteAll([]core.Candidate{c})
+				if err != nil {
+					failed[w] = true
+					return
+				}
+				verdicts[w] = v[0]
+			}(w)
+		}
+		wg.Wait()
+		for _, f := range failed {
+			if f {
+				errs++
+			}
+		}
+		if (verdicts[0] == core.VerdictSupersede && verdicts[1] == core.VerdictContest) || (verdicts[1] == core.VerdictSupersede && verdicts[0] == core.VerdictContest) {
+			pairs++
+		}
+	}
+	_, decoded := jsonLines(filepath.Join(dir, "corelog", "core", "log.jsonl"))
+	seen := map[float64]bool{}
+	for _, l := range decoded {
+		if g, ok := l["gen"].(float64); ok && g >= 1 && int(g) <= len(decoded) {
+			seen[g] = true
+		}
+	}
+	return len(decoded), len(seen), pairs, rounds, errs
 }
 
 // staleLayer runs a session with level 1 on (scripted, empty replies) on a store another writer
@@ -456,7 +523,7 @@ func jsonLines(path string) (int, []map[string]any) {
 // saves memories that hold them; session B on the same store sees no value in its index, its
 // saved searches, its summaries or their snippets.
 func secretsAcrossRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
-	var index, saved, summaries, snippets, layerLines, ledgerLines, runs int
+	var index, saved, summaries, snippets, layerLines, ledgerLines, coreLines, runs int
 	for _, seed := range cfg.Seeds {
 		p := drawSecrets(seed + 77)
 		dir, err := os.MkdirTemp("", "memeval-secrets-")
@@ -517,6 +584,15 @@ func secretsAcrossRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
 			}
 		}
 		layerLines += scanDir(p, store.Layer().Dir, "")
+		// The core log: a rule session A's user stated with the values, and a shared edit
+		// holding one; neither reaches the core's lines or session B's block.
+		_, _, _ = store.Core().PromoteAll([]core.Candidate{{Kind: core.KindRule, Text: "Deploy with AWS_SECRET_ACCESS_KEY=" + p.values[0] + " and GITHUB_TOKEN=" + p.values[1] + ".", Scope: core.ScopeUser, Via: core.ViaQuote, Writer: core.Writer{Session: "a"}}})
+		edited := "The database is postgres://app:" + p.values[3] + "@db.internal:5432/app2."
+		_, _ = store.Update("db-url", "", curated.Edit{Description: &edited}, "a")
+		coreLines += scanDir(p, filepath.Join(store.Dir, "core"), "")
+		if st, err := store.Core().Pull("b"); err == nil {
+			coreLines += p.count(core.Section(&st, core.View{Scopes: []string{core.ScopeUser}}))
+		}
 		if raw, err := os.ReadFile(filepath.Join(store.Dir, "usage.jsonl")); err == nil {
 			ledgerLines += p.count(string(raw))
 		}
@@ -528,8 +604,8 @@ func secretsAcrossRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
 	s.add(part, "no value in another session's saved searches", verdict(saved == 0), "", "%d values", saved)
 	s.add(part, "no value in another session's summaries or snippets", verdict(summaries == 0 && snippets == 0), "", "%d in summaries, %d in %d snippet answers", summaries, snippets, runs)
 	s.add(part, "no value in the shared usage ledgers", verdict(ledgerLines == 0), "", "%d values", ledgerLines)
-	s.add(part, "no value in the shared layer", verdict(layerLines == 0), "phase 8: secret purge (a layer write is not scanned)", "%d values", layerLines)
-	s.add(part, "core log shared lines", NotBuilt, "phase 6", "not built")
+	s.add(part, "no value in the shared layer", verdict(layerLines == 0), "", "%d values", layerLines)
+	s.add(part, "no value in the core log's shared lines or another session's core block", verdict(coreLines == 0), "", "%d values", coreLines)
 	return nil
 }
 

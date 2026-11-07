@@ -154,6 +154,12 @@ func anchors(records []ledger.Observation, repo host.Repo) []ledger.Observation 
 	return out
 }
 
+// Anchored are the records Query asks the view about (anchors), for the sleep pass's
+// verification.
+func Anchored(records []ledger.Observation, repo host.Repo) []ledger.Observation {
+	return anchors(records, repo)
+}
+
 // Query is what a compaction asks the view about records (the active records it folds): each
 // anchored project record's path, its symbol (in its path, or anywhere without one; the newest
 // MaxSymbols), and, for one with no body hash, its path's blob at the commit it was framed at.

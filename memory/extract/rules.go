@@ -147,6 +147,12 @@ var (
 	ruleOneTime = regexp.MustCompile(`(?i)\b(?:(?:just\s+)?this\s+once|just\s+once|(?:only\s+)?this\s+(?:one\s+)?time|one[-\s](?:time|off)|for\s+this\s+(?:task|change|commit|pr|one|run|session|ticket|request)|(?:it|that)\s+once)\b`)
 )
 
+// IsOneTime reports a permission or instruction for one occasion (ruleOneTime; decision 23): the
+// core never takes one as a standing rule (core.Candidate.OneTime).
+func IsOneTime(text string) bool {
+	return ruleOneTime.MatchString(strings.ReplaceAll(text, "’", "'"))
+}
+
 // ruleReportedNameWords are capitalized words before "said" that name a document, not a person:
 // "Policy says never …" states the policy.
 var ruleReportedNameWords = map[string]bool{"Policy": true, "Rule": true, "Docs": true, "Documentation": true, "Guidelines": true, "Spec": true, "Readme": true}

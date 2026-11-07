@@ -14,3 +14,6 @@ func WithLock(_ string, fn func() error) error {
 	defer lockMu.Unlock()
 	return fn()
 }
+
+// TryWithLock is WithLock here: these platforms have no file lock to try.
+func TryWithLock(path string, fn func() error) (bool, error) { return true, WithLock(path, fn) }

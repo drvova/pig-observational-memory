@@ -79,7 +79,11 @@ func (c Call) Run(op string, args map[string]string) (string, error) {
 	case OpSave:
 		m := Memory{Name: name, Type: args["type"], Description: args["description"], Body: strings.TrimSpace(args["body"])}
 		switch scope := args["scope"]; scope {
-		case "", "global":
+		case "":
+			// Decision 8: a save without a scope stays in its project (DefaultScope); only the
+			// user's own preferences and feedback are the user's everywhere.
+			m.Project = DefaultProject(m.Type, c.Project)
+		case "global":
 		case "project":
 			if c.Project == "" {
 				return "", errors.New("no project directory is known; save it as global instead")
@@ -338,4 +342,15 @@ func heldNote(rule string) string {
 
 func releasedNote(rule string) string {
 	return "It weakens security (" + rule + "), so it is held: the user's words restate it, so it is shown in this session only; every other session holds it until its user's words restate it."
+}
+
+// DefaultProject is the project a save without a scope applies to (docs/brain-memory.md, decision
+// 8): a user or feedback memory is the user's preference, shown in every project (""); every other
+// type stays in the project it was saved in, when one is known. A memory saved global before
+// phase 6 keeps loading and listing everywhere.
+func DefaultProject(memoryType, project string) string {
+	if memoryType == TypeUser || memoryType == TypeFeedback {
+		return ""
+	}
+	return project
 }

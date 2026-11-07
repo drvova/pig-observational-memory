@@ -196,10 +196,6 @@
              (ledger (format nil "~A/models/p_2fm.jsonl" store)))
         ;; Evidence that changed since no proposal: the offer is due.
         (om.layer::append-line ledger "{\"time\":\"2026-11-01T09:00:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-union-kept\":1},\"engine\":\"v2\",\"level1\":true}")
-        ;; The null arm's control windows (rules.SettleV2): 2·MinEvidence compactions without it,
-        ;; each with two refused proposals and its own evidence root.
-        (dotimes (i 6)
-          (om.layer::append-line ledger (format nil "{\"time\":\"2026-11-01T09:1~D:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-refused\":2},\"engine\":\"v2\",\"level1\":true,\"roots\":[\"c0ffee000000000~D\"],\"harm\":0}" i i)))
         (setf (l1host-reply l)
               (lambda (request)
                 (tool-call-message (jobject "records" (vector (jobject "id" (first (l1-candidate-ids request)) "subject" "deploy"))
@@ -214,6 +210,12 @@
           (check (search "detector" (subseq text (search "HARNESS EVIDENCE" text))) nil "no detector is offered")
           (check (and (probe-file (format nil "~A/harness/p_2fm/held/instructions/consolidation.rows" store)) t) t "held in the Go layer")
           (check (and (notice-with-p h "held until a later compaction proves it") t) t))
+        ;; The null arm's control windows (rules.SettleV2): 2·MinEvidence compactions without it,
+        ;; each with two refused proposals and its own evidence root, recorded after the first
+        ;; compaction's pass so the windows are theirs alone (that pass refused nothing, and in a
+        ;; window it would make the spread exactly half the effect).
+        (dotimes (i 6)
+          (om.layer::append-line ledger (format nil "{\"time\":\"2026-11-01T09:1~D:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-refused\":2},\"engine\":\"v2\",\"level1\":true,\"roots\":[\"c0ffee000000000~D\"],\"harm\":0}" i i)))
         ;; Other sessions' compactions under it, over other text, refused nothing: its null arm.
         (let ((id (om.golayer:instructions-held-id (first (om.golayer:held-instructions-snapshot store "p/m")))))
           (dotimes (i 3)

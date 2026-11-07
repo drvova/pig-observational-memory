@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 	"github.com/drvova/pig-observational-memory/memory/layer"
@@ -435,12 +436,20 @@ func (s Store) update(name, project string, edit Edit, source string, line usage
 		if !SeenBy(m, source) {
 			return ErrNotFound
 		}
+		shared := !m.Staged
 		if m, err = applyEdit(m, edit, source); err != nil {
 			return err
 		}
 		m.Updated = s.Now().UTC()
 		m.Sources = addSource(m.Sources, source)
 		m = redactMemory(m)
+		if shared {
+			// Scenario 14: a shared memory's edits are generations of the core log, decided
+			// against the newest one under its lock (the store's lock is taken first).
+			if err := s.commitEdit(m, source); err != nil {
+				return err
+			}
+		}
 		updated = m
 		return s.writeChecked(m)
 	})
@@ -448,6 +457,53 @@ func (s Store) update(name, project string, edit Edit, source string, line usage
 		return Memory{}, err
 	}
 	return updated, s.appendUsage(line)
+}
+
+// ErrConflict is an edit of a shared memory another session changed after this session last read
+// the core (its consumed-through marker): the edit is not made, and its text is kept in the core as
+// the other side of a contested pair with the change that committed (scenario 14).
+var ErrConflict = errors.New("another session changed this memory after this session read it")
+
+// Core is the store's core log (memory/core): <store>/core.
+func (s Store) Core() core.Log { return core.Log{Dir: filepath.Join(s.Dir, "core"), Now: s.Now} }
+
+// EditText is a memory's content as its core generations record it: the description, and the
+// body after a blank line when it has one.
+func EditText(m Memory) string {
+	if m.Body == "" {
+		return m.Description
+	}
+	return m.Description + "\n\n" + m.Body
+}
+
+// commitEdit records the edit of shared memory m by session as a generation of the core log
+// (core.KindMemory, keyed by its name), decided against the newest generation: a session that had
+// read every change to it (its consumed-through marker at or above the last one, or the last one
+// its own) supersedes it; one that had not is re-evaluated, and an edit to other content becomes
+// the other side of a contested pair (ErrConflict) while one to the same content is already made.
+// A session that never read the core (no marker) reads it as it stands.
+func (s Store) commitEdit(m Memory, session string) error {
+	log := s.Core()
+	verdict := ""
+	_, err := log.Commit(func(st *core.State, emit func(core.Line)) {
+		base, ok := log.Consumed(session)
+		if !ok {
+			base = st.Gen
+		}
+		line, v := core.Decide(st, core.Candidate{Kind: core.KindMemory, Key: m.Name, Text: EditText(m), Scope: core.ScopeGlobal,
+			Via: core.ViaEdit, Record: m.Name, Base: base, Writer: core.Writer{Session: session}})
+		verdict = v
+		if line.Op != "" {
+			emit(line)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if verdict == core.VerdictContest {
+		return fmt.Errorf("%w: memory %s stays as the other session left it, and this edit is kept in the core as the other side of a contested pair; read it again and edit it from what it says now", ErrConflict, m.Name)
+	}
+	return nil
 }
 
 // applyEdit is m with edit applied, as session makes it: a staged memory whose description
@@ -546,7 +602,8 @@ const (
 	// EventStaged is a save that staged a memory's name and description in one more session
 	// (memory v2).
 	EventStaged = "staged"
-	// EventCited is a level-1 citation of a memory (memory v2): evidence for a staged one.
+	// EventCited is a level-1 citation of a memory (memory v2), recorded as its use: never
+	// promotion evidence (decision 7).
 	EventCited = "cited"
 	// EventCorrected is a level-0 user correction whose subject matches the memory (memory
 	// v2): it ranks the memory lower and flags it until the memory is edited.

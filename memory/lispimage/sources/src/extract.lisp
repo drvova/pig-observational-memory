@@ -116,6 +116,8 @@
 
 (defstruct (xstate (:conc-name x-))
   entries
+  ;; Phase 8: the revisions found so far, and each path's newest revision id (nil until read).
+  (revisions '()) (chain nil)
   (start 0) (end 0)
   skip-tools
   ledger
@@ -467,9 +469,25 @@
               (return-from forget-of (values t (second m) words (forget-scope-of (or (third m) ""))))))))))
   (values nil "" "" ""))
 
-(defun forget-content (ids)
-  "forgetContent."
-  (format nil "The user asked to forget ~D ~A: ~A." (length ids) (if (= (length ids) 1) "record" "records") (join ids " ")))
+(defun erasure-request-p (sentence)
+  "ledger.IsErasureRequest: a word of sentence (a run of ASCII letters, lowercased) is erase, purge or wipe."
+  (let ((lower (ascii-lower sentence)) (start nil))
+    (loop for i from 0 to (length lower)
+          for letter = (and (< i (length lower)) (char<= #\a (char lower i) #\z))
+          do (cond ((and letter (null start)) (setf start i))
+                   ((and (not letter) start)
+                    (when (member (subseq lower start i) '("erase" "purge" "wipe") :test #'string=)
+                      (return-from erasure-request-p t))
+                    (setf start nil))))
+    nil))
+
+(defun erasure-p (o)
+  "ledger.IsErasure."
+  (and (string= (obs-kind o) "forget") (has-prefix (obs-content o) "The user asked to erase ")))
+
+(defun forget-content (ids &optional erase)
+  "forgetContent: an erase request's record opens with ledger.ErasurePrefix."
+  (format nil "The user asked to ~A ~D ~A: ~A." (if erase "erase" "forget") (length ids) (if (= (length ids) 1) "record" "records") (join ids " ")))
 
 (defun resolve-forgets (x)
   "resolveForgets: each forget request's tombstones; the records of this extraction it names are
@@ -502,7 +520,7 @@ not written, and a forget naming nothing is no record."
                   (add (rec-obs e)))))
             (when stones
               (let ((o (rec-obs r)))
-                (setf (obs-content o) (forget-content (mapcar #'first stones))
+                (setf (obs-content o) (forget-content (mapcar #'first stones) (erasure-request-p (obs-content o)))
                       (obs-forgets o) stones)
                 (setf (obs-id o) (record-id o))
                 (setf (obs-token-count o) (observation-line-tokens (obs-id o) (obs-timestamp o) (obs-relevance o) (obs-content o))))
@@ -1026,6 +1044,8 @@ Kiro's write replacing a string (its command strReplace) edits the file."
               (let ((p (arg-string (tcall-args call) arg)))
                 (when (and p (string/= (trim-space p) ""))
                   (x-file-event x p state "" sources)
+                  (when (member state '("written" "edited") :test #'string=)
+                    (x-revision x i call p))
                   (return))))))
         (let ((command (shell-command (tcall-args call))))
           (when command
@@ -1306,7 +1326,98 @@ Kiro's write replacing a string (its command strReplace) edits the file."
       (x-resolve-pushbacks x)
       (x-resolve-closures x)
       (x-encode x)
-      (values (x-batches x cite) (if (>= last 0) (entry-id (aref entries last)) "")))))
+      (values (x-batches x cite) (if (>= last 0) (entry-id (aref entries last)) "") (x-revisions x)))))
+
+;;; revision.go: a file's revisions (docs/memory-v2.md, "Revisions")
+
+(defconstant +revision-links+ 5)
+(defparameter +revision-new-args+ '("new_string" "content" "file_text" "new_str" "newText" "new_source"))
+(defparameter +revision-old-args+ '("old_string" "old_str" "oldText"))
+
+(defstruct (revision (:conc-name rev-)) id path entry prev (added 0) (removed 0) (summary "") (links '()))
+
+(defun first-string-arg (args names)
+  (dolist (n names "") (let ((v (jget args n))) (when (stringp v) (return v)))))
+
+(defun line-count (text)
+  (if (string= text "")
+      0
+      (let ((n (count #\Newline text)))
+        (if (char= (char text (1- (length text))) #\Newline) n (1+ n)))))
+
+(defun revision-texts (args)
+  "revisionTexts: (values new old)."
+  (let ((edits (jget args "edits")))
+    (if (vectorp edits)
+        (let ((news '()) (olds '()))
+          (loop for e across edits
+                when (hash-table-p e)
+                  do (push-end (first-string-arg e +revision-new-args+) news)
+                     (push-end (first-string-arg e +revision-old-args+) olds))
+          (values (join news (string #\Newline)) (join olds (string #\Newline))))
+        (values (first-string-arg args +revision-new-args+) (first-string-arg args +revision-old-args+)))))
+
+(defun revision-summary (new old)
+  (let ((olds (make-hash-table :test #'equal)) (first ""))
+    (dolist (l (split old (string #\Newline))) (setf (gethash (trim-space l) olds) t))
+    (dolist (l (split new (string #\Newline)))
+      (let ((l (trim-space l)))
+        (unless (string= l "")
+          (when (string= first "") (setf first l))
+          (unless (gethash l olds) (setf first l) (return)))))
+    (clip (redact-secrets first) +brief-key-arg-runes+)))
+
+(defun sha256-text (s) (sha256-octets (utf8-octets s)))
+
+(defun revision-id (prev path digest added removed)
+  "extract.RevisionID."
+  (let ((nul (string (code-char 0))))
+    (subseq (sha256-text (cat "revision" nul prev nul path nul digest nul (format nil "~D" added) nul (format nil "~D" removed))) 0 12)))
+
+(defun revision-from-value (v)
+  (make-revision :id (str (jget v "id")) :path (str (jget v "path")) :entry (str (jget v "entry")) :prev (str (jget v "prev"))))
+
+(defun revision-chain (entries end)
+  (let ((chain (make-hash-table :test #'equal)))
+    (loop for i from 0 below end
+          for e = (aref entries i)
+          when (and (string= (entry-type e) "custom") (string= (entry-custom-type e) "om.revisions.recorded"))
+            do (let ((list (jget (entry-data e) "revisions")))
+                 (when (vectorp list)
+                   (loop for v across list
+                         do (let ((id (jget v "id")) (path (jget v "path")))
+                              (when (and (stringp id) (stringp path)) (setf (gethash path chain) id)))))))
+    chain))
+
+(defun x-revision (x i call p)
+  (unless (x-chain x) (setf (x-chain x) (revision-chain (x-entries x) (x-end x))))
+  (multiple-value-bind (new old) (revision-texts (tcall-args call))
+    (let* ((key (path-key x p)) (display (path-display x p))
+           (r (make-revision :path key :entry (entry-id (aref (x-entries x) i)) :prev (or (gethash key (x-chain x)) "")
+                             :added (line-count new) :removed (line-count old) :summary (revision-summary new old))))
+      (setf (rev-id r) (revision-id (rev-prev r) key (sha256-text (redact-secrets new)) (rev-added r) (rev-removed r)))
+      (dolist (o (folded-active (x-ledger x)))
+        (when (= (length (rev-links r)) +revision-links+) (return))
+        (when (member (obs-kind o) '("decision" "convention" "file") :test #'string=)
+          (if (and (string= (obs-kind o) "file") (string= (obs-target o) key))
+              (push-end (obs-id o) (rev-links r))
+              (when (some (lambda (k) (or (string= k key) (string= k display))) (keys-get (obs-keys o) "paths"))
+                (push-end (obs-id o) (rev-links r))))))
+      (setf (gethash key (x-chain x)) (rev-id r))
+      (push-end r (x-revisions x)))))
+
+(defun revision-json (r)
+  "ledger.Revision's encoding (links omitted when empty)."
+  (with-output-to-string (o)
+    (format o "{\"id\":~A,\"path\":~A,\"entry\":~A,\"prev\":~A,\"added\":~D,\"removed\":~D,\"summary\":~A"
+            (json-string (rev-id r)) (json-string (rev-path r)) (json-string (rev-entry r))
+            (json-string (rev-prev r)) (rev-added r) (rev-removed r) (json-string (rev-summary r)))
+    (when (rev-links r)
+      (format o ",\"links\":[~{~A~^,~}]" (mapcar #'json-string (rev-links r))))
+    (write-string "}" o)))
+
+(defun revisions-data-json (revisions)
+  (format nil "{\"revisions\":[~{~A~^,~}]}" (mapcar #'revision-json revisions)))
 
 ;;; drop.go
 

@@ -27,6 +27,9 @@ type FoldedLedger struct {
 	// Truth is what truth maintenance took out of the fold (truth.go): the forgotten records,
 	// which are in none of the lists above, and the records and reflections gone out.
 	Truth Truth
+	// Challenged are the records whose latest sleep check (om.sleep, decision 13) challenged
+	// them through the fold boundary; Labels labels a believed one contested. nil when none.
+	Challenged map[string]bool
 }
 
 func foldEndIndex(entries []Entry, upToEntryID string) int {
@@ -113,6 +116,15 @@ func FoldLedgerUnresolved(entries []Entry, upToEntryID string) FoldedLedger {
 		case OMSubjectsAliased:
 			if data, ok := SubjectsAliasedDataFrom(entry.Data); ok {
 				folded.Aliases = append(folded.Aliases, data.Aliases...)
+			}
+		case OMSleep:
+			if data, ok := SleepEntry(entry); ok {
+				for _, c := range data.Checks {
+					if folded.Challenged == nil {
+						folded.Challenged = map[string]bool{}
+					}
+					folded.Challenged[c.ID] = c.Verdict == VerdictChallenged
+				}
 			}
 		}
 	}

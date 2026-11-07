@@ -78,6 +78,22 @@ type Config struct {
 	// ledger.DefaultDecayHorizon (docs/brain-memory.md, decision 6).
 	Decay        string
 	DecayHorizon int
+	// SleepAfterCompactions is K of the sleep pass's compaction fallback (sleepAfterCompactions,
+	// docs/brain-memory.md, decision 13): a compaction runs the pass once K compactions passed
+	// with no sleep record on the branch; 0 never runs it in a compaction. SleepMaxRecords bounds
+	// the fallback (sleepMaxRecords): a ledger with more active records skips it, so the pass
+	// stays within the compaction's budget. SleepIdleOff (sleepIdle: false) turns the image's idle
+	// pass off.
+	SleepAfterCompactions int
+	SleepMaxRecords       int
+	SleepIdleOff          bool
+	// CueCap is the cap on cues per compaction for an om harness whose hooks hand a tool's result
+	// back with added context (cueCap, docs/memory-v2.md "Cues"; decision 4); 0 turns cues off.
+	CueCap int
+	// Dreams turns the summary's dream section on (dreams: true; docs/memory-v2.md "Dreams",
+	// decision 5): code-only links, counterfactual skeletons, hindsight relabels and rehearsal of
+	// open intentions, and level 1's quarantined hypotheses. It ships off.
+	Dreams bool
 	// RemovedSet are the RemovedSettings a settings file that was read sets to
 	// a valid value, in RemovedSettings order: nothing reads them and /om:status
 	// lists them while they are set (docs/memory-v2.md, "Migration > Settings").
@@ -168,7 +184,20 @@ var Defaults = Config{
 	CuratedMemory:            true,
 	CuratedMemoryIndexTokens: 2_000,
 	MemoryFormat:             MemoryFormatTables,
+	SleepAfterCompactions:    DefaultSleepAfterCompactions,
+	SleepMaxRecords:          DefaultSleepMaxRecords,
+	CueCap:                   DefaultCueCap,
 }
+
+// DefaultCueCap is the cues a compaction allows by default (extract.CueCap).
+const DefaultCueCap = 3
+
+// The sleep pass's defaults: the compaction fallback after 4 compactions without a sleep run,
+// skipped over more than 5,000 active records.
+const (
+	DefaultSleepAfterCompactions = 4
+	DefaultSleepMaxRecords       = 5_000
+)
 
 // CompactionSummaryFallbackMaxTokens is the summary size the harness profile never halves
 // below (harness.Profile.ApplySummary): memory v1's summary budget for an unknown window.
@@ -337,6 +366,7 @@ var numberKeys = []string{
 	"compactionSummaryMaxTokens",
 	"curatedMemoryIndexTokens",
 	"decayHorizon",
+	"sleepMaxRecords",
 }
 
 func normalizeSettings(value map[string]any) partial {
@@ -355,6 +385,11 @@ func normalizeSettings(value map[string]any) partial {
 		}
 		p.decay = &clock
 	}
+	for _, key := range []string{"sleepAfterCompactions", "cueCap"} {
+		if f, ok := value[key].(float64); ok && f >= 0 && f == math.Trunc(f) && !math.IsInf(f, 0) {
+			p.ints[key] = int(f)
+		}
+	}
 	p.limits, _ = readLimits(value)
 	if models, ok := value["modelLimits"].(map[string]any); ok {
 		for key, raw := range models {
@@ -368,7 +403,7 @@ func normalizeSettings(value map[string]any) partial {
 			}
 		}
 	}
-	for _, key := range []string{"passive", "debugLog", "curatedMemory", "consolidate", "rawFloor", "qualityTrigger"} {
+	for _, key := range []string{"passive", "debugLog", "curatedMemory", "consolidate", "rawFloor", "qualityTrigger", "sleepIdle", "dreams"} {
 		if b, ok := value[key].(bool); ok {
 			p.bools[key] = b
 		}
@@ -418,6 +453,12 @@ func (p partial) apply(cfg *Config) {
 			cfg.CuratedMemoryIndexTokens = n
 		case "decayHorizon":
 			cfg.DecayHorizon = n
+		case "sleepAfterCompactions":
+			cfg.SleepAfterCompactions = n
+		case "cueCap":
+			cfg.CueCap = n
+		case "sleepMaxRecords":
+			cfg.SleepMaxRecords = n
 		}
 	}
 	if p.decay != nil {
@@ -440,6 +481,10 @@ func (p partial) apply(cfg *Config) {
 			cfg.RawFloor = b
 		case "qualityTrigger":
 			cfg.QualityTrigger = b
+		case "sleepIdle":
+			cfg.SleepIdleOff = !b
+		case "dreams":
+			cfg.Dreams = b
 		}
 	}
 	cfg.Limits = cfg.Limits.over(p.limits)

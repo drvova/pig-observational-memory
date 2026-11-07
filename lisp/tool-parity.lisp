@@ -93,6 +93,10 @@
            (line "~D settle ~A | ~A" n
                  (one-line-json (om::join (loop for (name . evidence) in promoted collect (format nil "~A=~A" name evidence)) ";"))
                  (om::join flagged ",")))))
+      ((string= op "pull")
+       (let ((st (core-pull (core-dir dir) (or (om::jget step "session") ""))))
+         (line "~D pull ~D ~A" n (cstate-gen st)
+               (one-line-json (core-section st (list +scope-user+ (project-scope "" project)) (or (gethash "model" args) ""))))))
       (t (return-from index-step nil)))
     t))
 
@@ -112,7 +116,7 @@
                                                        (let ((texts (strings-of conversation)))
                                                          (lambda (q) (quoted-in-p texts q))))
                                         :user-evidence (lambda (q) (quoted-in-p user q))
-                                        :source-of (lambda (q) (quoted-source tools q))))
+                                        :source-of (lambda (q) (quoted-source tools q (or (om::jget step "project") "")))))
                   (args (let ((h (make-hash-table :test 'equal)) (a (om::jget step "args")))
                           (when (hash-table-p a) (maphash (lambda (k v) (setf (gethash k h) v)) a))
                           h)))

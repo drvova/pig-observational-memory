@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Core consumed-through marker",
+  "description": "One line of <store>/core/consumed.jsonl: the generation of the core log a session read through, at its start or after a compaction (core.Log.Pull), appended only when it moved. Between two pulls the session reads the core through its latest marker, and a shared curated edit is checked against it. Source: memory/core/log.go (Marker, Pull, Consumed) and lisp/src/core.lisp.",
+  "type": "object",
+  "required": ["session", "through", "time"],
+  "additionalProperties": false,
+  "properties": {
+    "session": { "type": "string", "minLength": 1 },
+    "through": { "type": "integer", "minimum": 0 },
+    "time": { "description": "RFC 3339, UTC, whole seconds.", "type": "string" }
+  }
+}

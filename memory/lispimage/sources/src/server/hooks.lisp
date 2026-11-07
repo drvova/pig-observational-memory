@@ -19,6 +19,13 @@ client's PI_OBSERVATIONAL_MEMORY_PASSIVE."
         (setf (om::hconfig-memory-format cfg) (om::jget nested "memoryFormat")))
       (when (eq (om::jget nested "consolidate") :false) (setf (om::hconfig-consolidate-off cfg) t))
       (when (eq (om::jget nested "rawFloor") :true) (setf (om::hconfig-raw-floor cfg) t))
+      (let ((k (om::jget nested "sleepAfterCompactions")))
+        (when (and (realp k) (>= k 0) (= k (ftruncate k))) (setf (om::hconfig-sleep-after cfg) (truncate k))))
+      (let ((k (om::jget nested "cueCap")))
+        (when (and (realp k) (>= k 0) (= k (ftruncate k))) (setf (om::hconfig-cue-cap cfg) (truncate k))))
+      (when (eq (om::jget nested "dreams") :true) (setf (om::hconfig-dreams cfg) t))
+      (let ((n (om::jget nested "sleepMaxRecords")))
+        (when (and (realp n) (> n 0) (= n (ftruncate n))) (setf (om::hconfig-sleep-max-records cfg) (truncate n))))
       (setf (om::hconfig-limits cfg) (om::read-limits nested)
             (om::hconfig-model-limits cfg) (om::read-model-limits (om::jget nested "modelLimits") nil)))
     (setf (om::hconfig-passive cfg) (passive-p params))
@@ -86,6 +93,12 @@ evidence unit (record-compaction-evidence), on the layer's snapshot taken before
          (marker (funcall (om::hhost-append h) "om.cut" (om::json-string (om::jobject "reason" reason))))
          (c (let ((om::*encoding* (neutral-encoding params))) (om::compact-on h cfg reason marker 0))))
     (store-compaction session params format c)
+    ;; promoteCoreV2: the session's constraints and open intentions offered to the core.
+    (when (curated-on-p)
+      (handler-case (om.layer::core-promote-ledger (curated-dir) (read-branch session params format) (session-id session)
+                                                   (param-string params "cwd")
+                                                   (om::str (om::jget (om::jget params "repo") "repoId")) model)
+        (error (e) (format *error-output* "om engine: core promote: ~A~%" e))))
     (when snapshot
       (let ((branch (read-branch session params format)))
         (om.layer::record-compaction-evidence
@@ -148,8 +161,9 @@ An unreadable branch settles nothing, as GetBranch's error does."
   (if (curated-on-p)
       (values (om.layer::pin-get (session-pin session)
                                  (lambda ()
-                                   (om.layer::index-as (curated-dir) (om.layer::project-root (param-string params "cwd")) (session-id session)
-                                                        (curated-index-tokens)))))
+                                   (om.layer::index-with-core (curated-dir) (om.layer::project-root (param-string params "cwd")) (session-id session)
+                                                              (curated-index-tokens)
+                                                              (om::str (om::jget (om::jget params "repo") "repoId")) ""))))
       ""))
 
 (defun start-context (summary index)
@@ -281,3 +295,25 @@ handed now; \"\" otherwise."
     (with-session (s params)
       (multiple-value-bind (text notice) (om::view-text (read-branch s params format) (param-string params "args"))
         (om::jobject "text" text "notice" (if notice :true :false))))))
+
+;;; Phase 8: the cue after a tool call (extract.CueFor; docs/memory-v2.md, "Cues")
+
+(define-method "post-tool" (params)
+  ;; One hint plus an om snippet on an exact match of the call against a standing record's keys,
+  ;; with its om.cue entry appended; "" when it abstains.
+  (with-session (s params)
+    (let* ((format (check-format params))
+           (branch (read-branch s params format))
+           (args (om::jget params "args")))
+      (multiple-value-bind (record key text)
+          (om.engine::cue-for branch (param-string params "tool") (if (hash-table-p args) args (om::jobject))
+                              (param-string params "output") (param-string params "cwd")
+                              (om::hconfig-cue-cap (hook-config params)))
+        (if (null record)
+            (om::jobject "text" "")
+            (let ((tip (if (plusp (length branch)) (om::entry-id (aref branch (1- (length branch)))) "")))
+              (append-entry s tip "om.cue"
+                            (format nil "{\"record\":~A,\"key\":~A,\"compaction\":~A}"
+                                    (om::json-string record) (om::json-string key)
+                                    (om::json-string (om.engine::cue-compaction branch))))
+              (om::jobject "text" text)))))))

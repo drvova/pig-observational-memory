@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/insecure"
@@ -133,7 +134,23 @@ func CuratedStatusLines(h host.Host, cfg config.Config) []string {
 		}
 		lines = append(lines, fmt.Sprintf("Refused by the validator, so not loaded (%d; edit within it or forget): %s", len(refused), strings.Join(parts, "; ")))
 	}
+	lines = append(lines, CoreStatusLines(store, h.SessionID())...)
 	return lines
+}
+
+// CoreStatusLines are /om:status's and om status's view of the core log (core.StatusLines), read
+// only: none when the store holds no core log yet.
+func CoreStatusLines(store curated.Store, session string) []string {
+	log := store.Core()
+	if !log.Exists() {
+		return nil
+	}
+	st, err := log.Read()
+	if err != nil {
+		return []string{"Core log unreadable: " + err.Error()}
+	}
+	through, pulled := log.Consumed(session)
+	return core.StatusLines(&st, through, pulled)
 }
 
 // ProjectRoot is the directory a project-scoped memory is filed under: the

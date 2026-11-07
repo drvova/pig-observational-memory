@@ -27,10 +27,10 @@ var extractMu sync.Mutex
 // recorded once the extraction is appended. Passive mode turns it off;
 // the compaction then extracts the whole cut range. A panic is recovered: extraction never
 // fails a turn.
-func extractTurnV2(rt *runtime.Runtime, h host.Host) {
+func extractTurnV2(rt *runtime.Runtime, h host.Host) (erasure bool) {
 	cfg := rt.Config()
 	if cfg.Passive {
-		return
+		return false
 	}
 	ctx := debuglog.With(context.Background(), debugScope(rt, h))
 	defer func() {
@@ -42,7 +42,7 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 	defer extractMu.Unlock()
 	entries, err := h.GetBranch()
 	if err != nil {
-		return
+		return false
 	}
 	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
@@ -65,6 +65,8 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 	if err == nil && len(appended) > 0 {
 		record()
 	}
+	// An erase request among the new records: the turn end purges it (ErasePending).
+	return holdsErasure(appended)
 }
 
 // extractCutV2 extracts whatever of a compaction's cut range no earlier extraction read, plus
@@ -203,6 +205,9 @@ func appendExtraction(h host.Host, result extract.Result, write bool) ([]ledger.
 		if data := ledger.BuildObservationsRecordedData(batch.Observations, batch.CoversUpToID); data != nil {
 			queue = append(queue, pending{ledger.OMObservationsRecorded, data})
 		}
+	}
+	if len(result.Revisions) > 0 {
+		queue = append(queue, pending{ledger.OMRevisionsRecorded, ledger.RevisionsRecordedData{Revisions: result.Revisions}})
 	}
 	if result.CoversUpToID != "" && (len(result.Batches) == 0 || result.Batches[len(result.Batches)-1].CoversUpToID != result.CoversUpToID) {
 		queue = append(queue, pending{ledger.OMExtracted, ledger.ExtractedData{CoversUpToID: result.CoversUpToID}})

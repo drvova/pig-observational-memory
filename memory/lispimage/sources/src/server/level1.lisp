@@ -258,6 +258,8 @@ error is :aborted (the request's cancel), or a message."
                            (format nil "{\"observationIds\":~A,\"coversUpToId\":~A,\"consolidated\":true}"
                                    (om::json-string (coerce drop 'simple-vector)) (om::json-string covers)))
                      queue))
+    (when (om::vresult-hypotheses result)
+      (push-end-list (cons "om.hypotheses.recorded" (om::hypotheses-json (om::vresult-hypotheses result) covers)) queue))
     (loop for (type . data) in queue for n from 0
           do (funcall (om::hhost-append h) type data)
           ;; The entry the compaction folds is the one appended, redacted (contracts/secrets.md).
@@ -394,7 +396,8 @@ reports the request and its usage (spent)."
                    (project (om.layer::project-root (scope-cwd))))
               (multiple-value-bind (offer evidence) (definition-offer store key)
                 (multiple-value-bind (name description parameters)
-                    (om::consolidate-tool offer (setf stale (om::stale-records (om::hhost-structure h) om::*freshness*)))
+                    (om::consolidate-tool offer (setf stale (om::stale-records (om::hhost-structure h) om::*freshness*))
+                                          (rcfg-dreams cfg))
                   (let* ((system (om::consolidate-system-prompt
                                   ;; Read-time scope (decision 24): the repository and task family
                                   ;; of the records citing the cut range (scopedLayerV2).
@@ -432,6 +435,7 @@ reports the request and its usage (spent)."
                                                       :links (om::prompt-links prompt) :curated (om::prompt-curated prompt)
                                                       :branch entries :offer shown-offer
                                                       :stale (om::prompt-stale prompt)
+                                                      :dreams (rcfg-dreams cfg)
                                                       :writer (getf om::*encoding* :writer)))
                                  (result (om::validate-level1 (l1answer-arguments a) in)))
                             (setf (report-refused rep) (length (om::vresult-refusals result)) (l1-answered out) t)

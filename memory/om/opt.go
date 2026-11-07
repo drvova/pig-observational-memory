@@ -21,9 +21,8 @@ func (o Opt) with(set func(*omwire.Options)) Opt {
 	return o
 }
 
-// Search keeps rows matching every literal word, case-insensitive, over every column; when no
-// row matches every word, Notes, Reflections and History rank the rows by how many of the words
-// each contains instead, and mark the list Partial. Notes and its kinds also find a record by an
+// Search keeps rows matching every literal word, case-insensitive, over every column; if none
+// does, Notes, Reflections and History rank rows by words matched and mark the list Partial. Notes and its kinds also find a record by an
 // exact key (a path, symbol, test, error line, version or SHA, byte for byte) or by identifier
 // parts (parse_config finds parseConfig), and rank: current before superseded or retracted,
 // exact key hits first, then by relevance, newest first; each row carries its Tag and the
@@ -188,10 +187,10 @@ type SaveOpt struct{ w omwire.SaveOptions }
 // Body sets the memory's body.
 func Body(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Body: &text}} }
 
-// Scope sets where the memory applies: "global" or "project".
+// Scope sets where the memory applies: "global" or "project". Without it a user or feedback memory is global and any other stays in its project.
 func Scope(scope string) SaveOpt { return SaveOpt{omwire.SaveOptions{Scope: &scope}} }
 
-// Quoting gives the user's words confirming the save, or asking for the forget or rollback.
+// Quoting gives the user's words confirming the save, or asking for the change.
 func Quoting(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Quoting: &text}} }
 
 func mergeSave(opts []SaveOpt) omwire.SaveOptions {

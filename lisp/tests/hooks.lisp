@@ -169,7 +169,7 @@
       (append-extraction-entries h batches covers))
     (check (view-text (funcall branch) "")
            "Nothing compacted yet: 2 active observations are recorded; /om:view full shows them.")
-    (check (view-text (funcall branch) "bogus") "Usage: /om:view [full]")
+    (check (view-text (funcall branch) "bogus") "Usage: /om:view [full | records [page] | record <id>]")
     (check (nth-value 1 (view-text (funcall branch) "full")) nil "full is copied")
     (check (has-prefix (view-text (funcall branch) "full") "── Reflections ──") t))
   (check (locale-int 1234567) "1,234,567")

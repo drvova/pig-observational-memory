@@ -262,6 +262,32 @@ filtered pool on each side that share its episode or its first source entry and 
 took; they are merged into it (`With`), never results of their own, and a merged hit is not listed
 again.
 
+## The core log (exists)
+
+Every engine that shares a store reads and writes the shared core log the same way (`memory/core`,
+`lisp/src/core.lisp`; `contracts/schemas/core-line.schema.json`, `core-consumed.schema.json`; cases
+in `contracts/core.jsonl`, docs/memory-v2.md "The core log"):
+
+- **Writing.** Take an exclusive flock on `<store>/core/.lock`, fold `<store>/core/log.jsonl`, decide
+  against that state, then append each line (a torn tail ended first, one write, fsync) numbered from
+  the next generation: one above the highest of every line's `gen`, a torn line's leading
+  `{"gen":N` and the count of non-blank lines. Members are written in the schema's order, as
+  encoding/json writes them (`<`, `>`, `&` escaped), text and key redacted.
+- **Reading.** A line that does not decode, has `gen` below 1 or an unknown `op` is skipped. A
+  session reads the core only when its start context is rendered (its start, each compaction) and
+  appends `{"session","through","time"}` to `<store>/core/consumed.jsonl` when the generation moved;
+  in between it reads through its last marker.
+- **Ids and roots.** An item's id is the first 12 hex of SHA-256 of
+  `core\0<kind>\0<scope>\0<key>\0<text>`, the key ASCII-lowercased with ASCII white space collapsed.
+  An evidence root is SHA-256 hex of `file\0<project>\0<path>` (the path trimmed of `./` and the
+  project prefix) when the read names a file, else of `text\0<key of the quote>`; a user turn's root
+  is of `user\0<entry id>\0<key of its text>`, a project's of `project\0<root>`.
+- **Forgets and lifts.** A `forget` line's ids are tombstones from its generation on, timed by its
+  `time` (a forget record's line carries the request's). A promote, supersede or contest line with
+  `via: restated` lifts the tombstone on its own `id` (its `record` must be no tombstone): the
+  forgotten item leaves the fold and the line's own text makes it again. A `forget` line whose `id`
+  is already a tombstone never re-tombstones a lifted id.
+
 ## Versioning of this protocol
 
 A later revision may add events, payload fields and output members; it never renames or removes

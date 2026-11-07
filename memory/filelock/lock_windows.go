@@ -33,3 +33,6 @@ func WithLock(path string, fn func() error) error {
 	defer procUnlockFileEx.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&ol)))
 	return fn()
 }
+
+// TryWithLock is WithLock on Windows, which waits for the lock (untested there, as WithLock).
+func TryWithLock(path string, fn func() error) (bool, error) { return true, WithLock(path, fn) }

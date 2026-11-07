@@ -47,10 +47,16 @@ func seedV2Evidence(t *testing.T, store curated.Store, model string) {
 // from none.
 func seedControls(t *testing.T, store curated.Store, model string) {
 	t.Helper()
+	controls(t, store, model, "c0ffee")
+}
+
+// controls records seedControls' passes over the evidence roots prefix and a number.
+func controls(t *testing.T, store curated.Store, model, prefix string) {
+	t.Helper()
 	for i := range 2 * rules.MinEvidence {
 		harm := 0
 		if err := store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2, Tokens: 400, Level1: true,
-			Counts: map[string]int{rules.CountLevel1Refused: 2}, Harm: &harm, Roots: []string{fmt.Sprintf("c0ffee%010x", i)}}); err != nil {
+			Counts: map[string]int{rules.CountLevel1Refused: 2}, Harm: &harm, Roots: []string{fmt.Sprintf("%s%0*x", prefix, 16-len(prefix), i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -58,9 +64,11 @@ func seedControls(t *testing.T, store curated.Store, model string) {
 
 // underHeld records MinEvidence memory v2 compaction passes of other sessions that ran with the
 // model's held definitions, over their own evidence roots, each counting failures refused
-// proposals and harm: the later compactions SettleV2 reads.
+// proposals and harm: the later compactions SettleV2 reads. Fresh control windows (controls)
+// come first, so the proposing compaction's own pass, which refused nothing, is in neither.
 func underHeld(t *testing.T, store curated.Store, model string, failures, harm int) {
 	t.Helper()
+	controls(t, store, model, "cafe")
 	held, err := store.Layer().Held(model)
 	if err != nil || len(held) == 0 {
 		t.Fatalf("nothing held: %v", err)

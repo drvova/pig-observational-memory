@@ -212,6 +212,10 @@ func newID() (string, error) {
 	return "om" + hex.EncodeToString(b), nil
 }
 
+// EngineOwnsSessions reports that the neutral store's session files are the engine's own, so an
+// erasure purges them (hooks.EngineSessions).
+func (h *Host) EngineOwnsSessions() bool { return true }
+
 func (h *Host) SessionID() string   { return h.Session }
 func (h *Host) SessionFile() string { return h.Store.Path }
 func (h *Host) Cwd() string         { return h.Dir }

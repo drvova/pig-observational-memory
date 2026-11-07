@@ -88,7 +88,7 @@ cd memory && OM_LISP_PARITY=1 go test -count=1 -p 1 ./enginerpc -run Lisp
 - **`TestLispLevel1OfferMatchesInProcess`**: an offer due over a store with a staged curated
   memory; the answer labels a candidate, cites the memory with records of the user's own words and
   defines the consolidation instructions. Identical but for the three differences above:
-  everything the first test compares, the citation and the promotion (cited 1, promoted 1), the
+  everything the first test compares, the citation recorded without a promotion (cited 1, promoted 0), the
   hold (defined 1, the same held text). A second compaction on each store runs with the held text
   in its system prompt, credits it in its pass event (identical but its time) and settles it as
   written on both paths.

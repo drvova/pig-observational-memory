@@ -142,5 +142,10 @@ func (folded FoldedLedger) Labels() map[string]string {
 			out[id] = LabelRetracted
 		}
 	}
+	for id, challenged := range folded.Challenged {
+		if challenged && out[id] == LabelBelieved {
+			out[id] = LabelContested
+		}
+	}
 	return out
 }

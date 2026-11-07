@@ -154,7 +154,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	// The project records whose file changed at HEAD, with their diffs (decision 20): level 1
 	// re-checks each claim inside this one request.
 	stale := staleRecordsV2(fresh)
-	tool := consolidate.ToolWith(offer, len(stale) > 0)
+	tool := consolidate.ToolWith(offer, len(stale) > 0, cfg.Dreams)
 	system := consolidate.SystemPromptFor(modelLayer.Instructions(agents.InstructionsConsolidation))
 	fixedTokens := requestOverheadTokens(system, tool)
 	prompt, ok := consolidate.BuildPrompt(consolidate.PromptInput{
@@ -245,6 +245,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Stale:       prompt.Stale,
 		Branch:      entries,
 		Writer:      writerOf(h),
+		Dreams:      cfg.Dreams,
 	}
 	if offer != nil && prompt.HarnessShown {
 		in.Offer = offer
@@ -375,6 +376,9 @@ func appendLevel1(ctx context.Context, h host.Host, result consolidate.Result, d
 	if data := ledger.BuildObservationsDroppedData(drop, coversUpToID); data != nil {
 		data.Consolidated = true
 		queue = append(queue, pending{ledger.OMObservationsDropped, data})
+	}
+	if len(result.Hypotheses) > 0 {
+		queue = append(queue, pending{ledger.OMHypothesesRecorded, consolidate.HypothesesRecordedData{Hypotheses: result.Hypotheses, CoversUpToID: coversUpToID}})
 	}
 	out := make([]ledger.Entry, 0, len(queue))
 	for n, p := range queue {

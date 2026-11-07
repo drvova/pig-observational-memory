@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/kernel"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/tables"
 )
 
@@ -387,7 +388,26 @@ func encodeFile(d Definition, fallback string) string {
 		absent[i] = v == ""
 	}
 	header := tables.Rows.Encode(tables.Table{Name: headerTable, Fields: fields, Rows: [][]string{row}, Absent: [][]bool{absent}})
-	return header + "\n\n" + strings.TrimRight(d.Text, "\n") + "\n"
+	return header + "\n\n" + strings.TrimRight(secrets.Redact(d.Text), "\n") + "\n"
+}
+
+// ProseKind reports whether a kind's text is prose, which a write redacts (decision 10): the
+// instructions and a remedy's catalogue. Every other kind is code or a query, which a write
+// holding a secret refuses (checkSecret), since a redacted literal would change what it does.
+func ProseKind(kind string) bool { return kind == KindInstructions || kind == KindRemedy }
+
+// checkSecret refuses a code or query definition holding a secret (memory/secrets) with where it
+// is; a prose one is redacted when its file is written (encodeFile), keeping the variable name.
+func checkSecret(d Definition) error {
+	if ProseKind(d.Kind) {
+		return nil
+	}
+	_, found := secrets.Scan(d.Text)
+	if len(found) == 0 {
+		return nil
+	}
+	line := 1 + strings.Count(d.Text[:min(found[0].Start, len(d.Text))], "\n")
+	return fmt.Errorf("the %s definition %q holds a secret (%s, line %d): a code or query definition is never redacted, so it is refused; read the value from where it lives instead of writing it in", d.Kind, d.Name, found[0].Rule, line)
 }
 
 // decodeFile reads a layer file: its definition and, for a held file, its fallback.
@@ -498,6 +518,9 @@ func (s Store) checkLifted(d Definition) error {
 	}
 	if strings.TrimSpace(d.Text) == "" {
 		return fmt.Errorf("the %s definition %q has no text", d.Kind, d.Name)
+	}
+	if err := checkSecret(d); err != nil {
+		return err
 	}
 	if s.Validate != nil {
 		if err := s.Validate(d); err != nil {
@@ -957,7 +980,7 @@ func (s Store) putStampedScoped(d Definition, scope *Scope) (Definition, error) 
 	// text is written again, with its generation.
 	if data, err := os.ReadFile(path); err == nil && recorded[d.Key()] == Digest(string(data)) {
 		if old, _, err := decodeFile(string(data)); err == nil && old.Kind == d.Kind && old.Name == d.Name && old.Model == d.Model &&
-			old.Text == d.Text && old.Seed == d.Seed && old.SeedDigest == d.SeedDigest && old.Mode == d.Mode {
+			old.Text == strings.TrimRight(secrets.Redact(d.Text), "\n") && old.Seed == d.Seed && old.SeedDigest == d.SeedDigest && old.Mode == d.Mode {
 			old.State = StateWritten
 			return old, nil
 		}

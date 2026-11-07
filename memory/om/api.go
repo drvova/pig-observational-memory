@@ -162,7 +162,7 @@ func Save(name, typ, description string, opts ...SaveOpt) (string, error) {
 	return s, err
 }
 
-// Edit changes a curated memory for every session on EditQuoting's user words, else in this session only (staged); it never pins one.
+// Edit changes a curated memory for every session on EditQuoting's user words, else in this session only (staged); never pins one.
 func Edit(name string, opts ...EditOpt) (string, error) {
 	var s string
 	err := call(omwire.MEdit, &s, name, mergeEdit(opts))
@@ -194,6 +194,14 @@ func LayerForget(kind, name string, opts ...SaveOpt) (string, error) {
 func LayerRollback(gen int, opts ...SaveOpt) (string, error) {
 	var s string
 	err := call(omwire.MLayerRollback, &s, gen, mergeSave(opts))
+	return s, err
+}
+
+// Correct supersedes record id with text on Quoting's user words, else possibly updates it; never
+// an edit.
+func Correct(id, text string, opts ...SaveOpt) (string, error) {
+	var s string
+	err := call(omwire.MCorrect, &s, id, text, mergeSave(opts))
 	return s, err
 }
 

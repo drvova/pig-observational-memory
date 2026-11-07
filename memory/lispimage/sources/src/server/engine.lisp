@@ -136,7 +136,7 @@ returns the new entry's id."
   (format nil "{\"observations\":[~{~A~^,~}],\"coversUpToId\":~A}"
           (mapcar #'om::obs-json observations) (om::json-string covers)))
 
-(defun append-extraction (session branch batches covers)
+(defun append-extraction (session branch batches covers &optional revisions)
   "hooks.appendExtraction: one om.observations.recorded entry per batch with records, then an
 om.extracted marker when the last batch stops short of what the extraction read. Returns the
 number appended."
@@ -145,6 +145,7 @@ number appended."
       (when (and (om::batch-observations b) (string/= (om::batch-covers b) ""))
         (push (cons "om.observations.recorded" (recorded-data-json (om::batch-observations b) (om::batch-covers b)))
               queue)))
+    (when revisions (push (cons "om.revisions.recorded" (om::revisions-data-json revisions)) queue))
     (when (and (string/= covers "") (or (null batches) (string/= (om::batch-covers (car (last batches))) covers)))
       (push (cons "om.extracted" (format nil "{\"coversUpToId\":~A}" (om::json-string covers))) queue))
     (let ((tip (if (plusp (length branch)) (om::entry-id (aref branch (1- (length branch)))) "")))
@@ -162,12 +163,12 @@ inside the extraction is recovered (extraction never fails a turn) and named in 
          (branch (read-branch session params format)))
     (handler-case
         (let ((start (om::extraction-start-index branch)))
-          (multiple-value-bind (batches covers)
+          (multiple-value-bind (batches covers revisions)
               (let ((om::*encoding* (neutral-encoding params)))
                 (om::extract branch start (length branch) (om::fold-ledger branch) :cwd (param-string params "cwd")))
             ;; stampV2: the new project records' body hashes, from the client's HEAD view.
             (om::stamp-batches (client-structure params) batches)
-            (om::jobject "appended" (append-extraction session branch batches covers))))
+            (om::jobject "appended" (append-extraction session branch batches covers revisions))))
       (error (e)
         (format *error-output* "om engine: turn-end level 0 recovered: ~A~%" e)
         (om::jobject "appended" 0 "recovered" (princ-to-string e))))))

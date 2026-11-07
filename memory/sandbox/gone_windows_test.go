@@ -13,3 +13,6 @@ func gone(pid int) bool {
 	p.Release()
 	return false
 }
+
+// oomWatch is a no-op here: the allocate-until-killed test relies on the kernel.
+func oomWatch(int, int64) (stop func()) { return func() {} }

@@ -25,6 +25,6 @@
         "body": { "type": "string" }
       }
     },
-    "source": { "description": "A staging's source digest: sha256 hex of the tool output its quote comes from, whitespace collapsed (curated.SourceDigest); two sessions' stagings are independent evidence only when their digests differ.", "type": "string" }
+    "source": { "description": "A staging's evidence root (decision 7; core.EvidenceRoot through omhost.QuotedSource): sha256 hex of the file its quote was read from when the read names one, else of the quoted words, never the tool result's bytes; two sessions' stagings are independent evidence only when their roots differ. Lines written before phase 6 hold the digest of the whole tool result (curated.SourceDigest).", "type": "string" }
   }
 }

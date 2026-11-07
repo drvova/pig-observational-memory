@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.erased entry",
+  "description": "Marks the erase requests (forget records whose text opens with ledger.ErasurePrefix) whose payloads a purge removed from the files the engine owns, with the copies replaced per surface. It holds record ids and counts only, never a payload (docs/brain-memory.md, decision 11). Source: memory/hooks/erase_v2.go (OMErased, ErasedData), memory/cli/erase.go (om erase).",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.erased"
+    },
+    "data": {
+      "type": "object",
+      "required": ["erasures", "residue"],
+      "additionalProperties": false,
+      "properties": {
+        "erasures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "residue": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["surface", "files", "copies"],
+            "additionalProperties": false,
+            "properties": {
+              "surface": {"type": "string", "minLength": 1},
+              "files": {"type": "integer", "minimum": 0},
+              "copies": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -77,6 +77,7 @@ const (
 	MEdit           = "Edit"
 	MForgetMemory   = "ForgetMemory"
 	MFeedback       = "Feedback"
+	MCorrect        = "Correct"
 	MLayerForget    = "LayerForget"
 	MLayerRollback  = "LayerRollback"
 	MPropose        = "Propose"
@@ -93,7 +94,7 @@ const (
 var Methods = []string{
 	MNotes, MReflections, MHistory, MRecall, MNoteByID, MReflectionByID, MFiles, MCommits,
 	MAttempts, MDropped, MSubjects, MSaved, MInfo, MLayer, MRetired, MCitedBy, MSupporting,
-	MSave, MEdit, MForgetMemory, MFeedback, MLayerForget, MLayerRollback, MPropose, MDefine,
+	MSave, MEdit, MForgetMemory, MFeedback, MCorrect, MLayerForget, MLayerRollback, MPropose, MDefine,
 	MStr, MMan, MKept, MForget, MHead,
 }
 
