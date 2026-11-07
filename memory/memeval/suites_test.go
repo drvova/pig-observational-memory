@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/layer"
+	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
@@ -20,12 +21,8 @@ import (
 // skips naming the phase that fixes it. A finding that starts to pass fails this test, so the
 // phase that fixes it deletes its entry and the skip together.
 var findings = map[string]string{
-	"secret redaction: layer files":                                      "TestLayerWriteHoldsNoSecret",
-	"no value in the shared layer":                                       "TestLayerWriteHoldsNoSecret",
-	"same evidence re-read in two sessions is not counted as two":        "TestSameEvidenceNotIndependent",
-	"a project fact saved without a scope stays out of the other repo":   "TestScenario19ForeignScopeNotReturned",
-	"a lesson crosses projects only stripped of its values (decision 8)": "TestScenario19ForeignScopeNotReturned",
-	"curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14)": "TestScenario14ConcurrentSupersedeOneCommits",
+	"secret redaction: layer files": "TestLayerWriteHoldsNoSecret",
+	"no value in the shared layer":  "TestLayerWriteHoldsNoSecret",
 }
 
 // checkSuite asserts s's rows against the findings, makes sure no model was called (every
@@ -162,11 +159,10 @@ func TestLayerWriteHoldsNoSecret(t *testing.T) {
 	}
 }
 
-// Finding (Tier 0c, part a): two sessions that read the same file count as independent
-// evidence when their tool results differ in bytes (line numbers, a header, a partial read), so
-// a staged save is promoted on its own copy.
+// Tier 0c, part a (decision 7): two sessions that read the same file in other bytes (line
+// numbers, a header, a partial read, a grep match) cite one evidence root, so a staged save is
+// not promoted on its own copy; another file quoting the line is a second root.
 func TestSameEvidenceNotIndependent(t *testing.T) {
-	later(t, "phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes")
 	var s Suite
 	if err := independenceRows(&s, DefaultSuiteConfig(1)); err != nil {
 		t.Fatal(err)
@@ -237,7 +233,6 @@ func TestScenario14ConcurrentSupersedeOneCommits(t *testing.T) {
 // lesson, is not returned in repository B's index (decision 8: only lessons stripped of their
 // values cross projects).
 func TestScenario19ForeignScopeNotReturned(t *testing.T) {
-	later(t, "phase 6: core scopes and pulls (a save's scope defaults to global; lessons keep their values)")
 	store := curated.New(t.TempDir())
 	a := curated.Call{Store: store, Project: "/work/repo-a", Source: "a", UserEvidence: func(string) bool { return true }}
 	for _, st := range []map[string]string{
@@ -253,6 +248,40 @@ func TestScenario19ForeignScopeNotReturned(t *testing.T) {
 		if strings.Contains(index, v) {
 			t.Fatalf("repository A's value %s is in repository B's index:\n%s", v, index)
 		}
+	}
+	// One project's lesson does not cross; the same lesson from a second project crosses into
+	// a third, stripped of both projects' values (decision 8).
+	view := core.View{Scopes: []string{core.ScopeUser, core.ProjectScope("", "/work/repo-c")}}
+	if _, err := store.Settle(curated.SettleInput{}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := store.Core().Read()
+	if block := core.Section(&st, view); block != "" {
+		t.Fatalf("a lesson from one project crossed:\n%s", block)
+	}
+	b := curated.Call{Store: store, Project: "/work/repo-b", Source: "b", UserEvidence: func(string) bool { return true }}
+	if _, err := b.Run(curated.OpSave, map[string]string{"name": "b-lesson", "type": curated.TypeLesson, "description": "Wrap every client in betaRetry3Policy or the tests flake.", "quote": "remember this for the project"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Settle(curated.SettleInput{}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = store.Core().Read()
+	block := core.Section(&st, view)
+	if !strings.Contains(block, "Wrap every client in <value> or the tests flake.") || strings.Contains(block, "Retry") {
+		t.Fatalf("the lesson did not cross stripped of its values:\n%s", block)
+	}
+	// A derived record takes the intersection of its sources' scopes: two projects share none,
+	// so it is never promoted.
+	if got := core.Intersect(core.ProjectScope("", "/work/repo-a"), core.ProjectScope("", "/work/repo-b")); got != "" {
+		t.Fatalf("intersection %q", got)
+	}
+	merge := ledger.Observation{ID: "00000000000c", Content: "Never deploy on Fridays.", Kind: "preference", Source: ledger.SourceUserSaid, Replaces: []string{"00000000000a", "00000000000b"}}
+	srcA := ledger.Observation{ID: "00000000000a", Content: "Never deploy on Fridays.", Kind: "preference", Scope: core.ProjectScope("", "/work/repo-a")}
+	srcB := ledger.Observation{ID: "00000000000b", Content: "No Friday deploys.", Kind: "preference", Scope: core.ProjectScope("", "/work/repo-b")}
+	cands := core.Candidates([]ledger.Observation{srcA, srcB, merge}, map[string]string{merge.ID: ledger.LabelBelieved}, nil, core.Session{Scope: core.ProjectScope("", "/work/repo-a")})
+	if _, verdicts, err := store.Core().PromoteAll(cands); err != nil || len(verdicts) != 1 || verdicts[0] != core.VerdictScope {
+		t.Fatalf("a merge across two projects: %v (%v)", verdicts, err)
 	}
 }
 

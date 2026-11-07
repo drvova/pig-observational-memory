@@ -289,6 +289,7 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	}
 	if request.Err() == nil && (owner || !rt.CompactHookOwnerLive()) {
 		recordCompactionV2(ctx, rt, h, entries, cut, level1.counts, snapshot)
+		promoteCoreV2(ctx, rt, h, entries)
 		// The detector pass is built as data beside the summary, only when a detector would
 		// run, and runs in the background once the compaction is produced; a compaction PiG
 		// discards (a cancelled request) starts none.

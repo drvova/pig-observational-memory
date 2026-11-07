@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Core log line",
+  "description": "One line of <store>/core/log.jsonl, the shared core log (docs/brain-memory.md, phase 6; docs/memory-v2.md, \"The core log\"): append-only, written by one writer at a time under <store>/core/log.lock, members in this order, text redacted. A line that does not decode is skipped, but the generation it began with and the log's line count bound the next generation from below, so a torn line's generation is never used again. Source: memory/core/log.go (Line, Fold, Commit) and lisp/src/core.lisp.",
+  "type": "object",
+  "required": ["gen", "op", "id", "base", "time"],
+  "additionalProperties": false,
+  "properties": {
+    "gen": { "description": "The line's generation, above every one recorded before it.", "type": "integer", "minimum": 1 },
+    "op": { "enum": ["promote", "supersede", "contest", "forget", "scope"] },
+    "id": { "description": "The item the line writes (promote, supersede, contest) or acts on (forget: the forget record; scope): 12 hex.", "type": "string", "minLength": 1 },
+    "of": { "description": "The item a supersede replaces or a contest stands against.", "type": "string" },
+    "kind": { "enum": ["rule", "intention", "lesson", "memory"] },
+    "key": { "description": "What items are matched by (core.NormKey): a rule's subject, a curated memory's name, else the text.", "type": "string" },
+    "text": { "description": "The item's text, redacted (contracts/secrets.md); a lesson's stripped of its values.", "type": "string" },
+    "scope": { "description": "user, global, or project:<repoId, else work-tree root>.", "type": "string" },
+    "via": { "description": "The evidence: quote (the user's words), request (a plan under a request the person typed), roots (two evidence roots), fast (the same item with new roots), projects (a lesson seen in two projects), edit (a shared curated edit).", "enum": ["quote", "request", "roots", "fast", "projects", "edit"] },
+    "roots": { "description": "The evidence roots (sha256 hex), deduplicated: what support counts, never sessions.", "type": "array", "items": { "type": "string" } },
+    "record": { "description": "The session record (or curated memory name) the item came from.", "type": "string" },
+    "tombstones": { "description": "A forget's ids: core items and session records, never text.", "type": "array", "items": { "type": "string" } },
+    "base": { "description": "The generation the writer had read through (its consumed-through marker).", "type": "integer", "minimum": 0 },
+    "writer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "description": "The session model's key (provider/id), for the per-model hint.", "type": "string" },
+        "session": { "type": "string" }
+      }
+    },
+    "time": { "description": "RFC 3339, UTC, whole seconds.", "type": "string" }
+  }
+}

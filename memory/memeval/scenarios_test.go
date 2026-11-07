@@ -7,6 +7,7 @@ package memeval
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/memory/config"
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/layer"
@@ -352,7 +354,28 @@ func TestScenario09RecallDoesNotConfirm(t *testing.T) {
 // Scenario 9, shared memory: a core entry recalled 50 times without user evidence keeps its
 // rank and support.
 func TestScenario09CoreSupportUnchangedByRecall(t *testing.T) {
-	t.Skip("phase 6: rank and support of a core entry unchanged by recall alone")
+	log := core.In(t.TempDir())
+	c := core.Candidate{Kind: core.KindRule, Text: "Never deploy from `hotfix/` branches.", Scope: core.ScopeUser, Via: core.ViaQuote, Roots: []string{core.UserRoot("u1", "Never deploy from `hotfix/` branches.")}}
+	if _, _, err := log.PromoteAll([]core.Candidate{c}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := log.Read()
+	view := core.View{Scopes: []string{core.ScopeUser}}
+	block := core.Section(&before, view)
+	for i := 0; i < 50; i++ {
+		// A session reads it, and its own summary offers it back with no new evidence.
+		st, err := log.Pull(fmt.Sprintf("s%d", i))
+		if err != nil || core.Section(&st, view) != block {
+			t.Fatalf("recall %d changed the block (%v)", i, err)
+		}
+		if _, v, _ := log.PromoteAll([]core.Candidate{c}); v[0] != core.VerdictSame {
+			t.Fatalf("recall %d: %s", i, v[0])
+		}
+	}
+	after, _ := log.Read()
+	if after.Gen != before.Gen || len(after.Items[0].Roots) != 1 {
+		t.Fatalf("support moved: generation %d to %d, %d roots", before.Gen, after.Gen, len(after.Items[0].Roots))
+	}
 }
 
 // Scenario 10: an instruction found only in tool output (a README telling agents to add

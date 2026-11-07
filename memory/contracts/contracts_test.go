@@ -183,6 +183,10 @@ func classify(rel string) (storedFile, bool) {
 			return storedFile{"curated-memory.schema.json", "frontmatter"}, true
 		case len(inner) == 1 && base == "usage.jsonl":
 			return storedFile{"curated-usage-line.schema.json", "lines"}, true
+		case len(inner) == 2 && inner[0] == "core" && base == "log.jsonl":
+			return storedFile{"core-line.schema.json", "lines"}, true
+		case len(inner) == 2 && inner[0] == "core" && base == "consumed.jsonl":
+			return storedFile{"core-consumed.schema.json", "lines"}, true
 		case len(inner) == 2 && inner[0] == "models" && strings.HasSuffix(base, ".jsonl"):
 			return storedFile{"model-event.schema.json", "lines"}, true
 		case len(inner) == 3 && inner[0] == "harness" && base == "manifest.jsonl":

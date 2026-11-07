@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
@@ -71,7 +72,7 @@ func TestForgetAndSourcesOnTheBranch(t *testing.T) {
 			t.Fatal(err)
 		}
 		if l["name"] == "deploy-first" && l["event"] == "save" {
-			cited = l["source"] == curated.SourceDigest(readme) && l["session"] == "s1"
+			cited = l["source"] == core.EvidenceRoot("", "", instruction) && l["session"] == "s1"
 		}
 	}
 	if !cited {
