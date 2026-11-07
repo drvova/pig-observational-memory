@@ -899,6 +899,46 @@ func TestLispSettleParity(t *testing.T) {
 		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: detector, Text: d.Declared(), Events: events})
 		want = append(want, fmt.Sprintf("%d %s", i+1, settleWords(rules.SettleV2(events, d))))
 	}
+	// The effect's bound (decision 24, rule 1), fixed: exactly twice the spread, one failure
+	// more (free, and charged turns), and with no spread one failure free or charged (turns, an
+	// instructions text's tokens), for a remedy and an instructions text.
+	bounds := []struct {
+		def               int
+		controls, treated []int
+		turns             int
+		clean             bool
+	}{
+		{1, []int{2, 2, 2, 2, 2, 3}, []int{2, 1, 1}, 4, false},
+		{1, []int{2, 2, 2, 2, 2, 3}, []int{1, 1, 1}, 4, true},
+		{1, []int{2, 2, 2, 2, 2, 3}, []int{1, 1, 1}, 5, true},
+		{1, []int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 4, true},
+		{1, []int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 5, false},
+		{1, []int{3, 3, 3, 1, 1, 1}, []int{0, 0, 0}, 4, false},
+		{0, []int{2, 2, 2, 2, 2, 2}, []int{2, 2, 1}, 4, false},
+		{0, []int{2, 2, 2, 2, 2, 2}, []int{2, 1, 1}, 4, true},
+	}
+	for _, b := range bounds {
+		d := defs[b.def]
+		d.Time = held
+		id := d.HeldID()
+		var events []curated.ModelEvent
+		for j, f := range append(append([]int{}, b.controls...), b.treated...) {
+			harm, turns, ran := 0, 4, []string(nil)
+			if j >= len(b.controls) {
+				turns, ran = b.turns, []string{id}
+			}
+			events = append(events, curated.ModelEvent{Time: held.Add(time.Duration(j-len(b.controls)+1) * time.Minute).Format(time.RFC3339Nano), Model: "p/m",
+				Engine: curated.EngineV2, Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Outcome: curated.OutcomeOK, Tokens: 250, Level1: true,
+				Harm: &harm, Turns: turns, RanHeld: ran, Roots: []string{fmt.Sprintf("b%015x", len(cases)*16+j)}, Repo: "r1", Family: ".go",
+				Counts: map[string]int{rules.DetectUncitedAssistantSpecifics: f, rules.CountLevel1Refused: f}})
+		}
+		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: "other", Text: d.Declared(), Events: events})
+		st := rules.SettleV2(events, d)
+		if !st.Decided || st.Clean != b.clean {
+			t.Errorf("bound %v under %v (turns %d): %+v, want clean %v", b.controls, b.treated, b.turns, st, b.clean)
+		}
+		want = append(want, fmt.Sprintf("%d %s", len(cases), settleWords(st)))
+	}
 	path := filepath.Join(t.TempDir(), "cases.json")
 	writeJSON(t, path, cases)
 	got := runLisp(t, sbcl, script, "settle", path)
