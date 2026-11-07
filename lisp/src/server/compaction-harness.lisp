@@ -76,6 +76,9 @@ before it is sent; an error here is logged and never changes the answer."
       ;; settleDefinitionsV2 for the held instructions the compaction ran with.
       (dolist (n (settle-level1-held (ch-store-dir ch) (ch-model-key ch) (ch-held-instructions ch)))
         (notify-ui n "info"))
+      ;; rollbackInsecureV2: a written definition that weakens security rolls the layer back.
+      (dolist (n (rollback-insecure-layer (ch-store-dir ch) (ch-model-key ch)))
+        (notify-ui n "warning"))
       (dolist (n notices)
         (notify-ui (if (stringp n)
                        n

@@ -230,6 +230,8 @@ error is :aborted (the request's cancel), or a message."
 
 (defun settle-level1-held (store model snapshot) (om.golayer:settle-held-instructions store model snapshot))
 
+(defun rollback-insecure-layer (store model) (om.golayer:rollback-insecure store model))
+
 ;;; Appending (appendLevel1)
 
 (defun append-level1 (h result drop covers)
@@ -301,12 +303,25 @@ nothing is due."
              (incf refused)
              (log-line "level 1: definition ~A refused: ~A" what message)
              (notify-ui (format nil "Observational memory: level-1 definition ~A for ~A refused: ~A" what model message) "warning")))
-      (dolist (p (om::vresult-definitions result))
-        (destructuring-bind (kind name text) p
-          (let ((refusal (om.golayer:check-level1-definition kind name text model entries)))
-            (if refusal
-                (refuse (concatenate 'string kind "/" name) refusal)
-                (push-end-list (om.layer::make-gdef :kind kind :name name :model model :text text :session session) defs)))))
+      ;; One proposal holds one rule, never a bundle (decision 24); a definition that weakens
+      ;; security is held out of the layer (decision 19).
+      (let ((taken nil))
+        (dolist (p (om::vresult-definitions result))
+          (destructuring-bind (kind name text) p
+            (let ((refusal (om.golayer:check-level1-definition kind name text model entries))
+                  (what (concatenate 'string kind "/" name)))
+              (cond (refusal (refuse what refusal))
+                    (taken (refuse what (format nil "one proposal holds one rule, never a bundle; propose it at a later offer: ~A already takes this proposal" taken)))
+                    (t (setf taken what)
+                       (let ((rule (om::insecure-match text)) (d (om.layer::make-gdef :kind kind :name name :model model :text text :session session)))
+                         (cond ((null rule) (push-end-list d defs))
+                               ((cancelled-p))
+                               (t (handler-case
+                                      (progn (om.golayer:hold-insecure store d rule)
+                                             (incf held)
+                                             (notify-ui (format nil "Observational memory: level-1 definition ~A for ~A weakens security (~A); held, never applied, and listed in /om:status" what model rule)
+                                                        "warning"))
+                                    (error (e) (log-line "level 1: hold insecure: ~A" e))))))))))))
       (when (cancelled-p) (return-from hold-definitions (values 0 refused)))
       (multiple-value-bind (holds refusals)
           (handler-case (om.golayer:hold-pass store model defs evidence session)
@@ -380,7 +395,13 @@ reports the request and its usage (spent)."
               (multiple-value-bind (offer evidence) (definition-offer store key)
                 (multiple-value-bind (name description parameters)
                     (om::consolidate-tool offer (setf stale (om::stale-records (om::hhost-structure h) om::*freshness*)))
-                  (let* ((system (om::consolidate-system-prompt (om.golayer:consolidation-instructions store key)))
+                  (let* ((system (om::consolidate-system-prompt
+                                  ;; Read-time scope (decision 24): the repository and task family
+                                  ;; of the records citing the cut range (scopedLayerV2).
+                                  (multiple-value-bind (roots repo family)
+                                      (om.layer::unit-of (om::folded-observations folded) cut-ids)
+                                    (declare (ignore roots))
+                                    (om.golayer:consolidation-instructions store key :repo repo :family family))))
                          (fixed (om::request-overhead-tokens system name description parameters)))
                     (multiple-value-bind (prompt ok)
                         (om::build-prompt (om::make-pin* :cut cut :skip-tools (om::hhost-skip-tools h) :candidates candidates

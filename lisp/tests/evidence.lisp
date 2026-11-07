@@ -156,7 +156,7 @@ other tests' lists of adaptable functions never show it)."
     (at ("2026-11-02T11:00:00Z") (after-pass store model :empty t))
     (om::check (om::split (string-right-trim '(#\Newline) (read-file (models-path store model))) (string #\Newline))
                (list "{\"time\":\"2026-11-02T09:00:00.5Z\",\"model\":\"acme/shape\",\"kind\":\"detect\",\"outcome\":\"\",\"tokens\":120,\"counts\":{\"uncited-assistant-specifics\":2},\"revisions\":{\"decode-failure\":2,\"dropped-then-queried\":2,\"uncited-assistant-specifics\":2},\"engine\":\"v2\"}"
-                     "{\"time\":\"2026-11-02T10:00:00Z\",\"model\":\"acme/shape\",\"kind\":\"pass\",\"outcome\":\"\",\"stage\":\"compaction\",\"tokens\":120,\"counts\":{\"level1-refused\":1,\"uncited-assistant-specifics\":2},\"revisions\":{\"decode-failure\":2,\"dropped-then-queried\":2,\"uncited-assistant-specifics\":2},\"engine\":\"v2\",\"level1\":true,\"ranHeld\":[\"adaptable/x@0123456789abcdef\"]}"
+                     "{\"time\":\"2026-11-02T10:00:00Z\",\"model\":\"acme/shape\",\"kind\":\"pass\",\"outcome\":\"\",\"stage\":\"compaction\",\"tokens\":120,\"counts\":{\"level1-refused\":1,\"uncited-assistant-specifics\":2},\"revisions\":{\"decode-failure\":2,\"dropped-then-queried\":2,\"uncited-assistant-specifics\":2},\"engine\":\"v2\",\"level1\":true,\"ranHeld\":[\"adaptable/x@0123456789abcdef\"],\"harm\":0}"
                      "{\"time\":\"2026-11-02T11:00:00Z\",\"model\":\"acme/shape\",\"kind\":\"pass\",\"outcome\":\"empty\",\"stage\":\"compaction\",\"engine\":\"v2\"}"))))
 
 (om::deftest evaluate-writes-a-keep-head-rule

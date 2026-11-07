@@ -264,6 +264,18 @@ effective layer (held over written, the model's own over all models')."
       (remove-if-not (lambda (r) (and (rule-active-p r) (rule-applies-to r model)))
                      (of-v2 (rules-of (mapcar #'cdr (go-effective-remedies store model)))))))
 
+(defun active-rules-in-scope (store model repo family)
+  "rules.ForScope: active-rules with the written rules whose settled scope does not cover repo
+and family left out (layer.Harness.InScope; decision 24, read-time scope)."
+  (if (or (null model) (string= model ""))
+      '()
+      (remove-if-not (lambda (r) (and (rule-active-p r) (rule-applies-to r model)))
+                     (of-v2 (rules-of (loop for (nil . d) in (go-effective-remedies store model)
+                                            when (or (not (eq (gdef-state d) :written))
+                                                     (scope-covers-p (go-written-scope store (gdef-model d) (gdef-kind d) (gdef-name d))
+                                                                     repo family))
+                                              collect d))))))
+
 (defun rules-have-p (rules remedy) (and (find remedy rules :key #'rule-remedy :test #'string=) t))
 
 ;;; The catalogue (declared.go)

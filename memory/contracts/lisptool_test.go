@@ -816,18 +816,19 @@ func TestLispSettleParity(t *testing.T) {
 		var events []curated.ModelEvent
 		// A long case is a null arm: controls before the hold, then compactions under it, so the
 		// settlement rules reach their decisions; a short one is random.
-		n, long := rng.IntN(5), i%3 == 0
+		n, c, long := rng.IntN(5), 0, i%3 == 0
 		if long {
-			n = 8 + rng.IntN(10)
+			c = 6 + rng.IntN(5)
+			n = c + 2 + rng.IntN(6)
 		}
 		for j := 0; j < n; j++ {
 			offsets := []time.Duration{-time.Hour, -time.Nanosecond, 0, time.Nanosecond, time.Minute, 3 * time.Hour}
 			at := held.Add(offsets[rng.IntN(len(offsets))])
 			if long {
-				at = held.Add(time.Duration(j-n/2) * time.Minute)
+				at = held.Add(time.Duration(j-c+1) * time.Minute)
 			}
 			e := curated.ModelEvent{Time: at.Format(time.RFC3339Nano), Model: "p/m", Engine: curated.EngineV2}
-			if rng.IntN(8) == 0 {
+			if !long && rng.IntN(8) == 0 || rng.IntN(30) == 0 {
 				e.Engine = ""
 			}
 			switch kind := rng.IntN(3); {
@@ -847,6 +848,9 @@ func TestLispSettleParity(t *testing.T) {
 				e.Outcome = []string{curated.OutcomeOK, curated.OutcomeEmpty, ""}[rng.IntN(3)]
 				e.Tokens = []int{0, 40, 250}[rng.IntN(3)]
 				e.Level1 = rng.IntN(2) == 0
+				if long && rng.IntN(8) != 0 {
+					e.Outcome, e.Level1 = curated.OutcomeOK, rng.IntN(8) != 0
+				}
 				e.Counts = map[string]int{}
 				for _, k := range []string{rules.CountLevel1Failed, rules.CountLevel1SpecificsRefused, rules.CountLevel1UnionKept, rules.CountLevel1Refused,
 					rules.DetectUncitedAssistantSpecifics, rules.DetectDecodeFailure, rules.DetectDroppedThenQueried} {
@@ -854,25 +858,34 @@ func TestLispSettleParity(t *testing.T) {
 						e.Counts[k] = rng.IntN(3)
 					}
 				}
+				if long {
+					// Controls fail more than the compactions under it, by a margin that varies.
+					spread := 3
+					if j >= c {
+						spread = 2
+					}
+					e.Counts[rules.DetectUncitedAssistantSpecifics] += rng.IntN(spread)
+					e.Counts[rules.CountLevel1Refused] += rng.IntN(spread)
+				}
 				// The settlement fields (rules.SettleV2's null arm): most passes carry them.
-				if rng.IntN(6) != 0 {
+				if rng.IntN(6) != 0 || long && rng.IntN(4) != 0 {
 					harm := rules.HarmOf(e.Counts)
 					e.Harm = &harm
 				}
-				for k := rng.IntN(3); k > 0; k-- {
-					e.Roots = append(e.Roots, fmt.Sprintf("%016x", rng.IntN(30)))
+				for k := rng.IntN(3) + b2i(long); k > 0; k-- {
+					e.Roots = append(e.Roots, fmt.Sprintf("%016x", rng.IntN(30+170*b2i(long))))
 				}
 				sort.Strings(e.Roots)
 				e.Roots = slices.Compact(e.Roots)
 				e.Turns = rng.IntN(12)
 				e.Repo = []string{"", "r1", "r2"}[rng.IntN(3)]
 				e.Family = []string{"", ".go", ".md"}[rng.IntN(3)]
-				if rng.IntN(6) == 0 {
+				if rng.IntN(6+14*b2i(long)) == 0 {
 					e.RanWritten = []string{d.Key() + "@00000000000000ff"}
 				}
 			}
 			switch {
-			case long && j < n/2:
+			case long && j < c:
 				if rng.IntN(8) == 0 {
 					e.RanHeld = []string{d.Key() + "@0000000000000000"}
 				}
@@ -890,13 +903,21 @@ func TestLispSettleParity(t *testing.T) {
 	writeJSON(t, path, cases)
 	got := runLisp(t, sbcl, script, "settle", path)
 	diffParity(t, want, got)
-	decided := 0
+	decided, reasons := 0, map[string]int{}
 	for _, w := range want {
 		if strings.Contains(w, " decided ") {
 			decided++
 		}
+		for _, r := range []string{"its effect beat the null arm", "no net effect after cost", "no null arm", "harm:", "independent evidence", "detector pass", "gave no count"} {
+			if strings.Contains(w, r) {
+				reasons[r]++
+			}
+		}
 	}
-	t.Logf("identical: %d cases, %d decided", len(want), decided)
+	t.Logf("identical: %d cases, %d decided %v", len(want), decided, reasons)
+	if len(reasons) < 6 {
+		t.Errorf("the cases no longer reach every settlement branch: %v", reasons)
+	}
 }
 
 // The files the Lisp layer writes validate: its manifest against lisp-layer-generation and its
@@ -942,4 +963,12 @@ func TestLispLayerFilesValidate(t *testing.T) {
 	if seen["manifest"] < 5 || seen["index"] == 0 {
 		t.Errorf("the Lisp layer wrote too little: %v", seen)
 	}
+}
+
+// b2i is 1 for true.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

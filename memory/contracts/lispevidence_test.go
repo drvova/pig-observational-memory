@@ -61,7 +61,9 @@ type evidenceStep struct {
 	Family     string   `json:"family,omitempty"`
 	Turns      int      `json:"turns,omitempty"`
 	RanWritten []string `json:"ranWritten,omitempty"`
-	def        layer.Definition
+	// Text is a settle step's definition as declared (its cost).
+	Text string `json:"text,omitempty"`
+	def  layer.Definition
 }
 
 var evidenceModels = []string{"p/a", "p/b", "p/c", "q/d", "q/e"}
@@ -179,7 +181,7 @@ func evidenceSteps(rng *rand.Rand, start time.Time) []evidenceStep {
 		steps = append(steps, evidenceStep{Op: "rules", Model: model, Time: tick()})
 		for _, d := range held {
 			steps = append(steps, evidenceStep{Op: "settle", Model: model, Time: tick(), Kind: d.Kind, Name: d.Name, HeldID: d.HeldID(),
-				HeldTime: d.Time.UTC().Format(time.RFC3339Nano), def: d})
+				HeldTime: d.Time.UTC().Format(time.RFC3339Nano), Text: d.Declared(), def: d})
 		}
 	}
 	return steps

@@ -196,6 +196,10 @@
              (ledger (format nil "~A/models/p_2fm.jsonl" store)))
         ;; Evidence that changed since no proposal: the offer is due.
         (om.layer::append-line ledger "{\"time\":\"2026-11-01T09:00:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-union-kept\":1},\"engine\":\"v2\",\"level1\":true}")
+        ;; The null arm's control windows (rules.SettleV2): 2·MinEvidence compactions without it,
+        ;; each with two refused proposals and its own evidence root.
+        (dotimes (i 6)
+          (om.layer::append-line ledger (format nil "{\"time\":\"2026-11-01T09:1~D:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-refused\":2},\"engine\":\"v2\",\"level1\":true,\"roots\":[\"c0ffee000000000~D\"],\"harm\":0}" i i)))
         (setf (l1host-reply l)
               (lambda (request)
                 (tool-call-message (jobject "records" (vector (jobject "id" (first (l1-candidate-ids request)) "subject" "deploy"))
@@ -210,6 +214,10 @@
           (check (search "detector" (subseq text (search "HARNESS EVIDENCE" text))) nil "no detector is offered")
           (check (and (probe-file (format nil "~A/harness/p_2fm/held/instructions/consolidation.rows" store)) t) t "held in the Go layer")
           (check (and (notice-with-p h "held until a later compaction proves it") t) t))
+        ;; Other sessions' compactions under it, over other text, refused nothing: its null arm.
+        (let ((id (om.golayer:instructions-held-id (first (om.golayer:held-instructions-snapshot store "p/m")))))
+          (dotimes (i 3)
+            (om.layer::append-line ledger (format nil "{\"time\":\"2099-01-01T00:0~D:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"engine\":\"v2\",\"level1\":true,\"ranHeld\":[~A],\"roots\":[\"beef00000000000~D\"],\"harm\":0}" i (json-string id) i))))
         ;; The next compaction runs with the held text, credits it, and settles it clean.
         (setf (phost-branch h) branch (phost-appended h) '()
               (l1host-reply l) (lambda (request)
@@ -217,7 +225,7 @@
         (let* ((c (l1-compact stream 2 dir l branch)) (request (first (l1host-requests l))))
           (check (jget (jget (jget c "details") "consolidation") "applied") :true)
           (check (and (search "Additional instructions for this model:" (jget request "systemPrompt")) t) t "the held text applies")
-          (check (and (search "instructions/consolidation@" (json-string (om.layer::ev (car (last (om.layer::read-model-events ledger))) "ranHeld"))) t)
+          (check (and (search "instructions/consolidation@" (json-string (om.layer::ev (car (last (remove-if-not (lambda (e) (equal (om.layer::ev e "kind") "pass")) (om.layer::read-model-events ledger)))) "ranHeld"))) t)
                  t "the pass credits it")
           (check (and (probe-file (format nil "~A/harness/p_2fm/instructions/consolidation.rows" store)) t) t "settled: written")
           (check (and (notice-with-p h "passed a clean pass and is written to the layer") t) t))))))

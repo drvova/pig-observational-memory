@@ -139,13 +139,15 @@
 (defun run-settle (cases)
   (loop for c across cases
         for n from 1
-        do (multiple-value-bind (decided clean reason)
+        do (multiple-value-bind (decided clean reason scope)
                (settle-v2 (strings-of (om::jget c "events"))
                           :kind (om::jget c "kind") :name (om::jget c "name")
                           :held-id (om::jget c "heldId") :time (parse-rfc3339 (om::jget c "time"))
+                          :text (om::str (om::jget c "text"))
                           :detector (let ((d (om::jget c "detector")))
                                       (cond ((equal d "code") :code) ((equal d "retired") :retired) (t :other))))
-             (line "~D ~A ~A ~A" n (if decided "decided" "held") (if clean "clean" "unclean") (one-line-json reason)))))
+             (line "~D ~A ~A ~A ~A" n (if decided "decided" "held") (if clean "clean" "unclean") (one-line-json reason)
+                   (one-line-json (scope-string scope))))))
 
 (defun run-layer (root)
   (let* ((*layer-root* root) (model "acme/parity-1")

@@ -410,10 +410,11 @@ refuses a scalar or a list."
 
 (defun held-index (store model) (om.layer::go-held-index store model))
 
-(defun append-generation (store model op &key kind name digest session reason from held)
+(defun append-generation (store model op &key kind name digest session reason from held target keep scope)
   "appendGeneration: the generation's number. The caller holds the lock."
   (om.layer::go-append-generation store model op :kind kind :name name :digest digest
-                                                 :session session :reason reason :from from :held held))
+                                                 :session session :reason reason :from from :held held
+                                                 :target target :keep keep :scope scope))
 
 (defun record-held (store model key d)
   "recordHeld: key's held file recorded as holding the content d names (\"\" removes it)."
@@ -499,8 +500,9 @@ store recorded it and its checks accept it; nil otherwise."
        (string= (s0 (om.layer::gdef-seed-digest old)) (s0 (om.layer::gdef-seed-digest d)))
        (string= (s0 (om.layer::gdef-mode old)) (s0 (om.layer::gdef-mode d)))))
 
-(defun put-stamped (store d)
-  "putStamped: d written, with its generation, unless the recorded file already holds it."
+(defun put-stamped (store d &optional scope)
+  "putStamped: d written, with its generation (putStampedScoped: with scope, a settlement's),
+unless the recorded file already holds it."
   (let* ((model (om.layer::gdef-model d))
          (path (def-path store model (om.layer::gdef-kind d) (om.layer::gdef-name d)))
          (data (read-octets path)))
@@ -513,7 +515,8 @@ store recorded it and its checks accept it; nil otherwise."
       (let ((content (encode-file d "")))
         (write-content store model path content)
         (append-generation store model +op-put+ :kind (om.layer::gdef-kind d) :name (om.layer::gdef-name d)
-                                                :digest (digest content) :session (om.layer::gdef-session d)))
+                                                :digest (digest content) :session (om.layer::gdef-session d)
+                                                :scope scope))
       d)))
 
 (defun put-locked (store d)

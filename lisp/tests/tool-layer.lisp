@@ -109,45 +109,64 @@
     (when cut (setf (gethash "cut" e) cut))
     e))
 
+(defun unit-event (time &key ran (failures 0) (harm 0) root (level1 t) (turns 4))
+  "A compaction pass with the settlement fields (rules.SettleV2's null arm)."
+  (let ((e (pass-event time :ran ran :level1 level1
+                            :counts (list (cons "uncited-assistant-specifics" failures) (cons "level1-refused" failures)))))
+    (setf (gethash "harm" e) (float harm 1d0) (gethash "turns" e) (float turns 1d0)
+          (gethash "roots" e) (vector root) (gethash "repo" e) "r1" (gethash "family" e) ".go")
+    e))
+
 (om::deftest settle-v2-rule
-  (let ((held (fixed-time "2026-11-01T10:00:00Z")) (id "instructions/consolidation@0123456789abcdef"))
+  (let ((held (fixed-time "2026-11-01T10:00:00Z")) (id "remedy/keep-head@0123456789abcdef"))
     (flet ((settle (events &rest keys)
-             (multiple-value-list (apply #'settle-v2 events :held-id id :time held keys))))
-      ;; no evidence: the compaction before the hold, an empty one, one that did not run it
-      (om::check (settle (list (pass-event "2026-11-01T09:00:00Z" :ran (list id) :level1 t)
-                               (pass-event "2026-11-01T11:00:00Z" :ran (list id) :level1 t :outcome "empty")
-                               (pass-event "2026-11-01T11:00:00Z" :ran '("other") :level1 t))
-                         :kind "instructions" :name "consolidation")
-                 '(nil nil ""))
-      (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :level1 t)) :kind "instructions" :name "consolidation")
-                 '(t t "level 1 ran under it at 1 later compaction with no loss counted"))
-      (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :level1 t :counts '(("level1-union-kept" . 2)))
-                               (pass-event "2026-11-01T12:00:00Z" :ran (list id) :level1 t :counts '(("level1-failed" . 1))))
-                         :kind "instructions" :name "consolidation")
-                 '(t nil "level 1 ran under it at 2 later compactions and its code checks counted level1-failed 1, level1-union-kept 2"))
-      (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :tokens 0)) :kind "remedy" :name "keep-head")
-                 '(nil nil ""))
-      (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :tokens 120)
-                               (pass-event "2026-11-01T12:00:00Z" :ran (list id) :tokens 30))
-                         :kind "remedy" :name "keep-head")
-                 '(t t "the turns under it (150 source tokens over 2 later compactions) counted no failure it could cause"))
+             (multiple-value-list (apply #'settle-v2 events :held-id id :time held keys)))
+           (controls (failures)
+             (loop for f in failures for i from 0
+                   collect (unit-event (format nil "2026-11-01T09:0~D:00Z" i) :failures f :root (format nil "c~15,'0D" i))))
+           (treated (failures)
+             (loop for f in failures for i from 0
+                   collect (unit-event (format nil "2026-11-01T11:0~D:00Z" i) :ran (list id) :failures f :root (format nil "t~15,'0D" i)))))
+      ;; the null arm: an effect beyond both control windows' spread settles it, with its scope
+      (om::check (settle (append (controls '(3 2 3 2 3 2)) (treated '(0 0 1))) :kind "remedy" :name "keep-head")
+                 '(t t "its effect beat the null arm after cost: failures 1 under it over 3 compactions against 7 and 8 without it (spread 1), cost 0.000"
+                   (("r1") (".go"))))
+      ;; a no-op is rejected; so is an effect inside the spread
+      (om::check (subseq (settle (append (controls '(2 2 2 2 2 2)) (treated '(2 2 2))) :kind "remedy" :name "keep-head") 0 2) '(t nil))
+      (om::check (subseq (settle (append (controls '(1 1 1 4 4 4)) (treated '(1 1 1))) :kind "remedy" :name "keep-head") 0 2) '(t nil))
+      ;; no null arm, too few units, harm
+      (om::check (settle (append (controls '(3 3 3 3)) (treated '(0 0 0))) :kind "remedy" :name "keep-head")
+                 '(t nil "no null arm: 4 compactions without it to compare against (needs 6)" nil))
+      (om::check (settle (append (controls '(3 3 3 3 3 3)) (treated '(0 0))) :kind "remedy" :name "keep-head") '(nil nil "" nil))
+      (om::check (first (cddr (settle (append (controls '(3 3 3 3 3 3))
+                                              (list (unit-event "2026-11-01T11:00:00Z" :ran (list id) :harm 2 :root "t0"))
+                                              (treated '(0 0 0)))
+                                      :kind "remedy" :name "keep-head")))
+                 "harm: 2 over 3 compactions under it, against 0 and 0 in two windows without it")
+      ;; the same root counts once
+      (om::check (third (settle (append (controls '(3 3 3 3 3 3))
+                                        (loop for i from 0 below 6
+                                              collect (unit-event (format nil "2026-11-01T11:0~D:00Z" i) :ran (list id) :root "same")))
+                                :kind "remedy" :name "keep-head"))
+                 "its 6 compactions came from 1 independent evidence root (needs 3): repeated text is one root")
+      ;; a Go detector, a retired one, an adaptable
       (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :kind "detector-pass" :counts '(("defined:d" . 0))))
                          :kind "detector" :name "d" :detector :code)
-                 '(t t "it counted at 1 later detector pass with no error"))
+                 '(t t "it counted at 1 later detector pass with no error" nil))
       (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :kind "detector-pass" :errors '(("d" . "panic")) :cut "e9"))
                          :kind "detector" :name "d" :detector :code)
-                 '(t nil "its run after the compaction at e9 gave no count: panic"))
+                 '(t nil "its run after the compaction at e9 gave no count: panic" nil))
       (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :kind "detector-pass" :counts '(("defined:d" . 3))))
                          :kind "detector" :name "d" :detector :retired)
-                 '(nil nil ""))
+                 '(nil nil "" nil))
       (om::check (settle (list (pass-event "2026-11-01T11:00:00Z" :ran (list id) :counts '(("adaptable-failed:rank-notes" . 1))))
                          :kind "adaptable" :name "rank-notes")
-                 '(t nil "it failed its kernel check, errored or timed out 1 time over 1 later compaction"))
+                 '(t nil "it failed its kernel check, errored or timed out 1 time over 1 later compaction" nil))
       ;; sub-millisecond order is kept
-      (om::check (settle (list (pass-event "2026-11-01T10:00:00.000000001Z" :ran (list id))) :kind "remedy" :name "keep-head")
-                 '(t t "the turns under it (100 source tokens over 1 later compaction) counted no failure it could cause"))
-      (om::check (settle (list (pass-event "2026-11-01T10:00:00Z" :ran (list id))) :kind "remedy" :name "keep-head")
-                 '(nil nil "")))))
+      (om::check (settle (list (pass-event "2026-11-01T10:00:00.000000001Z" :ran (list id))) :kind "adaptable" :name "x")
+                 '(t t "the turns under it (100 source tokens over 1 later compaction) counted no failure it could cause" nil))
+      (om::check (settle (list (pass-event "2026-11-01T10:00:00Z" :ran (list id))) :kind "adaptable" :name "x")
+                 '(nil nil "" nil)))))
 
 ;;; Adaptable dispatch and the layer
 
