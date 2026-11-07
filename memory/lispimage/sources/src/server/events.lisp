@@ -39,6 +39,21 @@ host reads none or the call fails."
     (request-cancelled (e) (error e))
     (error () nil)))
 
+(defun tool-freshness (branch)
+  "The memory tool's freshness verdicts (omhost's Call.freshness): the active project records of
+branch judged against the host's HEAD structure view, by record id; nil without a repository, a
+view or a record to ask about."
+  (handler-case
+      (let ((repo (om::jget (host-call "host/repo") "repo")))
+        (when (and (hash-table-p repo) (string/= (om::str (om::jget repo "repoId")) ""))
+          (let* ((records (om::folded-active (om::fold-ledger branch)))
+                 (q (om::project-query records repo)))
+            (unless (om::project-query-empty-p q)
+              (let ((answer (host-structure q)))
+                (when answer (om::project-texts (om::project-verdicts records repo answer))))))))
+    (request-cancelled (e) (error e))
+    (error () nil)))
+
 (defun store-dir (c)
   "harness.StoreOf's store: <config home>/observational-memory/memories, nil without one."
   (and (rcfg-curated-memory (conn-cfg c))

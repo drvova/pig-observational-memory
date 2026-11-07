@@ -18,7 +18,10 @@
   (curated-dir nil)
   (project "")
   (session "")
-  (model ""))
+  (model "")
+  ;; freshness: the active project records' freshness verdict texts by record id (project.lisp),
+  ;; read from the host's HEAD structure view when the call began; nil for none.
+  (freshness nil))
 
 (defvar *call* nil "The call model code runs in.")
 

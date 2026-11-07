@@ -185,7 +185,20 @@ search no record matches with every word ranks the records holding any of its wo
                                     (multiple-value-bind (pos ok) (gethash (note-anchor x) positions)
                                       (and ok (or (null lo) (>= pos lo)) (or (null hi) (<= pos hi)))))
                                   kept))))
-    (subseq kept 0 (min n (length kept)))))
+    (with-freshness (subseq kept 0 (min n (length kept))))))
+
+(defun with-freshness (notes)
+  "The notes with each project record's freshness verdict after its content (omhost's Note.Fresh,
+which the Go tool prints after the content)."
+  (let ((fresh (call-freshness (the-call))))
+    (if (null fresh)
+        notes
+        (mapcar (lambda (n)
+                  (let ((v (gethash (note-id n) fresh)))
+                    (if v
+                        (let ((c (copy-note n))) (setf (note-content c) (om::cat (note-content n) " (" v ")")) c)
+                        n)))
+                notes))))
 
 (defun om.tool:note-by-id (id)
   "One record by id, dropped ones included."
