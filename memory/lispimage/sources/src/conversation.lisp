@@ -78,6 +78,11 @@
 (defparameter +scope-pronouns+
   '("it" "that" "this" "them" "those" "these" "me" "us" "him" "her" "anything" "everything" "something" "nothing"))
 
+(defun one-time-p (text)
+  "extract.IsOneTime: a permission or instruction for one occasion (decision 23), which the core
+never takes as a standing rule."
+  (regex-match-p +rule-one-time+ (replace-all text "’" "'")))
+
 (defun rule-p (sentence)
   "isRule: a standing rule, scope exclusion or policy form, neither a question, posed
 hypothetically, reported from someone else nor a one-time permission."

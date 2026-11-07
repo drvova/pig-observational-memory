@@ -38,6 +38,8 @@ member is cleared, not fatal).
 | `floor-lowering` | `<store>/harness/floor.jsonl` | curated store |
 | `repo-id` | `<root>/repos/<hash>.json` (om) or `<config>/observational-memory/repos/<hash>.json` (PiG): a repository's cached id | engine store |
 | `code-units` | `<config>/observational-memory/memories/code/<project>/units.json` | code store |
+| `core-line` | `<store>/core/log.jsonl`, the shared core log (phase 6) | curated store |
+| `core-consumed` | `<store>/core/consumed.jsonl`, the sessions' consumed-through markers | curated store |
 | `record-tool-output` | the value and evidence records level 0 reads from tool output, as members of a records list | session / neutral store |
 | `defs` | the shared record, reflection, alias, details and envelope shapes | — |
 
@@ -75,6 +77,18 @@ authority, hedge, time hint, keys, frame, writer), the hedge lexicon and the pro
 records and their tombstones, decision 1's cascade, typed intentions and decay; `truth.jsonl`
 holds Go's answers for both engines (`cd memory && go test ./ledger -run TruthContract -args
 -write`), and the forget grammar's cases are in `conversation.jsonl`.
+
+## The core log
+
+`core-line` is a line of `<store>/core/log.jsonl`, the shared core log (docs/memory-v2.md, "The core
+log"), and `core-consumed` a line of `<store>/core/consumed.jsonl`, a session's consumed-through
+marker; one writer appends either under `<store>/core/.lock`. `core.jsonl` holds Go's answers
+(`cd memory && go test ./core -run CoreContract -args -write`), which `lisp/tests/core.lisp` checks
+byte for byte: lessons stripped of their values, scope intersection, model families and the hint,
+evidence roots and the paths they read, a torn log's fold, a script's log and marker bytes, items,
+blocks and status lines, and the candidates and forget lines of a ledger. The curated parity script
+(`contracts/lisptool_test.go`, `coreScript`) covers the curated side: default scopes, evidence roots,
+a concurrent shared edit kept as a contested pair, and a lesson crossing projects.
 
 ## Level-0 conversation cases
 

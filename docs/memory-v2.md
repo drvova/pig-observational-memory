@@ -591,6 +591,57 @@ Phase 5 of the brain-like memory ([brain-memory.md](brain-memory.md), decisions 
   record sharing a key) lies `decayHorizon` ticks back is taken after the others of the summary's
   classes 4 and 6. Never on wall time or retrieval, never the protected classes, never a deletion.
 
+### The core log (no request)
+
+Phase 6 of the brain-like memory ([brain-memory.md](brain-memory.md), "Shape", decisions 7, 8, 16
+and 23; `memory/core`, `lisp/src/core.lisp`; cases in `contracts/core.jsonl`):
+
+- **The log.** `<store>/core/log.jsonl` in the engine's own store (the curated store's directory
+  under PiG's config root, or `~/.om`'s), never the repository or the harness's files. It is
+  append-only, and one writer at a time appends under `<store>/core/.lock`: every decision is made
+  against the newest state under that lock (`core.Log.Commit`). Each line carries a generation, above
+  every one the log recorded before it: a line no reader decodes is skipped, but the generation it
+  began with (`{"gen":N`) and the log's line count bound the next one from below, so a torn line's
+  generation is never used again (scenario 16's rule). Text and keys are redacted.
+- **Operations.** `promote` adds an item, or adds evidence roots to the same item (the fast path);
+  `supersede` replaces an item from a writer that had read it; `contest` stores the other side of a
+  contested pair, both shown with `conflicts <id>`, never last-writer-wins; `forget` carries
+  tombstones (item and record ids, never text) that hold for good; `scope` changes an item's scope.
+  An item is `rule`, `intention`, `lesson` or `memory` (a curated memory's shared edits).
+- **Reads.** A session reads the core only when its start context is rendered, at its start and
+  after each compaction (the index pin's renders, `engine.CoreBlock`): the pull moves its
+  consumed-through marker (`<store>/core/consumed.jsonl`) to the newest generation, and between pulls
+  it reads through that marker. So the request bytes it adds change only at those moments.
+- **The gate** (`core.Decide`, decision 7 as amended): tool output alone never promotes, nor a
+  one-time permission (decision 23, `extract.IsOneTime`), nor a record with no shared scope. A
+  candidate needs the user's words (a rule or plan the user said; a plan made under a request the
+  person typed) or two distinct evidence roots; the same item is the fast path, gaining only roots
+  it lacked, so dedup never raises support and recall never changes it (scenario 9). Against a live
+  item on its key with another value it supersedes when the user's words back it and the writer had
+  read that item, and is stored as a contested pair otherwise (scenario 14).
+- **Evidence roots** (`core.EvidenceRoot`): the digest of the file a quote was read from (the call's
+  path argument, the file its shell read command names, a grep match's file), else of the quoted
+  words; never the tool result's bytes, the session or the reading tool. The same file read with
+  `cat -n`, `head`, a grep match or behind a header is one root; curated staging cites them too.
+- **Promotion at compaction** (`hooks.promoteCoreV2`, the image's `core-promote-ledger`): code offers
+  the fold's believed rules and open plans no receipt closed (`core.Candidates`), and each project or
+  user forget record as a forget line, so tombstones carry across sessions.
+- **Scopes** (decision 8): an item is `user`, `global` or `project:<repoId>` (the root when no
+  repository id is known); a record derived from several takes the intersection of their scopes, and
+  two projects share none. A curated save without a scope stays in its project
+  (`curated.DefaultProject`); a user or feedback memory is the user's everywhere; memories saved
+  global before stay global and listed. A lesson crosses projects only stripped of its values
+  (`core.StripValues`) and only once saved in two projects (`curated.LessonsCrossing`).
+- **Shared curated edits** (scenario 14): an edit of a live memory is a `memory` generation decided
+  against the newest one; a session that had not read the other session's change (its marker below
+  it) is re-evaluated, and an edit to other content is refused with `curated.ErrConflict` and kept in
+  the core as the other side of a contested pair.
+- **Delivery** (decision 16): the start context opens with the core's block (`core.Section`): the
+  user's constraints, then the open intentions, then the lessons from other projects, each at most
+  ten, before the curated index. An item another model family wrote carries `written by a <family>
+  model` (the per-model hint rule). `/om:status` and `om status` list the core read-only
+  (`core.StatusLines`).
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every

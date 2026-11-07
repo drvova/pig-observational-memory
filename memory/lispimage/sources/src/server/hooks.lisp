@@ -86,6 +86,12 @@ evidence unit (record-compaction-evidence), on the layer's snapshot taken before
          (marker (funcall (om::hhost-append h) "om.cut" (om::json-string (om::jobject "reason" reason))))
          (c (let ((om::*encoding* (neutral-encoding params))) (om::compact-on h cfg reason marker 0))))
     (store-compaction session params format c)
+    ;; promoteCoreV2: the session's constraints and open intentions offered to the core.
+    (when (curated-on-p)
+      (handler-case (om.layer::core-promote-ledger (curated-dir) (read-branch session params format) (session-id session)
+                                                   (param-string params "cwd")
+                                                   (om::str (om::jget (om::jget params "repo") "repoId")) model)
+        (error (e) (format *error-output* "om engine: core promote: ~A~%" e))))
     (when snapshot
       (let ((branch (read-branch session params format)))
         (om.layer::record-compaction-evidence
@@ -148,8 +154,9 @@ An unreadable branch settles nothing, as GetBranch's error does."
   (if (curated-on-p)
       (values (om.layer::pin-get (session-pin session)
                                  (lambda ()
-                                   (om.layer::index-as (curated-dir) (om.layer::project-root (param-string params "cwd")) (session-id session)
-                                                        (curated-index-tokens)))))
+                                   (om.layer::index-with-core (curated-dir) (om.layer::project-root (param-string params "cwd")) (session-id session)
+                                                              (curated-index-tokens)
+                                                              (om::str (om::jget (om::jget params "repo") "repoId")) ""))))
       ""))
 
 (defun start-context (summary index)

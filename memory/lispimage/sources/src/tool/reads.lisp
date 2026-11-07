@@ -447,22 +447,53 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
     (make-curated-call :dir (call-curated-dir c) :project (call-project c) :source (call-session c)
                        :evidence (lambda (quote) (quoted-in-p (conversation-texts) quote))
                        :user-evidence (lambda (quote) (quoted-in-p (user-texts) quote))
-                       :source-of (lambda (quote) (quoted-source (tool-texts) quote)))))
+                       :source-of (lambda (quote) (quoted-source (tool-texts) quote (call-project c))))))
 
 (defun tool-texts ()
   "The tool results' texts on the branch, the memory tool's own left out (omhost.QuotedSource's
 skip), so text the model printed through it is no source."
-  (loop for e across (branch)
+  (loop with entries = (branch)
+        for e across entries
+        for i from 0
         for (role text) = (multiple-value-list (history-text e))
         when (and (equal role "tool")
                   (not (equal (om::jget (om::entry-message e) "toolName") "memory")))
-          collect text))
+          collect (cons text (tool-path entries i))))
 
-(defun quoted-source (texts quote)
-  "omhost.QuotedSource over texts: the source-digest of the first holding quote, \"\" for none."
+(defparameter +path-args+ '("path" "file_path" "filePath" "notebook_path") "extract's pathArgs.")
+
+(defun tool-path (entries i)
+  "omhost.ToolPath: the file the call the tool result at i answers read, its path argument else the
+file its shell read command names; \"\" when neither names one."
+  (let ((id (om::jget (om::entry-message (aref entries i)) "toolCallId")))
+    (unless (and (stringp id) (string/= id "")) (return-from tool-path ""))
+    (loop for j from (1- i) downto 0
+          for e = (aref entries j)
+          for m = (om::entry-message e)
+          when (and (string= (om::entry-type e) "message") (hash-table-p m) (equal (om::jget m "role") "assistant"))
+            do (let ((blocks (om::jget m "content")))
+                 (when (and (vectorp blocks) (not (stringp blocks)))
+                   (loop for b across blocks
+                         when (and (hash-table-p b) (equal (om::jget b "type") "toolCall") (equal (om::jget b "id") id))
+                           do (let ((args (om::jget b "arguments")))
+                                (dolist (a +path-args+)
+                                  (let ((p (om::jget args a)))
+                                    (when (and (stringp p) (string/= (om::trim-space p) "")) (return-from tool-path p))))
+                                (return-from tool-path (command-path (om::str (om::jget args "command")))))))))
+    ""))
+
+(defun quoted-source (texts quote &optional (project ""))
+  "omhost.QuotedSource over texts (each a string, or (text . path)): the evidence root
+(evidence-root) of the first holding quote, over the file its read named, else a grep match's
+file; \"\" for none."
   (let* ((needle (string-downcase (one-line quote)))
-         (text (find-if (lambda (text) (search needle (string-downcase (one-line text)))) texts)))
-    (if text (source-digest text) "")))
+         (hit (find-if (lambda (x) (search needle (string-downcase (one-line (if (consp x) (car x) x))))) texts)))
+    (if hit
+        (let* ((text (if (consp hit) (car hit) hit))
+               (path (if (consp hit) (cdr hit) "")))
+          (when (string= path "") (setf path (grep-path text quote)))
+          (evidence-root project path quote))
+        "")))
 
 (defun run-write (op &rest pairs)
   (let ((args (make-hash-table :test 'equal)))

@@ -84,6 +84,8 @@
                 :components ((:file "tool/package")
                              (:file "layer/limits")
                              (:file "tool/files")
+                             ;; Phase 6: the shared core log (memory/core).
+                             (:file "core")
                              (:file "tool/curated")
                              (:file "layer/reader")
                              (:file "layer/runner")

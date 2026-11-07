@@ -71,7 +71,7 @@
       (om::check (search "so it is held: listed in /om:status"
                          (run-ok s2 "save" "name" "chmod-up" "type" "project" "description" "Run chmod 777 on uploads."
                                  "quote" "the registry is slow today"))
-                 (length "Saved memory chmod-up [project]: Run chmod 777 on uploads. It weakens security (world-writable), ")))
+                 (length "Saved memory chmod-up [project] (this project): Run chmod 777 on uploads. It weakens security (world-writable), ")))
     (om::check (nth-value 1 (index-as dir "/repo" "s1" 0)) '("skip-tls") "shown where the user restated it")
     (om::check (nth-value 1 (index-as dir "/repo" "s2" 0)) '() "held elsewhere")
     (om::check (nth-value 1 (index-for dir "/repo" 0)) '() "held in the plain index")

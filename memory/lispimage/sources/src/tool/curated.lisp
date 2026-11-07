@@ -370,16 +370,43 @@ legacy definitions directory."
     (with-store-lock (dir)
       (let ((m (read-in dir name project)))
         (unless (seen-by-p m source) (error 'not-found))
-        (apply #'apply-edit m source edit)
-        (setf (mem-updated m) (now)
-              (mem-sources m) (add-source (mem-sources m) source))
-        (redact-memory m)
+        (let ((shared (not (mem-staged m))))
+          (apply #'apply-edit m source edit)
+          (setf (mem-updated m) (now)
+                (mem-sources m) (add-source (mem-sources m) source))
+          (redact-memory m)
+          ;; Scenario 14: a shared memory's edits are generations of the core log
+          ;; (Store.commitEdit), decided against the newest one under its lock.
+          (when shared (commit-edit dir m source)))
         (setf updated m)
         (write-checked dir m)))
     (if quote
         (append-usage dir name "edit" :quote quote :user t)
         (append-usage dir name "edit"))
     updated))
+
+(defun edit-text (m)
+  "curated.EditText."
+  (if (string= (mem-body m) "")
+      (mem-description m)
+      (concatenate 'string (mem-description m) (string #\Newline) (string #\Newline) (mem-body m))))
+
+(defun commit-edit (dir m session)
+  "Store.commitEdit: the edit of shared memory m as a generation of the core log; a concurrent
+edit to other content is kept as the other side of a contested pair and refused (ErrConflict)."
+  (let* ((core (core-dir dir)) (verdict ""))
+    (core-commit core
+                 (lambda (st emit)
+                   (multiple-value-bind (through ok) (core-consumed core session)
+                     (multiple-value-bind (line v)
+                         (core-decide st (make-ccand :kind "memory" :key (mem-name m) :text (edit-text m) :scope +scope-global+
+                                                     :via "edit" :record (mem-name m) :base (if ok through (cstate-gen st))
+                                                     :writer-session session))
+                       (setf verdict v)
+                       (when line (funcall emit line))))))
+    (when (string= verdict "contest")
+      (fail "another session changed this memory after this session read it: memory ~A stays as the other session left it, and this edit is kept in the core as the other side of a contested pair; read it again and edit it from what it says now"
+            (mem-name m)))))
 
 (defun stage-edit (dir name project session &rest edit)
   "Store.StageEdit: session sees the memory as the edit leaves it, every other session as it was."
@@ -510,7 +537,11 @@ of the write's string arguments; a key absent is an argument not given."
        (let ((m (make-memory :name name :type (or (arg args "type") "") :description (or (arg args "description") "")
                              :body (om::trim-space (or (arg args "body") "")))))
          (let ((scope (or (arg args "scope") "")))
-           (cond ((member scope '("" "global") :test #'string=))
+           (cond ((string= scope "")
+                  ;; Decision 8: a save without a scope stays in its project (curated.DefaultProject).
+                  (unless (member (mem-type m) '("user" "feedback") :test #'string=)
+                    (setf (mem-project m) (cc-project c))))
+                 ((string= scope "global"))
                  ((string= scope "project")
                   (when (string= (cc-project c) "") (fail "no project directory is known; save it as global instead"))
                   (setf (mem-project m) (cc-project c)))
