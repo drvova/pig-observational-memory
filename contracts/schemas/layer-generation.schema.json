@@ -8,7 +8,7 @@
   "properties": {
     "gen": { "description": "The generation number, from 1 in manifest order.", "type": "integer", "minimum": 1 },
     "time": { "type": "string" },
-    "op": { "enum": ["put", "forget", "revert", "rollback", "build", "revise", "establish", "migrate", "propose", "migrate-v2"] },
+    "op": { "enum": ["put", "forget", "revert", "rollback", "build", "revise", "establish", "migrate", "propose", "migrate-v2", "hold-insecure"] },
     "kind": { "enum": ["format", "schema", "instructions", "summary", "tool", "detector", "remedy"] },
     "name": { "type": "string" },
     "digest": { "description": "layer.Digest of the content written: 16 hex characters.", "type": "string", "pattern": "^[a-f0-9]{16}$" },
@@ -19,6 +19,15 @@
     "from": { "type": "string" },
     "held": { "type": "boolean" },
     "evidence": { "type": "string" },
-    "events": { "type": "integer", "minimum": 0 }
+    "events": { "type": "integer", "minimum": 0 },
+    "scope": {
+      "description": "A put that settled a held definition: the repositories and task families its evidence covered (rules.Settlement.Scope), where it applies (layer.Harness.InScope).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repos": { "type": "array", "items": { "type": "string" } },
+        "families": { "type": "array", "items": { "type": "string" } }
+      }
+    }
   }
 }

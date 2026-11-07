@@ -134,6 +134,9 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// section 6; level 1 defines no format). With no evidence and no definitions the profile is the default and the render is
 	// unchanged.
 	active := harness.LayerFor(h, cfg, model)
+	// Read-time scope (decision 24): a settled definition applies only in the repository and
+	// task family its evidence certified, here those of the records citing the cut range.
+	active = scopedLayerV2(active, entries, cut)
 	profile := harness.Default(harness.ModelKey(model))
 	if l, ok := harness.For(h, cfg, model); ok {
 		profile = l.ProfileWith(active)

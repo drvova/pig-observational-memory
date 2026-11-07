@@ -29,6 +29,12 @@
     "cut": { "type": "string" },
     "errors": { "type": "object", "additionalProperties": { "type": "string" } },
     "unfinished": { "type": "string" },
-    "pending": { "type": "array", "items": { "type": "string" } }
+    "pending": { "type": "array", "items": { "type": "string" } },
+    "roots": { "description": "A compaction pass's evidence roots (rules.UnitOf): 16 hex characters each, sorted, of the records citing its cut range that are not tool output.", "type": "array", "items": { "type": "string", "pattern": "^[a-f0-9]{16}$" } },
+    "harm": { "description": "A compaction pass's harm signal (rules.HarmCounts summed); absent on passes recorded before the settlement rules.", "type": "integer", "minimum": 0 },
+    "turns": { "description": "The assistant messages a compaction's cut range removed.", "type": "integer", "minimum": 0 },
+    "repo": { "description": "A compaction pass's repository: the commonest frame.repoId of its records.", "type": "string" },
+    "family": { "description": "A compaction pass's task family: the commonest lower-cased path extension its records name.", "type": "string" },
+    "ranWritten": { "description": "The model's own written definitions a compaction ran with: kind/name@digest (layer.Definition.HeldID).", "type": "array", "items": { "type": "string" } }
   }
 }

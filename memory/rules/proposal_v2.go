@@ -218,28 +218,24 @@ func ProposalDue(store curated.Store, model string) (Evidence, bool, error) {
 	return e, e.Digest() != baseline, nil
 }
 
-// level1Losses are the level-1 counts that settle a held consolidation instructions definition
-// as not clean: an output nothing was recorded from, a proposal that would have lost a specific,
-// and a fact the union rule had to keep back.
-var level1Losses = []string{CountLevel1Failed, CountLevel1SpecificsRefused, CountLevel1UnionKept}
-
 // SettleV2 decides held definition d (SettlesUnderV2) from model's usage ledger events, on
 // evidence its proposing request did not produce: the memory v2 compaction passes that record
-// having run with exactly d's held text (curated.ModelEvent.RanHeld names d.HeldID), and of
-// those only the ones that were not empty. The compaction that held d read its layer before its
-// level 1, so its pass never names d; neither does another session's compaction whose layer was
-// read before the hold, wherever its pass lands in the shared ledger. decided is false while
-// there is no such evidence, so d stays held:
+// having run with exactly d's held text (curated.ModelEvent.RanHeld names d.HeldID) after its
+// hold. The compaction that held d read its layer before its level 1, so its pass never names
+// d; neither does another session's compaction whose layer was read before the hold, wherever
+// its pass lands in the shared ledger. Decided is false while there is not enough evidence, so
+// d stays held:
 //
-//   - the consolidation instructions need a compaction whose level-1 request answered under
-//     them (curated.ModelEvent.Level1); they are clean unless its code checks counted a loss
-//     (level1-failed, level1-specifics-refused, level1-union-kept);
-//   - a detector, a remedy catalogue and a rule need detector runs over turns that ran under
-//     them (the passes' source tokens), and are clean: they change only what code counts or
-//     keeps, and the kernel's counts judge rules from there.
+//   - a Go detector is judged by its own runs in the detector passes (settleCodeDetector): it
+//     only counts, so it changes nothing a null arm could measure;
+//   - a held query detector is retired with the query language and never judged;
+//   - every other definition (the consolidation instructions, a remedy catalogue, a kernel-check
+//     detector, a rule) is settled by decision 24's null arm with its cost, over independent
+//     evidence roots with a harm signal (settleNullArm, settle_v2.go).
 //
-// clean writes it (layer.Store.ClaimHeld), and otherwise it is reverted with reason.
-func SettleV2(events []curated.ModelEvent, d layer.Definition) (decided, clean bool, reason string) {
+// Clean writes it (layer.Store.ClaimHeldScoped, with Scope), and otherwise it is reverted with
+// Reason.
+func SettleV2(events []curated.ModelEvent, d layer.Definition) Settlement {
 	id := d.HeldID()
 	if d.Kind == layer.KindDetector {
 		def, err := ParseDetector(d.Name, d.Text)
@@ -247,54 +243,14 @@ func SettleV2(events []curated.ModelEvent, d layer.Definition) (decided, clean b
 		case err != nil:
 		case def.Retired():
 			// Retired with the query language: no pass runs it, and it is never judged.
-			return false, false, ""
+			return Settlement{}
 		case def.IsCode():
 			// A Go detector's evidence is its own runs, in the detector pass events.
-			return settleCodeDetector(events, d, id)
+			decided, clean, reason := settleCodeDetector(events, d, id)
+			return Settlement{Decided: decided, Clean: clean, Reason: reason}
 		}
 	}
-	tokens, answered, compactions := 0, 0, 0
-	counts := map[string]int{}
-	for _, e := range events {
-		if !isV2Compaction(e) || e.Outcome == curated.OutcomeEmpty || !slices.Contains(e.RanHeld, id) {
-			continue
-		}
-		if t, ok := eventTime(e); !ok || !t.After(d.Time) {
-			continue
-		}
-		compactions++
-		tokens += e.Tokens
-		if e.Level1 {
-			answered++
-		}
-		for k, n := range e.Counts {
-			if n > 0 {
-				counts[k] += n
-			}
-		}
-	}
-	losses := func(keys ...string) string {
-		parts := []string{}
-		for _, k := range keys {
-			if counts[k] > 0 {
-				parts = append(parts, fmt.Sprintf("%s %d", k, counts[k]))
-			}
-		}
-		return strings.Join(parts, ", ")
-	}
-	switch {
-	case d.Kind == layer.KindInstructions:
-		if answered == 0 {
-			return false, false, ""
-		}
-		if lost := losses(level1Losses...); lost != "" {
-			return true, false, fmt.Sprintf("level 1 ran under it at %d later %s and its code checks counted %s", answered, pluralWord(answered, "compaction"), lost)
-		}
-		return true, true, fmt.Sprintf("level 1 ran under it at %d later %s with no loss counted", answered, pluralWord(answered, "compaction"))
-	case tokens == 0:
-		return false, false, ""
-	}
-	return true, true, fmt.Sprintf("the turns under it (%d source tokens over %d later %s) counted no failure it could cause", tokens, compactions, pluralWord(compactions, "compaction"))
+	return settleNullArm(events, d, id)
 }
 
 // settleCodeDetector decides held Go detector d (held id id) from the detector pass events

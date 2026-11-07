@@ -213,6 +213,12 @@ func afterCompaction(store curated.Store, model string, pass Pass) ([]Transition
 			e.Counts[DetectDecodeFailure] += codec
 			e.Counts[CountCodecDecodeFailure] += codec
 		}
+		// The settlement fields (docs/memory-v2.md, "Settling a definition"): the unit's roots,
+		// harm signal, turns and scope, and the written definitions it ran with.
+		harm := HarmOf(e.Counts)
+		e.Harm, e.Turns = &harm, pass.Turns
+		e.Roots, e.Repo, e.Family = pass.Unit.Roots, pass.Unit.Repo, pass.Unit.Family
+		e.RanWritten = pass.RanWritten
 		if err := store.RecordModelLocked(e); err != nil {
 			return err
 		}

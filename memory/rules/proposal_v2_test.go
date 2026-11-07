@@ -96,82 +96,6 @@ func TestProposalDueOnlyWhenEvidenceChanged(t *testing.T) {
 	}
 }
 
-// SettleV2 counts only the non-empty compaction passes that record having run with exactly a
-// definition's held text: never the compaction that held it, never an empty one, never another
-// session's compaction that ran without it, wherever those land in the shared ledger. It decides
-// each kind on its own evidence: the consolidation instructions on a level-1 answer under them
-// (reverted on a loss), a detector on detector runs under it.
-func TestSettleV2(t *testing.T) {
-	store := newStore(t)
-	held := func(kind, name, text string) layer.Definition {
-		d, err := store.Layer().Hold(layer.Definition{Kind: kind, Name: name, Model: "p/m", Text: text})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d
-	}
-	events := func() []curated.ModelEvent {
-		e, err := store.ModelEvents("p/m")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return e
-	}
-	compaction := func(p Pass) {
-		t.Helper()
-		if _, err := AfterPass(store, "p/m", p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	instructions := held(layer.KindInstructions, agents.InstructionsConsolidation, "Merge less.")
-	detector := held(layer.KindDetector, "missed-paths", "detector[1]{check,description}:\n  thin-chunk,notes counted")
-	if instructions.Engine != curated.EngineV2 || detector.Engine != curated.EngineV2 {
-		t.Fatalf("a hold through a v2 store is not marked v2: %q %q", instructions.Engine, detector.Engine)
-	}
-	both := []string{instructions.HeldID(), detector.HeldID()}
-
-	// The compaction that held them read its layer before the hold: it ran with neither, and its
-	// clean level-1 answer is never their proof.
-	if err := RecordDetection(store, "p/m", Findings{Counts: map[string]int{}}, 200); err != nil {
-		t.Fatal(err)
-	}
-	compaction(Pass{Level1: true, Counts: map[string]int{}})
-	// Another session's compaction recorded after the hold, whose layer was read before it: its
-	// pass names neither, so it is no evidence either, though it comes after the hold.
-	if err := RecordDetection(store, "p/m", Findings{Counts: map[string]int{}}, 200); err != nil {
-		t.Fatal(err)
-	}
-	compaction(Pass{Level1: true, Counts: map[string]int{CountLevel1UnionKept: 1}})
-	for _, d := range []layer.Definition{instructions, detector} {
-		if decided, _, reason := SettleV2(events(), d); decided {
-			t.Fatalf("%s/%s settled by a compaction that never ran under it (%s)", d.Kind, d.Name, reason)
-		}
-	}
-	// An empty compaction that ran under them: no evidence.
-	compaction(Pass{Empty: true, RanHeld: both})
-	for _, d := range []layer.Definition{instructions, detector} {
-		if decided, _, _ := SettleV2(events(), d); decided {
-			t.Fatalf("%s/%s settled by an empty compaction", d.Kind, d.Name)
-		}
-	}
-	// A compaction that ran under them, whose level 1 kept a fact back.
-	if err := RecordDetection(store, "p/m", Findings{Counts: map[string]int{}}, 200); err != nil {
-		t.Fatal(err)
-	}
-	compaction(Pass{Level1: true, Counts: map[string]int{CountLevel1UnionKept: 1}, RanHeld: both})
-	if decided, clean, reason := SettleV2(events(), instructions); !decided || clean || !strings.Contains(reason, CountLevel1UnionKept) {
-		t.Fatalf("instructions: decided %v clean %v (%s)", decided, clean, reason)
-	}
-	if decided, clean, reason := SettleV2(events(), detector); !decided || !clean || !strings.Contains(reason, "200 source tokens over 1 later compaction") {
-		t.Fatalf("detector: decided %v clean %v (%s)", decided, clean, reason)
-	}
-	// A pass that ran with another text of the name is no evidence for this one.
-	changed := held(layer.KindDetector, "missed-paths", "detector[1]{check,description}:\n  thin-chunk,notes counted again")
-	if decided, _, _ := SettleV2(events(), changed); decided {
-		t.Fatal("a re-held text was settled on passes that ran with the old one")
-	}
-}
-
 // V2UnitsSinceProposal counts the non-empty v2 compaction passes after the usage ledger length
 // the last level-1 offer recorded (from the start before any), never a v1 observer pass.
 func TestV2UnitsSinceProposal(t *testing.T) {
@@ -246,23 +170,23 @@ func TestSettleV2GoDetectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range []layer.Definition{good, loops, query} {
-		if decided, _, reason := SettleV2(events(), d); decided {
-			t.Fatalf("%s settled without a detector pass (%s)", d.Name, reason)
+		if st := SettleV2(events(), d); st.Decided {
+			t.Fatalf("%s settled without a detector pass (%s)", d.Name, st.Reason)
 		}
 	}
 	// A pass that never started them (still queued at the kill) names neither.
 	pass(nil, map[string]int{}, nil)
-	if decided, _, _ := SettleV2(events(), good); decided {
+	if SettleV2(events(), good).Decided {
 		t.Fatal("settled by a pass that never started it")
 	}
 	pass([]string{good.HeldID(), loops.HeldID(), query.HeldID()}, map[string]int{DefinedCountKey("plans"): 0}, map[string]string{"loops": "unfinished at the next compaction"})
-	if decided, clean, reason := SettleV2(events(), good); !decided || !clean || !strings.Contains(reason, "1 later detector pass") {
-		t.Fatalf("good: %v %v (%s)", decided, clean, reason)
+	if st := SettleV2(events(), good); !st.Decided || !st.Clean || !strings.Contains(st.Reason, "1 later detector pass") {
+		t.Fatalf("good: %+v", st)
 	}
-	if decided, clean, reason := SettleV2(events(), loops); !decided || clean || !strings.Contains(reason, "unfinished at the next compaction") {
-		t.Fatalf("loops: %v %v (%s)", decided, clean, reason)
+	if st := SettleV2(events(), loops); !st.Decided || st.Clean || !strings.Contains(st.Reason, "unfinished at the next compaction") {
+		t.Fatalf("loops: %+v", st)
 	}
-	if decided, _, _ := SettleV2(events(), query); decided {
+	if SettleV2(events(), query).Decided {
 		t.Fatal("a held query detector was settled")
 	}
 	// The held query detector never blocks an offer; a held Go detector does.

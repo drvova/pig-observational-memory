@@ -332,6 +332,13 @@ type Pass struct {
 	Level1 bool
 	// RanHeld are the held definitions the compaction ran with (curated.ModelEvent.RanHeld).
 	RanHeld []string
+	// RanWritten are the model's own written definitions it ran with
+	// (curated.ModelEvent.RanWritten).
+	RanWritten []string
+	// Unit is what its cut range's records give settlement: evidence roots and scope (UnitOf).
+	Unit Unit
+	// Turns are the assistant messages the cut range removed.
+	Turns int
 }
 
 // AfterPass records one compaction of model in its usage ledger as its evidence unit and
@@ -445,6 +452,17 @@ func For(store curated.Store, model string) Active {
 		return Active{}
 	}
 	return ActiveFor(ofV2(rulesOf(h.List(layer.KindRemedy))), model)
+}
+
+// ForScope is For with the rules whose settled scope does not cover repo and family left out
+// (layer.Harness.InScope; decision 24, read-time scope).
+func ForScope(store curated.Store, model, repo, family string) Active {
+	migrate(store)
+	h, _, err := store.Layer().Load(model)
+	if err != nil {
+		return Active{}
+	}
+	return ActiveFor(ofV2(rulesOf(h.InScope(repo, family).List(layer.KindRemedy))), model)
 }
 
 // DetectorCountsLine is model's detector counts over its last compactions (at most

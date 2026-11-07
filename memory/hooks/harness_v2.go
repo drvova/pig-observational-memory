@@ -6,6 +6,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/consolidate"
 	"github.com/drvova/pig-observational-memory/memory/debuglog"
+	"github.com/drvova/pig-observational-memory/memory/declare"
 	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/harness"
 	"github.com/drvova/pig-observational-memory/memory/host"
@@ -62,7 +63,7 @@ func detectV2(ctx context.Context, rt *runtime.Runtime, h host.Host, at string, 
 		Defined: harness.DefinedQueries(h, cfg, harness.MemoryToolNames(rt)),
 	})
 	logData := map[string]any{"at": at, "uncited": len(findings.Uncited), "counts": findings.Counts, "tokens": rules.SourceTokens(covered)}
-	if len(notes) > 0 && l.Rules().Has(rules.RemedyKeepHead) {
+	if len(notes) > 0 && keepHeadInScope(l, notes) {
 		existing := append(append([]ledger.Observation(nil), folded.Observations...), notes...)
 		kept, refused := rules.KeepHead(entries, findings.Uncited, read, result.CoversUpToID, existing)
 		for i := range kept {
@@ -78,6 +79,20 @@ func detectV2(ctx context.Context, rt *runtime.Runtime, h host.Host, at string, 
 			debuglog.Log(ctx, "harness.v2.detect_record_failed", map[string]any{"at": at, "errorMessage": err.Error()})
 		}
 	}
+}
+
+// keepHeadInScope reports whether a keep-head rule applies to the model for the extraction whose
+// records are notes: its rules with their settled scopes covering the repository and task
+// family of those records (rules.ForScope; decision 24, read-time scope).
+func keepHeadInScope(l harness.Ledger, notes []ledger.Observation) bool {
+	all := make(map[string]bool)
+	for _, o := range notes {
+		for _, id := range o.SourceEntryIDs {
+			all[id] = true
+		}
+	}
+	u := rules.UnitOf(notes, all)
+	return rules.ForScope(l.Store, l.Model, u.Repo, u.Family).Has(rules.RemedyKeepHead)
 }
 
 // placeNotesV2 puts each note into the batch of the cut-point segment holding its source entry
@@ -158,21 +173,17 @@ func recordCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, e
 		cutIDs[entry.ID] = true
 	}
 	empty := true
-	for _, o := range ledger.FoldLedger(entries, "").Observations {
+	observations := ledger.FoldLedger(entries, "").Observations
+	for _, o := range observations {
 		if citesAny(o.SourceEntryIDs, cutIDs) {
 			empty = false
 			break
 		}
 	}
-	ranHeld := []string{}
-	for _, d := range snapshot.List("") {
-		if d.State == layer.StateHeld && d.Model == l.Model {
-			ranHeld = append(ranHeld, d.HeldID())
-		}
-	}
-	sort.Strings(ranHeld)
+	ranHeld, ranWritten := ranWithV2(snapshot, l.Model)
 	catalog := l.Layer().Harness()
-	transitions, err := rules.AfterPass(l.Store, l.Model, rules.Pass{Counts: counts, Level1: counts != nil, Empty: empty, Layer: &catalog, RanHeld: ranHeld})
+	transitions, err := rules.AfterPass(l.Store, l.Model, rules.Pass{Counts: counts, Level1: counts != nil, Empty: empty, Layer: &catalog, RanHeld: ranHeld,
+		RanWritten: ranWritten, Unit: rules.UnitOf(observations, cutIDs), Turns: assistantTurns(cut)})
 	logData := map[string]any{"model": l.Model, "empty": empty, "counts": counts, "transitions": len(transitions)}
 	if err != nil {
 		logData["errorMessage"] = err.Error()
@@ -184,5 +195,49 @@ func recordCompactionV2(ctx context.Context, rt *runtime.Runtime, h host.Host, e
 	}
 	if ctx.Err() == nil {
 		settleDefinitionsV2(ctx, h, l, snapshot)
+		rollbackInsecureV2(ctx, h, l)
 	}
+}
+
+// ranWithV2 are the held definitions of model the compaction ran with (snapshot, its layer read
+// before level 1 and scoped to the compaction), and its own written ones, by held id
+// (layer.Definition.HeldID), sorted: what attributes the pass to a held definition, and what
+// keeps a pass out of a definition's control windows (rules.SettleV2).
+func ranWithV2(snapshot layer.Harness, model string) (held, written []string) {
+	held, written = []string{}, []string{}
+	for _, d := range snapshot.List("") {
+		switch {
+		case d.Model != model:
+		case d.State == layer.StateHeld:
+			held = append(held, d.HeldID())
+		case d.State == layer.StateWritten:
+			written = append(written, d.HeldID())
+		}
+	}
+	sort.Strings(held)
+	sort.Strings(written)
+	return held, written
+}
+
+// scopedLayerV2 is active with the written definitions whose settled scope does not cover the
+// compaction left out (layer.Harness.InScope): the scope is the repository and task family of
+// the records citing cut (rules.UnitOf).
+func scopedLayerV2(active declare.Active, entries, cut []ledger.Entry) declare.Active {
+	cutIDs := make(map[string]bool, len(cut))
+	for _, e := range cut {
+		cutIDs[e.ID] = true
+	}
+	u := rules.UnitOf(ledger.FoldLedger(entries, "").Observations, cutIDs)
+	return declare.Of(active.Harness().InScope(u.Repo, u.Family))
+}
+
+// assistantTurns are the assistant messages among cut: the turns a definition is charged for.
+func assistantTurns(cut []ledger.Entry) int {
+	n := 0
+	for _, e := range cut {
+		if e.Type == "message" && e.MessageRole() == "assistant" {
+			n++
+		}
+	}
+	return n
 }

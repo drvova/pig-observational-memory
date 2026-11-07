@@ -778,12 +778,15 @@ func TestLispCuratedParity(t *testing.T) {
 
 // settleCase is one held definition and the usage ledger events it is settled on.
 type settleCase struct {
-	Kind     string               `json:"kind"`
-	Name     string               `json:"name"`
-	HeldID   string               `json:"heldId"`
-	Time     string               `json:"time"`
-	Detector string               `json:"detector"`
-	Events   []curated.ModelEvent `json:"events"`
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+	HeldID   string `json:"heldId"`
+	Time     string `json:"time"`
+	Detector string `json:"detector"`
+	// Text is the definition's text as declared, whose tokens an instructions definition is
+	// charged (rules.SettleV2's cost).
+	Text   string               `json:"text"`
+	Events []curated.ModelEvent `json:"events"`
 }
 
 func TestLispSettleParity(t *testing.T) {
@@ -811,14 +814,24 @@ func TestLispSettleParity(t *testing.T) {
 			}
 		}
 		var events []curated.ModelEvent
-		for k := rng.IntN(5); k > 0; k-- {
+		// A long case is a null arm: controls before the hold, then compactions under it, so the
+		// settlement rules reach their decisions; a short one is random.
+		n, long := rng.IntN(5), i%3 == 0
+		if long {
+			n = 8 + rng.IntN(10)
+		}
+		for j := 0; j < n; j++ {
 			offsets := []time.Duration{-time.Hour, -time.Nanosecond, 0, time.Nanosecond, time.Minute, 3 * time.Hour}
-			e := curated.ModelEvent{Time: held.Add(offsets[rng.IntN(len(offsets))]).Format(time.RFC3339Nano), Model: "p/m", Engine: curated.EngineV2}
+			at := held.Add(offsets[rng.IntN(len(offsets))])
+			if long {
+				at = held.Add(time.Duration(j-n/2) * time.Minute)
+			}
+			e := curated.ModelEvent{Time: at.Format(time.RFC3339Nano), Model: "p/m", Engine: curated.EngineV2}
 			if rng.IntN(8) == 0 {
 				e.Engine = ""
 			}
-			switch rng.IntN(3) {
-			case 0:
+			switch kind := rng.IntN(3); {
+			case kind == 0 && !long:
 				e.Kind = curated.ModelKindDetectorPass
 				e.Cut = fmt.Sprintf("e%d", rng.IntN(9))
 				e.Counts = map[string]int{}
@@ -835,29 +848,43 @@ func TestLispSettleParity(t *testing.T) {
 				e.Tokens = []int{0, 40, 250}[rng.IntN(3)]
 				e.Level1 = rng.IntN(2) == 0
 				e.Counts = map[string]int{}
-				for _, k := range []string{rules.CountLevel1Failed, rules.CountLevel1SpecificsRefused, rules.CountLevel1UnionKept, rules.CountLevel1Refused} {
+				for _, k := range []string{rules.CountLevel1Failed, rules.CountLevel1SpecificsRefused, rules.CountLevel1UnionKept, rules.CountLevel1Refused,
+					rules.DetectUncitedAssistantSpecifics, rules.DetectDecodeFailure, rules.DetectDroppedThenQueried} {
 					if rng.IntN(5) == 0 {
 						e.Counts[k] = rng.IntN(3)
 					}
 				}
+				// The settlement fields (rules.SettleV2's null arm): most passes carry them.
+				if rng.IntN(6) != 0 {
+					harm := rules.HarmOf(e.Counts)
+					e.Harm = &harm
+				}
+				for k := rng.IntN(3); k > 0; k-- {
+					e.Roots = append(e.Roots, fmt.Sprintf("%016x", rng.IntN(30)))
+				}
+				sort.Strings(e.Roots)
+				e.Roots = slices.Compact(e.Roots)
+				e.Turns = rng.IntN(12)
+				e.Repo = []string{"", "r1", "r2"}[rng.IntN(3)]
+				e.Family = []string{"", ".go", ".md"}[rng.IntN(3)]
+				if rng.IntN(6) == 0 {
+					e.RanWritten = []string{d.Key() + "@00000000000000ff"}
+				}
 			}
-			if rng.IntN(4) != 0 {
+			switch {
+			case long && j < n/2:
+				if rng.IntN(8) == 0 {
+					e.RanHeld = []string{d.Key() + "@0000000000000000"}
+				}
+			case rng.IntN(4) != 0:
 				e.RanHeld = []string{id}
-			} else if rng.IntN(2) == 0 {
+			case rng.IntN(2) == 0:
 				e.RanHeld = []string{d.Key() + "@0000000000000000"}
 			}
 			events = append(events, e)
 		}
-		decided, clean, reason := rules.SettleV2(events, d)
-		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: detector, Events: events})
-		state, cleanWord := "held", "unclean"
-		if decided {
-			state = "decided"
-		}
-		if clean {
-			cleanWord = "clean"
-		}
-		want = append(want, fmt.Sprintf("%d %s %s %s", i+1, state, cleanWord, quoted(reason)))
+		cases = append(cases, settleCase{Kind: d.Kind, Name: d.Name, HeldID: id, Time: held.Format(time.RFC3339Nano), Detector: detector, Text: d.Declared(), Events: events})
+		want = append(want, fmt.Sprintf("%d %s", i+1, settleWords(rules.SettleV2(events, d))))
 	}
 	path := filepath.Join(t.TempDir(), "cases.json")
 	writeJSON(t, path, cases)
