@@ -626,7 +626,12 @@ func (c *Call) notes(ctx context.Context, fn string, o omwire.Options, n int) (a
 	shown, nextSnippet := bound(n, matched, next, fn, o)
 	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: set.t.ranked}
 	var hits []string
+	fresh := map[string]string(nil)
+	if shown > 0 && set.t.anchors != nil {
+		fresh = c.freshness()
+	}
 	for _, i := range set.t.idx[:shown] {
+		set.notes[i].Fresh = fresh[set.notes[i].ID]
 		out.Rows = append(out.Rows, set.notes[i])
 		hits = append(hits, set.notes[i].ID)
 	}
@@ -693,10 +698,15 @@ func (c *Call) searchNotes(ctx context.Context, fn string, o omwire.Options, n i
 	shown, nextSnippet := bound(n, matched, nil, fn, o)
 	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: got.partial}
 	var hits []string
+	fresh := map[string]string(nil)
+	if shown > 0 && got.set.t.anchors != nil {
+		fresh = c.freshness()
+	}
 	note := func(k int) om.Note {
 		i := got.pool[k]
 		nt := got.set.notes[i]
 		nt.Tag = got.set.tags[i]
+		nt.Fresh = fresh[nt.ID]
 		hits = append(hits, nt.ID)
 		return nt
 	}

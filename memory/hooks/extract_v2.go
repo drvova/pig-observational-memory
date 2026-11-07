@@ -59,6 +59,7 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 		RepoRoot:  root,
 	})
 	result, record := detectV2(ctx, rt, h, "turn_end", entries, start, len(entries), folded, result)
+	stampV2(h, &result)
 	appended, err := appendExtraction(h, result, true)
 	logExtraction(ctx, "turn_end", result, appended, err)
 	if err == nil && len(appended) > 0 {
@@ -125,6 +126,7 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 		RepoRoot:  root,
 	})
 	result, record := detectV2(ctx, rt, h, "compaction", entries, start, cut, folded, result)
+	stampV2(h, &result)
 	appended, err := appendExtraction(h, result, true)
 	logExtraction(ctx, "compaction", result, appended, err)
 	if err == nil && len(appended) > 0 && fresh {
@@ -147,11 +149,7 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 // (Runtime.CachedRepo).
 func encodingOf(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) (ledger.Writer, ledger.Frame, string) {
 	writer := writerOf(h)
-	key := h.Cwd() + "\x00"
-	if i := ledger.FindLastCompactionIndex(entries); i >= 0 {
-		key += entries[i].ID
-	}
-	repo, ok := rt.CachedRepo(key, h)
+	repo, ok := repoOfV2(rt, h, entries)
 	if !ok {
 		return writer, ledger.Frame{}, ""
 	}

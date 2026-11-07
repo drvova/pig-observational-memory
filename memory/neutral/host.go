@@ -46,6 +46,9 @@ type Host struct {
 	// ReadRepo reads the git repository holding a directory (gitrepo.Read, which the om command
 	// sets); nil reads none, so records carry no frame.
 	ReadRepo func(dir string) (host.Repo, bool, error)
+	// ReadStructure answers the HEAD structure view of a repository (gitrepo.Structure, which the
+	// om command sets); nil answers none, so records get no freshness verdict.
+	ReadStructure func(dir string, repo host.Repo, q host.StructureQuery) (host.StructureAnswer, bool, error)
 
 	// The parsed transcript and store, kept while their files are unchanged (Versioned), so a
 	// hook that appends many entries reads each file once rather than once per append.
@@ -66,6 +69,7 @@ var _ host.ToolHost = (*Host)(nil)
 var _ host.ConfigHomer = (*Host)(nil)
 var _ host.SessionFileReader = (*Host)(nil)
 var _ host.RepoReader = (*Host)(nil)
+var _ host.StructureReader = (*Host)(nil)
 var _ host.HarnessNamer = (*Host)(nil)
 
 // Harness is the session's harness name.
@@ -77,6 +81,19 @@ func (h *Host) Repo() (host.Repo, bool, error) {
 		return host.Repo{}, false, nil
 	}
 	return h.ReadRepo(h.Dir)
+}
+
+// Structure answers the HEAD structure view (ReadStructure over the repository Repo reads),
+// none without a reader.
+func (h *Host) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	if h.ReadStructure == nil {
+		return host.StructureAnswer{}, false, nil
+	}
+	repo, ok, err := h.Repo()
+	if err != nil || !ok {
+		return host.StructureAnswer{}, false, err
+	}
+	return h.ReadStructure(h.Dir, repo, q)
 }
 
 func (h *Host) now() time.Time {

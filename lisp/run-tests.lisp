@@ -84,6 +84,8 @@
 (load (merge-pathnames "tests/insecure.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 ;; Phase 4: the search behind the reads (docs/protocol.md, "Retrieval").
 (load (merge-pathnames "tests/retrieval.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 4: project records and freshness verdicts (contracts/project.jsonl).
+(load (merge-pathnames "tests/project.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
 (let ((errors 0))
   (dolist (test *tests*)

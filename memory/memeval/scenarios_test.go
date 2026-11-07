@@ -87,11 +87,27 @@ func rowsFrom(summary string, turn int) []Row {
 // compactOnce runs one level-0 compaction of entries on cut with a fresh runtime and host.
 func compactOnce(t *testing.T, entries []session.Entry, cut string) (hooks.CompactionResult, []session.Entry) {
 	t.Helper()
+	return compactOnceWith(t, entries, cut, nil)
+}
+
+// compactOnceWith is compactOnce with the host set up by setup first (nil for none).
+func compactOnceWith(t *testing.T, entries []session.Entry, cut string, setup func(*testfix.FakeHost)) (hooks.CompactionResult, []session.Entry) {
+	t.Helper()
+	return compactWithLevel(t, entries, cut, setup, false)
+}
+
+// compactWithLevel is compactOnceWith, with level 1 on when level1 is set (setup scripts the
+// session model's replies).
+func compactWithLevel(t *testing.T, entries []session.Entry, cut string, setup func(*testfix.FakeHost), level1 bool) (hooks.CompactionResult, []session.Entry) {
+	t.Helper()
 	cfg := config.Defaults
-	cfg.ConsolidateOff = true
+	cfg.ConsolidateOff = !level1
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := testfix.NewFakeHost(entries...)
+	if setup != nil {
+		setup(h)
+	}
 	h.UI = false
 	h.Model = testfix.Model("eval", "session", map[string]any{"contextWindow": 200_000, "maxTokens": 32_000})
 	h.ModelsFake.Add(h.Model, testfix.KeyAuth("none"))
@@ -290,15 +306,6 @@ func TestScenario06ShellFailureIsFailed(t *testing.T) {
 		}
 	}
 	t.Fatalf("no attempt row:\n%s", c.Summary)
-}
-
-// Scenario 7: session 1 records parseConfig; the repository renames it; session 2 marks the
-// record stale at the commit that renamed it, never deletes it.
-func TestScenario07RenameMarksStale(t *testing.T) {
-	t.Skip("phase 2: adapter-supplied repo, branch and HEAD; records marked stale@<commit> on a rename")
-	// Input: session 1 states "`parseConfig` in `config/load.go` reads the YAML"; between the
-	// sessions the repository's HEAD renames it to `LoadConfig` in `config/config.go`.
-	// Expected: in session 2 the record is still recallable and carries stale@<commit>.
 }
 
 // Scenario 8: a hypothetical ("would Obsidian help?") and an assistant-guessed path are never

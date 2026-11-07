@@ -44,7 +44,8 @@ the guidelines, one per line."
                                                                (om.layer::make-tool-record) "compile")))))))
            (pin (sb-thread:with-mutex ((conn-mutex c)) (conn-pin c)))
            (call (om.layer:make-call :branch branch :curated-dir store :project project
-                                     :session (host-string "host/sessionId") :model (session-model-key))))
+                                     :session (host-string "host/sessionId") :model (session-model-key)
+                                     :freshness (tool-freshness branch))))
       (multiple-value-bind (text is-error details)
           (om.layer::memory-tool-run args :call call
                                           :index-shown (and (om.layer::pin-p pin) (om.layer::pin-shown-names pin))

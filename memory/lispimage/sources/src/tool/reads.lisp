@@ -209,7 +209,7 @@ carries its note-tag and the contiguous records of its episode or source entry i
     (let ((searches (as-list search)))
       (if (null searches)
           (progn (dolist (x kept-notes) (setf (note-tag x) ""))
-                 (subseq kept-notes 0 (min n (length kept-notes))))
+                 (with-freshness (subseq kept-notes 0 (min n (length kept-notes)))))
           (let* ((records (let ((h (make-hash-table :test 'eq)))
                             (dolist (p pairs h) (setf (gethash (car p) h) (cdr p)))))
                  (pool (map 'vector (lambda (x)
@@ -227,7 +227,24 @@ carries its note-tag and the contiguous records of its episode or source entry i
                                    results)))
                 (when partial
                   (setf heads (om.engine::rank-notes heads (search-words searches))))
-                (subseq heads 0 (min n (length heads))))))))))
+                (mapcar (lambda (h)
+                          (let ((h (first (with-freshness (list h)))))
+                            (setf (note-with h) (with-freshness (note-with h)))
+                            h))
+                        (subseq heads 0 (min n (length heads)))))))))))
+
+(defun with-freshness (notes)
+  "The notes with each project record's freshness verdict after its content (omhost's Note.Fresh,
+which the Go tool prints after the content)."
+  (let ((fresh (call-freshness (the-call))))
+    (if (null fresh)
+        notes
+        (mapcar (lambda (n)
+                  (let ((v (gethash (note-id n) fresh)))
+                    (if v
+                        (let ((c (copy-note n))) (setf (note-content c) (om::cat (note-content n) " (" v ")")) c)
+                        n)))
+                notes))))
 
 (defun om.tool:note-by-id (id)
   "One record by id, dropped ones included."

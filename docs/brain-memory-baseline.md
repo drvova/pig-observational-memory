@@ -134,7 +134,7 @@ column gives that result.
 | 4 | completed migration never shown as pending; a planned one closed by its run shows done in `next` with its receipt | **pass** (phase 3) | |
 | 5 | own edits at their newest state (edited, written, deleted, reverted) | **pass** | |
 | 6 | "Process exited with code 2" is a failed attempt | **pass** | |
-| 7 | rename marks a record stale at a commit | skip, phase 2 | no body yet |
+| 7 | rename marks a record stale at a commit | **pass** (phase 4: "gone at <sha>", real git) | |
 | 8 | hypothetical never a fact | skip, phases 2 and 6 | fails: the question is recorded as a fact |
 | 9 | 50 recalls leave the summary byte-identical | **pass** | |
 | 9 | core rank and support unchanged by recall | skip, phase 6 | no body yet |
@@ -154,7 +154,8 @@ column gives that result.
 | 23 | quality trigger on a 1M window; no level-1 request below the raw floor | **pass** (phase 3) | |
 | 24 | an opinion with pushback is not a rule | **pass** (phase 2, episodes and pushback) | |
 | 25 | insecure preference held, not in the index | skip, phase 1 | fails: in the index |
-| 26 | project record stale against HEAD | skip, phase 4 | no body yet |
+| 26 | project record stale against HEAD | **pass** (phase 4: "changed since", "gone at", level 1's re-check, no structure line) | |
+| 37 | repo id lookup times out | **pass** (phase 4: computed once, cached by the common git dir) | |
 
 Nine passed at the baseline: 1, 2 (constraint), 3, 4, 5, 6, 9 (session), 15 and 16. Phase 2C
 (below) makes 2 (scope exclusion) pass and adds a decision probe (`TestDecisionWithReasonRecorded`). Scenarios 10, 11, 12,
@@ -474,7 +475,7 @@ person's own turns only. Measured on `origin/claude/lisp-core` 118eb45 (before) 
 Phase 4 part A (`claude/phase4-retrieval`; [protocol.md](protocol.md), "Retrieval") ranks the memory
 tool's notes searches: the tokenizer contract, the exact key index, integer BM25, two-level RRF
 (k = 60), neighbour merging, status tags and filters before the bound. Measured on 2026-11-07
-against `5a663ea` (the same tree before retrieval), no model requests.
+against `5a663ea` (the same tree before retrieval, before the part B merge), no model requests.
 
 **Tier 0: no regression.** `go run ./cmd/memeval -seeds 20` (600 compactions, 1,549 snippets run, 0
 failed), `-summary-max 1200` (3,915 snippets, 0 failed) and `-suite all` print tables identical to
@@ -521,6 +522,17 @@ would need about 14 GB here, so only the search was timed. The Lisp search is ab
 Go one.
 
 **Tier 1: ready, not run.** It needs an answering model.
+
+## Phase 4 part B: project knowledge
+
+The HEAD structure view, project records with freshness verdicts, level 1's re-check of changed
+records and the cached repository id (docs/brain-memory.md, "Phase 4 status"). The Tier 0 generator
+runs in no repository, so no record is framed and no verdict is printed: `go run ./cmd/memeval
+-seeds 20` (1,549 snippets run, none failed), `-seeds 20 -summary-max 1200` (3,915, none failed) and
+`-suite all -seeds 20` give the Phase 3 and Tier 0b/0c tables cell for cell, all four invariants
+kept on every compaction, with no model request beyond the suites' scripted level-1 replies.
+Scenarios 7, 26 and 37 run on real git repositories in temporary directories
+(`memory/memeval/project_test.go`).
 
 ## Tier 0b: forgetting
 

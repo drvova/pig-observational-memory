@@ -462,6 +462,21 @@ type FakeHost struct {
 	RepoInfo    *host.Repo
 	RepoErr     error
 	RepoCalls   int
+	// StructureFunc answers Structure (nil: none); StructureCalls counts the calls.
+	StructureFunc  func(host.StructureQuery) (host.StructureAnswer, bool, error)
+	StructureCalls int
+}
+
+// Structure is StructureFunc's answer (none when nil), counted in StructureCalls.
+func (h *FakeHost) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	h.mu.Lock()
+	h.StructureCalls++
+	f := h.StructureFunc
+	h.mu.Unlock()
+	if f == nil {
+		return host.StructureAnswer{}, false, nil
+	}
+	return f(q)
 }
 
 // RequestContext is the cancellation of the request the host answers (Ctx).

@@ -31,6 +31,29 @@ first that fails. Returns how many landed."
           (log-line "turn end: append ~A: ~A" (car p) e)
           (return landed))))))
 
+(defun host-structure (query)
+  "host.StructureReader over the host (host/structure): the decoded answer to query, nil when the
+host reads none or the call fails."
+  (handler-case (let ((answer (om::jget (host-call "host/structure" "query" query) "answer")))
+                  (and (hash-table-p answer) answer))
+    (request-cancelled (e) (error e))
+    (error () nil)))
+
+(defun tool-freshness (branch)
+  "The memory tool's freshness verdicts (omhost's Call.freshness): the active project records of
+branch judged against the host's HEAD structure view, by record id; nil without a repository, a
+view or a record to ask about."
+  (handler-case
+      (let ((repo (om::jget (host-call "host/repo") "repo")))
+        (when (and (hash-table-p repo) (string/= (om::str (om::jget repo "repoId")) ""))
+          (let* ((records (om::folded-active (om::fold-ledger branch)))
+                 (q (om::project-query records repo)))
+            (unless (om::project-query-empty-p q)
+              (let ((answer (host-structure q)))
+                (when answer (om::project-texts (om::project-verdicts records repo answer))))))))
+    (request-cancelled (e) (error e))
+    (error () nil)))
+
 (defun store-dir (c)
   "harness.StoreOf's store: <config home>/observational-memory/memories, nil without one."
   (and (rcfg-curated-memory (conn-cfg c))
@@ -67,6 +90,8 @@ removed query language, is refused (not ported), so the Go engine reads the turn
             (om.layer::legacy-memory-call (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e)))
             (error (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e))))
         (check-cancelled)
+        ;; stampV2: the new project records' body hashes from HEAD.
+        (om::stamp-batches #'host-structure batches)
         (let ((landed (host-append-extraction batches covers)))
           (when (and (plusp landed) record)
             (handler-case (funcall record)

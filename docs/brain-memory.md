@@ -366,13 +366,51 @@ and `contracts/retrieval.jsonl`). Measured in [brain-memory-baseline.md](brain-m
   working, and a ranked list pages by a bigger `Limit`. Detector reads keep the plain filter.
 - **Fold checkpoints: built, per call.** A memory tool call folds each snapshot once; engine private,
   rebuilt, never compared (decision 12). A checkpoint across calls (incremental folding) is not built.
-- **Not built (part B):** links that only expand lexical hits, revocation on read beyond the tags, the
-  HEAD structure view and per-repo project records with freshness verdicts (decision 20, scenario 26).
+- **Not built:** links that only expand lexical hits, and revocation on read beyond the tags. The
+  HEAD structure view and project records are part B (below); a ranked search prints their
+  freshness verdicts as a plain read does.
 - **Tier 1: ready, not run** (it needs an answering model).
 - Also in this part: `isPreference` applies the rule grammar's reported-speech and hypothetical
   exclusions ("My manager said never deploy on Fridays" and "If we never deploy on Fridays…" are no
   preference of the user's), with cases in `contracts/conversation.jsonl`.
 - Scenarios 35 and 36 pass.
+
+### Phase 4 status: project knowledge (part B)
+
+Built in Go and Lisp (docs/memory-v2.md, "Project knowledge"; contracts/encoding.md, "Project
+records"); the adapter runs git, the engine never does. Part A is above.
+
+- **HEAD structure view: built.** `host.StructureReader` (engine RPC `host/structure`) answers a
+  path's existence and blob at HEAD, a symbol's presence in a file (a bounded `git grep -w -F`), a
+  path's blob at an older commit, a bounded diff and a paged file list. `memory/gitrepo` reads HEAD's
+  tree once per (repository, HEAD), at most 100,000 files (past that a missing path is unknown, never
+  gone), and bounds one query's searches to 10 s. Nothing of it is stored: no ledger line is written
+  for structure (scenario 26).
+- **Project records: built.** A decision, a repository convention, or the user's own rule,
+  correction or stated fact, framed in a repository (`frame.repoId`). Level 0 sets `frame.symbol` to
+  the one code symbol it names and stamps `frame.bodyHash` with its path's blob at HEAD when the host
+  can hash it.
+- **Freshness verdicts: built.** At each compaction and on each memory-tool notes read, the active
+  project records are judged against HEAD: "gone at <sha>" only when the path or symbol no longer
+  exists, "changed since <sha>, unverified" when the path's blob differs from the one recorded (the
+  body hash, else the blob at the commit it was framed at), nothing when unchanged or unknown. The
+  summary prints the verdict after the record with one instructions line; a verdict never deletes or
+  supersedes anything.
+- **Re-check inside level 1: built.** The changed records the level-1 input shows are listed as
+  POSSIBLY STALE with their diffs (at most 8, bounded), in the one existing request. Level 1 confirms
+  one (`stale`: the record stands framed at HEAD, `rechecked` in the report) or supersedes it with a
+  record or merge under the status rule; no new request is made.
+- **`om.Head`: built** in the Go tool (pages HEAD's files under a prefix, `om.Limit`/`om.Offset`);
+  the Lisp tool prints the notes' verdicts but has no HEAD file listing yet.
+- **Repo id cached: built** (phase 6's item, scenario 37). `gitrepo.Reader` computes the id once per
+  repository, keyed by the common git directory, in `<engine store>/repos/<hash>.json` (the PiG
+  adapter's `<config>/observational-memory`, the om command's root); a first root-commit lookup runs
+  in the background and is waited on for 2 s, during which records take no frame; a missing or
+  unreadable file is computed again.
+- **Not built:** the om command with the image passes no structure view, so it prints no verdicts
+  there (`OM_ENGINE=go` does).
+- Scenarios 7, 26 and 37 pass; memeval Tier 0, 0b and 0c are unchanged cell for cell
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 4 part B").
 
 ## Scenarios
 

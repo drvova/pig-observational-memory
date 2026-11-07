@@ -53,6 +53,17 @@ func History(opts ...Opt) EntryList {
 	return l
 }
 
+// Head pages HEAD's files.
+//
+// The repository's tree at HEAD is read on demand and never stored; the page is in path order,
+// om.Limit (50 by default, at most 500) files from om.Offset; outside a repository it is an
+// error.
+func Head(prefix string, opts ...Opt) (HeadView, error) {
+	var v HeadView
+	err := call(omwire.MHead, &v, prefix, mergeOpts(opts))
+	return v, err
+}
+
 // Recall reads a record's sources, else an entry (paged), else a saved memory by name.
 func Recall(id string, opts ...Opt) (Text, error) {
 	var t Text

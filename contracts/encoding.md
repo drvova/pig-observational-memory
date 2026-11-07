@@ -132,11 +132,44 @@ the branch and HEAD. Its `repoId` is the first 12 hex characters of the SHA-256 
 `repo\0<remote>\0<root commit>` (no remote leaves it empty), or of `repo-dir\0<common dir>` before
 the first commit: it survives re-clones, moves and worktrees, and an alias table for renamed
 remotes belongs to the core. The engine reads it once per compaction (keyed by the working
-directory and the latest compaction entry), so git runs at most once between two compactions.
+directory and the latest compaction entry), so git runs at most once between two compactions. The
+adapter computes the id once per repository and caches it by the common git directory in the
+engine's own store (`<store>/repos/<first 16 hex of SHA-256 of the common dir>.json`: `commonDir`,
+`repoId`, `remote`, `rootCommit`, `computedAt`), never in the repository; the first id computed
+stands. While a first root-commit lookup is still running (it is waited on for 2 s), the repository
+reads with `repoId` "" and records take no frame; a missing or unreadable file is computed again.
 
 Each new level-0 record then carries `repoId`, `branch` and `head`, and `path`: its one `paths` key
-relative to the work-tree root when inside it. `symbol` and `bodyHash` stay empty in this phase. A
-level-1 merge keeps the frame its sources share, else none.
+relative to the work-tree root when inside it. A project record (below) also carries `symbol` and
+`bodyHash`. A level-1 merge keeps the frame its sources share, else none.
+
+### Project records
+
+A **project record** (`project.IsRecord`, `project-record-p`) is a record framed in a repository
+(`frame.repoId`) that keeps the why: kind `decision` or `convention`, or a `preference`,
+`correction` or `fact` of `source: user-said`. Its `frame.symbol` is its one `symbols` key, else the
+one code symbol its text names in backticks (`project.SymbolIn`: ASCII letters, digits and `_`,
+optionally followed by `()`, with an underscore, a lower-case letter before an upper-case one, or
+the `()`; a path, a dotted name or a plain word is none; two different ones are none). Its
+`frame.bodyHash` is its path's blob at HEAD, set when the record is appended and the adapter's
+HEAD structure view (`host.StructureReader`, engine RPC `host/structure`) answers at the commit the
+record is framed at; otherwise it stays empty.
+
+A compaction, and a memory-tool notes read, judge the active project records of the session's
+repository against HEAD (`project.Query`, `project.Verdicts`; at most 200 records, the newest, and 20
+symbol searches): **gone at <HEAD, 7 hex>** when the view knows the path or the symbol is absent;
+**changed since <frame.head, 7 hex>, unverified** when the path exists with another blob than the
+recorded one (`bodyHash`, else the path's blob at `frame.head`); nothing when unchanged or when the
+view cannot tell (a truncated tree, a failed search). The verdict is printed, never stored, and
+never deletes or supersedes a record. `contracts/project.jsonl` (`go test ./project -args -write`)
+and `contracts/project-render.jsonl` (`go test ./selection -run FreshnessRender -args
+-write-freshness`) pin the verdicts and the summaries both engines give.
+
+The changed records the level-1 input shows are listed as possibly stale with their diffs
+(`consolidate.StaleLine`; at most 8); a `stale` verdict `confirm` replaces the record by itself
+framed at HEAD with its path's blob there, its id the hash of `level1-recheck`, its level-1 id and
+HEAD, so confirming it again at a later HEAD is a new record (`contracts/project-level1.jsonl`,
+`go test ./consolidate -run StaleLevel1 -args -write`).
 
 ### Episode
 

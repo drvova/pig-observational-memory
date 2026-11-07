@@ -296,6 +296,111 @@ type RepoReader interface {
 	Repo() (repo Repo, ok bool, err error)
 }
 
+// The HEAD structure view (docs/brain-memory.md, decision 20; contracts/encoding.md, "Project
+// records"): what the session's repository holds at HEAD, derived on demand by the adapter and
+// cached per (repository, HEAD). It is never stored as fact: the engine reads it to judge its
+// project records' freshness and to answer the memory tool, and writes no line of it.
+
+// StructureQuery is one batch of questions about HEAD. Every part is optional.
+type StructureQuery struct {
+	// Paths asks whether each repository-relative path exists at HEAD, and its blob hash.
+	Paths []string `json:"paths,omitempty"`
+	// Symbols asks whether each symbol appears as a whole word in a path at HEAD ("" path: in
+	// any file).
+	Symbols []SymbolQuery `json:"symbols,omitempty"`
+	// Blobs asks for each path's blob hash at a commit (the hash a record written there would
+	// have carried).
+	Blobs []BlobQuery `json:"blobs,omitempty"`
+	// Diffs asks for each path's diff from a commit to HEAD, bounded.
+	Diffs []DiffQuery `json:"diffs,omitempty"`
+	// List asks for a page of the file list at HEAD.
+	List *ListQuery `json:"list,omitempty"`
+}
+
+// SymbolQuery asks whether Symbol appears in Path at HEAD.
+type SymbolQuery struct {
+	Path   string `json:"path"`
+	Symbol string `json:"symbol"`
+}
+
+// BlobQuery asks for Path's blob hash at commit At.
+type BlobQuery struct {
+	Path string `json:"path"`
+	At   string `json:"at"`
+}
+
+// BlobAnswer is one path's blob at a commit; Known is false when it could not be read (an
+// unknown commit, a path the commit does not hold).
+type BlobAnswer struct {
+	Path  string `json:"path"`
+	At    string `json:"at"`
+	Known bool   `json:"known"`
+	Blob  string `json:"blob,omitempty"`
+}
+
+// DiffQuery asks for Path's diff from commit From to HEAD.
+type DiffQuery struct {
+	Path string `json:"path"`
+	From string `json:"from"`
+}
+
+// ListQuery is a page of HEAD's files whose path starts with Prefix, in path order.
+type ListQuery struct {
+	Prefix string `json:"prefix,omitempty"`
+	Offset int    `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// StructureAnswer answers a StructureQuery at one HEAD, its parts in the query's order.
+type StructureAnswer struct {
+	// RepoID and Head name the repository and the commit answered.
+	RepoID  string         `json:"repoId"`
+	Head    string         `json:"head"`
+	Paths   []PathAnswer   `json:"paths,omitempty"`
+	Symbols []SymbolAnswer `json:"symbols,omitempty"`
+	Blobs   []BlobAnswer   `json:"blobs,omitempty"`
+	Diffs   []DiffAnswer   `json:"diffs,omitempty"`
+	// Files is the page List asked for; Total counts HEAD's files under the prefix.
+	Files []string `json:"files,omitempty"`
+	Total int      `json:"total,omitempty"`
+	// Truncated is true when HEAD holds more files than the adapter lists: a path missing from
+	// the list is then unknown, never gone.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// PathAnswer is one path at HEAD. Known is false when the adapter could not tell (a truncated
+// list, a path outside the work tree); Exists and Blob are then meaningless.
+type PathAnswer struct {
+	Path   string `json:"path"`
+	Known  bool   `json:"known"`
+	Exists bool   `json:"exists"`
+	Blob   string `json:"blob,omitempty"`
+}
+
+// SymbolAnswer is one symbol at HEAD; Known is false when the search failed or timed out.
+type SymbolAnswer struct {
+	Path   string `json:"path"`
+	Symbol string `json:"symbol"`
+	Known  bool   `json:"known"`
+	Found  bool   `json:"found"`
+}
+
+// DiffAnswer is one path's diff, at most the adapter's bound (Truncated past it); Known is false
+// when the diff could not be read (an unknown commit).
+type DiffAnswer struct {
+	Path      string `json:"path"`
+	From      string `json:"from"`
+	Known     bool   `json:"known"`
+	Diff      string `json:"diff,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// StructureReader is a host that answers the HEAD structure view of the session's repository.
+// ok is false outside a repository, before the first commit, or when the host reads none.
+type StructureReader interface {
+	Structure(q StructureQuery) (answer StructureAnswer, ok bool, err error)
+}
+
 // HarnessNamer is a host that names its harness ("pig", or the om registry's harness name), which
 // records carry as their writer.
 type HarnessNamer interface {

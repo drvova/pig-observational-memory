@@ -28,6 +28,9 @@ type Input struct {
 	// Curated are the curated memories the prompt listed (Prompt.Curated): the only ones a
 	// citation may name.
 	Curated []CuratedMemory
+	// Stale are the possibly stale records the prompt listed (Prompt.Stale): the only ones a
+	// stale verdict may name.
+	Stale []StaleRecord
 	// Branch is the current branch, which tells a record of the user's own words (a citation's
 	// support) by its first source entry.
 	Branch []ledger.Entry
@@ -84,6 +87,8 @@ const (
 	ReasonLinkSettled    = "settles a possible update another verdict already settled"
 	ReasonLinkMerged     = "settles a possible update between records its merge joins"
 	ReasonStatusReplace  = "replaces a record of another status (a plan or condition never replaces a fact, a retraction only a plan or condition)"
+	ReasonNotStale       = "names a record the input did not list as possibly stale"
+	ReasonStaleVerdict   = "has no stale verdict: confirm"
 )
 
 // The failure reasons of an output nothing is recorded from.
@@ -114,6 +119,9 @@ type Result struct {
 	// supersede, a rejected one was removed. LinkRecords are the records of Records that only
 	// settle links (the later record with its links settled, replacing it).
 	Confirmed, Rejected, LinkRecords int
+	// Rechecked counts the possibly stale records confirmed: each is replaced by itself framed
+	// at HEAD with the path's blob there, so it is no longer marked.
+	Rechecked int
 	// Cited are the accepted curated citations (Citation).
 	Cited []Citation
 	// Definitions and Rules are the structurally valid harness proposals; the hook holds each
@@ -223,6 +231,7 @@ func Validate(args map[string]any, in Input) Result {
 		v.label(i, item)
 	}
 	v.settleRemaining()
+	v.stale(list(args["stale"]))
 	for i, item := range reflections {
 		v.reflection(i, item)
 	}
@@ -537,9 +546,18 @@ func (v *validator) resolve(id string) string {
 // accept records a new record replacing sources. The record says which records it replaces
 // (Observation.Replaces), so every link to them is read as a link to it (ledger.Standing).
 func (v *validator) accept(record ledger.Observation, sources []string) {
+	v.acceptAs(record, sources, "")
+}
+
+// acceptAs is accept with the id salted by salt when it is not empty (a stale confirmation's
+// HEAD, so confirming one record again at a later HEAD is a new record).
+func (v *validator) acceptAs(record ledger.Observation, sources []string, salt string) {
 	v.leastProvenance(&record, sources)
 	record.Replaces = slices.Clone(sources)
 	record.ID = recordID(record)
+	if salt != "" {
+		record.ID = ids.HashID(strings.Join([]string{"level1-recheck", record.ID, salt}, "\x00"))
+	}
 	record.TokenCount = tokens.ObservationLineTokenCount(tokens.ObservationLine{ID: record.ID, Timestamp: record.Timestamp, Relevance: string(record.Relevance), Content: record.Content})
 	for _, id := range sources {
 		v.used[id] = true
@@ -785,6 +803,49 @@ func (v *validator) confirmable(record ledger.Observation, sources []string, ear
 		return ReasonCycle
 	}
 	return ""
+}
+
+// stale validates the stale verdicts: each names a possibly stale record the input listed, once,
+// that no other proposal took or superseded, and confirms it: the record as it stands, framed at
+// HEAD with its path's blob there, replaces it (its text, kind and origin unchanged), so it is
+// no longer marked. A record that no longer holds is superseded by a record or merge instead.
+func (v *validator) stale(items []any) {
+	for i, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			v.refuse("stale", i, ReasonMalformed)
+			continue
+		}
+		id, _ := m["id"].(string)
+		id = strings.TrimSpace(id)
+		word, _ := m["verdict"].(string)
+		at := slices.IndexFunc(v.in.Stale, func(r StaleRecord) bool { return r.ID == id })
+		_, shown := v.shown[id]
+		switch {
+		case at < 0 || !shown:
+			v.refuse("stale", i, ReasonNotStale)
+			continue
+		case strings.TrimSpace(word) != VerdictRecheck:
+			v.refuse("stale", i, ReasonStaleVerdict)
+			continue
+		case v.used[id]:
+			v.refuse("stale", i, ReasonUsed)
+			continue
+		case v.superseded[id]:
+			v.refuse("stale", i, ReasonSuperseded)
+			continue
+		}
+		r := v.in.Stale[at]
+		record := v.shown[id]
+		record.ID, record.TokenCount = "", 0
+		record.Supersedes = slices.Clone(record.Supersedes)
+		record.Frame.Head, record.Frame.BodyHash = r.Head, r.Blob
+		before := len(v.result.Records)
+		v.acceptAs(record, []string{id}, r.Head)
+		if len(v.result.Records) > before {
+			v.result.Rechecked++
+		}
+	}
 }
 
 // settleRemaining gives each later record whose verdicts no merge or label took a record of its

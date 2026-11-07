@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/selection"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
@@ -41,6 +42,20 @@ type PromptInput struct {
 	// Harness is what the request may define, with the harness evidence the input shows after
 	// the curated memories while room remains; nil when nothing is offered.
 	Harness *DefinitionOffer
+	// Stale are the project records whose file changed at HEAD since they were written
+	// (project.Verdicts, kind changed), with their diffs; the input lists those it shows as
+	// possibly stale after the possible updates, while room remains.
+	Stale []StaleRecord
+}
+
+// StaleRecord is a project record the HEAD structure view found changed (docs/brain-memory.md,
+// decision 20): its id, its path, the commit it was written at (Since), HEAD and the path's blob
+// there (the frame a confirmation gives it), and the path's diff from Since to HEAD, bounded
+// (DiffKnown false when it could not be read).
+type StaleRecord struct {
+	ID, Path, Since, Head, Blob string
+	Diff                        string
+	DiffKnown, Truncated        bool
 }
 
 // Prompt is the level-1 user text and what it shows; validation accepts only ids it shows.
@@ -70,6 +85,10 @@ type Prompt struct {
 	// HarnessShown reports whether the harness evidence fit; when it did not, a line says so and
 	// nothing may be defined.
 	HarnessShown bool
+	// Stale are the possibly stale records listed, each a record the prompt shows; OmittedStale
+	// did not fit, and a line says they keep their mark.
+	Stale        []StaleRecord
+	OmittedStale int
 }
 
 // The section headings of the level-1 input.
@@ -82,6 +101,7 @@ const (
 	headingSubjects     = "CURRENT SUBJECTS:"
 	headingLinks        = "POSSIBLE UPDATES (code found a later record giving a different value of the same type on the same subject and scope; it cannot tell an update from a second value. Settle one with links: confirm when the later value replaces the earlier, reject when both hold. Unsettled ones stay, and both records stay shown):"
 	headingInstructions = "INSTRUCTIONS FOR THIS COMPACTION (from the user):"
+	headingStale        = "POSSIBLY STALE (project records whose file changed at HEAD since they were written; a change is a trigger, not a verdict. Check each claim against its diff: confirm it in stale when it still holds, or supersede it with a record or merge stating what holds now; one left alone keeps its mark):"
 )
 
 // RecordLine is how the level-1 input shows a record: its observer line (id, time, relevance,
@@ -143,6 +163,10 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 	if all := possibleUpdates(in.Candidates, in.Active); len(all) > 0 {
 		linksNotice = tokens.EstimateStringTokens("\n\n" + headingLinks + "\n" + omittedLinksLine(len(all)))
 	}
+	staleNotice := 0
+	if len(in.Stale) > 0 {
+		staleNotice = tokens.EstimateStringTokens("\n\n" + headingStale + "\n" + omittedStaleLine(len(in.Stale)))
+	}
 	curatedNotice := 0
 	if len(in.Curated) > 0 {
 		curatedNotice = tokens.EstimateStringTokens("\n\n" + headingCurated + "\n" + omittedCuratedLine(len(in.Curated)))
@@ -152,7 +176,7 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 		harnessNotice = tokens.EstimateStringTokens("\n\n" + headingHarness + "\n" + harnessNotShown)
 	}
 	cutNotice := max(tokens.EstimateStringTokens(cutNotShown), tokens.EstimateStringTokens(laterEntriesNote(len(in.Cut))))
-	remaining -= candidateNotice + memoryNotice + subjectsNotice + linksNotice + curatedNotice + harnessNotice + cutNotice
+	remaining -= candidateNotice + memoryNotice + subjectsNotice + linksNotice + staleNotice + curatedNotice + harnessNotice + cutNotice
 	if remaining <= 0 {
 		return out, false
 	}
@@ -261,6 +285,40 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 		}
 	}
 
+	// The possibly stale project records among those shown, each with its diff while it fits,
+	// and a line saying how many did not, paid from the room reserved for it.
+	staleSection := ""
+	if staleNotice > 0 {
+		remaining += staleNotice
+		shown := map[string]bool{}
+		for _, o := range append(append([]ledger.Observation{}, out.Candidates...), out.Active...) {
+			shown[o.ID] = true
+		}
+		lines := []string{headingStale}
+		cost := tokens.EstimateStringTokens("\n\n" + headingStale + "\n" + omittedStaleLine(len(in.Stale)))
+		for _, r := range in.Stale {
+			if !shown[r.ID] {
+				continue
+			}
+			text := StaleLine(r)
+			c := tokens.EstimateStringTokens(text + "\n")
+			if cost+c > remaining {
+				out.OmittedStale++
+				continue
+			}
+			cost += c
+			lines = append(lines, text)
+			out.Stale = append(out.Stale, r)
+		}
+		if out.OmittedStale > 0 {
+			lines = append(lines, omittedStaleLine(out.OmittedStale))
+		}
+		if len(lines) > 1 {
+			staleSection = strings.Join(lines, "\n")
+			remaining -= tokens.EstimateStringTokens("\n\n" + staleSection)
+		}
+	}
+
 	// The subjects of the records shown, or a line saying they did not fit, paid from the room
 	// reserved for it.
 	subjectsSection := ""
@@ -331,7 +389,7 @@ func BuildPrompt(in PromptInput) (Prompt, bool) {
 	}
 
 	sections := []string{headingCut + "\n" + cutText, headingCandidates + "\n" + strings.Join(candidateLines, "\n")}
-	for _, s := range []string{memorySection, linksSection, subjectsSection, curatedSection, harnessSection, instructions} {
+	for _, s := range []string{memorySection, linksSection, staleSection, subjectsSection, curatedSection, harnessSection, instructions} {
 		if s != "" {
 			sections = append(sections, s)
 		}
@@ -374,6 +432,32 @@ func linkLine(l Link) string {
 // omittedLinksLine closes the possible updates when n of them did not fit.
 func omittedLinksLine(n int) string {
 	return fmt.Sprintf("omitted: %d more possible updates are not shown; they stay unsettled and cannot be settled here.", n)
+}
+
+// StaleLine is how the level-1 input lists a possibly stale record: its id, the commit it was
+// written at and its path, then its diff to HEAD, each line indented, with role-like labels
+// escaped and secrets redacted (the diff is the repository's text).
+func StaleLine(r StaleRecord) string {
+	since := r.Since
+	if len(since) > 7 {
+		since = since[:7]
+	}
+	line := "[" + r.ID + "] changed since " + since + " in " + r.Path + ":"
+	if !r.DiffKnown || strings.TrimSpace(r.Diff) == "" {
+		return line + "\n  (no diff could be read)"
+	}
+	for _, l := range strings.Split(secrets.Redact(serialize.EscapeRoleLabels(r.Diff)), "\n") {
+		line += "\n  " + l
+	}
+	if r.Truncated {
+		line += "\n  (diff truncated)"
+	}
+	return line
+}
+
+// omittedStaleLine closes the possibly stale records when n of them did not fit.
+func omittedStaleLine(n int) string {
+	return fmt.Sprintf("omitted: %d more possibly stale records are not shown; they keep their mark and cannot be confirmed here.", n)
 }
 
 // possibleUpdates are the possible updates (ledger.Observation.PossiblyUpdates) between records

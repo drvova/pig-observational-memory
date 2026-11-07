@@ -325,6 +325,9 @@ type ConsolidationReport struct {
 	// supersede, a rejected one was removed.
 	Confirmed int `json:"confirmed,omitempty"`
 	Rejected  int `json:"rejected,omitempty"`
+	// Rechecked counts the possibly stale project records level 1 confirmed against their diffs:
+	// each now stands as checked at HEAD (docs/brain-memory.md, decision 20).
+	Rechecked int `json:"rechecked,omitempty"`
 	// Cited counts the curated memories level 1 cited (evidence for a staged one), and Promoted
 	// the staged memories the citations made live.
 	Cited    int `json:"cited,omitempty"`
@@ -889,7 +892,7 @@ func consolidationReportFrom(v any) *ConsolidationReport {
 	}
 	report.Records, report.Merges, report.Reflections = count("records"), count("merges"), count("reflections")
 	report.Aliases, report.Dropped, report.Refused = count("aliases"), count("dropped"), count("refused")
-	report.Confirmed, report.Rejected = count("confirmed"), count("rejected")
+	report.Confirmed, report.Rejected, report.Rechecked = count("confirmed"), count("rejected"), count("rechecked")
 	report.Cited, report.Promoted = count("cited"), count("promoted")
 	report.HarnessOffered, _ = m["harnessOffered"].(bool)
 	report.Defined = count("defined")

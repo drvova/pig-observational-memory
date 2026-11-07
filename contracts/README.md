@@ -36,6 +36,7 @@ member is cleared, not fatal).
 | `lisp-layer-generation` | `~/.om/layer/<model>/manifest.jsonl` (the Lisp image's layer; its `held/index.json` is `layer-held-index`) | Lisp layer |
 | `lisp-layer-unit` | `~/.om/layer/<model>/units.jsonl` (the retire rule's evidence units of the Lisp image's settled definitions) | Lisp layer |
 | `floor-lowering` | `<store>/harness/floor.jsonl` | curated store |
+| `repo-id` | `<root>/repos/<hash>.json` (om) or `<config>/observational-memory/repos/<hash>.json` (PiG): a repository's cached id | engine store |
 | `code-units` | `<config>/observational-memory/memories/code/<project>/units.json` | code store |
 | `record-tool-output` | the value and evidence records level 0 reads from tool output, as members of a records list | session / neutral store |
 | `defs` | the shared record, reflection, alias, details and envelope shapes | — |

@@ -65,10 +65,17 @@ func labelProperties() map[string]any {
 // Tool is the level-1 request's forced tool with nothing to define (ToolFor with no offer).
 func Tool() agents.Tool { return ToolFor(nil) }
 
-// ToolFor is the level-1 request's forced tool. It is never executed: RunSingleRequest reads its
+// VerdictRecheck is a stale item's verdict: the possibly stale record's claim still holds at HEAD.
+const VerdictRecheck = "confirm"
+
+// ToolFor is the level-1 request's forced tool with no possibly stale records (ToolWith).
+func ToolFor(offer *DefinitionOffer) agents.Tool { return ToolWith(offer, false) }
+
+// ToolWith is the level-1 request's forced tool. It is never executed: RunSingleRequest reads its
 // arguments from the one response. With an offer (harness evidence that changed since the last
-// one) it also takes definitions and, when the offer names remedies, rules.
-func ToolFor(offer *DefinitionOffer) agents.Tool {
+// one) it also takes definitions and, when the offer names remedies, rules; with stale (the input
+// has possibly stale project records, PromptInput.Stale) it also takes stale verdicts.
+func ToolWith(offer *DefinitionOffer, stale bool) agents.Tool {
 	record := labelProperties()
 	record["id"] = map[string]any{"type": "string", "description": "The candidate's id."}
 	record["outcome"] = enumOf([]string{ledger.OutcomeFailed, ledger.OutcomeWorked, ledger.OutcomeOpen}, "An attempt record's outcome.")
@@ -105,6 +112,14 @@ func ToolFor(offer *DefinitionOffer) agents.Tool {
 				}, "required": []any{"id", "updates", "verdict"}}},
 			},
 		},
+	}
+	if stale {
+		properties := tool.Parameters["properties"].(map[string]any)
+		properties["stale"] = map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
+			"id":      map[string]any{"type": "string", "description": "A listed POSSIBLY STALE record."},
+			"verdict": enumOf([]string{VerdictRecheck}, "confirm: its claim still holds at HEAD, read against its diff; it stays, checked at HEAD."),
+		}, "required": []any{"id", "verdict"}}}
+		tool.Description += " With POSSIBLY STALE records shown, also verdicts on them."
 	}
 	if offer != nil {
 		properties := tool.Parameters["properties"].(map[string]any)

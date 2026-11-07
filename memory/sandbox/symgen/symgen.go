@@ -47,10 +47,10 @@ var OMNames = []string{
 	// Values and lists.
 	"Note", "Reflection", "Entry", "Memory", "Text", "LayerRow", "StatusInfo", "ModelStatus",
 	"RetiredQuery", "NoteList", "ReflectionList", "EntryList", "MemoryList", "LayerList",
-	"RetiredList",
+	"RetiredList", "HeadView",
 	// Reads.
 	"Notes", "Reflections", "History", "Recall", "NoteByID", "ReflectionByID", "Files", "Commits",
-	"Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Str", "ErrNoCall",
+	"Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Head", "Str", "ErrNoCall",
 	// Writes.
 	"SaveOpt", "Body", "Scope", "Quoting", "EditOpt", "SetType", "SetDescription", "SetBody", "EditQuoting",
 	"Save", "Edit", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define",

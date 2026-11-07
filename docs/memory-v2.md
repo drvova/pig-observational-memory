@@ -542,6 +542,22 @@ model:
   compact" suspension until the tip changes), and the compaction it asks for is the extension's own,
   so it runs level 0 only.
 
+### Project knowledge (no request)
+
+The adapter answers a HEAD structure view of the session's repository (`host.StructureReader`,
+`memory/gitrepo`; docs/brain-memory.md, decision 20): whether a path exists at HEAD and its blob,
+whether a symbol appears in a file, a path's blob at an older commit, a bounded diff, and a paged file
+list, read from HEAD's tree once per (repository, HEAD). Nothing of it is stored as fact. Project
+records (contracts/encoding.md, "Project records": decisions, repository conventions and the user's
+own rules, corrections and facts, framed in the repository) carry their one path and symbol, and the
+blob of the path when the record was written. At each compaction (`hooks/project_v2.go`,
+`compaction-freshness`) the active project records are judged against HEAD and the summary prints
+`(gone at <sha>)` or `(changed since <sha>, unverified)` after a record, with one `- fresh:`
+instructions line; the memory tool's notes reads print the same, and `om.Head(prefix)` pages HEAD's
+files (the Go tool). The changed records go to level 1 as a POSSIBLY STALE list with their diffs,
+inside its one request: `stale` confirms one, a record or merge supersedes one. No verdict deletes
+or supersedes anything by itself.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every

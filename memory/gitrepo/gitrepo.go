@@ -22,8 +22,23 @@ import (
 // than hold an event.
 var Timeout = 5 * time.Second
 
+// Read reads the repository holding dir with no id cache: the root-commit lookup runs every
+// time, bounded by Timeout. ok is false when dir is in none, or git is missing.
+func Read(dir string) (host.Repo, bool, error) { return Reader{}.Read(dir) }
+
+// Reader reads repositories for an adapter. With a Store (a directory of the engine's own,
+// never inside the repository or the harness's files), each repository's id is computed once,
+// keyed by its common git directory, and cached in Store/repos (docs/brain-memory.md, scenario
+// 37): a slow root-commit lookup never holds an event and never yields another id later.
+type Reader struct {
+	Store string
+}
+
 // Read reads the repository holding dir. ok is false when dir is in none, or git is missing.
-func Read(dir string) (host.Repo, bool, error) {
+// With a Store and no cached id, the root-commit lookup runs in the background and is waited on
+// for RootWait at most: when it has not finished, the repository reads with no id (no record
+// takes a frame from it) until the lookup lands in the cache.
+func (r Reader) Read(dir string) (host.Repo, bool, error) {
 	if strings.TrimSpace(dir) == "" {
 		return host.Repo{}, false, nil
 	}
@@ -42,17 +57,41 @@ func Read(dir string) (host.Repo, bool, error) {
 	if branch, err := git(dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && len(branch) > 0 {
 		repo.Branch = branch[0]
 	}
-	if repo.Head != "" {
-		if roots, err := git(dir, "rev-list", "--max-parents=0", "HEAD"); err == nil && len(roots) > 0 {
-			// rev-list lists newest first: the last root is the oldest.
-			repo.RootCommit = roots[len(roots)-1]
-		}
-	}
 	if urls, err := git(dir, "config", "--get-regexp", `^remote\..*\.url$`); err == nil {
 		repo.Remote = pickRemote(urls)
 	}
-	repo.ID = ID(repo.Remote, repo.RootCommit, repo.CommonDir)
+	switch {
+	case repo.Head == "":
+		// Before the first commit the id is the common directory's, never cached: the first
+		// commit gives the repository its lasting id.
+		repo.ID = ID("", "", repo.CommonDir)
+	case r.Store == "":
+		if root, err := RootLookup(dir, Timeout); err == nil {
+			repo.RootCommit = root
+		}
+		repo.ID = ID(repo.Remote, repo.RootCommit, repo.CommonDir)
+	default:
+		if cached, ok := loadID(r.Store, repo.CommonDir); ok {
+			repo.ID, repo.RootCommit = cached.ID, cached.RootCommit
+		} else if cached, ok := r.lookupRoot(dir, repo); ok {
+			repo.ID, repo.RootCommit = cached.ID, cached.RootCommit
+		}
+	}
 	return repo, true, nil
+}
+
+// RootLookup finds the oldest root commit of HEAD in dir, bounded by timeout; tests replace it
+// with a slow one (scenario 37).
+var RootLookup = func(dir string, timeout time.Duration) (string, error) {
+	roots, err := gitWithin(timeout, dir, "rev-list", "--max-parents=0", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if len(roots) == 0 {
+		return "", errors.New("gitrepo: no root commit")
+	}
+	// rev-list lists newest first: the last root is the oldest.
+	return roots[len(roots)-1], nil
 }
 
 // ID is a repository's identity: the hash of its normalized remote and root commit, which
@@ -131,8 +170,11 @@ func canonical(p string) string {
 }
 
 // git runs one git command in dir and returns its non-empty output lines.
-func git(dir string, args ...string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+func git(dir string, args ...string) ([]string, error) { return gitWithin(Timeout, dir, args...) }
+
+// gitWithin is git bounded by timeout.
+func gitWithin(timeout time.Duration, dir string, args ...string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
