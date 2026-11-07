@@ -229,8 +229,11 @@ dropped.
 **A record's document.** Its text is its content (as shown, relative dates resolved), subject,
 scope, tool, target and keys, one per line; its exact keys are, each once: its `keys` in key-kind
 order as stored, its target and a value record's value, the exact-only tokens of its content and its
-normalized error lines. Its tag is the first that holds of `retracted` (its status, or a retraction
-withdrew it), `superseded`, `held` (the insecure pattern list), `contested`, else `believed`.
+normalized error lines. Its tag is its label in the fold ([contracts/truth.md](../contracts/truth.md),
+"Labels"): the first that holds of `retracted` (its status, a retraction withdrew it, or a merge gone
+out), `superseded` (a record supersedes it, level 1 replaced it, or a keep-both update), `held` (the
+insecure pattern list), `contested` (a contested claim, or either end of a contested pair), else
+`believed`.
 
 **Matching.** A searched string looks up, in the exact index, itself normalized as a line and each
 of its raw tokens, byte for byte. A record matches it on any exact hit, or when every white-space

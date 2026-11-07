@@ -558,6 +558,39 @@ tool's `(head prefix)`) pages HEAD's files. The changed records go to level 1 as
 inside its one request: `stale` confirms one, a record or merge supersedes one. No verdict deletes
 or supersedes anything by itself.
 
+### Truth maintenance and forgetting (no request)
+
+Phase 5 of the brain-like memory ([brain-memory.md](brain-memory.md), decisions 1 and 6;
+[contracts/truth.md](../contracts/truth.md) is the contract both engines check):
+
+- **Labels.** The fold gives every record it holds one label, the first that holds of retracted,
+  superseded, held, contested and believed (`ledger.LabelsOf`, `FoldedLedger.Labels`). The memory
+  tool's search tags are these labels, the summary's statuses read them, and level 1 refuses a
+  merge of a record labelled retracted or held.
+- **Supersession.** A newer record level 0 linked to an older one on the same subject and scope is
+  decided three ways (`ledger.Supersession`, under `MaySupersede`): replace (it supersedes it),
+  contested (a negation, or a different value on less authority: neither wins, both shown with
+  `(conflicts <id>)`), or keep-both (the history of a value: the older is labelled superseded and
+  shown with `(updated by <id>)`, so a stale value is never shown as current).
+- **Decision 1's cascade.** A level-1 merge whose source a retraction withdraws as written, or a
+  tombstone forgets, goes out; its other sources' replacements and drops are undone, so they
+  reappear as themselves until a later level 1 merges them again. Level 0 withdraws a merge's
+  matching sources rather than the merge. A reflection survives while `ceil(n/2)` of its `n`
+  supports stand.
+- **Forget records.** A user's own sentence asking to forget something ("forget my home address
+  from memory", "stop remembering X", "forget what I said about X") becomes a record of kind
+  `forget` with a scope (`session`, `project:<repoId>`, `user`) and tombstones naming what it
+  forgets by id, kind and source entries, never by text. The fold leaves those records out for
+  good, with a later re-extraction of the same source, a level-1 relabel and a merge holding the
+  text; level 0 never writes a tombstoned record again. Erasing the stored bytes is phase 8's.
+- **Typed intentions.** Every plan has an `intent`: todo, promise, condition-wait or deferred,
+  from fixed wording. All close only on a tool receipt; a deferred one only on a receipt made under
+  a later request than its own.
+- **Decay (off by default).** With `decay: "compactions"` (or `"turns"`, for comparison) a record
+  whose newest evidence event (its own sources, a later level-0 link to it, a later user or tool
+  record sharing a key) lies `decayHorizon` ticks back is taken after the others of the summary's
+  classes 4 and 6. Never on wall time or retrieval, never the protected classes, never a deletion.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every

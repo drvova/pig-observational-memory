@@ -217,10 +217,11 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
     rollbacks (`TestInjectedOverwriteLeavesSharedMemory`, `TestInjectedLayerForgetLeavesLayer`).
   - Findings, each a skipped test naming its phase:
     - a layer write keeps a secret (phase 8);
-    - the merge's other source does not reappear (phase 5).
+    - the merge's other source does not reappear (phase 5; closed by phase 5 part A).
   - Two secret leaks fixed in Go and Lisp: level 1's projection in the compaction details, and
     the usage ledger's quotes.
-  - Decay and erasure: not built.
+  - Decay: built in phase 5, off by default; part (c) runs with it on, both clocks ("Phase 5"
+    in the baseline). Part (e) checks forget records and tombstones. Erasure: phase 8.
 - **Sharing (Tier 0c): recorded** ("Tier 0c"; `-suite sharing`).
   - Holding: project-scoped and staged memories stay in their repository; concurrent writers
     lose no save, line or generation; another writer's layer change is seen only at the next
@@ -418,6 +419,46 @@ records"); the adapter runs git, the engine never does. Part A is above.
 - Scenarios 7, 26 and 37 pass; memeval Tier 0, 0b and 0c are unchanged cell for cell
   ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 4 part B").
 
+### Phase 5 status: truth maintenance and forgetting (part A)
+
+Built in Go and Lisp with byte-identical answers ([contracts/truth.md](../contracts/truth.md), cases
+in `contracts/truth.jsonl` and `conversation.jsonl`; docs/memory-v2.md, "Truth maintenance and
+forgetting"). Measured in [brain-memory-baseline.md](brain-memory-baseline.md), "Phase 5". Part B,
+the settlement of model-written definitions (decision 24, scenarios 30–34), is not built here.
+
+- **Labels in the fold: built.** Every record the fold holds is believed, superseded, retracted,
+  contested or held, worked out from its links, replacements, retractions, contests, holds and the
+  cascade (`FoldedLedger.Labels`, `folded-labels`). The memory tool's search tags are these labels;
+  the summary's statuses read them; level 1 refuses a merge of a record labelled retracted or held.
+- **Decision 1's cascade: built.** A level-1 merge whose source is withdrawn as written by a
+  retraction, or forgotten, goes out; its replacements and drops are undone, so its other sources
+  reappear as themselves (believed) until a later level 1 merges them again. Level 0 withdraws the
+  matching sources of a merge rather than the merge, so the cascade is set arithmetic; the model is
+  never asked to rebuild a record. A reflection survives while k = ceil(n/2) of its n supports
+  stand; a forgotten support takes it out whatever k. Scenario 17 passes, and Tier 0b's "the
+  merge's other source reappears as itself" goes from 0 of 20 to 20 of 20.
+- **Forget records and tombstones: built.** A user's own sentence in fixed wording ("forget X from
+  memory", "stop remembering X", "forget what I said about X") is a forget record with a scope
+  (session, `project:<repoId>`, user) and permanent tombstones (id, kind, source entries; never the
+  value). The fold leaves the named records out, with a re-extraction of the same source, a level-1
+  relabel and a merge holding the text; level 0 never writes a tombstoned record again. The user's
+  words are decision 2's gate: tool output and the assistant never make one. Curated-memory forgets
+  keep their decision 2 gate; their files stay until phase 8's erasure.
+- **Typed intentions: built.** Plans carry `intent`: todo, promise, condition-wait or deferred, from
+  fixed wording; all close only on Phase 3's tool receipts, and a deferred plan only on a receipt
+  made under a later request.
+- **Three-way supersession: built.** A newer record on the same subject and scope against an older
+  one is replace, keep-both (the history of a value: the older is labelled superseded and shown
+  `(updated by <id>)`) or contested (a negation, or a value on less authority: both shown
+  `(conflicts <id>)`, never last-writer-wins), under `ledger.MaySupersede`.
+- **Decay with floors: built, off** (`decay`, `decayHorizon`). It lowers rank only in the summary's
+  classes 4 and 6, on a clock of compactions (or turns) over evidence events; a record's own
+  retrieval, recall, reuse or self-graded outcome is never one, and nothing is deleted. Floors:
+  the user's rules, prohibitions, constraints and corrections, unsuperseded failed attempts, secret
+  locations; pinned memories and user definitions are outside the ledger.
+- **Not built:** erasure of the stored bytes (phase 8), carrying tombstones across sessions (the
+  core log, phase 6), and definition settlement (part B).
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -444,7 +485,7 @@ in a majority of runs.
 | 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated |
 | 15 | A stale layer is served after another writer | Seen only at the next compaction (fixed) |
 | 16 | A torn manifest line reuses a generation | The next gen is above the highest recorded (fixed) |
-| 17 | A retracted source survives inside a merge | The merge goes out (decision 1) |
+| 17 | A retracted source survives inside a merge | The merge goes out (decision 1); its other sources reappear as themselves (passes: phase 5 part A) |
 | 18 | A forget is injected through tool output, or planted in a README | Staged; shared memory unchanged |
 | 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes |
 | 20 | A dream hypothesis is asserted as fact | Never in fact classes, also when clean inputs over-generalize into a rule |

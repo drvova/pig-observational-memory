@@ -69,6 +69,13 @@ and `roles.jsonl` are their cases, rewritten with `cd memory && go test ./secret
 authority, hedge, time hint, keys, frame, writer), the hedge lexicon and the project identity;
 `encoding.jsonl` holds the cases both engines check.
 
+## Truth maintenance and forgetting
+
+[truth.md](truth.md) specifies the fold's labels, the three-way supersession decision, forget
+records and their tombstones, decision 1's cascade, typed intentions and decay; `truth.jsonl`
+holds Go's answers for both engines (`cd memory && go test ./ledger -run TruthContract -args
+-write`), and the forget grammar's cases are in `conversation.jsonl`.
+
 ## Level-0 conversation cases
 
 `conversation.jsonl` holds level 0's records for short branches that state rules, scope exclusions,
