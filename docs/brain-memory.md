@@ -150,10 +150,11 @@ The owner accepted the follow-up research's recommended changes. They refine dec
 24. **Model-written definitions settle by five rules,** all code over recorded events, so none adds
     a model request. They refine `rules.SettleV2`.
     - **Null arm and cost.** A held definition settles only when its effect over the compactions
-      whose `RanHeld` names it beats the spread between two control windows of the same model's
-      compactions where it did not run (an A-versus-A margin on the same metric, not a gain over
-      zero). Its added request tokens and turns per compaction count against it, so a definition
-      with no net effect after cost settles as rejected.
+      whose `RanHeld` names it exceeds twice the spread between two control windows of the same
+      model's compactions where it did not run (an A-versus-A margin on the same metric, not a gain
+      over zero), and is at least one failure when that spread is 0. Its added request tokens and
+      turns per compaction count against it, so a definition with no net effect after cost settles
+      as rejected.
     - **Independent recurrence.** Evidence that proposes or supports a definition excludes records
       of tool-output origin and is counted by distinct evidence-root digests (decision 7), so
       repeated compactions over the same file, summary or poisoned text count once. The evidence
@@ -467,12 +468,15 @@ events: no request is added. Part A (fold labels, cascade, tombstones, decay) is
 
 - **Null arm and cost: built.** A held definition settles only when its failures over its first
   `MinEvidence` independent compactions beat both of two control windows of `MinEvidence` (the
-  model's latest compactions without it) by more than their spread, after the tokens its text adds
-  to each request and the turns beyond the control windows; otherwise it is rejected. Fewer than
-  2·`MinEvidence` controls is no null arm, and rejects it. The no-op replay (`memeval -suite
-  settle`) settles a no-op at every hold point under the rule before and at none of the recorded
-  Tier 0 hold points after; with per-compaction failure noise it still settles a no-op at about one
-  hold point in seven ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 5 part B").
+  model's latest compactions without it) by more than twice their spread (at least one failure
+  when the spread is 0), after the tokens its text adds to each request and the turns beyond the
+  control windows; otherwise it is rejected. Fewer than 2·`MinEvidence` controls is no null arm,
+  and rejects it. The no-op replay (`memeval -suite settle`) settles a no-op at every hold point
+  under the rule before and at none of the recorded Tier 0 hold points after; with per-compaction
+  failure noise it settles a no-op at 7.5% of hold points (9.5% with a full null arm; 10.9% and
+  13.9% when the margin was one spread), and a definition that removes half the failures under it
+  at 21.8% (27.7%; 34.3% and 43.6% before), the false negatives the tighter margin costs
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 5 part B").
 - **Independent recurrence: built.** Each pass records the evidence roots of its records that are
   not tool output (the digest of a record's kind and content, never its session or entry); a pass
   with no new root is no evidence, and 2·`MinEvidence` passes under a definition from fewer than
@@ -534,7 +538,7 @@ in a majority of runs.
 | 27 | A test run or tool event cuts an episode | Episodes start only at person-typed requests; the test result is a field; boundary density is reported against the evenly spaced baseline (passes: phase 2 part D, `TestEpisodeBoundariesAgainstEvenBaseline`) |
 | 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction |
 | 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task |
-| 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at about one hold point in seven) |
+| 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at 7.5% of hold points) |
 | 31 | A definition is supported by repeated tool output | Tool-output records do not count; compactions over the same evidence root count once; not settled (passes: phase 5 part B) |
 | 32 | Two definitions on one target are each safe but harmful together | Settling one returns the other to a hold window; the check reads their joint evidence (passes: phase 5 part B) |
 | 33 | A security-weakening definition enters the layer | Held; on detection the layer rolls back to the generation before it; listed in `/om:status` (passes: phase 5 part B) |
