@@ -94,12 +94,39 @@ func NothingVisibleNote(entries []ledger.Entry) string {
 }
 
 // ViewUsage is the /om:view usage line.
-const ViewUsage = "Usage: /om:view [full]"
+const ViewUsage = "Usage: /om:view [full | records [page] | record <id>]"
 
 // ViewOutput renders /om:view for a mode ("", "visible" or "full"); usage is true when the
 // mode is unknown. It leaves out the reflections level 1 replaced (ledger.ActiveReflections),
 // as the summaries and the memory tool do. It only reads.
 func ViewOutput(entries []ledger.Entry, mode string) (output string, usage bool) {
+	return ViewOutputArgs(entries, mode)
+}
+
+// ViewOutputArgs is ViewOutput over the command's whole arguments: the first is the mode, and
+// the record views (records.go) read the second.
+func ViewOutputArgs(entries []ledger.Entry, args string) (output string, usage bool) {
+	fields := strings.Fields(args)
+	mode, arg := "", ""
+	if len(fields) > 0 {
+		mode = fields[0]
+	}
+	if len(fields) > 1 {
+		arg = fields[1]
+	}
+	switch mode {
+	case "records":
+		if len(fields) > 2 {
+			return RecordsUsage, true
+		}
+		out := RecordsPage(entries, arg)
+		return out, out == RecordsUsage
+	case "record":
+		if len(fields) != 2 {
+			return RecordsUsage, true
+		}
+		return RecordView(entries, arg), false
+	}
 	var projection ledger.Projection
 	scope := "visible"
 	switch mode {
@@ -148,7 +175,7 @@ func RunView(rt *runtime.Runtime, h host.Host, args string, copyText CopyFunc) e
 			return nil
 		}
 	}
-	output, usage := ViewOutput(entries, mode)
+	output, usage := ViewOutputArgs(entries, args)
 	ShowView(rt, h, output, usage, copyText)
 	return nil
 }

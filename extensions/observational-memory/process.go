@@ -204,7 +204,7 @@ func RegisterProcess(ext *sdk.Extension, client *enginerpc.Client) {
 		},
 	})
 	ext.RegisterCommand("om:view", sdk.CommandOptions{
-		Description: "Print and copy observational memory content (visible by default, full for recorded memory)",
+		Description: "Print and copy observational memory content (visible by default, full for recorded memory; records [page] and record <id> show each record's provenance, lifecycle and use)",
 		Handler: func(ctx sdk.Context, args string) error {
 			return client.Command(sdkhost.New(ctx), enginerpc.CommandView, args)
 		},

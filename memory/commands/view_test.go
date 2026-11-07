@@ -144,7 +144,7 @@ func TestViewKeepsRenderingWhenCopyFails(t *testing.T) {
 func TestViewRejectsUnsupportedArgumentsWithoutCopying(t *testing.T) {
 	output, clip := runView(t, nil, "diff", true)
 
-	if len(clip.calls) != 0 || output != "Usage: /om:view [full]" {
+	if len(clip.calls) != 0 || output != commands.ViewUsage {
 		t.Fatalf("output %q clipboard %q", output, clip.calls)
 	}
 }

@@ -167,6 +167,13 @@ func lispFlow(t *testing.T, image string) string {
 	section("view after compact", om(t, "", "view", "--harness", "mine", "--dir", home))
 	section("view full", om(t, "", "view", "--harness", "mine", "--dir", home, "full"))
 	section("view usage", om(t, "", "view", "--harness", "mine", "--dir", home, "everything"))
+	// Per-record transparency (phase 7): a page of records and one record's view.
+	section("view records", om(t, "", "view", "--harness", "mine", "--dir", home, "records"))
+	section("view records 2", om(t, "", "view", "--harness", "mine", "--dir", home, "records", "2"))
+	if id := firstRecordID(store("mine", "g1")); id != "" {
+		section("view record", om(t, "", "view", "--harness", "mine", "--dir", home, "record", id))
+	}
+	section("view record unknown", om(t, "", "view", "--harness", "mine", "--dir", home, "record", "000000000000"))
 	// Level 0 after a compaction, a second compaction, and the summary at the next start.
 	for i := 40; i < 48; i++ {
 		lines = append(lines, fmt.Sprintf(`{"id":"m%d","role":"user","text":"Host h-%d moved to region r-%d and now serves port %d.","timestamp":"2026-05-02T10:00:00Z"}`, i, i, i, 9000+i))
@@ -422,6 +429,9 @@ var (
 func normalizeFlow(s, root, home string) string {
 	s = strings.ReplaceAll(s, `"engine":"lisp"`, `"engine":"<engine>"`)
 	s = strings.ReplaceAll(s, `"engine":"go"`, `"engine":"<engine>"`)
+	// /om:view record prints the writer as text.
+	s = strings.ReplaceAll(s, "engine lisp;", "engine <engine>;")
+	s = strings.ReplaceAll(s, "engine go;", "engine <engine>;")
 	s = strings.ReplaceAll(s, root, "<root>")
 	s = strings.ReplaceAll(s, home, "<home>")
 	s = flowStampPattern.ReplaceAllString(s, `"timestamp":"<now>"`)
@@ -433,4 +443,13 @@ func normalizeFlow(s, root, home string) string {
 		names[id] = fmt.Sprintf("<id%d>", len(names))
 		return names[id]
 	})
+}
+
+// firstRecordID is the first record id a store's text holds, "" for none.
+func firstRecordID(store string) string {
+	m := regexp.MustCompile(`"observations":\[\{[^{}]*?"id":"([0-9a-f]{12})"`).FindStringSubmatch(store)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
