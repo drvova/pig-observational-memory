@@ -30,6 +30,9 @@
           "$ref": "entry-extracted.schema.json"
         },
         {
+          "$ref": "entry-sleep.schema.json"
+        },
+        {
           "$ref": "entry-cut.schema.json"
         },
         {

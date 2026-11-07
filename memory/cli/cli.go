@@ -10,6 +10,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/commands"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
+	"github.com/drvova/pig-observational-memory/memory/neutral"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
 )
 
@@ -28,6 +29,8 @@ const usage = `om: observational memory for coding agents
   om tool-spec                       the memory tool's name, description and JSON schema
   om status [--harness h] [--dir d]  the current session's memory figures
   om view [--harness h] [--dir d] [args]  print memory content (as /om:view)
+  om sleep [--harness h --dir d]     run the sleep pass (code only) over every session store,
+                                     or over one session with its repository
   om serve                           run the engine as a long-lived process for one harness
                                      process: JSON-RPC 2.0 on stdin and stdout (docs/engine-rpc.md)
   om version
@@ -172,6 +175,29 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return err
 		}
 		return commands.RunView(a.rt, h, strings.Join(fs.Args(), " "), nil)
+	case "sleep":
+		fs := flag.NewFlagSet("sleep", flag.ContinueOnError)
+		harnessName := fs.String("harness", "claude-code", "with --dir: the harness")
+		dir := fs.String("dir", "", "the project directory of the one session to sleep")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		one := false
+		fs.Visit(func(*flag.Flag) { one = true })
+		if !one {
+			return runSleep(root, nil, stdout)
+		}
+		if *dir == "" {
+			*dir, _ = os.Getwd()
+		}
+		return runSleep(root, func() (*neutral.Host, string, error) {
+			s, ok := session(root, *harnessName, *dir)
+			if !ok {
+				return nil, "", fmt.Errorf("om sleep: no %s session recorded for %s", *harnessName, *dir)
+			}
+			h, err := s.Host(root, stdout)
+			return h, *harnessName + "/" + s.ID, err
+		}, stdout)
 	case "install", "uninstall":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		dry := fs.Bool("dry-run", false, "print what would change, change nothing")

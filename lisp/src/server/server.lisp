@@ -28,6 +28,10 @@
 
 (defvar *server* nil "The running server, nil when none.")
 
+(defvar *idle-hook* nil
+  "A function of the server the accept loop calls about four times a second (the idle sleep pass,
+server/sleep.lisp), nil for none.")
+
 (defvar *server-info* (om::jobject)
   "Facts initialize and status report, set by start-server.")
 
@@ -123,6 +127,9 @@ request to a worker and each reply to the call waiting for it."
                           (push client (server-connections s))
                           (setf (server-last-activity s) (now-seconds)))
                         (sb-thread:make-thread (lambda () (serve-connection s client)) :name "om connection"))))
+                  (when *idle-hook*
+                    (handler-case (funcall *idle-hook* s)
+                      (error (e) (log-line "idle hook: ~A" e))))
                   (when (idle-p s)
                     (log-line "no client for ~D s: exiting" (server-idle-seconds s))
                     (setf (server-stopping s) t)))
@@ -192,6 +199,8 @@ runs in a thread and the server is returned; else it runs here until the server 
   (sb-ext:disable-debugger)
   (when (equal (second sb-ext:*posix-argv*) "--tool-child")
     (funcall (find-symbol "TOOL-CHILD-MAIN" "OM.LAYER")))
+  (when (equal (second sb-ext:*posix-argv*) "--sleep-child")
+    (funcall (find-symbol "SLEEP-CHILD-MAIN" "OM.SERVER") (third sb-ext:*posix-argv*)))
   (let ((code 0))
     (handler-case
         (let ((options (parse-args (rest sb-ext:*posix-argv*))))

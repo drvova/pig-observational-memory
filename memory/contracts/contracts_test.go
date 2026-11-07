@@ -170,6 +170,8 @@ func classify(rel string) (storedFile, bool) {
 		return storedFile{mode: "skip"}, true
 	case len(parts) == 3 && parts[0] == "sessions" && strings.HasSuffix(base, ".jsonl"):
 		return storedFile{"neutral-store-line.schema.json", "lines"}, true
+	case len(parts) == 2 && parts[0] == "sleep" && base == "state.json":
+		return storedFile{"sleep-state.schema.json", "json"}, true
 	case len(parts) == 3 && parts[0] == "current" && strings.HasSuffix(base, ".json"):
 		return storedFile{"current-session.schema.json", "json"}, true
 	case len(parts) == 3 && parts[0] == "transcripts" && strings.HasSuffix(base, ".jsonl"):

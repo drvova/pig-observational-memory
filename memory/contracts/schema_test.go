@@ -80,8 +80,10 @@ func TestRealOutputsValidate(t *testing.T) {
 			}
 		}
 	}
+	// The sleep pass over every store (om sleep): its records and its checkpoint.
+	om(t, "", "sleep")
 	seen := validateTree(t, set, root)
-	for _, want := range []string{"neutral-store-line.schema.json", "current-session.schema.json", "entry-observations-recorded.schema.json", "entry-extracted.schema.json", "entry-cut.schema.json", "entry-compaction.schema.json", "entry-summary-handed.schema.json"} {
+	for _, want := range []string{"neutral-store-line.schema.json", "current-session.schema.json", "entry-observations-recorded.schema.json", "entry-extracted.schema.json", "entry-cut.schema.json", "entry-compaction.schema.json", "entry-summary-handed.schema.json", "entry-sleep.schema.json", "sleep-state.schema.json"} {
 		if seen[want] == 0 {
 			t.Errorf("the run stored nothing %s checks (%v)", want, seen)
 		}

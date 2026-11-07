@@ -167,4 +167,9 @@
                              (:file "harness/floor")
                              (:file "harness/retired")
                              (:file "harness/layer-status")
-                             (:file "server/status")))))
+                             (:file "server/status")))
+               ;; Phase 7: the sleep pass at the image's idle, in a child SBCL (decision 9).
+               (:module "sleep"
+                :pathname "src"
+                :serial t
+                :components ((:file "server/sleep")))))

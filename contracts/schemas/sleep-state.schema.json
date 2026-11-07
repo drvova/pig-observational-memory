@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "the sleep pass's checkpoint",
+  "description": "<root>/sleep/state.json: each session store's size, in bytes, when the sleep pass last finished it, keyed <harness>/<session>.jsonl, so a pass that is stopped (a client connecting to the image) loses at most the store in hand and an unchanged store is skipped. Engine-private and rebuildable (docs/brain-memory.md, decision 12): deleting it only makes the next pass read every store again. Written by memory/cli/sleep.go (om sleep) and lisp/src/server/sleep.lisp (the image's idle child), under <root>/sleep/.lock.",
+  "type": "object",
+  "required": ["version", "stores"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 1},
+    "stores": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    }
+  }
+}

@@ -22,3 +22,21 @@ func WithLock(path string, fn func() error) error {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
 }
+
+// TryWithLock is WithLock that does not wait: held is false, and fn does not run, when another
+// open holds the lock.
+func TryWithLock(path string, fn func() error) (held bool, err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if err == syscall.EWOULDBLOCK {
+			return false, nil
+		}
+		return false, err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return true, fn()
+}
