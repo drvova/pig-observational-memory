@@ -272,7 +272,9 @@ func IsErrorLine(line string) bool {
 	return false
 }
 
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' }
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
 
 // NormalizeLine is a line as the exact index compares it: ASCII white space runs as one space,
 // trimmed, then any leading locations ("file.go:42: ", "main.go:3:7: ") cut off, so a compiler's
