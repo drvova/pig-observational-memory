@@ -341,6 +341,44 @@ replacements"). Measured in [brain-memory-baseline.md](brain-memory-baseline.md)
   model and are ready, not run.
 - Scenarios 3 (rendering), 4, 21, 22 and 23 pass.
 
+### Phase 4 status: project knowledge (part B)
+
+Built in Go and Lisp (docs/memory-v2.md, "Project knowledge"; contracts/encoding.md, "Project
+records"); the adapter runs git, the engine never does. Part A (the exact key index, two-level RRF,
+fold checkpoints) is a separate branch.
+
+- **HEAD structure view: built.** `host.StructureReader` (engine RPC `host/structure`) answers a
+  path's existence and blob at HEAD, a symbol's presence in a file (a bounded `git grep -w -F`), a
+  path's blob at an older commit, a bounded diff and a paged file list. `memory/gitrepo` reads HEAD's
+  tree once per (repository, HEAD), at most 100,000 files (past that a missing path is unknown, never
+  gone), and bounds one query's searches to 10 s. Nothing of it is stored: no ledger line is written
+  for structure (scenario 26).
+- **Project records: built.** A decision, a repository convention, or the user's own rule,
+  correction or stated fact, framed in a repository (`frame.repoId`). Level 0 sets `frame.symbol` to
+  the one code symbol it names and stamps `frame.bodyHash` with its path's blob at HEAD when the host
+  can hash it.
+- **Freshness verdicts: built.** At each compaction and on each memory-tool notes read, the active
+  project records are judged against HEAD: "gone at <sha>" only when the path or symbol no longer
+  exists, "changed since <sha>, unverified" when the path's blob differs from the one recorded (the
+  body hash, else the blob at the commit it was framed at), nothing when unchanged or unknown. The
+  summary prints the verdict after the record with one instructions line; a verdict never deletes or
+  supersedes anything.
+- **Re-check inside level 1: built.** The changed records the level-1 input shows are listed as
+  POSSIBLY STALE with their diffs (at most 8, bounded), in the one existing request. Level 1 confirms
+  one (`stale`: the record stands framed at HEAD, `rechecked` in the report) or supersedes it with a
+  record or merge under the status rule; no new request is made.
+- **`om.Head`: built** in the Go tool (pages HEAD's files under a prefix, `om.Limit`/`om.Offset`);
+  the Lisp tool prints the notes' verdicts but has no HEAD file listing yet.
+- **Repo id cached: built** (phase 6's item, scenario 37). `gitrepo.Reader` computes the id once per
+  repository, keyed by the common git directory, in `<engine store>/repos/<hash>.json` (the PiG
+  adapter's `<config>/observational-memory`, the om command's root); a first root-commit lookup runs
+  in the background and is waited on for 2 s, during which records take no frame; a missing or
+  unreadable file is computed again.
+- **Not built:** the om command with the image passes no structure view, so it prints no verdicts
+  there (`OM_ENGINE=go` does).
+- Scenarios 7, 26 and 37 pass; memeval Tier 0, 0b and 0c are unchanged cell for cell
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 4 part B").
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,

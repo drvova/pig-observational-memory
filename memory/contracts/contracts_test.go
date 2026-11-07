@@ -173,6 +173,9 @@ func classify(rel string) (storedFile, bool) {
 		return storedFile{"current-session.schema.json", "json"}, true
 	case len(parts) == 3 && parts[0] == "transcripts" && strings.HasSuffix(base, ".jsonl"):
 		return storedFile{"generic-transcript-line.schema.json", "lines"}, true
+	case len(parts) >= 2 && parts[len(parts)-2] == "repos" && strings.HasSuffix(base, ".json") &&
+		(len(parts) == 2 || parts[len(parts)-3] == "observational-memory"):
+		return storedFile{"repo-id.schema.json", "json"}, true
 	case memories >= 0:
 		inner := strings.Split(rel[memories+len("observational-memory/memories/"):], "/")
 		switch {
