@@ -37,11 +37,25 @@ regard to case; only the exact names are read here.)"
     (if (and (vectorp x) (not (stringp x))) (loop for e across x collect (if (stringp e) e "")) '())))
 
 (defun details-writes (d)
-  "Details.Writes as (op name description) lists."
+  "Details.Writes as (op name description type) lists."
   (let ((w (gethash "writes" d)))
     (if (and (vectorp w) (not (stringp w)))
-        (loop for e across w collect (list (jstr e "op") (jstr e "name") (jstr e "description")))
+        (loop for e across w collect (list (jstr e "op") (jstr e "name") (jstr e "description") (jstr e "type")))
         '())))
+
+(defun add-correction (x i result id text quoted)
+  "addCorrection: om.Correct's correction of the record id, never an edit of it: on the user's
+quoted words one with the user's source that supersedes it, else the model's claim that only
+possibly updates it, which the three-way rule weighs beside it."
+  (let ((text (trim-space text))
+        (target (gethash id (folded-by-id (om.engine::x-ledger x)))))
+    (when (or (null target) (string= text "")) (return-from add-correction))
+    (let ((o (make-obs :content (one-line text) :kind "correction" :origin "model" :subject (obs-subject target)
+                       :scope (obs-scope target) :source (if quoted "user-said" "assistant-claim"))))
+      (if quoted (setf (obs-supersedes o) (list id)) (setf (obs-possibly-updates o) (list id)))
+      (let ((r (om.engine::x-add x o i (om.engine::tresult-index result))))
+        (setf (obs-id (om.engine::rec-obs r)) (om.engine::record-id (om.engine::rec-obs r)))
+        (when quoted (setf (gethash id (om.engine::x-superseded x)) t))))))
 
 ;;; extract/work.go note
 
@@ -70,9 +84,9 @@ regard to case; only the exact names are read here.)"
               (add-note x i result (or (lq-arg q "name") "") (or (lq-arg q "description") "")))))
         (let ((d (details-from (om.engine::tresult-details result))))
           (when d
-            (loop for (op name description) in (details-writes d)
-                  when (member op '("save" "edit") :test #'string=)
-                    do (add-note x i result name description)))))))
+            (loop for (op name description type) in (details-writes d)
+                  do (cond ((member op '("save" "edit") :test #'string=) (add-note x i result name description))
+                           ((string= op "correct") (add-correction x i result name description (string= type "quoted"))))))))))
 
 ;;; rules/detect.go MemoryAsks
 

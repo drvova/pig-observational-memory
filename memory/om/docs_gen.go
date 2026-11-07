@@ -12,6 +12,7 @@ var docs = map[string][2]string{
 	"CheckSnippet":           {"CheckSnippet(s string) error", "CheckSnippet reports whether s parses as one call of a read function (ReadFuncs), optionally followed by one of SnippetTails, whose arguments are literals (Recall's id) and at most one chain of option calls (om.Search(...).Limit(...)) whose arguments are literals."},
 	"Commits":                {"Commits(opts ...Opt) NoteList", "Commits lists the commit records."},
 	"Contains":               {"Contains(field, value string) Opt", "Contains keeps rows whose field contains value."},
+	"Correct":                {"Correct(id, text string, opts ...SaveOpt) (string, error)", "Correct records text as a correction of the record id: a supersession of it on Quoting's user words, else a possible update the three-way rule weighs beside it; never an edit."},
 	"Define":                 {"Define(name string) error", "Define always refuses: a kept Go function replaces a defined tool."},
 	"Doc":                    {"Doc(name string) (signature, synopsis string, ok bool)", "Doc is the signature and one-line doc of an exported om symbol, from the table generated from om's sources (docs_gen.go): name is a function or type, or Type.Method or Type.Field."},
 	"Dropped":                {"Dropped(opts ...Opt) NoteList", "Dropped lists the records dropped by rule."},

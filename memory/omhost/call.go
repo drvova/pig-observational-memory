@@ -9,10 +9,12 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
 	"github.com/drvova/pig-observational-memory/memory/session"
@@ -107,7 +109,14 @@ const (
 	WriteFeedback      = "feedback"
 	WriteLayerForget   = "layer-forget"
 	WriteLayerRollback = "layer-rollback"
+	// WriteCorrect is om.Correct: Name the record, Description the correction, Type
+	// CorrectQuoted when the user's words confirmed it.
+	WriteCorrect = "correct"
 )
+
+// CorrectQuoted is a correction's Write.Type when the user's quoted words confirmed it.
+const CorrectQuoted = "quoted"
+
 
 // Record is the hit recorder (docs/code-tool.md, "Result"): what the om calls of one memory tool
 // call read and wrote, kept in the extension and safe to read while the call runs, so a result
@@ -372,6 +381,13 @@ func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, err
 		}
 		return c.curatedWrite(ctx, curated.OpFeedback, map[string]string{"name": name, "outcome": outcome, "quote": quote}, Write{Op: WriteFeedback, Name: name})
+	case omwire.MCorrect:
+		var id, text string
+		var o omwire.SaveOptions
+		if err := decode(method, raw, &id, &text, &o); err != nil {
+			return nil, err
+		}
+		return c.correct(ctx, id, text, o)
 	case omwire.MLayerForget:
 		var kind, name string
 		var o omwire.SaveOptions
@@ -456,6 +472,44 @@ func (c *Call) landed(ctx context.Context, w Write, run func() (string, error)) 
 	}
 	c.Record.write(w)
 	return text, nil
+}
+
+// correct is om.Correct (docs/memory-v2.md, "Correcting a record"): it never edits the record.
+// The call's Write names the record and carries the correction, and level 0 records it at the
+// next turn end as a correction that supersedes the record when the user's quoted words confirm
+// it (the quote gate, as a layer change's), else as a possible update of it, which the three-way
+// rule (ledger.Supersession) weighs: a model's word never replaces a user's.
+func (c *Call) correct(ctx context.Context, id, text string, o omwire.SaveOptions) (any, error) {
+	q, err := c.layerQuote("om.Correct", o)
+	if err != nil {
+		return nil, err
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return nil, errors.New("om.Correct needs the corrected text")
+	}
+	if _, ok := ledger.FoldLedger(c.Entries, "").ObservationsByID[id]; !ok {
+		return nil, fmt.Errorf("no record %s to correct", id)
+	}
+	w := Write{Op: WriteCorrect, Name: id, Description: text}
+	reason := "no user's words were quoted"
+	if q.Given {
+		normalized, err := curated.NormalizeQuote(q.Text)
+		if err != nil {
+			return nil, err
+		}
+		if q.ByUser(normalized) {
+			w.Type = CorrectQuoted
+		} else {
+			reason = "the quote is not a user's words in this conversation"
+		}
+	}
+	return c.landed(ctx, w, func() (string, error) {
+		if w.Type == CorrectQuoted {
+			return fmt.Sprintf("Recorded a correction of %s that supersedes it, on the user's words; the record is kept, labelled superseded, from the next turn end.", id), nil
+		}
+		return fmt.Sprintf("Recorded a possible update of %s, not a supersession: %s, so the three-way rule weighs it beside the record from the next turn end.", id, reason), nil
+	})
 }
 
 // layerQuote is a layer change's quote (om.Quoting only) with the user-words check curatedWrite

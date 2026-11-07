@@ -520,6 +520,24 @@ without them it hides the memory in this session only and stages the forget."
   "Records that a memory helped or harmed, quoting the conversation."
   (run-write "feedback" "name" name "outcome" outcome "quote" quote))
 
+(defun om.tool:correct (id text &key quoting)
+  "Records text as a correction of the record id, never an edit (omhost.Call.correct): a
+supersession on quoting's user words, else a possible update the three-way rule weighs."
+  (let ((text (join (fields (if (stringp text) text "")) " ")) (id (name-of id)))
+    (when (string= text "") (tool-fail "om.Correct needs the corrected text"))
+    (unless (gethash id (folded-by-id (fold-ledger (coerce (branch) 'simple-vector))))
+      (tool-fail "no record ~A to correct" id))
+    (let ((reason "no user's words were quoted"))
+      (when quoting
+        (let ((args (make-hash-table :test 'equal)))
+          (setf (gethash "quote" args) (if (stringp quoting) quoting (princ-to-string quoting)))
+          (let ((quote (handler-case (gate-quote args "correction") (curated-error (e) (tool-fail "~A" (curated-error-message e))))))
+            (if (user-quoted-p (write-call) quote)
+                (return-from om.tool:correct
+                  (format nil "Recorded a correction of ~A that supersedes it, on the user's words; the record is kept, labelled superseded, from the next turn end." id))
+                (setf reason "the quote is not a user's words in this conversation")))))
+      (format nil "Recorded a possible update of ~A, not a supersession: ~A, so the three-way rule weighs it beside the record from the next turn end." id reason))))
+
 ;;; The model's layer
 
 (defmacro om.tool:define (name lambda-list &body body)

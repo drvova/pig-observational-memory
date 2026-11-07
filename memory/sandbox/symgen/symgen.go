@@ -53,7 +53,7 @@ var OMNames = []string{
 	"Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Head", "Str", "ErrNoCall",
 	// Writes.
 	"SaveOpt", "Body", "Scope", "Quoting", "EditOpt", "SetType", "SetDescription", "SetBody", "EditQuoting",
-	"Save", "Edit", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define",
+	"Save", "Edit", "ForgetMemory", "Feedback", "Correct", "LayerForget", "LayerRollback", "Propose", "Define",
 }
 
 // TimeDeleted are time's functions left out of its table: they block or start goroutines

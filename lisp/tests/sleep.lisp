@@ -4,6 +4,32 @@
 
 (in-package "OM")
 
+(deftest correction-as-supersession
+  ;; om.Correct's write at level 0 (extract/correct_test.go): quoted, a correction superseding
+  ;; the record; unquoted, a possible update of it; an unknown record, nothing.
+  (let* ((target "{\"id\":\"aaaaaaaaaa01\",\"content\":\"The staging port is 5432.\",\"timestamp\":\"2026-05-02 10:00\",\"relevance\":\"medium\",\"sourceEntryIds\":[\"u0\"],\"tokenCount\":10,\"kind\":\"fact\",\"subject\":\"staging\"}")
+         (lines (list "{\"type\":\"message\",\"id\":\"u0\",\"timestamp\":\"2026-05-02T10:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"The staging port is 5432.\"}}"
+                      (format nil "{\"type\":\"custom\",\"id\":\"r0\",\"customType\":\"om.observations.recorded\",\"data\":{\"observations\":[~A],\"coversUpToId\":\"u0\"}}" target)
+                      "{\"type\":\"message\",\"id\":\"u1\",\"timestamp\":\"2026-05-02T10:01:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"No, the staging port is 5433 now.\"}}"))
+         (n 0))
+    (dolist (w '(("aaaaaaaaaa01" "The staging port is 5433." "quoted") ("aaaaaaaaaa01" "The staging port is 6000." "") ("bbbbbbbbbbbb" "No such record." "")))
+      (incf n)
+      (push-end (format nil "{\"type\":\"message\",\"id\":\"a~D\",\"timestamp\":\"2026-05-02T10:02:00.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"c~D\",\"name\":\"memory\",\"arguments\":{\"code\":\"om.Correct(...)\"}}]}}" n n) lines)
+      (push-end (format nil "{\"type\":\"message\",\"id\":\"t~D\",\"timestamp\":\"2026-05-02T10:02:01.000Z\",\"message\":{\"role\":\"toolResult\",\"toolCallId\":\"c~D\",\"toolName\":\"memory\",\"content\":[{\"type\":\"text\",\"text\":\"Recorded\"}],\"isError\":false,\"details\":{\"code\":\"x\",\"writes\":[{\"op\":\"correct\",\"name\":~A,\"type\":~A,\"description\":~A}],\"outcome\":\"ok\"}}}"
+                        n n (json-string (first w)) (json-string (third w)) (json-string (second w)))
+                lines))
+    (let* ((entries (map 'simple-vector (lambda (l) (entry-from-map (json-parse l))) lines))
+           (records (extract entries 2 (length entries) (fold-ledger entries) :skip-tools (list +memory-tool+)))
+           (records (if (and records (batch-p (first records))) (mapcan (lambda (b) (copy-list (batch-observations b))) records) records))
+           (quoted (find "The staging port is 5433." records :key #'obs-content :test #'string=))
+           (unquoted (find "The staging port is 6000." records :key #'obs-content :test #'string=)))
+      (check (and quoted (obs-supersedes quoted)) '("aaaaaaaaaa01") "quoted supersedes")
+      (check (and quoted (list (obs-kind quoted) (obs-source quoted) (obs-authority quoted) (obs-subject quoted)))
+             '("correction" "user-said" "user" "staging") "quoted encoding")
+      (check (and unquoted (list (obs-supersedes unquoted) (first (obs-possibly-updates unquoted)) (obs-authority unquoted)))
+             '(nil "aaaaaaaaaa01" "model") "unquoted possibly updates")
+      (check (find "No such record." records :key #'obs-content :test #'string=) nil "unknown record"))))
+
 (deftest sleep-contract-cases
   (let ((cases (contract-cases "sleep.jsonl")))
     (check (> (length cases) 6) t "cases read")

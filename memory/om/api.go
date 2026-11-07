@@ -197,6 +197,13 @@ func LayerRollback(gen int, opts ...SaveOpt) (string, error) {
 	return s, err
 }
 
+// Correct records text as a correction of the record id: a supersession of it on Quoting's user words, else a possible update the three-way rule weighs beside it; never an edit.
+func Correct(id, text string, opts ...SaveOpt) (string, error) {
+	var s string
+	err := call(omwire.MCorrect, &s, id, text, mergeSave(opts))
+	return s, err
+}
+
 // Propose always refuses: definitions are proposed only at a compaction.
 func Propose(kind, name, text string) error {
 	return call(omwire.MPropose, nil, kind, name, text)

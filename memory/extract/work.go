@@ -467,9 +467,36 @@ func (x *extraction) note(i int, call toolCall, result toolResult) {
 		return
 	}
 	for _, w := range d.Writes {
-		if w.Op == omtool.WriteSave || w.Op == omtool.WriteEdit {
+		switch w.Op {
+		case omtool.WriteSave, omtool.WriteEdit:
 			x.addNote(i, result, w.Name, w.Description)
+		case omtool.WriteCorrect:
+			x.addCorrection(i, result, w.Name, w.Description, w.Type == omtool.CorrectQuoted)
 		}
+	}
+}
+
+// addCorrection records om.Correct's correction of the record id (docs/memory-v2.md,
+// "Correcting a record"), never an edit of it: on the user's quoted words a correction with the
+// user's authority that supersedes it, else one with the model's that only possibly updates it,
+// which the three-way rule (ledger.Supersession) weighs beside it.
+func (x *extraction) addCorrection(i int, result toolResult, id, text string, quoted bool) {
+	text = strings.TrimSpace(text)
+	target, ok := x.in.Ledger.ObservationsByID[id]
+	if !ok || text == "" {
+		return
+	}
+	obs := ledger.Observation{Content: oneLine(text), Kind: "correction", Origin: ledger.OriginModel, Subject: target.Subject, Scope: target.Scope,
+		Source: ledger.SourceAssistantClaim}
+	if quoted {
+		obs.Source, obs.Supersedes = ledger.SourceUserSaid, []string{id}
+	} else {
+		obs.PossiblyUpdates = []string{id}
+	}
+	r := x.add(obs, i, result.index)
+	r.obs.ID = recordID(r.obs)
+	if quoted {
+		x.superseded[id] = true
 	}
 }
 

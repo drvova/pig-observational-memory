@@ -16,6 +16,7 @@ func init() {
 		"ByEvent":        reflect.ValueOf(om.ByEvent),
 		"Commits":        reflect.ValueOf(om.Commits),
 		"Contains":       reflect.ValueOf(om.Contains),
+		"Correct":        reflect.ValueOf(om.Correct),
 		"Define":         reflect.ValueOf(om.Define),
 		"Dropped":        reflect.ValueOf(om.Dropped),
 		"Edit":           reflect.ValueOf(om.Edit),
