@@ -612,7 +612,8 @@ before them), no model requests.
 
 **Tier 0, 0b and 0c: no regression.** `go run ./cmd/memeval -suite all -seeds 20` (600 compactions,
 1,549 snippets run, 0 failed) prints the retention, invariant, forgetting and sharing tables
-identical to `5b270fd`'s, cell for cell: settlement changes what a pass records, never a summary.
+identical to `5b270fd`'s, cell for cell, and again after merging part A (`fc65434`) against
+that tree: settlement changes what a pass records, never a summary.
 
 **The no-op definition replay** (`go run ./cmd/memeval -suite settle -seeds 20`, also printed by
 `-suite all`; `memeval.NoOpSettleRate`). Each seed's session runs at level 0 with a curated store;
