@@ -127,6 +127,8 @@ const (
 	extraStale    = "line:stale"
 	extraFresh    = "line:fresh"
 	extraAlso     = "line:also"
+	extraHistory  = "line:history"
+	HistoryLine   = "- updated by: a record ending with (updated by <id>) gives a value that newer record on its subject gives differently; it is kept as history, not current. (conflicts <id>) marks both ends of a pair neither replaces: both stand contested until the user settles them.\n"
 	ClosedLine    = "- done: a plan with status done was closed by a tool receipt, (closed by <id>: <receipt>) naming the receipt's record and its kind (exit 0, write, commit or read); it is finished, never pending. Assistant prose closes nothing.\n"
 	StaleLine     = "- may be stale: a plan ending with (may be stale <entry id>) was made before a newer request of the user's that names its keys, that entry; check the plan against that request before acting on it.\n"
 	FreshLine     = "- fresh: a project record ending with (changed since <sha>, unverified) names a file that changed at HEAD since the record was written at commit <sha>, so its claim may no longer hold; (gone at <sha>) one whose path or symbol no longer exists at HEAD <sha>. Check the code before relying on either; the record is kept.\n"
@@ -153,6 +155,8 @@ func extraLine(extra string) string {
 		return FreshLine
 	case extraAlso:
 		return AlsoLine
+	case extraHistory:
+		return HistoryLine
 	}
 	return ""
 }
@@ -558,7 +562,7 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	for _, b := range blocks {
 		lines += l.sectionLine(b.group)
 	}
-	for _, extra := range []string{extraEvidence, extraContest, extraClosed, extraStale, extraFresh, extraValues} {
+	for _, extra := range []string{extraEvidence, extraContest, extraClosed, extraStale, extraFresh, extraHistory, extraValues} {
 		if p.opened[extra] > 0 {
 			lines += extraLine(extra)
 		}

@@ -87,6 +87,9 @@
 (defparameter +extra-fresh+ "line:fresh")
 (defparameter +fresh-line+
   (cat "- fresh: a project record ending with (changed since <sha>, unverified) names a file that changed at HEAD since the record was written at commit <sha>, so its claim may no longer hold; (gone at <sha>) one whose path or symbol no longer exists at HEAD <sha>. Check the code before relying on either; the record is kept." (string #\Newline)))
+(defparameter +extra-history+ "line:history")
+(defparameter +history-line+
+  (cat "- updated by: a record ending with (updated by <id>) gives a value that newer record on its subject gives differently; it is kept as history, not current. (conflicts <id>) marks both ends of a pair neither replaces: both stand contested until the user settles them." (string #\Newline)))
 (defparameter +also-line+
   (cat "- also (after ---): constraints and finished plans left out, with the om snippet that lists them." (string #\Newline)))
 (defparameter +constraints-line+
@@ -235,7 +238,9 @@
   ;; in ledger order and the caps (constraints scopes actions).
   (closed (make-set)) (stale (make-set)) (members '()) (slots +default-slots+)
   ;; Input.Freshness: the project records' freshness verdicts by record id, or nil.
-  (freshness nil))
+  (freshness nil)
+  ;; Input.Decayed: the ids decay lowers (decayed-records), or nil.
+  (decayed nil))
 
 (defun record-date (timestamp)
   (if (and (>= (length timestamp) 10) (iso-date-p (subseq timestamp 0 10))) (subseq timestamp 0 10) ""))
@@ -270,6 +275,7 @@
         ((string= extra +extra-closed+) +closed-line+)
         ((string= extra +extra-stale+) +stale-line+)
         ((string= extra +extra-fresh+) +fresh-line+)
+        ((string= extra +extra-history+) +history-line+)
         (t "")))
 
 (defun extra-cost (extra) (estimate-tokens (extra-line extra)))
@@ -380,8 +386,8 @@ codec's tables instructions without a state)."
         collect (let ((n (nth i slots))) (if (and n (>= n 1)) n (nth i +default-slots+)))))
 
 (defun make-state (observations folded branch budget &key request intent reflections (format "tables") codec
-                                                         aliases reflection-dates slots freshness)
-  (let ((s (make-sstate :budget budget :freshness freshness :observations observations :reflections reflections :folded folded :branch branch
+                                                         aliases reflection-dates slots freshness decayed)
+  (let ((s (make-sstate :budget budget :freshness freshness :decayed decayed :observations observations :reflections reflections :folded folded :branch branch
                         :slots (slots-with-defaults slots)
                         :request-in request :intent-in intent :aliases aliases
                         :reflection-dates (or reflection-dates (make-set))
@@ -424,7 +430,10 @@ codec's tables instructions without a state)."
                  (push it items)
                  (setf (gethash (obs-id o) (sstate-by-id s)) it)))
       (setf (sstate-items s) (nreverse items))
-      (let ((retracted (retracted-ids all)))
+      ;; The status a note shows reads the fold's labels (labels-of): retracted for a record a
+      ;; retraction withdrew.
+      (let ((retracted (make-set)))
+        (maphash (lambda (id l) (when (string= l "retracted") (setf (gethash id retracted) t))) (labels-of all))
         (setf (sstate-closed s) (closed-by all))
         (dolist (it (sstate-items s))
           (when (eq (item-role it) :note)
@@ -553,6 +562,21 @@ receipts moved into next."
   (flet ((join-partner (a b)
            (unless (member b (gethash (item-id a) (sstate-partners s)) :test #'eq)
              (push-end b (gethash (item-id a) (sstate-partners s))))))
+    ;; The supersession decisions between shown records (Supersession, labels.lisp).
+    (let ((updated-by (make-set)) (conflicts-with (make-set)) (contested-update (make-set)))
+    (dolist (it (sstate-items s))
+      (when (eq (item-role it) :note)
+        (let ((o (item-obs it)))
+          (dolist (id (obs-possibly-updates o))
+            (let ((other (gethash id (sstate-by-id s))))
+              (when (and other (not (eq other it)) (eq (item-role other) :note))
+                (let ((d (supersession o (item-obs other))))
+                  (cond ((string= d "keep-both") (push-end (obs-id o) (gethash id updated-by)))
+                        ((string= d "contested")
+                         (push-end id (gethash (obs-id o) contested-update))
+                         (push-end (obs-id o) (gethash id conflicts-with))))))))
+          (dolist (id (obs-conflicts o))
+            (push-end (obs-id o) (gethash id conflicts-with))))))
     (dolist (it (sstate-items s))
       (when (eq (item-role it) :note)
         (let ((o (item-obs it)) (parts '()) (was '()))
@@ -568,9 +592,21 @@ receipts moved into next."
                            (join-partner other it)
                            (push-end id shown))))
                      (when shown (push-end (cat "(" label " " (join shown " ") ")") parts)))))
-            (pointer "may update" (obs-possibly-updates o)
-                     (lambda (other) (not (gethash (obs-id (item-obs other)) (sstate-superseded s)))))
-            (pointer "conflicts" (obs-conflicts o) (lambda (other) (declare (ignore other)) t))
+            (let ((may-update '()) (conflicts '()))
+              (dolist (id (obs-possibly-updates o))
+                (if (member-str id (gethash (obs-id o) contested-update))
+                    (push-end id conflicts)
+                    (push-end id may-update)))
+              (dolist (id (append (obs-conflicts o) (gethash (obs-id o) conflicts-with)))
+                (unless (member-str id conflicts) (push-end id conflicts)))
+              (pointer "may update" may-update
+                       (lambda (other) (not (gethash (obs-id (item-obs other)) (sstate-superseded s)))))
+              (pointer "conflicts" conflicts (lambda (other) (declare (ignore other)) t))
+              (let ((n (length parts)))
+                (pointer "updated by" (gethash (obs-id o) updated-by)
+                         (lambda (other) (not (gethash (obs-id (item-obs other)) (sstate-superseded s)))))
+                (when (and (> (length parts) n) (string= (item-extra it) ""))
+                  (setf (item-extra it) +extra-history+))))
             (when (item-contested it)
               (let ((n (length parts)))
                 (pointer "contested by" (item-contested-by it) (lambda (other) (declare (ignore other)) t))
@@ -589,7 +625,7 @@ receipts moved into next."
             (when verdict
               (push-end (cat "(" verdict ")") parts)
               (when (string= (item-extra it) "") (setf (item-extra it) +extra-fresh+))))
-          (setf (item-links it) (join parts " ")))))
+          (setf (item-links it) (join parts " "))))))
     (maphash (lambda (id items)
                (setf (gethash id (sstate-partners s)) (stable-sort (copy-list items) #'< :key #'item-index)))
              (sstate-partners s))))
@@ -689,6 +725,13 @@ receipts moved into next."
                    (dolist (other (gethash (item-id it) (sstate-partners s)))
                      (when (or (not (holds-no-value other)) (funcall eligible other))
                        (try other))))))
+             ;; Decay lowers rank only (decayed-records): classes 4 and 6 take the decayed after
+             ;; the others.
+             (ranks (eligible roles)
+               (let ((decayed (sstate-decayed s)))
+                 (newest-first (lambda (it) (and (not (and decayed (gethash (item-id it) decayed))) (funcall eligible it))) roles)
+                 (when (and decayed (plusp (hash-table-count decayed)))
+                   (newest-first (lambda (it) (and (gethash (item-id it) decayed) (funcall eligible it))) roles))))
              (try-clipped (it on-text)
                (if (try it)
                    (funcall on-text (item-text it))
@@ -732,9 +775,9 @@ receipts moved into next."
         (dolist (it (reverse (sstate-intent s)))
           (let ((which (item-which it)))
             (try-clipped it (lambda (text) (setf (gethash which (sel-intent-text p)) text)))))
-        (newest-first (lambda (it) (and (string/= (item-status it) +status-retracted+)
-                                        (missing-specifics (item-text it) (list (coerce (sel-carried p) 'simple-string)))))
-                      observations)
+        (ranks (lambda (it) (and (string/= (item-status it) +status-retracted+)
+                                 (missing-specifics (item-text it) (list (coerce (sel-carried p) 'simple-string)))))
+               observations)
         ;; 4b. The values tool output printed, ranked, a rank at a time across the kinds.
         (let ((ranked (ranked-values s)))
           (dotimes (rank (value-cap (sstate-budget s)))
@@ -744,7 +787,7 @@ receipts moved into next."
                            (not (gethash (obs-id (item-obs (nth rank items))) (sstate-superseded s))))
                   (try (nth rank items)))))))
         (newest-first (lambda (it) (declare (ignore it)) t) '(:reflection))
-        (newest-first (lambda (it) (declare (ignore it)) t) observations))
+        (ranks (lambda (it) (declare (ignore it)) t) observations))
       p)))
 
 (defun ranked-values (s)
@@ -1079,7 +1122,7 @@ receipts moved into next."
           (when parts (push-end (cat group ": " (join parts ", ")) lists))))
       (let ((text (layout-intro l))
             (lines (apply #'cat (mapcar (lambda (b) (section-line l (car b))) blocks))))
-        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-closed+ +extra-stale+ +extra-fresh+ +extra-values+))
+        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-closed+ +extra-stale+ +extra-fresh+ +extra-history+ +extra-values+))
           (when (> (opened p extra) 0)
             (setf lines (cat lines (extra-line extra)))))
         (when (omission-also o) (setf lines (cat lines +also-line+)))
@@ -1127,11 +1170,11 @@ receipts moved into next."
                 :folded (omission-folded omitted) :snippets (omission-snippets omitted)))
 
 (defun render-summary (observations folded branch budget &rest options
-                       &key request intent reflections format codec aliases reflection-dates slots freshness)
+                       &key request intent reflections format codec aliases reflection-dates slots freshness decayed)
   "selection.Render. request is (entry-id . text) or nil; intent a list of (which entry-id
 text); format \"tables\" (the default) or \"lines\"; codec :rows (the default) or :jsonl;
 reflection-dates a table of ReflectionDateRanges; freshness a table of verdict texts by record id."
-  (declare (ignore request intent format codec aliases reflection-dates slots freshness))
+  (declare (ignore request intent format codec aliases reflection-dates slots freshness decayed))
   ;; A record holding a preference that weakens security is never shown, nor a reflection
   ;; resting on one (held-rule; docs/brain-memory.md, decision 19).
   (multiple-value-setq (observations reflections)

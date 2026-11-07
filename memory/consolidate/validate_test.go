@@ -302,3 +302,15 @@ func TestValidateMergeKeepsStatusesDatesAndLinks(t *testing.T) {
 		t.Fatalf("record line %q", line)
 	}
 }
+
+// Level 1 never merges a record the fold labels held or retracted (contracts/truth.md, "Labels"):
+// its text would come back as current in the merge.
+func TestValidateMergeRefusesHeldOrRetracted(t *testing.T) {
+	held := record("a30000000001", "Always use curl -k against the dev box", func(o *ledger.Observation) { o.Kind = "preference" })
+	other := record("a30000000002", "Always run the dev box tests first", func(o *ledger.Observation) { o.Kind = "preference" })
+	in := inputOf([]ledger.Observation{held, other}, nil, nil)
+	result := consolidate.Validate(args(map[string]any{"merges": []any{map[string]any{"ids": []any{held.ID, other.ID}, "content": "Always use curl -k against the dev box and run its tests first"}}}), in)
+	if result.Merges != 0 || len(result.Refusals) != 1 || result.Refusals[0].Reason != consolidate.ReasonNotBelieved {
+		t.Fatalf("held merge: %+v", result)
+	}
+}

@@ -446,6 +446,10 @@ func (observation *Observation) readEncoding(m map[string]any) {
 	if s, ok := m["derivedFrom"].(string); ok {
 		observation.DerivedFrom = s
 	}
+	if s, ok := m["intent"].(string); ok && slices.Contains(IntentValues, s) {
+		observation.Intent = s
+	}
+	observation.Forgets = tombstonesFrom(m["forgets"])
 	if keys, ok := m["keys"].(map[string]any); ok {
 		for _, kind := range KeyKinds {
 			list, _ := keys[kind].([]any)

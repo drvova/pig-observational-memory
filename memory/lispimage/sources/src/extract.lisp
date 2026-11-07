@@ -108,7 +108,11 @@
   ;; receipt: what the record's call or file state can close (working.lisp), nil for none;
   ;; replaces-rule: the phrase a user rule says it replaces, "" for none.
   (receipt nil)
-  (replaces-rule ""))
+  (replaces-rule "")
+  ;; forgetting marks a forget request (forget-of), with the phrase and words it names.
+  forgetting
+  (forget-phrase "")
+  (forget-words ""))
 
 (defstruct (xstate (:conc-name x-))
   entries
@@ -433,6 +437,81 @@
                 (and (regex-match-p +named-retraction+ sentence) (has-specifics-p sentence)))
             "" "")))
 
+;;; forget.go: forget requests (contracts/truth.md, "Forget records")
+
+(defparameter +forget-scope+
+  #r§(\s+(?:for\s+(?:this|the)\s+session|in\s+this\s+session|for\s+now|(?:in|for)\s+this\s+(?:project|repo(?:sitory)?)|everywhere|for\s+good|permanently|in\s+every\s+project|across\s+(?:all\s+)?projects))?§)
+
+(defparameter +forget-patterns+
+  (list
+   (compile-regex (cat #r§(?i)^§ +retraction-opening+ #r§(?:please\s+)?(?:forget|erase|delete|remove|purge|wipe)\s+(?:about\s+)?(§ +retraction-phrase+ #r§)\s+from\s+(?:your\s+|the\s+|my\s+)?memory§ +forget-scope+ +retraction-close+))
+   (compile-regex (cat #r§(?i)^§ +retraction-opening+ #r§(?:please\s+)?(?:don'?t|do\s+not|stop)\s+remember(?:ing)?\s+(§ +retraction-phrase+ #r§)§ +forget-scope+ +retraction-close+))
+   (compile-regex (cat #r§(?i)^§ +retraction-opening+ #r§(?:please\s+)?forget\s+(?:everything\s+|what\s+)?i\s+(?:said|told\s+you)\s+about\s+(§ +retraction-phrase+ #r§)§ +forget-scope+ +retraction-close+))))
+
+(defun forget-scope-of (phrase)
+  "ForgetScopeOf."
+  (let ((p (to-lower phrase)))
+    (cond ((or (search "session" p) (search "for now" p)) "session")
+          ((or (search "this project" p) (search "this repo" p)) "project")
+          (t "user"))))
+
+(defun forget-of (sentence)
+  "forgetOf: (values ok phrase words scope)."
+  (when (question-p sentence) (return-from forget-of (values nil "" "" "")))
+  (let ((sentence (replace-all sentence "’" "'")))
+    (dolist (pattern +forget-patterns+)
+      (let ((m (regex-find-submatch pattern sentence)))
+        (when m
+          (let ((words (retraction-words (second m))))
+            (when (string/= words "")
+              (return-from forget-of (values t (second m) words (forget-scope-of (or (third m) ""))))))))))
+  (values nil "" "" ""))
+
+(defun forget-content (ids)
+  "forgetContent."
+  (format nil "The user asked to forget ~D ~A: ~A." (length ids) (if (= (length ids) 1) "record" "records") (join ids " ")))
+
+(defun resolve-forgets (x)
+  "resolveForgets: each forget request's tombstones; the records of this extraction it names are
+not written, and a forget naming nothing is no record."
+  (let ((forgotten (make-set)) (kept '()) (before '()))
+    (dolist (r (x-records x))
+      (if (not (rec-forgetting r))
+          (push r kept)
+          (let ((stones '()))
+            (flet ((matches (content)
+                     (if (phrase-specifics (rec-forget-phrase r))
+                         (carries-phrase-p content (rec-forget-phrase r))
+                         (contains-words-p content (rec-forget-words r))))
+                   (add (o)
+                     (unless (find (obs-id o) stones :key #'first :test #'string=)
+                       (push-end (list (obs-id o) (obs-kind o) (copy-list (obs-source-ids o))) stones))))
+              (dolist (o (folded-active (x-ledger x)))
+                (unless (or (string= (obs-kind o) "forget") (gethash (obs-id o) forgotten) (not (matches (obs-content o))))
+                  (setf (gethash (obs-id o) forgotten) t)
+                  (let ((hit '()))
+                    (dolist (id (obs-replaces o))
+                      (let ((src (gethash id (folded-by-id (x-ledger x)))))
+                        (when (and src (matches (obs-content src))) (push-end src hit))))
+                    (if (and (> (length (obs-replaces o)) 1) hit (< (length hit) (length (obs-replaces o))))
+                        (dolist (src hit) (add src))
+                        (add o)))))
+              (dolist (e (reverse before))
+                (unless (or (rec-forgetting e) (gethash (obs-id (rec-obs e)) forgotten) (not (matches (obs-content (rec-obs e)))))
+                  (setf (gethash (obs-id (rec-obs e)) forgotten) t)
+                  (add (rec-obs e)))))
+            (when stones
+              (let ((o (rec-obs r)))
+                (setf (obs-content o) (forget-content (mapcar #'first stones))
+                      (obs-forgets o) stones)
+                (setf (obs-id o) (record-id o))
+                (setf (obs-token-count o) (observation-line-tokens (obs-id o) (obs-timestamp o) (obs-relevance o) (obs-content o))))
+              (push r kept))))
+      (push r before))
+    (setf (x-records x)
+          (remove-if (lambda (r) (and (not (rec-forgetting r)) (gethash (obs-id (rec-obs r)) forgotten)))
+                     (nreverse kept)))))
+
 (defun preference-p (sentence)
   "isPreference: an explicit preference construction, neither a question, posed hypothetically
 (+rule-hypothetical+) nor reported from someone else (reported-p), as rule-p excludes them."
@@ -473,6 +552,14 @@
       (dolist (sentence (sentences text))
         (unless (or (bare-ack-p sentence) (markup-only-p sentence) (gethash (normalized sentence) (x-known x)))
           (block next
+            (multiple-value-bind (forget phrase words scope) (forget-of sentence)
+              (when forget
+                (let ((repo (alist-member (getf *encoding* :frame) "repoId")))
+                  (when (and (string= scope "project") (string/= repo ""))
+                    (setf scope (cat scope ":" repo))))
+                (let ((r (x-add x (make-obs :content sentence :kind "forget" :scope scope) i)))
+                  (setf (rec-forgetting r) t (rec-forget-phrase r) phrase (rec-forget-words r) words))
+                (return-from next)))
             (multiple-value-bind (target correction) (correction-of sentence)
               (multiple-value-bind (retraction named-phrase named-words) (retraction-of sentence)
                 (let ((kind "") (status "") (fallback nil))
@@ -581,27 +668,44 @@
           (let ((o (rec-obs r)))
             (when (rec-retraction r)
               (let ((withdrawn nil) (phrase (rec-named-phrase r)) (words (rec-named-words r)))
-                (flet ((withdraw (id) (push-end id (obs-supersedes o)) (setf (gethash id (x-superseded x)) t withdrawn t)))
+                ;; withdraw supersedes what c names: c itself, or, when c is a level-1 merge some
+                ;; but not all of whose sources match, those sources (decision 1's cascade).
+                (flet ((withdraw (id match)
+                         (let* ((by-id (folded-by-id (x-ledger x))) (m (gethash id by-id)) (ids (list id)))
+                           (when (and m match (> (length (obs-replaces m)) 1))
+                             (let ((hit '()))
+                               (dolist (sid (obs-replaces m))
+                                 (let ((src (gethash sid by-id)))
+                                   (when (and src (pending-p src) (funcall match (obs-content src)))
+                                     (push-end sid hit))))
+                               (when (and hit (< (length hit) (length (obs-replaces m))))
+                                 (setf ids hit))))
+                           (dolist (i ids)
+                             (unless (member-str i (obs-supersedes o)) (push-end i (obs-supersedes o))))
+                           (setf (gethash id (x-superseded x)) t withdrawn t))))
                   (cond
                     ((and (string/= words "") (phrase-specifics phrase))
-                     (dolist (c earlier)
-                       (when (and (not (gethash (first c) (x-superseded x))) (carries-phrase-p (second c) phrase))
-                         (withdraw (first c)))))
+                     (let ((match (lambda (content) (carries-phrase-p content phrase))))
+                       (dolist (c earlier)
+                         (when (and (not (gethash (first c) (x-superseded x))) (funcall match (second c)))
+                           (withdraw (first c) match)))))
                     ((string/= words "")
-                     (dolist (c (reverse earlier))
-                       (when (and (not (gethash (first c) (x-superseded x))) (may-supersede-p (obs-status o) (third c))
-                                  (contains-words-p (second c) words))
-                         (withdraw (first c))
-                         (return))))
+                     (let ((match (lambda (content) (contains-words-p content words))))
+                       (dolist (c (reverse earlier))
+                         (when (and (not (gethash (first c) (x-superseded x))) (may-supersede-p (obs-status o) (third c))
+                                    (funcall match (second c)))
+                           (withdraw (first c) match)
+                           (return)))))
                     ((has-specifics-p (obs-content o))
-                     (dolist (c earlier)
-                       (when (and (not (gethash (first c) (x-superseded x))) (null (added-specifics (obs-content o) (list (second c)))))
-                         (withdraw (first c)))))
+                     (let ((match (lambda (content) (null (added-specifics (obs-content o) (list content))))))
+                       (dolist (c earlier)
+                         (when (and (not (gethash (first c) (x-superseded x))) (funcall match (second c)))
+                           (withdraw (first c) match)))))
                     (t
                      (let ((from (previous-exchange x (rec-exchange r))))
                        (dolist (c (reverse earlier))
                          (when (and (not (gethash (first c) (x-superseded x))) (>= (fourth c) from))
-                           (withdraw (first c))
+                           (withdraw (first c) nil)
                            (return)))))))
                 (unless withdrawn
                   (cond ((rec-fallback r)
@@ -1138,7 +1242,8 @@ Kiro's write replacing a string (its command strReplace) edits the file."
       (let ((o (rec-obs r)))
         (when (obs-source-ids o)
           (when (string= (obs-id o) "") (setf (obs-id o) (record-id o)))
-          (unless (or (gethash (obs-id o) (folded-by-id (x-ledger x))) (gethash (obs-id o) seen))
+          (unless (or (gethash (obs-id o) (folded-by-id (x-ledger x))) (gethash (obs-id o) seen)
+                      (folded-tombstoned-p (x-ledger x) o))
             (setf (gethash (obs-id o) seen) t)
             (setf (obs-token-count o) (observation-line-tokens (obs-id o) (obs-timestamp o) (obs-relevance o) (obs-content o)))
             (push r kept)))))
@@ -1194,6 +1299,7 @@ Kiro's write replacing a string (its command strReplace) edits the file."
       (x-assign-ids x)
       (resolve-corrections x (lambda (r) (rec-correction r)))
       (resolve-retractions x)
+      (resolve-forgets x)
       (resolve-corrections x (lambda (r) (and (rec-correction r) (eq (rec-correction r) (rec-fallback r)))))
       (x-resolve-rule-replacements x)
       (link-records x)
@@ -1305,5 +1411,7 @@ bound by the caller that knows the session and its repository; nil writes neithe
       ;; A plan's requirement is the request it was made under (Observation.DerivedFrom).
       (when (and (string= (obs-status o) "proposed") (string= (obs-derived-from o) "") (>= at 0)
                  (< at (length (x-requests x))) (>= (aref (x-requests x) at) 0))
-        (setf (obs-derived-from o) (entry-id (entry-at x (aref (x-requests x) at))))))
+        (setf (obs-derived-from o) (entry-id (entry-at x (aref (x-requests x) at)))))
+      ;; A plan's type says how it closes (intent-of; contracts/truth.md, "Intentions").
+      (when (string= (obs-intent o) "") (setf (obs-intent o) (intent-of o))))
     (encode-record (rec-obs r) (x-source-of x r))))

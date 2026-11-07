@@ -18,12 +18,11 @@ import (
 // skips naming the phase that fixes it. A finding that starts to pass fails this test, so the
 // phase that fixes it deletes its entry and the skip together.
 var findings = map[string]string{
-	"secret redaction: layer files":                                                                                           "TestLayerWriteHoldsNoSecret",
-	"no value in the shared layer":                                                                                            "TestLayerWriteHoldsNoSecret",
-	"the merge's other source reappears as itself (decision 1)":                                                               "TestScenario17RetractedSourceLeavesMerge",
-	"same evidence re-read in two sessions is not counted as two":                                                             "TestSameEvidenceNotIndependent",
-	"a project fact saved without a scope stays out of the other repo":                                                        "TestScenario19ForeignScopeNotReturned",
-	"a lesson crosses projects only stripped of its values (decision 8)":                                                      "TestScenario19ForeignScopeNotReturned",
+	"secret redaction: layer files":                                      "TestLayerWriteHoldsNoSecret",
+	"no value in the shared layer":                                       "TestLayerWriteHoldsNoSecret",
+	"same evidence re-read in two sessions is not counted as two":        "TestSameEvidenceNotIndependent",
+	"a project fact saved without a scope stays out of the other repo":   "TestScenario19ForeignScopeNotReturned",
+	"a lesson crosses projects only stripped of its values (decision 8)": "TestScenario19ForeignScopeNotReturned",
 	"curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14)": "TestScenario14ConcurrentSupersedeOneCommits",
 }
 
@@ -224,15 +223,14 @@ func TestScenario19ForeignScopeNotReturned(t *testing.T) {
 }
 
 // Scenario 17: a level-1 merge of A and B whose source A is retracted goes out, and B
-// reappears as itself (decision 1). Level 1 is a scripted reply. Today the retraction withdraws
-// the merge, and B goes with it.
+// reappears as itself (decision 1). Level 1 is a scripted reply. Level 0 withdraws the merge's
+// matching source, A, and the fold takes the merge out and brings B back (phase 5).
 func TestScenario17RetractedSourceLeavesMerge(t *testing.T) {
-	later(t, "phase 5: believed/not-believed labels in the fold; a merge whose source is retracted goes out and its other sources reappear")
 	o, err := RetractedMerge(context.Background(), 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !o.Merged || o.MergeStands || !o.OtherStands {
+	if !o.Merged || o.MergeStands || !o.OtherStands || o.RetractedShown {
 		t.Fatalf("%+v", o)
 	}
 }

@@ -8,17 +8,18 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 )
 
-// The status tags a search's results carry (docs/brain-memory.md, scenario 35).
+// The status tags a search's results carry (docs/brain-memory.md, scenario 35): the fold's labels
+// (ledger.LabelValues; contracts/truth.md).
 const (
-	TagBelieved   = "believed"
-	TagSuperseded = "superseded"
-	TagRetracted  = "retracted"
-	TagContested  = "contested"
-	TagHeld       = "held"
+	TagBelieved   = ledger.LabelBelieved
+	TagSuperseded = ledger.LabelSuperseded
+	TagRetracted  = ledger.LabelRetracted
+	TagContested  = ledger.LabelContested
+	TagHeld       = ledger.LabelHeld
 )
 
 // Tags are the status tags in the order docs/protocol.md lists them.
-var Tags = []string{TagBelieved, TagSuperseded, TagRetracted, TagContested, TagHeld}
+var Tags = ledger.LabelValues
 
 // IsTag reports one of Tags.
 func IsTag(s string) bool {
@@ -30,41 +31,17 @@ func IsTag(s string) bool {
 	return false
 }
 
-// TagOf is a record's status tag, the first that holds of: retracted (its status, or a
-// retraction withdrew it), superseded (a record supersedes it), held (ledger.HeldRule), contested
-// (ledger.Contested), believed.
+// TagOf is a record's status tag, its label (ledger.LabelOf): the first that holds of retracted
+// (its status, or a retraction withdrew it), superseded, held (ledger.HeldRule), contested,
+// believed.
 func TagOf(o ledger.Observation, superseded, retracted, contested bool) string {
-	switch {
-	case retracted || o.Status == ledger.StatusRetracted:
-		return TagRetracted
-	case superseded:
-		return TagSuperseded
-	case ledger.HeldRule(o) != "":
-		return TagHeld
-	case contested:
-		return TagContested
-	}
-	return TagBelieved
+	return ledger.LabelOf(o, superseded, retracted, contested)
 }
 
-// TagsOf are the status tags of records (the active records, in ledger order), by id.
+// TagsOf are the status tags of records (the active records, in ledger order), by id: their
+// labels (ledger.LabelsOf).
 func TagsOf(records []ledger.Observation) map[string]string {
-	superseded := map[string]bool{}
-	for _, o := range records {
-		for _, id := range o.Supersedes {
-			if id != o.ID {
-				superseded[id] = true
-			}
-		}
-	}
-	retracted := ledger.RetractedIDs(records)
-	contested := ledger.Contested(records)
-	out := make(map[string]string, len(records))
-	for _, o := range records {
-		_, c := contested[o.ID]
-		out[o.ID] = TagOf(o, superseded[o.ID], retracted[o.ID], c)
-	}
-	return out
+	return ledger.LabelsOf(records)
 }
 
 // withdrawn reports a tag no current record has: a withdrawn record never outranks a current one.

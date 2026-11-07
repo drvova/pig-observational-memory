@@ -39,6 +39,21 @@ const (
 // RetractedMerge runs seed's session: the two plans, filler, level 1 merging them at the first
 // compaction, the retraction a few turns after it, and a second compaction.
 func RetractedMerge(ctx context.Context, seed int64) (RetractOutcome, error) {
+	o, _, err := withdrawnMerge(ctx, seed, retraction)
+	return o, err
+}
+
+// ForgottenMerge is RetractedMerge with the user's forget request (forgetPlan) in the
+// retraction's place, and the last run.
+func ForgottenMerge(ctx context.Context, seed int64) (RetractOutcome, Run, error) {
+	return withdrawnMerge(ctx, seed, forgetPlan)
+}
+
+// forgetPlan asks the memory to forget plan A (contracts/truth.md, "Forget records").
+const forgetPlan = "Please forget the rate limiting plan from memory."
+
+// withdrawnMerge runs RetractedMerge's session with withdraw said after the merge.
+func withdrawnMerge(ctx context.Context, seed int64, withdraw string) (RetractOutcome, Run, error) {
 	var out RetractOutcome
 	ids := map[string]string{}
 	reply := func(n int, branch []session.Entry) map[string]any {
@@ -66,18 +81,18 @@ func RetractedMerge(ctx context.Context, seed int64) (RetractOutcome, error) {
 	script := func(at int) Script {
 		turns := append([]Turn{say(planA), say(planB)}, Filler(seed, 300)...)
 		if at > 0 {
-			turns[at] = say(retraction)
+			turns[at] = say(withdraw)
 		}
 		return Script{Seed: seed, Turns: turns}
 	}
 	first, err := SimulateWith(ctx, script(0), level1Window, 1, Sim{Level1: reply})
 	if err != nil || len(first.Snapshots) != 1 {
-		return out, fmt.Errorf("first compaction: %v", err)
+		return out, Run{}, fmt.Errorf("first compaction: %v", err)
 	}
 	at := first.Snapshots[0].Turn + 3
 	run, err := SimulateWith(ctx, script(at), level1Window, 2, Sim{Level1: reply})
 	if err != nil || len(run.Snapshots) != 2 {
-		return out, fmt.Errorf("second compaction: %v (%d)", err, len(run.Snapshots))
+		return out, Run{}, fmt.Errorf("second compaction: %v (%d)", err, len(run.Snapshots))
 	}
 	c := run.Snapshots[0].Result.Details.Consolidation
 	out.Merged = c != nil && c.Applied && c.Merges == 1
@@ -100,11 +115,14 @@ func RetractedMerge(ctx context.Context, seed int64) (RetractOutcome, error) {
 		if o.Status == ledger.StatusRetracted && len(o.SourceEntryIDs) > 0 && o.SourceEntryIDs[0] == UserID(at) {
 			out.Retraction = append(out.Retraction, o.Supersedes...)
 		}
+		for _, t := range o.Forgets {
+			out.Retraction = append(out.Retraction, t.ID)
+		}
 	}
 	for _, r := range SummaryRows(last.Summary) {
 		if r.Table != "omitted" && strings.Contains(r.Text, "rate limiting") && r.Cells["status"] == ledger.StatusProposed {
 			out.RetractedShown = true
 		}
 	}
-	return out, nil
+	return out, run, nil
 }

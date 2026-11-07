@@ -145,7 +145,7 @@ column gives that result.
 | 14 | concurrent supersede, one commits | skip, phase 6 | fails: two curated edits of one memory both commit (Tier 0c) |
 | 15 | another writer's layer change is read, no stale cache | **pass** | |
 | 16 | torn manifest line, next generation intact and numbered after | **pass** | |
-| 17 | retracted source takes its merge out | skip, phase 5 | fails: the merge goes out, but its other source goes with it (Tier 0b) |
+| 17 | retracted source takes its merge out, and its other source reappears | **pass** (phase 5 part A) | |
 | 18 | forget injected through tool output leaves shared memory | skip, phase 1 | fails: the memory is retired |
 | 19 | foreign scope not returned | skip, phase 6 | fails: an unscoped fact and a lesson keep their values in the other repository's index (Tier 0c) |
 | 20 | dream never a fact | skip, phase 8 | no body yet |
@@ -539,6 +539,71 @@ kept on every compaction, with no model request beyond the suites' scripted leve
 Scenarios 7, 26 and 37 run on real git repositories in temporary directories
 (`memory/memeval/project_test.go`).
 
+## Phase 5: truth maintenance and forgetting
+
+Phase 5 part A (`claude/phase5-truth`; [contracts/truth.md](../contracts/truth.md)): the fold's
+labels, decision 1's cascade, forget records with tombstones, typed intentions, the three-way
+supersession decision and decay with floors (off by default). Measured on 2026-11-07, 20 seeds, no
+model request beyond the suites' scripted level-1 replies.
+
+**Tier 0: unchanged.** `go run ./cmd/memeval -seeds 20` (1,549 snippets run, none failed) and
+`-seeds 20 -summary-max 1200` (3,915, none failed) give the "Phase 3" tables cell for cell, all
+four invariants kept on all 600 compactions of each. The generator's sessions forget nothing, retract
+no merge and decide no possible update keep-both or contested in a shown pair, so labels and the
+cascade change no cell; decay ships off.
+
+**Tier 0b** (`-suite all -seeds 20`, 140 scripted level-1 replies, 6m23s). Before and after for the
+rows phase 5 owns:
+
+| part | check | before | after |
+|---|---|---|---|
+| c. protected | decay clock with floors for the protected classes (decision 6) | **not built** | built, off by default; the four rows below |
+| c. protected | decay on (compactions clock): no protected class below its floor, none lost | — | 2,556 cells, 0 shown less than without decay, 0 lost: **pass** |
+| c. protected | decay on (compactions clock) lowers rank only: nothing lost that is kept without it | — | 0 more cells lost: **pass** |
+| c. protected | decay on (turns clock): no protected class below its floor, none lost | — | 2,556 cells, 0 shown less, 0 lost: **pass** |
+| c. protected | decay on (turns clock) lowers rank only | — | 0 more cells lost: **pass** |
+| d. retracted source | a retracted source takes its merge out (scenario 17) | 20 of 20 out (20 withdrawn by the retraction itself) | 20 of 20 out (0 withdrawn by the retraction itself: level 0 withdraws the matching source and the fold takes the merge out): **pass** |
+| d. retracted source | the merge's other source reappears as itself (decision 1) | 0 of 20: **fail** | 20 of 20: **pass** |
+| e. forget records | a user's forget request writes a forget record (after a scripted merge) | — | 20 of 20: **pass** |
+| e. forget records | the forgotten plan and the merge holding it leave the fold | — | 20 of 20: **pass** |
+| e. forget records | the merge's other source reappears as itself | — | 20 of 20: **pass** |
+| e. forget records | a tombstone carries no forgotten value | — | 20 of 20: **pass** |
+| e. forget records | a re-extraction of the forgotten source makes no visible record | — | 20 of 20: **pass** |
+| e. forget records | no summary row holds the forgotten plan | — | 0 summaries: **pass** |
+
+Every other Tier 0b row and the whole Tier 0c table are unchanged (the same findings: layer files
+keep a secret, phase 8; the sharing findings, phase 6).
+
+**Decay: a compaction clock against a turn clock at the same budget.** The Tier 0 runs again with
+`decay: "compactions"`, `decayHorizon: 4`, and with `decay: "turns"` at 36 turns, the runs' mean of 9
+turns per compaction times 4 (shown / reachable / lost, in percent, by compactions since the probe
+left the context):
+
+| class | decay | 1 | 4 | 8 | 16 | 20 |
+|---|---|---|---|---|---|---|
+| identifier | off | 98 / 2 / 0 | 89 / 11 / 0 | 61 / 39 / 0 | 45 / 55 / 0 | 35 / 65 / 0 |
+| identifier | compactions, 4 | 98 / 2 / 0 | 89 / 11 / 0 | 61 / 39 / 0 | 45 / 55 / 0 | 35 / 65 / 0 |
+| identifier | turns, 36 | 98 / 2 / 0 | 89 / 11 / 0 | 61 / 39 / 0 | 45 / 55 / 0 | 35 / 65 / 0 |
+| error text | off | 98 / 2 / 0 | 92 / 8 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| error text | compactions, 4 | 98 / 2 / 0 | 92 / 8 / 0 | 4 / 96 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| error text | turns, 36 | 98 / 2 / 0 | 92 / 8 / 0 | 4 / 96 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| decision | off | 88 / 12 / 0 | 58 / 42 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| decision | compactions, 4 | 88 / 12 / 0 | 58 / 42 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| decision | turns, 36 | 88 / 12 / 0 | 58 / 42 / 0 | 1 / 99 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | all three | 97 / 3 / 0 | 82 / 18 / 0 | 46 / 54 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
+| constraint, scope exclusion, superseded | all three | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| every protected class | all three | as part (c) without decay, cell for cell | | | | |
+
+- Both clocks keep the same records on this generator, cell for cell: its compactions come at
+  near-even turn counts, so a horizon of 4 compactions and one of 36 turns decay nearly the same
+  records where it matters. They can differ in sessions whose compactions come at uneven turn
+  counts; the compaction clock
+  is the one decision 6 names, and `turns` stays for comparison.
+- Decay frees a little room at N = 8 for records with fresh evidence (error text 0 → 4% shown,
+  decisions 0 → 1%); what it moves back is still reachable, and nothing is lost in any arm.
+- Newest-first selection already takes old records last, so decay moves rank only where an old
+  record has fresh evidence (a later user or tool record sharing its keys, or a level-0 link).
+
 ## Phase 5 part B: definition settlement
 
 Decision 24's settlement rules (docs/brain-memory.md, "Phase 5 status: definition settlement";
@@ -621,10 +686,10 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
 | c. protected | failed attempt never lost after 1-20 compactions | 551 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | pinned memory never lost after 1-20 compactions | 240 cells, 0 lost; rank-only movement: 240 reachable, not shown | **pass** |
 | c. protected | user definition never lost after 1-20 compactions | 120 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
-| c. protected | decay clock with floors for the protected classes (decision 6) | not built: nothing decays, so only rank moves | **not built** (phase 5) |
+| c. protected | decay clock with floors for the protected classes (decision 6) | not built: nothing decays, so only rank moves | **not built** (phase 5; built since, "Phase 5" above) |
 | d. retracted source | level-1 merge accepted (scripted reply) | 20 of 20 | **pass** |
 | d. retracted source | a retracted source takes its merge out (scenario 17) | 20 of 20 merges out (20 withdrawn by the retraction itself); 0 summaries still show the plan open | **pass** |
-| d. retracted source | the merge's other source reappears as itself (decision 1) | 0 of 20 | **fail** (phase 5: believed/not-believed labels in the fold) |
+| d. retracted source | the merge's other source reappears as itself (decision 1) | 0 of 20 | **fail** (phase 5: believed/not-believed labels in the fold; passes since, "Phase 5" above) |
 
 - **a. Injected instructions.** Each seed plants ten instructions in vendored-file reads, forged
   `[User]:` and `User:` lines and custom messages: forgets (with and without a quote), overwrites,

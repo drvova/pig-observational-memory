@@ -73,6 +73,9 @@ type Input struct {
 	// (project.Texts: "gone at <sha>", "changed since <sha>, unverified"); a record with none is
 	// unchanged or could not be told. A verdict is printed after the record, never drops it.
 	Freshness map[string]string
+	// Decayed are the records decay lowers (ledger.Decayed), by id: classes 4 and 6 take them
+	// after the others. None while the decay setting is off.
+	Decayed map[string]bool
 }
 
 // Slots are the working memory's caps: how many of the user's rules and of their scope
@@ -383,7 +386,12 @@ func newState(in Input) *state {
 		s.items = append(s.items, it)
 		s.byID[o.ID] = it
 	}
-	retracted := ledger.RetractedIDs(all)
+	// The status a note shows reads the fold's labels (ledger.LabelsOf): retracted for a record
+	// a retraction withdrew.
+	retracted := map[string]bool{}
+	for id, l := range ledger.LabelsOf(all) {
+		retracted[id] = l == ledger.LabelRetracted
+	}
 	s.closed = ledger.ClosedBy(all)
 	for _, it := range s.items {
 		if it.role == roleNote {
@@ -599,6 +607,34 @@ func (s *state) link() {
 			s.partners[a.id()] = append(s.partners[a.id()], b)
 		}
 	}
+	// The supersession decisions of the possible updates and conflicts between shown records
+	// (ledger.Supersession; contracts/truth.md): an older value a keep-both update leaves is
+	// marked (updated by <id>), and both ends of a contested pair (conflicts <id>), so a value
+	// another replaced is never shown as current and a contest never settles by order.
+	updatedBy := map[string][]string{}
+	conflictsWith := map[string][]string{}
+	contestedUpdate := map[string][]string{}
+	for _, it := range s.items {
+		if it.role != roleNote {
+			continue
+		}
+		for _, id := range it.obs.PossiblyUpdates {
+			other := s.byID[id]
+			if other == nil || other == it || other.role != roleNote {
+				continue
+			}
+			switch ledger.Supersession(it.obs, other.obs) {
+			case ledger.DecisionKeepBoth:
+				updatedBy[id] = append(updatedBy[id], it.obs.ID)
+			case ledger.DecisionContested:
+				contestedUpdate[it.obs.ID] = append(contestedUpdate[it.obs.ID], id)
+				conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+			}
+		}
+		for _, id := range it.obs.Conflicts {
+			conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+		}
+	}
 	for _, it := range s.items {
 		if it.role != roleNote {
 			continue
@@ -628,8 +664,26 @@ func (s *state) link() {
 				parts = append(parts, "("+label+" "+strings.Join(shown, " ")+")")
 			}
 		}
-		pointer("may update", it.obs.PossiblyUpdates, func(other *item) bool { return !s.superseded[other.obs.ID] })
-		pointer("conflicts", it.obs.Conflicts, func(*item) bool { return true })
+		var mayUpdate, conflicts []string
+		for _, id := range it.obs.PossiblyUpdates {
+			if slices.Contains(contestedUpdate[it.obs.ID], id) {
+				conflicts = append(conflicts, id)
+			} else {
+				mayUpdate = append(mayUpdate, id)
+			}
+		}
+		for _, id := range append(slices.Clone(it.obs.Conflicts), conflictsWith[it.obs.ID]...) {
+			if !slices.Contains(conflicts, id) {
+				conflicts = append(conflicts, id)
+			}
+		}
+		pointer("may update", mayUpdate, func(other *item) bool { return !s.superseded[other.obs.ID] })
+		pointer("conflicts", conflicts, func(*item) bool { return true })
+		n := len(parts)
+		pointer("updated by", updatedBy[it.obs.ID], func(other *item) bool { return !s.superseded[other.obs.ID] })
+		if len(parts) > n && it.extra == "" {
+			it.extra = extraHistory
+		}
 		// A contested claim names the pushback answering it, and the pushback the claims it
 		// answers (ledger.Contested, Observation.RespondsTo).
 		if it.contested {
@@ -886,8 +940,17 @@ func (s *state) choose(budget int) *selected {
 			}
 		}
 	}
+	// Decay lowers rank only (ledger.Decayed; docs/brain-memory.md, decision 6): in classes 4 and
+	// 6 the decayed records are taken after the others of their class, never left out of the
+	// omitted spans that list them. Off, nothing is decayed and the order is unchanged.
+	ranks := func(eligible func(*item) bool, roles ...role) {
+		newestFirst(func(it *item) bool { return !s.in.Decayed[it.id()] && eligible(it) }, roles...)
+		if len(s.in.Decayed) > 0 {
+			newestFirst(func(it *item) bool { return s.in.Decayed[it.id()] && eligible(it) }, roles...)
+		}
+	}
 	// 4. Records carrying specifics no selected line carries.
-	newestFirst(func(it *item) bool {
+	ranks(func(it *item) bool {
 		return it.status != ledger.StatusRetracted && len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
 	}, observations...)
 	// 4b. The values tool output printed (docs/memory-v2.md, "Tool output"): each kind's values
@@ -904,7 +967,7 @@ func (s *state) choose(budget int) *selected {
 	// 5. Reflections, which drop the records they cite.
 	newestFirst(func(*item) bool { return true }, roleReflection)
 	// 6. Everything else.
-	newestFirst(func(*item) bool { return true }, observations...)
+	ranks(func(*item) bool { return true }, observations...)
 	return p
 }
 

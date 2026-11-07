@@ -78,7 +78,9 @@ repo); none without a view, a repository or a record to ask about."
   "The settings the hook reads (config.Config): passive, consolidate, compactionSummaryMaxTokens,
 memoryFormat, the working-memory limits (global and per model) and rawFloor."
   (passive nil) (consolidate-off nil) (summary-max 0) (memory-format "tables")
-  (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil))
+  (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil)
+  ;; decay: its clock ("" off, "compactions" or "turns") and horizon (0 for the default).
+  (decay "") (decay-horizon 0))
 
 ;;; config/working.go: working memory's caps, the raw floor and the quality threshold
 
@@ -417,7 +419,10 @@ is skipped with level1-skip-reason's report."
                                 :format fmt :codec (profile-codec fmt) :aliases (projection-aliases projection)
                                 :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded))
                                 :slots (subseq (limits-for (hconfig-limits cfg) (hconfig-model-limits cfg) model) 0 3)
-                                :freshness (project-texts verdicts))))
+                                :freshness (project-texts verdicts)
+                                :decayed (and (string/= (hconfig-decay cfg) "")
+                                              (decayed-records entries observations (hconfig-decay cfg)
+                                                               (if (plusp (hconfig-decay-horizon cfg)) (hconfig-decay-horizon cfg) +default-decay-horizon+))))))
         (when (and (string/= (summary-text r) "") (<= (estimate-tokens (summary-text r)) memory-budget))
           (setf summary (summary-text r) kind "records"
                 shown (append (mapcar #'refl-id (summary-reflections r)) (mapcar #'obs-id (summary-observations r))))

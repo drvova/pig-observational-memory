@@ -23,6 +23,9 @@ type Window struct {
 	// SummaryMaxTokens caps the summary as the compactionSummaryMaxTokens setting does; 0 is
 	// the default (no cap beyond the window's).
 	SummaryMaxTokens int
+	// Decay and DecayHorizon set the decay setting (config.Config.Decay); "" is off.
+	Decay        string
+	DecayHorizon int
 }
 
 // SmallWindow is the default: small enough that the ledger outgrows the summary budget within a
@@ -114,6 +117,7 @@ func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions i
 	if w.SummaryMaxTokens > 0 {
 		cfg.CompactionSummaryMaxTokens = w.SummaryMaxTokens
 	}
+	cfg.Decay, cfg.DecayHorizon = w.Decay, w.DecayHorizon
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := sim.Host

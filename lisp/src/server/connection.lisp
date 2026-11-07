@@ -27,6 +27,8 @@ lowering with who and why, and the project trust they were read under (:trusted,
   ;; The working-memory limits (config.Config.Limits, ModelLimits) and the raw floor and quality
   ;; trigger switches (RawFloor, QualityTrigger), both off by default.
   (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil) (quality-trigger nil)
+  ;; decay's clock ("" off) and horizon (config.Config.Decay, DecayHorizon), off by default.
+  (decay "") (decay-horizon 0)
   (trust :unknown))
 
 (defstruct (conn (:constructor %make-conn))
@@ -191,6 +193,11 @@ curatedMemoryIndexTokens), memoryFormat, and whether the removed `model` setting
         (when n (setf (rcfg-summary-max cfg) n)))
       (let ((n (positive-integer (gethash "curatedMemoryIndexTokens" nested))))
         (when n (setf (rcfg-index-tokens cfg) n)))
+      (let ((n (positive-integer (gethash "decayHorizon" nested))))
+        (when n (setf (rcfg-decay-horizon cfg) n)))
+      (let ((d (gethash "decay" nested)))
+        (when (member d '("off" "compactions" "turns") :test #'equal)
+          (setf (rcfg-decay cfg) (if (string= d "off") "" d))))
       (let ((f (gethash "memoryFormat" nested)))
         (when (member f '("tables" "lines") :test #'equal) (setf (rcfg-memory-format cfg) f)))
       ;; config.normalizeSettings: the removed settings set to a valid value (ignored; /om:status

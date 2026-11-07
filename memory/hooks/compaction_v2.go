@@ -213,6 +213,7 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			ReflectionDates: ledger.ReflectionDateRanges(folded),
 			Slots:           V2Slots(cfg, model),
 			Freshness:       fresh.texts(),
+			Decayed:         v2Decayed(cfg, entries, projection.Observations),
 		})
 		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords
@@ -510,4 +511,17 @@ func v2SourceTokens(entries []ledger.Entry) int {
 		}
 	}
 	return total
+}
+
+// v2Decayed are the records decay lowers at this compaction (ledger.Decayed), none while the
+// decay setting is off (docs/brain-memory.md, decision 6).
+func v2Decayed(cfg config.Config, entries []session.Entry, records []ledger.Observation) map[string]bool {
+	if cfg.Decay == "" {
+		return nil
+	}
+	horizon := cfg.DecayHorizon
+	if horizon <= 0 {
+		horizon = ledger.DefaultDecayHorizon
+	}
+	return ledger.Decayed(entries, records, cfg.Decay, horizon)
 }

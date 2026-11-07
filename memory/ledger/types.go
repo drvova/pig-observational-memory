@@ -79,7 +79,7 @@ const (
 // CodeKindValues are the kinds level-0 extraction writes beside ObservationKindValues. They
 // are read back from the ledger (ObservationFrom) but are not kinds a worker or a note schema
 // may write, so v1's prompts and validation are unchanged.
-var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote, KindDecision, KindConvention, KindEvidence, KindValue, KindPushback}
+var CodeKindValues = []ObservationKind{KindAttempt, KindFile, KindCommit, KindNote, KindDecision, KindConvention, KindEvidence, KindValue, KindPushback, KindForget}
 
 // The origins of a record (Observation.Origin).
 const (
@@ -193,6 +193,13 @@ type Observation struct {
 	// newest request the person typed at or before its newest source entry, its own entry for a
 	// plan the person stated. A newer request bearing on the plan's keys shows it "may be stale".
 	DerivedFrom string `json:"derivedFrom,omitempty"`
+	// Intent is a plan's type (IntentValues; contracts/truth.md, "Intentions"): a todo, the
+	// assistant's promise, a wait on a condition, or deferred; it says how the plan closes. Code
+	// sets it from fixed wording; "" for every other record and for plans written before it.
+	Intent string `json:"intent,omitempty"`
+	// Forgets are the tombstones a forget record (KindForget) carries: what the user asked to
+	// forget, by id, kind and sources, never by text. Code sets it; none for every other record.
+	Forgets []Tombstone `json:"forgets,omitempty"`
 	// Keys are the exact strings the record can be looked up by (Keys.Add).
 	Keys Keys `json:"keys,omitzero"`
 	// Frame is where in a repository the record was made (the adapter's host.Repo).
