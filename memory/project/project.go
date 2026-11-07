@@ -17,6 +17,10 @@ import (
 // MaxRecords bounds the project records one compaction asks about, newest first.
 const MaxRecords = 200
 
+// MaxSymbols bounds the symbols one compaction searches for (a search with no path reads the
+// whole tree), the newest kept.
+const MaxSymbols = 20
+
 // MaxDiffs bounds the diffs the level-1 input shows (the possibly stale list).
 const MaxDiffs = 8
 
@@ -151,9 +155,9 @@ func anchors(records []ledger.Observation, repo host.Repo) []ledger.Observation 
 }
 
 // Query is what a compaction asks the view about records (the active records it folds): each
-// anchored project record's path, its symbol (in its path, or anywhere without one), and, for one
-// with no body hash written at another commit, its path's blob at that commit. Nothing is asked
-// twice; an empty query asks nothing.
+// anchored project record's path, its symbol (in its path, or anywhere without one; the newest
+// MaxSymbols), and, for one with no body hash, its path's blob at the commit it was framed at.
+// Nothing is asked twice; an empty query asks nothing.
 func Query(records []ledger.Observation, repo host.Repo) host.StructureQuery {
 	var q host.StructureQuery
 	paths := map[string]bool{}
@@ -169,10 +173,13 @@ func Query(records []ledger.Observation, repo host.Repo) host.StructureQuery {
 			symbols[s] = true
 			q.Symbols = append(q.Symbols, s)
 		}
-		if b := (host.BlobQuery{Path: p, At: o.Frame.Head}); p != "" && o.Frame.BodyHash == "" && o.Frame.Head != "" && o.Frame.Head != repo.Head && !blobs[b] {
+		if b := (host.BlobQuery{Path: p, At: o.Frame.Head}); p != "" && o.Frame.BodyHash == "" && o.Frame.Head != "" && !blobs[b] {
 			blobs[b] = true
 			q.Blobs = append(q.Blobs, b)
 		}
+	}
+	if len(q.Symbols) > MaxSymbols {
+		q.Symbols = q.Symbols[len(q.Symbols)-MaxSymbols:]
 	}
 	return q
 }

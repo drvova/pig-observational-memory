@@ -8,6 +8,7 @@
 (in-package "OM.ENGINE")
 
 (defparameter +project-max-records+ 200 "project.MaxRecords.")
+(defparameter +project-max-symbols+ 20 "project.MaxSymbols.")
 (defparameter +project-max-diffs+ 8 "project.MaxDiffs.")
 (defparameter +project-short-sha+ 7 "project.ShortSHA.")
 
@@ -88,8 +89,8 @@ correction or stated fact."
 
 (defun project-query (records repo)
   "project.Query: each anchored project record's path, its symbol, and its path's blob at the commit
-it was framed at when it has no body hash and was framed at another commit; nothing twice."
-  (let ((paths '()) (symbols '()) (blobs '()) (seen (make-set)) (head (str (jget repo "head"))))
+it was framed at when it has no body hash; the newest +project-max-symbols+ symbols; nothing twice."
+  (let ((paths '()) (symbols '()) (blobs '()) (seen (make-set)))
     (dolist (o (project-anchors records repo))
       (let ((p (project-rel-path (frame-of o "path"))) (sym (frame-of o "symbol")) (at (frame-of o "head")))
         (when (and (string/= p "") (not (gethash (cat "p" (string #\Nul) p) seen)))
@@ -100,10 +101,11 @@ it was framed at when it has no body hash and was framed at another commit; noth
             (setf (gethash key seen) t)
             (push-end (jobject "path" p "symbol" sym) symbols)))
         (let ((key (cat "b" (string #\Nul) p (string #\Nul) at)))
-          (when (and (string/= p "") (string= (frame-of o "bodyHash") "") (string/= at "") (string/= at head)
+          (when (and (string/= p "") (string= (frame-of o "bodyHash") "") (string/= at "")
                      (not (gethash key seen)))
             (setf (gethash key seen) t)
             (push-end (jobject "path" p "at" at) blobs)))))
+    (when (> (length symbols) +project-max-symbols+) (setf symbols (last symbols +project-max-symbols+)))
     (project-query-object paths symbols blobs nil)))
 
 (defun project-query-empty-p (q) (zerop (hash-table-count q)))

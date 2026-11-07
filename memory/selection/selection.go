@@ -69,6 +69,10 @@ type Input struct {
 	// Slots are the session model's working-memory caps (docs/memory-v2.md, "Working
 	// memory"); a zero cap takes its default (DefaultSlots).
 	Slots Slots
+	// Freshness are the project records' freshness verdicts against HEAD, by record id
+	// (project.Texts: "gone at <sha>", "changed since <sha>, unverified"); a record with none is
+	// unchanged or could not be told. A verdict is printed after the record, never drops it.
+	Freshness map[string]string
 }
 
 // Slots are the working memory's caps: how many of the user's rules and of their scope
@@ -649,6 +653,13 @@ func (s *state) link() {
 		}
 		if request, ok := s.stale[it.obs.ID]; ok {
 			parts = append(parts, "(may be stale "+request+")")
+		}
+		// A project record's freshness against HEAD (project.Verdicts; decision 20).
+		if verdict := s.in.Freshness[it.obs.ID]; verdict != "" {
+			parts = append(parts, "("+verdict+")")
+			if it.extra == "" {
+				it.extra = extraFresh
+			}
 		}
 		it.links = strings.Join(parts, " ")
 	}

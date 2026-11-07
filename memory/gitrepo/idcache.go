@@ -116,7 +116,7 @@ func (r Reader) lookupRoot(dir string, repo host.Repo) (CachedID, bool) {
 				lookupsMu.Unlock()
 				close(done)
 			}()
-			root, err := rootLookup(dir, RootTimeout)
+			root, err := RootLookup(dir, RootTimeout)
 			if err != nil || root == "" {
 				return
 			}

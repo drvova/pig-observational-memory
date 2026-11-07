@@ -294,9 +294,3 @@ func TestScenario25InsecurePreferenceHeld(t *testing.T) {
 		t.Fatalf("%d held records, want the preference kept once", held)
 	}
 }
-
-// Scenario 26: a project record that HEAD no longer bears out is printed "gone at <sha>", and
-// no structure line is stored in the ledger.
-func TestScenario26ProjectRecordStaleAgainstHEAD(t *testing.T) {
-	t.Skip("phase 4: per-repo project records with freshness verdicts and a HEAD structure view")
-}

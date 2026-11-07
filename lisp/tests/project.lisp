@@ -41,3 +41,22 @@
     (let ((o (encode-record (make-obs :id "a1" :kind "fact" :content "`parseConfig` is pure" :source-ids '("a1"))
                             "assistant-claim")))
       (check (frame-of o "symbol") "" "an assistant's fact is no project record"))))
+
+(deftest project-render-cases
+  ;; contracts/project-render.jsonl: level 0 framed at the first commit, the verdicts against the
+  ;; view's answer, and the summary Go renders with them.
+  (let ((cases (contract-cases "project-render.jsonl")))
+    (check (length cases) 2 "cases read")
+    (dolist (c cases)
+      (let* ((branch (apply #'branch-of (jlist-of (jget c "lines"))))
+             (repo (jget c "repo"))
+             (*encoding* (list :frame (make-record-frame :repo-id (str (jget repo "repoId"))
+                                                         :head "1111111111111111111111111111111111111111")
+                               :root (str (jget repo "root"))))
+             (records (extract-all branch))
+             (verdicts (project-verdicts records repo (jget c "answer"))))
+        (check (length verdicts) 2 (jget c "name"))
+        (check (summary-text (render-summary records (fold-ledger branch) branch (jget c "budget")
+                                             :format (or (jget c "format") "tables")
+                                             :freshness (project-texts verdicts)))
+               (jget c "summary") (jget c "name"))))))

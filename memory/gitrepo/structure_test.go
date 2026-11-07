@@ -142,11 +142,11 @@ func TestRepoIDCachedOnce(t *testing.T) {
 	dir := commitRepo(t)
 	run(t, dir, "remote", "add", "origin", "https://example.org/team/project.git")
 	store := t.TempDir()
-	defer func(f func(string, time.Duration) (string, error), w time.Duration) { rootLookup, RootWait = f, w }(rootLookup, RootWait)
-	real := rootLookup
+	defer func(f func(string, time.Duration) (string, error), w time.Duration) { RootLookup, RootWait = f, w }(RootLookup, RootWait)
+	real := RootLookup
 	var calls atomic.Int32
 	release := make(chan struct{})
-	rootLookup = func(dir string, timeout time.Duration) (string, error) {
+	RootLookup = func(dir string, timeout time.Duration) (string, error) {
 		calls.Add(1)
 		select {
 		case <-release:
@@ -187,7 +187,7 @@ func TestRepoIDCachedOnce(t *testing.T) {
 	}
 	// A new remote does not move the id; a later lookup that would fail is never run.
 	run(t, dir, "remote", "set-url", "origin", "https://example.org/other/name.git")
-	rootLookup = func(string, time.Duration) (string, error) {
+	RootLookup = func(string, time.Duration) (string, error) {
 		t.Error("the lookup ran with the id cached")
 		return "", errors.New("no")
 	}

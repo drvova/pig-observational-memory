@@ -38,6 +38,9 @@ var (
 	MaxDiffBytes = 2400
 	// MaxSymbolBytes bounds a searched symbol.
 	MaxSymbolBytes = 200
+	// StructureTimeout bounds the symbol searches, blob reads and diffs of one query together:
+	// past it the rest are answered unknown, so a compaction never waits long on the view.
+	StructureTimeout = 10 * time.Second
 	// maxViews is how many (repository, HEAD) views the process keeps.
 	maxViews = 4
 )
@@ -157,6 +160,7 @@ func Structure(dir string, repo host.Repo, q host.StructureQuery) (host.Structur
 		return host.StructureAnswer{}, false, err
 	}
 	a := host.StructureAnswer{RepoID: repo.ID, Head: repo.Head, Truncated: v.truncated}
+	deadline := time.Now().Add(StructureTimeout)
 	for i, p := range q.Paths {
 		if i >= MaxQueryItems {
 			break
@@ -167,19 +171,19 @@ func Structure(dir string, repo host.Repo, q host.StructureQuery) (host.Structur
 		if i >= MaxQueryItems {
 			break
 		}
-		a.Symbols = append(a.Symbols, v.symbol(dir, repo, s))
+		a.Symbols = append(a.Symbols, v.symbol(dir, repo, s, deadline))
 	}
 	for i, b := range q.Blobs {
 		if i >= MaxQueryItems {
 			break
 		}
-		a.Blobs = append(a.Blobs, v.blob(dir, repo, b))
+		a.Blobs = append(a.Blobs, v.blob(dir, repo, b, deadline))
 	}
 	for i, d := range q.Diffs {
 		if i >= MaxQueryItems {
 			break
 		}
-		a.Diffs = append(a.Diffs, v.diff(dir, repo, d))
+		a.Diffs = append(a.Diffs, v.diff(dir, repo, d, deadline))
 	}
 	if q.List != nil {
 		a.Files, a.Total = v.list(*q.List)
@@ -233,7 +237,7 @@ func (v *view) hasDir(rel string) bool {
 	return i < len(v.files) && strings.HasPrefix(v.files[i], prefix)
 }
 
-func (v *view) symbol(dir string, repo host.Repo, q host.SymbolQuery) host.SymbolAnswer {
+func (v *view) symbol(dir string, repo host.Repo, q host.SymbolQuery, deadline time.Time) host.SymbolAnswer {
 	out := host.SymbolAnswer{Path: q.Path, Symbol: q.Symbol}
 	sym := strings.TrimSpace(q.Symbol)
 	if sym == "" || len(sym) > MaxSymbolBytes || strings.ContainsAny(sym, "\n\r\x00") {
@@ -260,6 +264,9 @@ func (v *view) symbol(dir string, repo host.Repo, q host.SymbolQuery) host.Symbo
 		return cached
 	}
 	v.mu.Unlock()
+	if time.Now().After(deadline) {
+		return out
+	}
 	args := []string{"grep", "-q", "-I", "-w", "-F", "-e", sym, repo.Head}
 	if rel != "" {
 		args = append(args, "--", rel)
@@ -282,7 +289,7 @@ func (v *view) symbol(dir string, repo host.Repo, q host.SymbolQuery) host.Symbo
 // commitHash is a commit a diff may start from: hex only, so it can never read as an option.
 var commitHash = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
-func (v *view) blob(dir string, repo host.Repo, q host.BlobQuery) host.BlobAnswer {
+func (v *view) blob(dir string, repo host.Repo, q host.BlobQuery, deadline time.Time) host.BlobAnswer {
 	out := host.BlobAnswer{Path: q.Path, At: q.At}
 	rel, ok := Rel(repo.Root, q.Path)
 	if !ok || !commitHash.MatchString(q.At) {
@@ -302,6 +309,9 @@ func (v *view) blob(dir string, repo host.Repo, q host.BlobQuery) host.BlobAnswe
 		return cached
 	}
 	v.mu.Unlock()
+	if time.Now().After(deadline) {
+		return out
+	}
 	raw, code, err := gitRaw(Timeout, dir, 256, "rev-parse", "--verify", "--quiet", q.At+":"+rel)
 	if err != nil {
 		return out
@@ -315,7 +325,7 @@ func (v *view) blob(dir string, repo host.Repo, q host.BlobQuery) host.BlobAnswe
 	return out
 }
 
-func (v *view) diff(dir string, repo host.Repo, q host.DiffQuery) host.DiffAnswer {
+func (v *view) diff(dir string, repo host.Repo, q host.DiffQuery, deadline time.Time) host.DiffAnswer {
 	out := host.DiffAnswer{Path: q.Path, From: q.From}
 	rel, ok := Rel(repo.Root, q.Path)
 	if !ok || !commitHash.MatchString(q.From) {
@@ -329,6 +339,9 @@ func (v *view) diff(dir string, repo host.Repo, q host.DiffQuery) host.DiffAnswe
 		return cached
 	}
 	v.mu.Unlock()
+	if time.Now().After(deadline) {
+		return out
+	}
 	raw, code, err := gitRaw(Timeout, dir, 64*1024, "diff", "--no-color", "--no-ext-diff", "-U2", q.From, repo.Head, "--", rel)
 	if err != nil || code != 0 {
 		return out

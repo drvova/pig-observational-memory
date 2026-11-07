@@ -66,7 +66,7 @@ func (r Reader) Read(dir string) (host.Repo, bool, error) {
 		// commit gives the repository its lasting id.
 		repo.ID = ID("", "", repo.CommonDir)
 	case r.Store == "":
-		if root, err := rootLookup(dir, Timeout); err == nil {
+		if root, err := RootLookup(dir, Timeout); err == nil {
 			repo.RootCommit = root
 		}
 		repo.ID = ID(repo.Remote, repo.RootCommit, repo.CommonDir)
@@ -80,8 +80,9 @@ func (r Reader) Read(dir string) (host.Repo, bool, error) {
 	return repo, true, nil
 }
 
-// rootLookup finds the oldest root commit of HEAD in dir; tests replace it with a slow one.
-var rootLookup = func(dir string, timeout time.Duration) (string, error) {
+// RootLookup finds the oldest root commit of HEAD in dir, bounded by timeout; tests replace it
+// with a slow one (scenario 37).
+var RootLookup = func(dir string, timeout time.Duration) (string, error) {
 	roots, err := gitWithin(timeout, dir, "rev-list", "--max-parents=0", "HEAD")
 	if err != nil {
 		return "", err

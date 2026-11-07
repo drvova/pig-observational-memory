@@ -168,6 +168,9 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// settled by the compaction that proposed it.
 	snapshot := active.Harness()
 	level0Entries := entries
+	// The project records' freshness against HEAD (decision 20): printed after each record, and
+	// the changed ones offered to level 1 as possibly stale. Nothing of the view is stored.
+	fresh := freshnessV2(ctx, rt, h, entries)
 	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, active, spent)
 	if len(level1.entries) > 0 {
 		entries = append(append(make([]ledger.Entry, 0, len(entries)+len(level1.entries)), entries...), level1.entries...)
@@ -206,6 +209,7 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			Aliases:         projection.Aliases,
 			ReflectionDates: ledger.ReflectionDateRanges(folded),
 			Slots:           V2Slots(cfg, model),
+			Freshness:       fresh.texts(),
 		})
 		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords
