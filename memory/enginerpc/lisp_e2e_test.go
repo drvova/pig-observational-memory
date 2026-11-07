@@ -129,7 +129,7 @@ func TestLispEngineMatchesInProcess(t *testing.T) {
 	agentDir := settingsDir(t)
 	want := scenario(t, newInProcess())
 	log := &lockedLog{}
-	got := scenario(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log)})
+	got := scenario(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log), lisp: true})
 	checkLispTool(t, got)
 	got.Tool, got.ToolText = want.Tool, want.ToolText
 	compareTranscripts(t, "lisp", want, got)

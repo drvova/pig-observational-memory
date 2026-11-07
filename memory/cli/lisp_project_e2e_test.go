@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// gitPath is git, looked up before a test clears PATH.
+var gitPath, _ = exec.LookPath("git")
+
 // projectFlow is lispFlow's project-knowledge part (docs/brain-memory.md, decision 20): a
 // generic session in a real git repository under home whose records name two files; level 0
 // frames them at the first commit, a second commit changes one and deletes the other, and the
@@ -19,10 +22,15 @@ import (
 // the same commits.
 func projectFlow(t *testing.T, home string, lisp bool, section func(name, text string), store func() string) {
 	t.Helper()
+	if gitPath == "" {
+		t.Fatal("git is not on PATH: the project flow needs a real repository")
+	}
+	// env clears PATH; om's side of the HEAD view (memory/gitrepo) runs git.
+	t.Setenv("PATH", filepath.Dir(gitPath))
 	repo := filepath.Join(home, "repo")
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		cmd := exec.Command(gitPath, append([]string{"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
 		cmd.Dir = repo
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
 			"GIT_AUTHOR_NAME=om", "GIT_AUTHOR_EMAIL=om@example.org", "GIT_COMMITTER_NAME=om", "GIT_COMMITTER_EMAIL=om@example.org",
@@ -53,11 +61,14 @@ func projectFlow(t *testing.T, home string, lisp bool, section func(name, text s
 	git("commit", "-q", "-m", "first")
 
 	tr := filepath.Join(home, "r.jsonl")
+	// The assistant's long replies give the compaction a removed source large enough for a
+	// summary budget that shows both records.
+	pad := strings.Repeat("Reading through the loader and the client to see how they fit together. ", 60)
 	lines := []string{
 		`{"id":"u1","role":"user","text":"` + "`parseConfig` in `config/load.go` reads the YAML." + `","timestamp":"2026-11-01T10:00:00Z"}`,
-		`{"id":"a1","role":"assistant","text":"Noted.","timestamp":"2026-11-01T10:01:00Z"}`,
+		`{"id":"a1","role":"assistant","text":"Noted. ` + pad + `","timestamp":"2026-11-01T10:01:00Z"}`,
 		`{"id":"u2","role":"user","text":"We decided to keep the retries in ` + "`src/net/retry.go`" + ` because the client must stay small.","timestamp":"2026-11-01T10:02:00Z"}`,
-		`{"id":"a2","role":"assistant","text":"Understood.","timestamp":"2026-11-01T10:03:00Z"}`,
+		`{"id":"a2","role":"assistant","text":"Understood. ` + pad + `","timestamp":"2026-11-01T10:03:00Z"}`,
 	}
 	if err := os.WriteFile(tr, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
