@@ -606,7 +606,8 @@ and 23; `memory/core`, `lisp/src/core.lisp`; cases in `contracts/core.jsonl`):
 - **Operations.** `promote` adds an item, or adds evidence roots to the same item (the fast path);
   `supersede` replaces an item from a writer that had read it; `contest` stores the other side of a
   contested pair, both shown with `conflicts <id>`, never last-writer-wins; `forget` carries
-  tombstones (item and record ids, never text) that hold for good; `scope` changes an item's scope.
+  tombstones (item and record ids, never text) and the forget request's time; `scope` changes an
+  item's scope.
   An item is `rule`, `intention`, `lesson` or `memory` (a curated memory's shared edits).
 - **Reads.** A session reads the core only when its start context is rendered, at its start and
   after each compaction (the index pin's renders, `engine.CoreBlock`): the pull moves its
@@ -619,6 +620,18 @@ and 23; `memory/core`, `lisp/src/core.lisp`; cases in `contracts/core.jsonl`):
   it lacked, so dedup never raises support and recall never changes it (scenario 9). Against a live
   item on its key with another value it supersedes when the user's words back it and the writer had
   read that item, and is stored as a contested pair otherwise (scenario 14).
+- **Forgets and restatements** (`core.Restates`, `core.Restating`, `State.ForgetDue`): a tombstone
+  holds against every write but the user's own fresh words. A candidate on a tombstoned item's id
+  (so the same kind, scope, key and text) lifts it only when it is the user's words from a level-0
+  record of a user entry the person typed (`said`: never a custom message, tool output, another
+  session's text or a level-1 record), restating as the pushback contest reads one
+  (`ledger.Restater`, `ledger.RestatesClaim`: keys or specifics, no negation conflict, not a
+  concession), and said after the forget (the forget line's time, the request's; records are dated
+  to the minute, so not within its minute). Its line is via `restated`: a promote (or supersede or
+  contest) that names the tombstone by its id; the fold drops the forgotten item and makes it again
+  from the line's own text, and the forgotten record's tombstone stays. Generations are kept and
+  nothing is rewritten. A forget the log already holds, written again at a later compaction, never
+  re-tombstones a lifted id; a new forget does, and only words said after it lift it again.
 - **Evidence roots** (`core.EvidenceRoot`): the digest of the file a quote was read from (the call's
   path argument, the file its shell read command names, a grep match's file), else of the quoted
   words; never the tool result's bytes, the session or the reading tool. The same file read with
@@ -842,8 +855,9 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
   "never at a keep").
 - Any other `save` is staged: visible in its session through `saved`, absent from the always-loaded
   index. Code checks evidence at `agent_settled` and `session_start`, with no request: a later user
-  quote, a level-1 citation, or the same normalized name and description staged in another session
-  from distinct source content. A save quoting tool output is staged citing it (the digest of the
+  quote, or the same normalized name and description staged in another session from distinct
+  source content (decision 7). A level-1 citation is recorded (a `cited` usage line) and never
+  promotes: it is the session model's reading of what it was shown, not evidence of its own. A save quoting tool output is staged citing it (the digest of the
   tool result holding the quote, `curated.SourceDigest`); two sessions' stagings count only when
   their digests differ (`docs/brain-memory.md`, decision 7), so two sessions that read the same file
   never corroborate each other, and a staging that cites nothing is no evidence.
@@ -853,8 +867,7 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
   Staged memories are never deleted automatically. A later user quote is a `feedback ... outcome=helped`
   whose quote is in a user message (the assistant's words and harness markup confirm nothing); a
   level-1 citation names a listed memory with at least one shown record code picked from a user
-  message, so the model never confirms its own save; level 1 also runs the check after recording
-  citations.
+  message; level 1 also runs the check after recording citations, for the other evidence.
 - A `forget` through the memory tool retires a memory other sessions see only on a user's words
   quoted with it (`om.Quoting`, at most three memories per quote); without them it hides the memory
   in its own session at once and stages the forget, leaving shared memory unchanged

@@ -69,7 +69,10 @@ word. "Forget the X plan" stays a retraction, and "don't keep X" a rule.
   project", "in this repo"; `project` outside a repository) or `user` (everything else, the
   default), and `forgets`: one tombstone `{id, kind, sources}` per target.
 - **Tombstones never carry the forgotten value**, only ids, a kind and source entry ids, and are
-  permanent: they hold wherever they sit on the branch.
+  permanent: they hold wherever they sit on the branch. The user restating the value in a later
+  message makes a new record from new source entries, which no tombstone names, so it stands; in
+  the shared core the same rule is the lift of a tombstone by the user's own fresh words, and by
+  nothing else (docs/memory-v2.md, "The core log", `contracts/core.jsonl`).
 
 The fold leaves out every record a tombstone names, every record level 0 wrote (origin `code`) of
 the tombstone's kind from exactly its source entries (a re-extraction of the same source), a

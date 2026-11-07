@@ -28,7 +28,7 @@ type Candidate struct {
 	// restating as the pushback contest reads a restatement (ledger.Restater, RestatesClaim:
 	// keys or specifics, no negation conflict, not a concession). Level 1, tool output, another
 	// session's message and a model's write never carry it.
-	Said string `json:"said,omitempty"`
+	Said   string `json:"said,omitempty"`
 	Writer Writer `json:"writer"`
 	// Base is the generation the session had read the core through.
 	Base int `json:"base"`

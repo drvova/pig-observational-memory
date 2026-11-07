@@ -456,7 +456,7 @@ variable, or without `sbcl`, they are skipped.
   pin per conversation (harness and session id, `lisp/src/server/hooks.lisp`) and resets it at
   `session-start` and before a summary is handed, which follows a compaction.
 - **Settle.** `curated-settle` is `Store.Settle`: a staged memory is promoted on a user's quoted helped
-  feedback, a citation, or a second staging session, counting only events since it was saved and after
+  feedback or a second staging session (a level-1 citation is recorded, never evidence), counting only events since it was saved and after
   its last save or edit. A correction whose subject names a memory that applies in the project, made
   after its last update, records one `corrected` event per correction id. Pinned memories are never
   flagged. `branch-corrections` is `harness.Corrections` over the branch (W1's fold), with each
