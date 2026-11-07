@@ -137,17 +137,17 @@ column gives that result.
 | 7 | rename marks a record stale at a commit | **pass** (phase 4: "gone at <sha>", real git) | |
 | 8 | hypothetical never a fact | skip, phases 2 and 6 | fails: the question is recorded as a fact |
 | 9 | 50 recalls leave the summary byte-identical | **pass** | |
-| 9 | core rank and support unchanged by recall | skip, phase 6 | no body yet |
+| 9 | core rank and support unchanged by recall | **pass** (phase 6: the fast path adds no root, 50 pulls leave the block) | |
 | 10 | tool-output instruction staged, never promoted | skip, phase 1 | passes with this input |
 | 11 | forged `[User]:` line in tool output | skip, phase 1 | passes with this input |
-| 12 | same poisoned save from two sessions not promoted | skip, phase 1 | fails: promoted on "the same save staged in another session" |
+| 12 | same poisoned save from two sessions not promoted | **pass** (phase 1; phase 6 keys the stagings on evidence roots) | |
 | 13 | secret in no record, summary or snippet output | skip, phase 1 | fails: the summary holds it |
-| 14 | concurrent supersede, one commits | skip, phase 6 | fails: two curated edits of one memory both commit (Tier 0c) |
+| 14 | concurrent supersede, one commits | **pass** (phase 6: 1,000 runs, one commits and one is a contested pair) | |
 | 15 | another writer's layer change is read, no stale cache | **pass** | |
 | 16 | torn manifest line, next generation intact and numbered after | **pass** | |
 | 17 | retracted source takes its merge out, and its other source reappears | **pass** (phase 5 part A) | |
 | 18 | forget injected through tool output leaves shared memory | skip, phase 1 | fails: the memory is retired |
-| 19 | foreign scope not returned | skip, phase 6 | fails: an unscoped fact and a lesson keep their values in the other repository's index (Tier 0c) |
+| 19 | foreign scope not returned | **pass** (phase 6: project default scope, stripped lessons after two projects, scope intersection) | |
 | 20 | dream never a fact | skip, phase 8 | no body yet |
 | 21 | prose does not close a plan; an edit receipt does; a read plan only on a unique line | **pass** (phase 3) | |
 | 22 | fresh requirement marks a plan "may be stale"; the registry holds the resolved set | **pass** (phase 3) | |
@@ -155,6 +155,7 @@ column gives that result.
 | 24 | an opinion with pushback is not a rule | **pass** (phase 2, episodes and pushback) | |
 | 25 | insecure preference held, not in the index | skip, phase 1 | fails: in the index |
 | 26 | project record stale against HEAD | **pass** (phase 4: "changed since", "gone at", level 1's re-check, no structure line) | |
+| 29 | a one-time permission is never a standing rule or a core item | **pass** (phase 6) | |
 | 30 | a no-op definition replayed at `MinEvidence` does not settle; no net effect after cost is rejected | **pass** (phase 5 part B; the noise arm still settles 13.9%) | |
 | 31 | repeated text and tool output never settle a definition | **pass** (phase 5 part B) | |
 | 32 | settling one definition returns those sharing its target to a hold window | **pass** (phase 5 part B) | |
@@ -661,6 +662,36 @@ full null arm. Longer windows, or the spread taken over more than one pair of co
 would separate the two arms better; both are the owner's call. The recorded ledgers are unchanged
 (437 rejected for no net effect after cost, 120 for no null arm, 3 held).
 
+## Phase 6: the core log
+
+The shared core log (docs/brain-memory.md, "Phase 6 status: the core log"). Measured on 2026-11-07
+against the tree it merged (`claude/lisp-core` at `d859d24`), no model requests.
+
+**Tier 0 and 0b: no regression.** `go run ./cmd/memeval -suite all -seeds 20` (600 compactions,
+1,549 snippets run, 0 failed) prints the retention and invariant tables cell for cell as before
+(identifier 98 / 89 / 61 / 45 / 35% shown after 1, 4, 8, 16 and 20 compactions; constraints and
+scope exclusions 100% throughout; 0 invariant breaks) and the same Tier 0b table: the core changes
+the start context, never a summary.
+
+**Tier 0c: the phase-6 rows pass.**
+
+| check | before | after |
+|---|---|---|
+| same evidence re-read in two sessions is not counted as two | 80 of 120 pairs promoted (**fail**) | 0 of 120 (**pass**); the control still 20 of 20 |
+| a project fact saved without a scope stays out of the other repo | 20 of 20 shown (**fail**) | 0 of 20 (**pass**) |
+| a lesson crosses projects only stripped of its values | 20 of 20 shown with values (**fail**) | 0 of 20 (**pass**) |
+| two sessions editing one memory, one commits (scenario 14) | both in 40 of 40 rounds (**fail**) | one committed and one contested in 40 of 40 (**pass**) |
+| core log: one writer, generations, contested pairs | not built | 81 lines, 81 distinct generations, a contested pair in 40 of 40 rounds (**pass**) |
+| core log shared lines hold no secret | not built | 0 values (**pass**) |
+
+The one remaining Tier 0c finding is the layer's secret (phase 8).
+
+**Scenarios.** 9 (core: 50 pulls and re-offers leave its roots and block), 12, 14 (1,000 runs), 19
+and 29 pass; `TestCoreDeliveryAcrossSessions` checks decision 16's delivery (a constraint and an
+open intention of session A first in session B, not in another project, a one-time permission
+never a rule, the writer's model family named for another family) and a forget carried as a core
+tombstone.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
@@ -785,67 +816,68 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
 
 The sharing suite (`Sharing`) checks what crosses between sessions and projects through the
 stores that exist today: the curated store and its usage ledger, the layer store and the
-per-model usage ledger. The core log is phase 6.
+per-model usage ledger, and since phase 6 the core log.
 
 Command: `cd memory && go run ./cmd/memeval -suite sharing -seeds 20`.
 
-Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 replies the fake host served (no model called), 18.872s
+Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 replies the fake host served (no model called), 16.938s
 
 | part | check | counts | result |
 |---|---|---|---|
-| a. independence | same evidence re-read in two sessions is not counted as two | 80 of 120 same-evidence pairs promoted on "the same save staged in another session" (the same bytes 0, other whitespace 0, line numbers (cat -n) 20, the first lines only (head) 20, one grep match 20, a tool header 20) | **fail** (phase 6: promotion gates keyed on evidence-root digests, not the tool result's bytes) |
+| a. independence | same evidence re-read in two sessions is not counted as two | 0 of 120 same-evidence pairs promoted on "the same save staged in another session" (the same bytes 0, other whitespace 0, line numbers (cat -n) 0, the first lines only (head) 0, one grep match 0, a tool header 0) | **pass** |
 | a. independence | control: another file quoting the line counts as a second source | 20 of 20 promoted | **pass** |
 | b. cross-project | a project-scoped value is not in the other repo's index | 0 of 20 | **pass** |
 | b. cross-project | a staged memory is not in the other repo's index | 0 of 20 | **pass** |
 | b. cross-project | no value from repo A in repo B's summaries or snippets (scenario 19) | 0 in summaries, 0 in 200 snippet answers | **pass** |
 | b. cross-project | a user preference is user-scoped: shown in both repos (decision 8) | 20 of 20 | **pass** |
-| b. cross-project | a project fact saved without a scope stays out of the other repo | 20 of 20 shown in repo B with its value | **fail** (phase 6: core scopes (a save's scope defaults to global)) |
-| b. cross-project | a lesson crosses projects only stripped of its values (decision 8) | 20 of 20 shown in repo B with its value | **fail** (phase 6: lessons stripped of values, after evidence from two projects) |
+| b. cross-project | a project fact saved without a scope stays out of the other repo | 0 of 20 shown in repo B with its value | **pass** |
+| b. cross-project | a lesson crosses projects only stripped of its values (decision 8) | 0 of 20 shown in repo B with its value | **pass** |
 | c. concurrent writers | curated store: no save, staging or ledger line lost | 80 of 80 saves, 40 of 40 stagings joined, 80 of 80 feedback lines, 0 torn lines, 0 errors | **pass** |
-| c. concurrent writers | curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14) | 40 rounds, both edits reported made in 40, 40 edits overwritten unseen (last writer wins) | **fail** (phase 6: core log operations with generations) |
+| c. concurrent writers | curated store: two sessions editing one memory at once, exactly one commits and the other is re-evaluated (scenario 14) | 40 rounds, one committed and one kept as a contested pair in 40, both reported made in 0, 0 edits overwritten unseen, 0 other | **pass** |
 | c. concurrent writers | layer store: generations numbered once each, no definition lost | 80 of 80 generations (80 distinct numbers), 80 of 80 definitions, 0 errors | **pass** |
 | c. concurrent writers | usage ledger: no event lost, no torn line | 80 of 80 events, 80 lines | **pass** |
 | c. concurrent writers | a layer another writer changed is seen at the next compaction only (scenarios 15, 16) | 2 compactions, 0 requests between them, change seen at the next: true | **pass** |
-| c. concurrent writers | core log: one writer, generations, contested pairs | not built | **not built** (phase 6) |
+| c. concurrent writers | core log: one writer, generations, contested pairs | 81 lines, 81 distinct generations numbered 1 to 81, a contested pair in 40 of 40 rounds of two concurrent supersedes, 0 errors | **pass** |
 | d. secrets across sessions | no value in another session's index (scenario 13) | 0 values | **pass** |
 | d. secrets across sessions | no value in another session's saved searches | 0 values | **pass** |
 | d. secrets across sessions | no value in another session's summaries or snippets | 0 in summaries, 0 in 600 snippet answers | **pass** |
 | d. secrets across sessions | no value in the shared usage ledgers | 0 values | **pass** |
 | d. secrets across sessions | no value in the shared layer | 40 values | **fail** (phase 8: secret purge (a layer write is not scanned)) |
-| d. secrets across sessions | core log shared lines | not built | **not built** (phase 6) |
+| d. secrets across sessions | no value in the core log's shared lines or another session's core block | 0 values | **pass** |
 
 - **a. Independence.** Two sessions stage one save quoting one line of a README. The second
   session's read is the same file rendered differently.
   - Equal bytes and whitespace changes give one `SourceDigest`, and are not counted.
-  - A `cat -n` read, a partial read, a grep match or a tool header digest differently. Each is
-    promoted on `EvidenceSessions` as two independent sessions.
+  - A `cat -n` read, a partial read, a grep match or a tool header used to digest differently and
+    be promoted as two independent sessions; since phase 6 each cites the file's evidence root and
+    counts once.
   - The control, another file quoting the line, is promoted as it should be.
-  - The digest is of the whole tool result. Phase 6's promotion gates should digest the quoted
-    content and its file instead (`TestSameEvidenceNotIndependent`).
+  - The root is the file the read names (`core.EvidenceRoot`), never the result's bytes
+    (`TestSameEvidenceNotIndependent`).
 - **b. Cross-project.** Two repositories share one store, with session A in repo A and B in
   repo B.
   - These stay out of repo B's index, its saved searches, its summaries and their snippets:
     project-scoped values, staged memories and everything on A's branch (scenario 19 as far as
     today's scopes go). A user preference is shown in both, as decision 8 has it.
-  - Two kinds leak with their values:
-    - **A save without a scope.** It is global by default.
-    - **A lesson.** It crosses projects with its values, where decision 8 lets a lesson cross
-      only stripped of them and after evidence from two projects.
-
-    Both are phase 6's scopes (`TestScenario19ForeignScopeNotReturned`).
+  - Two kinds leaked with their values before phase 6: a save without a scope (global by
+    default) and a lesson. Since phase 6 a save without a scope stays in its project (a user or
+    feedback memory stays the user's), and a lesson crosses only stripped of its values once saved
+    in two projects (`TestScenario19ForeignScopeNotReturned`).
 - **c. Concurrent writers.** Once per run, not per seed: two `Store` values on one directory write 40 rounds from two goroutines at
   once.
   - No save, staging, feedback line, layer generation, definition or usage event is lost or
     torn.
-  - Two sessions editing one memory at once are both told it was updated, and one edit is gone.
-    That is scenario 14's lost update on the curated store, and phase 6's operations with
-    generations fix it (`TestScenario14ConcurrentSupersedeOneCommits`).
+  - Two sessions that read the core at their start edit one memory at once: exactly one commits
+    and the other is refused and kept as a contested pair (`curated.ErrConflict`); before phase 6
+    both were told it was updated and one edit was gone (`TestScenario14ConcurrentSupersedeOneCommits`).
+  - The core log: two writers supersede one item at once for 40 rounds; every generation is
+    numbered once, and every round leaves one supersede and one contested pair.
   - With level 1 on (scripted), a layer another writer changes between two compactions is in
     the second request and not the first. No request comes between compactions (scenarios 15
     and 16).
 - **d. Secrets across sessions** (scenario 13). Session A meets the values and saves and quotes
-  them. Session B's index, its saved searches, its summaries and their snippets, and the shared
-  usage ledgers hold none. The shared layer holds them: the same layer-write finding as Tier 0b.
+  them. Session B's index, its saved searches, its summaries and their snippets, the shared
+  usage ledgers, the core log's lines and B's core block hold none. The shared layer holds them: the same layer-write finding as Tier 0b.
 
 The tests (`TestTier0bForgetting`, `TestTier0cSharing`, `TestSuitesDeterministic`) run the
 suites over the Tier 0 test runs. They fail when a row other than a listed finding fails, when a
