@@ -182,6 +182,22 @@ func newHost(entries []session.Entry) *testfix.FakeHost {
 	h.HarnessName = "pig"
 	h.RepoInfo = &host.Repo{ID: "0123456789ab", Root: h.Cwd(), CommonDir: h.Cwd() + "/.git", Remote: "example.org/team/project",
 		RootCommit: "1111111111111111111111111111111111111111", Branch: "main", Head: "2222222222222222222222222222222222222222"}
+	// The HEAD structure view crosses the boundary too (host/structure): HEAD has moved on, every
+	// path it is asked about exists with another blob than the one at the commit asked, so a
+	// project record's freshness verdict is judged alike on both paths.
+	h.StructureFunc = func(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+		a := host.StructureAnswer{RepoID: "0123456789ab", Head: "3333333333333333333333333333333333333333"}
+		for _, p := range q.Paths {
+			a.Paths = append(a.Paths, host.PathAnswer{Path: p, Known: true, Exists: true, Blob: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
+		}
+		for _, s := range q.Symbols {
+			a.Symbols = append(a.Symbols, host.SymbolAnswer{Path: s.Path, Symbol: s.Symbol, Known: true, Found: true})
+		}
+		for _, b := range q.Blobs {
+			a.Blobs = append(a.Blobs, host.BlobAnswer{Path: b.Path, At: b.At, Known: true, Blob: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+		}
+		return a, true, nil
+	}
 	return h
 }
 
@@ -220,7 +236,7 @@ type transcript struct {
 // context event of the next request and a memory tool call.
 func scenario(t *testing.T, d driver) transcript {
 	t.Helper()
-	entries := append(codingTurn("p", "fix the loader"), codingTurn("q", "and the saver")...)
+	entries := append(codingTurn("p", "fix the loader"), codingTurn("q", "We decided to keep the saver in `saver.go` because it must stay pure.")...)
 	h := newHost(entries[:8])
 	d.sessionStart(h)
 	d.turnEnd(h)
@@ -241,6 +257,9 @@ func scenario(t *testing.T, d driver) transcript {
 	compaction, _ := result["compaction"].(map[string]any)
 	if compaction == nil || compaction["firstKeptEntryId"] != "qu" {
 		t.Fatalf("compaction %v", result)
+	}
+	if summary, _ := compaction["summary"].(string); !strings.Contains(summary, "(changed since 2222222, unverified)") {
+		t.Fatalf("no freshness verdict in the summary:\n%s", summary)
 	}
 	// PiG writes the compaction entry on its cut.
 	encoded := testfix.ToJSONValue(compaction).(map[string]any)
