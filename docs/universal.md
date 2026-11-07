@@ -119,8 +119,9 @@ else the default. In `entry`, `content` and install steps, `$OM` is om's path, `
 for a POSIX shell, `$OM_SH_ESCAPED` `$OM_SH` escaped for a double-quoted string, and `$HARNESS` the entry's
 name.
 
-`hooks` is the hook spec: `path`, `events` (om's `session-start`, `prompt`, `turn-end` and `pre-compact` to
-the harness's event names), `transcript` (a `memory/transcript` format), and the flags for how the family
+`hooks` is the hook spec: `path`, `events` (om's `session-start`, `prompt`, `turn-end`, `pre-compact` and
+`post-tool` to the harness's event names; `post-tool` only for a harness whose hook hands the model added
+context with a tool's result, which gets cues, memory-v2.md "Cues"), `transcript` (a `memory/transcript` format), and the flags for how the family
 writes and reads its hooks (`flat`, `topLevel`, `toml`, `key`, `timeoutMS`, `timeoutKey`, `noTimeout`,
 `noType`, `matcher`, `version`, `enable`, `env`, `noStdin`, and for context `plainContext`, `contextField`,
 `textContext`, `noContext`, `summaryOnStart`, `summaryOnPrompt`, `summaryAtPreCompact`,
@@ -218,6 +219,23 @@ session store under the root that changed since its checkpoint (`~/.om/sleep/sta
 read alone, and prints one line per store it appended a sleep record to; `om sleep --harness h
 --dir d` sleeps that directory's current session with its transcript and repository, so its project
 records are verified against HEAD. A held lock prints that another pass holds it and does nothing.
+
+## Cues
+
+After each tool call on a harness whose registry entry maps `post-tool` (Claude Code's and OpenClaude's
+`PostToolUse`), `om hook <harness> PostToolUse` answers with one cue as `additionalContext` when the call's
+command, path or an output line equals a standing record's key exactly, and with nothing otherwise
+(memory-v2.md, "Cues"): at most `cueCap` (3) per compaction, each record once. It makes no model request.
+
+## om erase and om purge
+
+`om erase` purges the text of erased records (a user's typed "erase ... from memory", which level 0
+records and the next hook purges at once) from every file om owns: the session stores, the recorded
+turns, the sleep checkpoints, the curated tree, the core log and the layers, under their locks.
+`--text <words>` erases words you type at the command line, and `--check` prints the copies left per
+surface and changes nothing. `om purge` redacts secret values written before writes were scanned, the
+layer's files and blobs included (`--check` counts them); `om sleep` runs the layer's purge too. The
+harness's own transcript is outside the engine: om never writes it and cannot erase from it.
 
 ## Any other harness
 

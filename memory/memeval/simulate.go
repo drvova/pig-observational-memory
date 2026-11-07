@@ -32,6 +32,9 @@ type Window struct {
 	SleepOff        bool
 	SleepAfter      int
 	SleepMaxRecords int
+	// Dreams turns the dream section on (config.Config.Dreams); each compaction is then checked
+	// for a false promotion (checkDreams).
+	Dreams bool
 }
 
 // SmallWindow is the default: small enough that the ledger outgrows the summary budget within a
@@ -133,6 +136,7 @@ func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions i
 	if w.SleepMaxRecords > 0 {
 		cfg.SleepMaxRecords = w.SleepMaxRecords
 	}
+	cfg.Dreams = w.Dreams
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := sim.Host
@@ -185,6 +189,9 @@ func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions i
 		h.Entries = append(h.Entries, testfix.CompactionEntry(fmt.Sprintf("cmp%02d", n), testfix.CompactionArgs{Summary: c.Summary, FirstKeptEntryID: c.FirstKeptEntryID, Details: testfix.ToJSONValue(c.Details)}, map[string]any{"tokensBefore": c.TokensBefore, "timestamp": TurnTime(i).Add(time.Minute).Format("2006-01-02T15:04:05.000Z")}))
 		summary = c.Summary
 		run.Snapshots = append(run.Snapshots, Snapshot{N: n, Turn: i, FirstKept: c.FirstKeptEntryID, Summary: c.Summary, Result: c, Before: before, Branch: append([]session.Entry{}, h.Entries...)})
+		if w.Dreams {
+			checkDreams(c.Summary, h.Entries, sim.Home)
+		}
 		if n >= maxCompactions {
 			break
 		}

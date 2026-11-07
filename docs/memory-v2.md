@@ -697,6 +697,111 @@ request (`TestSleepFallbackInCompaction` counts them with `testfix.CountRequests
   PiG's files, so the image's idle child never writes them: their sleep runs in the compaction
   fallback, on either engine.
 
+### Cues (no request)
+
+Phase 8 of the brain-like memory ([brain-memory.md](brain-memory.md), decision 4; `memory/extract/cue.go`,
+`lisp/src/cue.lisp`; cases in `contracts/cue.jsonl`, `go test ./extract -run CueCases -args -write`;
+schema `entry-cue`). Between compactions, an `om` harness whose hooks hand a tool's result back
+with added context gets at most one cue per tool call: one short hint plus an om snippet, never a
+set of records. The registry says which harnesses: an entry whose `hooks.events` maps `post-tool`
+(Claude Code's and OpenClaude's `PostToolUse`, answered as `additionalContext`). PiG gets no cue:
+a PiG `context`-event cue would change request bytes between compactions and needs its own owner
+exception.
+
+- **When one fires.** Only on an exact structural match of the call against a standing record's
+  keys (`ledger.Keys`): its shell command (trimmed), its path (as level 0 keys it, absolute, and
+  relative to the working directory; a record's directory key ending in `/` holds the paths inside
+  it), or a line of its output (trimmed, clipped as level 0 clips an error line) equal to a recorded
+  error line. The records it may point at are failed attempts, the user's rules and corrections,
+  decisions and repository conventions, never a held one (`ledger.HeldRule`). A look-alike (one
+  character off) never fires (scenario 28). The newest matching record wins.
+- **Bounds.** It abstains by default; a record is cued at most once per compaction, and at most
+  `cueCap` (default 3, `0` off) cues per compaction. Delivery state is derived from the branch: the
+  `om.cue` entries (`{record, key, compaction}`) after the latest compaction. A cue is appended to
+  the conversation by the harness and never removed; nothing is injected and then deleted.
+- **Its text.** `memory cue (unverified): <hint>: <the record's text, redacted, at most 120
+  characters> Read it: om.Recall(`<id>`)`, the hint saying what the record is (`this failed
+  before`, `a standing rule names this`, ...).
+- **Measured.** `memeval -suite cues` replays the Tier 0 generator's sessions and reports the cue
+  rate and the false-cue rate over one-character look-alikes ([brain-memory-baseline.md](brain-memory-baseline.md),
+  "Phase 8").
+
+### Revisions (no request)
+
+Each successful file write or edit level 0 reads becomes one small revision of its file
+(`memory/extract/revision.go`, `memory/ledger/revision.go`, `lisp/src/extract.lisp`; schema
+`entry-revisions-recorded`): the path key, the entry the call sits in, the lines it added and
+removed, its first changed line (redacted, at most 80 characters), and `prev`, the file's previous
+revision on the branch. Its `id` is the first 12 hex characters of the SHA-256 of `revision\0<prev>\0
+<path>\0<digest>\0<added>\0<removed>` (the digest being the SHA-256 of the redacted new text), so
+the ids form a hash chain per file. A revision links the standing decisions, conventions and file
+record about its file (at most 5). The revisions of a stretch go in one `om.revisions.recorded`
+entry after its batches; they are never records, never in the summary, and a later turn continues
+each file's chain from the entries on the branch (`ledger.FileRevisions`).
+
+### Dreams (setting `dreams`, off by default; no request of their own)
+
+Decision 5 ([brain-memory.md](brain-memory.md); `memory/dreams`, `memory/consolidate/hypotheses.go`,
+`lisp/src/dreams.lisp`, `lisp/src/consolidate/validate.lisp`; cases in `contracts/dreams.jsonl`,
+`go test ./dreams -args -write`; schema `entry-hypotheses-recorded`). With `dreams: true`:
+
+- **The dream section.** After everything else in a records summary, when it fits the budget
+  whole: a header saying these are hypotheses, never facts or instructions, then code-only lines,
+  each citing its records: at most 3 open intentions rehearsed (`rehearse, still open`), 2
+  hindsight relabels (a failed attempt a later success superseded was a dead end), 2
+  counterfactual skeletons (`what if <target> had not failed with <error>? unknown until a later
+  receipt`) and 2 links between standing records of different kinds that share an exact path or
+  command key.
+- **Level 1's hypotheses.** The one level-1 request's tool also offers `hypotheses`: at most 3
+  one-line guesses (240 characters) citing shown records. They are quarantined: redacted, stored
+  only in an `om.hypotheses.recorded` entry, never a record, a reflection, a fact class, the core or
+  curated memory, and shown only as `level-1 hypothesis` lines in the dream section (scenario 20).
+  A reply of hypotheses alone is no accepted output. Off, the tool, the prompt and the summary are
+  byte for byte what they were.
+- **The gate.** `memeval -dreams on` checks every compaction for a false promotion (a dream line or
+  the header in a fact class, a record or the curated store): 0 on Tier 0 and the suites
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 8"). The DreamBench-SWE bar's items
+  (`memeval -dreambench-out <file>`: each compaction with dreams off and on, with the probes'
+  questions) are written, ready, not run: answering and judging need models.
+
+### Erasure and the layer purge (no request)
+
+Decisions 10 and 11 ([brain-memory.md](brain-memory.md); `memory/erase`, `memory/ledger/erasure.go`,
+`memory/hooks/erase_v2.go`, `memory/layer/scrub.go`; the image's `erasure-request-p`; schema
+`entry-erased`).
+
+- **A layer write is scanned.** A prose definition (instructions, a remedy's catalogue) is redacted
+  as its file is written (`layer.encodeFile`, the image's `go-encode-file`), keeping the variable
+  name and its line, in the file and its blob. Code is never redacted, since a redacted literal
+  changes what it does: a code or query definition holding a secret, a Go detector's string
+  literal or comment included (`codepolicy.SecretInCode`), and an image layer form, are refused
+  with where the secret is.
+- **Existing files are purged.** `om purge` (`--check` only counts) and the sleep pass of `om sleep`,
+  under the stores' locks: a layer definition holding a value is rewritten through the store
+  (`layer.Store.Scrub`: a prose one redacted with a put generation, a code one forgotten, a blob
+  holding a value removed, so a rollback to it is refused), and every other engine file has its
+  values redacted in place.
+- **A user's erase request.** A forget request the user typed worded as an erasure (`erase`,
+  `purge` or `wipe` ... `from memory`) is a forget record whose text opens `The user asked to erase`
+  (`ledger.ErasurePrefix`); its tombstones hold ids only, as every forget's do. The user's own typed
+  words are the gate: tool output, custom messages and the assistant never make one. After level
+  0, whichever engine ran it, the Go client (`hooks.ErasePending`, om's hooks after the image's
+  turn end, the PiG adapter's process path) purges the payloads, the erased records' text and its
+  specific spans (`erase.Spans`), from every surface the engine owns, under each surface's lock:
+  om's session stores (records, value and evidence records, summaries and their details), its
+  recorded turns, the sleep checkpoints, the curated tree (memories, their usage ledger and
+  index, the per-model ledgers), the core log, the layer (through its store) and the image's layer.
+  Each copy becomes `[erased]`; one `om.erased` entry names the requests and the copies replaced
+  per surface. `om erase` purges what no purge handled yet (`--text <words>` erases words the user
+  types at the command line; `--check` reports the residue per surface and changes nothing).
+- **What stays.** The tombstones (ids only) and the `[erased]` markers, so nothing points at the
+  payload any more: that is the indirection. Crypto-shredding is not built, since backups of
+  `~/.om` are out of scope (decision 14). Under PiG the om.* entries live in PiG's session file,
+  which the engine writes only through the host: the fold leaves the erased records out for good,
+  and the purge covers the engine's own files.
+- **Outside the engine.** The harness's own transcript: the engine never writes it and cannot erase
+  from it, and `om erase` says so.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every

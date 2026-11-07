@@ -70,7 +70,11 @@ func cueHint(o ledger.Observation) string {
 
 // cueable reports whether o may be cued: a failed attempt, a rule, a correction, a decision or a
 // repository convention that is not held (ledger.HeldRule).
-func cueable(o ledger.Observation) bool {
+func cueable(o ledger.Observation) bool { return Cueable(o) }
+
+// Cueable reports whether o may be cued: a failed attempt, a rule, a correction, a decision or a
+// repository convention that is not held (ledger.HeldRule).
+func Cueable(o ledger.Observation) bool {
 	if cueHint(o) == "" || ledger.HeldRule(o) != "" {
 		return false
 	}
@@ -132,6 +136,12 @@ func keysOf(o ledger.Observation, kind string) []string {
 // one of the call's keys matches that no om.cue entry after the latest compaction names, while
 // fewer than limit cues were given since that compaction; false when it abstains.
 func CueFor(entries []ledger.Entry, call CueCall, cwd string, limit int) (Cue, bool) {
+	return CueOver(entries, nil, call, cwd, limit)
+}
+
+// CueOver is CueFor with the standing records given (active, the fold of entries' records, in
+// fold order), for a caller that already folded them; nil folds entries.
+func CueOver(entries []ledger.Entry, active []ledger.Observation, call CueCall, cwd string, limit int) (Cue, bool) {
 	if limit <= 0 {
 		return Cue{}, false
 	}
@@ -156,7 +166,9 @@ func CueFor(entries []ledger.Entry, call CueCall, cwd string, limit int) (Cue, b
 	if len(keys) == 0 {
 		return Cue{}, false
 	}
-	active := ledger.FoldLedger(entries, "").ActiveObservations
+	if active == nil {
+		active = ledger.FoldLedger(entries, "").ActiveObservations
+	}
 	for i := len(active) - 1; i >= 0; i-- {
 		o := active[i]
 		if given[o.ID] || !cueable(o) {
