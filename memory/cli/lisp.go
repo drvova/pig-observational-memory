@@ -284,7 +284,7 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 	case "turn-end", "compact", "before-compact", "prompt":
 		// The image's level 0 frames its records with the repository the adapter side reads
 		// (host.Repo), as neutral.Host.Repo hands the Go engine; the image never runs git.
-		if repo, ok, err := gitrepo.Read(s.Cwd); err == nil && ok {
+		if repo, ok, err := (gitrepo.Reader{Store: a.root}).Read(s.Cwd); err == nil && ok {
 			params["repo"] = repo
 		}
 	}

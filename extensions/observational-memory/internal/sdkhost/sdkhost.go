@@ -5,6 +5,7 @@ package sdkhost
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -240,9 +241,28 @@ func (h *Host) ProjectTrusted() (trusted bool, err error) {
 func (h *Host) Harness() string { return "pig" }
 
 // Repo is the git repository holding the session's working directory, read by running git there
-// (gitrepo.Read): the engine reads it once per compaction (runtime.Runtime.CachedRepo) and never
-// runs git itself.
-func (h *Host) Repo() (host.Repo, bool, error) { return gitrepo.Read(h.cwd) }
+// (gitrepo.Reader): the engine reads it once per compaction (runtime.Runtime.CachedRepo) and never
+// runs git itself. Its id is computed once per repository and cached under the extension's own
+// store in PiG's config root (<config>/observational-memory/repos), never in the repository.
+func (h *Host) Repo() (host.Repo, bool, error) { return h.repoReader().Read(h.cwd) }
+
+// Structure answers the HEAD structure view of the session's repository (gitrepo.Structure,
+// cached per repository and HEAD).
+func (h *Host) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	repo, ok, err := h.Repo()
+	if err != nil || !ok {
+		return host.StructureAnswer{}, false, err
+	}
+	return gitrepo.Structure(h.cwd, repo, q)
+}
+
+// repoReader is the repository reader with the extension's id cache, none without a config root.
+func (h *Host) repoReader() gitrepo.Reader {
+	if home := h.ConfigHome(); home != "" {
+		return gitrepo.Reader{Store: filepath.Join(home, "observational-memory")}
+	}
+	return gitrepo.Reader{}
+}
 
 // ConfigHome is PiG's config root (PIG_HOME, else XDG_CONFIG_HOME/pig, else
 // ~/.pig), "" when it cannot be found.
@@ -335,6 +355,7 @@ func Definition(spec host.ToolSpec) sdk.ToolDefinition {
 }
 
 var (
-	_ host.RepoReader   = (*Host)(nil)
-	_ host.HarnessNamer = (*Host)(nil)
+	_ host.RepoReader      = (*Host)(nil)
+	_ host.StructureReader = (*Host)(nil)
+	_ host.HarnessNamer    = (*Host)(nil)
 )

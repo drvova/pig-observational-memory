@@ -74,8 +74,9 @@ func (s Session) Host(root string, log io.Writer) (*neutral.Host, error) {
 		Store:      neutral.StoreFor(root, s.Harness, s.ID),
 		Log:        log,
 		// The adapter side reads the repository, so the engine never runs git itself.
-		HarnessName: s.Harness,
-		ReadRepo:    gitrepo.Read,
+		HarnessName:   s.Harness,
+		ReadRepo:      gitrepo.Reader{Store: root}.Read,
+		ReadStructure: gitrepo.Structure,
 	}, nil
 }
 

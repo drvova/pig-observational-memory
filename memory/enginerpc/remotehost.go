@@ -26,6 +26,7 @@ var (
 	_ host.ConfigHomer       = (*remoteHost)(nil)
 	_ host.SessionFileReader = (*remoteHost)(nil)
 	_ host.RepoReader        = (*remoteHost)(nil)
+	_ host.StructureReader   = (*remoteHost)(nil)
 	_ host.HarnessNamer      = (*remoteHost)(nil)
 )
 
@@ -85,6 +86,19 @@ func (h *remoteHost) Repo() (host.Repo, bool, error) {
 		return host.Repo{}, false, nil
 	}
 	return *out.Repo, true, nil
+}
+
+// Structure is the adapter's host.StructureReader answer; an adapter whose host reads none
+// answers null.
+func (h *remoteHost) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	var out StructureResult
+	if err := h.call(MethodStructure, StructureParams{Scope: h.scope.ID, Query: q}, &out); err != nil {
+		return host.StructureAnswer{}, false, err
+	}
+	if out.Answer == nil {
+		return host.StructureAnswer{}, false, nil
+	}
+	return *out.Answer, true, nil
 }
 func (h *remoteHost) HasUI() bool { return h.scope.HasUI }
 func (h *remoteHost) Cwd() string { return h.scope.Cwd }
