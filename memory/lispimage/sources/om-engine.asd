@@ -42,6 +42,8 @@
                              (:file "contest")
                              ;; Phase 3: working memory (receipts, staleness, rule replacements).
                              (:file "working")
+                             ;; Phase 4: the search behind the reads (memory/retrieve).
+                             (:file "retrieve")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")

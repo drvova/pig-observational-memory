@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -211,9 +212,34 @@ func retrievalInputs() []retrievalInput {
 	}
 }
 
+// hexIDs gives the records ids a ledger accepts (12 hex digits), in order of first use, links
+// included.
+func hexIDs(records []ledger.Observation) []ledger.Observation {
+	ids := map[string]string{}
+	id := func(short string) string {
+		if v, ok := ids[short]; ok {
+			return v
+		}
+		ids[short] = fmt.Sprintf("%012x", 0xa00+len(ids))
+		return ids[short]
+	}
+	out := make([]ledger.Observation, len(records))
+	for i, o := range records {
+		o.ID = id(o.ID)
+		var sup []string
+		for _, s := range o.Supersedes {
+			sup = append(sup, id(s))
+		}
+		o.Supersedes = sup
+		out[i] = o
+	}
+	return out
+}
+
 func retrievalCases() []RetrievalCase {
 	var out []RetrievalCase
 	for _, in := range retrievalInputs() {
+		in.records = hexIDs(in.records)
 		tags := TagsOf(in.records)
 		pool := make([]Doc, len(in.records))
 		for i, o := range in.records {

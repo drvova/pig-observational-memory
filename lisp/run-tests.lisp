@@ -82,6 +82,8 @@
 
 ;; Preferences that weaken security and the unverified framing (contracts/insecure.md).
 (load (merge-pathnames "tests/insecure.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 4: the search behind the reads (docs/protocol.md, "Retrieval").
+(load (merge-pathnames "tests/retrieval.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
 (let ((errors 0))
   (dolist (test *tests*)
