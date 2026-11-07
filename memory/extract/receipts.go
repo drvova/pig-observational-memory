@@ -143,22 +143,39 @@ func (x *extraction) uniqueLine(rc *receipt) bool {
 func (x *extraction) resolveClosures() {
 	plans, own := x.standingPlans()
 	closed := map[string]bool{}
+	// A deferred plan closes only on a receipt made under a later request of the person's than
+	// the one it was made under (ledger.IntentDeferred).
+	requests := Requests(x.in.Entries, len(x.in.Entries))
+	positions := ledger.EntryIndexByID(x.in.Entries)
+	requestOf := func(anchor int) int {
+		if anchor >= 0 && anchor < len(requests) {
+			return requests[anchor]
+		}
+		return -1
+	}
 	for _, r := range x.records {
 		if r.receipt == nil {
 			continue
 		}
-		try := func(plan ledger.Observation) {
+		try := func(plan ledger.Observation, planRequest int) {
+			if ledger.IntentOf(plan) == ledger.IntentDeferred && requestOf(r.anchor) <= planRequest {
+				return
+			}
 			if !closed[plan.ID] && plan.ID != r.obs.ID && x.closesPlan(plan, r.receipt) {
 				closed[plan.ID] = true
 				r.obs.Closes = append(r.obs.Closes, ledger.Closure{ID: plan.ID, ClosedBy: r.obs.ID, Receipt: r.receipt.kind})
 			}
 		}
 		for _, p := range plans {
-			try(p)
+			at, ok := positions[p.DerivedFrom]
+			if !ok {
+				at = -1
+			}
+			try(p, at)
 		}
 		for _, p := range own {
 			if p.anchor < r.anchor {
-				try(p.obs)
+				try(p.obs, requestOf(p.anchor))
 			}
 		}
 	}

@@ -1411,5 +1411,7 @@ bound by the caller that knows the session and its repository; nil writes neithe
       ;; A plan's requirement is the request it was made under (Observation.DerivedFrom).
       (when (and (string= (obs-status o) "proposed") (string= (obs-derived-from o) "") (>= at 0)
                  (< at (length (x-requests x))) (>= (aref (x-requests x) at) 0))
-        (setf (obs-derived-from o) (entry-id (entry-at x (aref (x-requests x) at))))))
+        (setf (obs-derived-from o) (entry-id (entry-at x (aref (x-requests x) at)))))
+      ;; A plan's type says how it closes (intent-of; contracts/truth.md, "Intentions").
+      (when (string= (obs-intent o) "") (setf (obs-intent o) (intent-of o))))
     (encode-record (rec-obs r) (x-source-of x r))))

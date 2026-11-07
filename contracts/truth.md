@@ -98,3 +98,18 @@ A **reflection** survives while `k` of its `n` supports stand, `k = ceil(n / 2)`
 when it is forgotten, out, withdrawn by a retraction or superseded by a record not dropped (a
 dropped support still stands: v1 dropped what a reflection covered). A forgotten support takes the
 reflection out whatever `k`, since its text may hold the value. One with no support stands.
+
+## Intentions
+
+Level 0 gives every plan it writes (status `proposed`) a type, `intent`, the first that holds of its
+text (ASCII word boundaries, any case):
+
+| Type | Wording | Closes on |
+|---|---|---|
+| `deferred` | later, eventually, someday, tomorrow, next week/month/sprint/quarter/session/time, after the release, down the road, at some point, another time | a tool receipt matching its keys, made under a later request of the person's than the one it was made under (`derivedFrom`): the work of the request it was put off from never closes it |
+| `condition-wait` | opening with once, when or after; or once, as soon as, wait(ing) for/until anywhere | a tool receipt matching its keys |
+| `promise` | the assistant's own plan (kind `assistant`), or one opening with I'll, I will, I'm going to, let me | a tool receipt matching its keys |
+| `todo` | any other plan | a tool receipt matching its keys |
+
+Receipts are Phase 3's (`closes`, encoding.md "Receipts"); prose closes nothing. The rule reads the
+type from the text (`ledger.IntentOf`), so a plan written before the field closes the same way.

@@ -23,6 +23,10 @@ func (x *extraction) encode() {
 		if r.obs.Status == ledger.StatusProposed && r.obs.DerivedFrom == "" && r.anchor >= 0 && r.anchor < len(x.requests) && x.requests[r.anchor] >= 0 {
 			r.obs.DerivedFrom = x.in.Entries[x.requests[r.anchor]].ID
 		}
+		// A plan's type says how it closes (ledger.IntentOf; contracts/truth.md, "Intentions").
+		if r.obs.Intent == "" {
+			r.obs.Intent = ledger.IntentOf(r.obs)
+		}
 		Encode(&r.obs, x.sourceOf(r), x.in.Writer, x.in.Frame, x.in.RepoRoot)
 	}
 }

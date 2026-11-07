@@ -319,6 +319,28 @@ func encodingCases() []encodingCase {
 			user("u2", "Forget the Postgres plan."),
 		}, []string{"fact/proposed", "correction/retracted"}},
 		{"don't keep is no forget", says("Don't keep secrets in `config/`."), nil},
+		// Typed intentions (contracts/truth.md, "Intentions"): a deferred plan closes only on a
+		// receipt under a later request.
+		{"deferred plan not closed by its own request's work", []session.Entry{
+			user("u1", "Next week we will add the 3 timings to `api/limit.go`."),
+			assistant("a1", call{"c1", "edit", map[string]any{"path": "api/limit.go", "oldText": "a", "newText": "b"}}),
+			result("r1", "c1", "edit", "Edited api/limit.go", false),
+		}, []string{"fact/proposed", "file"}},
+		{"deferred plan closed under a later request", []session.Entry{
+			user("u1", "Next week we will add the 3 timings to `api/limit.go`."),
+			user("u2", "Go ahead with the notes now."),
+			assistant("a1", call{"c1", "edit", map[string]any{"path": "api/limit.go", "oldText": "a", "newText": "b"}}),
+			result("r1", "c1", "edit", "Edited api/limit.go", false),
+		}, []string{"fact/proposed", "file"}},
+		{"todo closed by its own request's work", []session.Entry{
+			user("u1", "Next we will add the 3 timings to `api/limit.go`."),
+			assistant("a1", call{"c1", "edit", map[string]any{"path": "api/limit.go", "oldText": "a", "newText": "b"}}),
+			result("r1", "c1", "edit", "Edited api/limit.go", false),
+		}, []string{"fact/proposed", "file"}},
+		{"condition wait and promise", []session.Entry{
+			user("u1", "Once CI is green we will tag `v1.4.0`."),
+			assistant("a1", "I'll bump `go.mod` to Go 1.26 after that."),
+		}, []string{"fact/proposed", "assistant/proposed"}},
 	}
 }
 

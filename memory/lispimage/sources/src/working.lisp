@@ -144,17 +144,22 @@ output of a call on another target holds."
 (defun x-resolve-closures (x)
   "resolveClosures."
   (multiple-value-bind (plans own) (standing-plans x)
-    (let ((closed (make-set)))
-      (dolist (r (x-records x))
-        (let ((rc (rec-receipt r)))
-          (when rc
-            (flet ((try (plan)
-                     (when (and (not (gethash (obs-id plan) closed)) (string/= (obs-id plan) (obs-id (rec-obs r)))
-                                (closes-plan-p x plan rc))
-                       (setf (gethash (obs-id plan) closed) t)
-                       (push-end (list (obs-id plan) (obs-id (rec-obs r)) (receipt-kind rc)) (obs-closes (rec-obs r))))))
-              (dolist (p plans) (try p))
-              (dolist (p own) (when (< (rec-anchor p) (rec-anchor r)) (try (rec-obs p)))))))))))
+    (let* ((closed (make-set))
+           ;; A deferred plan closes only on a receipt under a later request than its own.
+           (requests (requests-of (x-entries x) (length (x-entries x))))
+           (positions (entry-index-by-id (x-entries x))))
+      (flet ((request-of (anchor) (if (and (>= anchor 0) (< anchor (length requests))) (aref requests anchor) -1)))
+        (dolist (r (x-records x))
+          (let ((rc (rec-receipt r)))
+            (when rc
+              (flet ((try (plan plan-request)
+                       (unless (and (string= (intent-of plan) "deferred") (<= (request-of (rec-anchor r)) plan-request))
+                         (when (and (not (gethash (obs-id plan) closed)) (string/= (obs-id plan) (obs-id (rec-obs r)))
+                                    (closes-plan-p x plan rc))
+                           (setf (gethash (obs-id plan) closed) t)
+                           (push-end (list (obs-id plan) (obs-id (rec-obs r)) (receipt-kind rc)) (obs-closes (rec-obs r)))))))
+                (dolist (p plans) (try p (or (gethash (obs-derived-from p) positions) -1)))
+                (dolist (p own) (when (< (rec-anchor p) (rec-anchor r)) (try (rec-obs p) (request-of (rec-anchor p)))))))))))))
 
 (defun requests-of (entries end)
   "Requests: by index below end, the index of the newest request at or before it, -1 before any."

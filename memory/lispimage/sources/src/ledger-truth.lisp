@@ -124,3 +124,20 @@
                             (and (string/= kind "") (string= (obs-kind o) kind) srcs (same-set-p (obs-source-ids o) srcs)))))
                     (obs-forgets r)))
             (folded-observations f))))
+
+;;; intent.go: the types of an intention (contracts/truth.md, "Intentions")
+
+(defparameter +intent-deferred+
+  (compile-regex #r§(?i)\b(?:later|eventually|some\s?day|tomorrow|next\s+(?:week|month|sprint|quarter|session|time)|after\s+the\s+release|down\s+the\s+road|at\s+some\s+point|another\s+time)\b§))
+(defparameter +intent-condition+
+  (compile-regex #r§(?i)(?:^(?:once|when|after)\b|\b(?:once|as\s+soon\s+as|wait(?:ing)?\s+(?:for|until))\b)§))
+(defparameter +intent-promise+
+  (compile-regex #r§(?i)^(?:i'll|i\s+will|i'm\s+going\s+to|i\s+am\s+going\s+to|let\s+me)\b§))
+
+(defun intent-of (o)
+  "IntentOf: a plan's type, \"\" for any other record."
+  (cond ((string/= (obs-status o) +status-proposed+) "")
+        ((regex-match-p +intent-deferred+ (obs-content o)) "deferred")
+        ((regex-match-p +intent-condition+ (obs-content o)) "condition-wait")
+        ((or (string= (obs-kind o) "assistant") (regex-match-p +intent-promise+ (obs-content o))) "promise")
+        (t "todo")))

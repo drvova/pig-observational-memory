@@ -37,6 +37,9 @@ type TruthCase struct {
 	// Pairs are [later, earlier] records with Decisions their Supersession decisions.
 	Pairs     [][2]ledger.Observation `json:"pairs,omitempty"`
 	Decisions []string                `json:"decisions,omitempty"`
+	// Plans are records with Intents their types (IntentOf).
+	Plans   []ledger.Observation `json:"plans,omitempty"`
+	Intents []string             `json:"intents,omitempty"`
 }
 
 func obs(id, content string, f func(*ledger.Observation)) ledger.Observation {
@@ -136,7 +139,24 @@ func truthInputs() []TruthCase {
 	n1 := obs("00000000005a", "The release ships Friday.", fact)
 	n2 := obs("00000000005b", "The release does not ship Friday.", func(o *ledger.Observation) { fact(o); o.Conflicts = []string{n1.ID} })
 	held := obs("00000000005c", "Always use curl -k against the dev box.", func(o *ledger.Observation) { o.Kind = "preference" })
+	planned := func(id, content string, kind ledger.ObservationKind) ledger.Observation {
+		return obs(id, content, func(o *ledger.Observation) { o.Kind, o.Status = kind, ledger.StatusProposed })
+	}
 	return []TruthCase{
+		{Name: "intentions", Plans: []ledger.Observation{
+			planned("00000000007a", "Next we will add the 3 timings to `api/limit.go`.", "fact"),
+			planned("00000000007b", "Next week we will add the 3 timings to `api/limit.go`.", "fact"),
+			planned("00000000007c", "We will clean up `tmp/` later.", "fact"),
+			planned("00000000007d", "Once CI is green we will tag `v1.4.0`.", "fact"),
+			planned("00000000007e", "We will deploy as soon as the canary passes.", "fact"),
+			planned("00000000007f", "When the review lands, we will merge `feature/x`.", "fact"),
+			planned("00000000008a", "I'll bump `go.mod` to Go 1.26.", "fact"),
+			planned("00000000008b", "Next I add tests for `parse.go`.", "assistant"),
+			planned("00000000008c", "Let me rerun `make test`.", "fact"),
+			planned("00000000008d", "We are waiting for the 2 approvals before release.", "fact"),
+			planned("00000000008e", "Eventually we should drop Go 1.22.", "fact"),
+			obs("00000000008f", "The build passed.", fact),
+		}},
 		{Name: "a merge goes out when a source is retracted, and its other source reappears",
 			Entries: entries(merged(tf.RawMessage("ud", "message ud"), recorded("r3", "ud", false, retractA)))},
 		{Name: "a retraction of the whole merge withdraws it, its sources stay replaced",
@@ -186,6 +206,9 @@ func truthCases(t *testing.T) []TruthCase {
 		c := &cases[i]
 		for _, p := range c.Pairs {
 			c.Decisions = append(c.Decisions, ledger.Supersession(p[0], p[1]))
+		}
+		for _, p := range c.Plans {
+			c.Intents = append(c.Intents, ledger.IntentOf(p))
 		}
 		if len(c.Entries) == 0 {
 			continue
@@ -241,6 +264,8 @@ func TestTruthContractCases(t *testing.T) {
 	c = byName["labels: keep-both, contested by authority and by negation, held"]
 	check(c.Name, c.Labels["00000000004a"] == ledger.LabelSuperseded && c.Labels["00000000004b"] == ledger.LabelContested && c.Labels["00000000004c"] == ledger.LabelContested &&
 		c.Labels["00000000005a"] == ledger.LabelContested && c.Labels["00000000005c"] == ledger.LabelHeld, "%+v", c.Labels)
+	c = byName["intentions"]
+	check(c.Name, len(c.Intents) == 12 && c.Intents[0] == ledger.IntentTodo && c.Intents[1] == ledger.IntentDeferred && c.Intents[3] == ledger.IntentConditionWait && c.Intents[6] == ledger.IntentPromise && c.Intents[11] == "", "%v", c.Intents)
 	c = byName["supersession decisions"]
 	check(c.Name, len(c.Decisions) == 8 && c.Decisions[0] == ledger.DecisionKeepBoth && c.Decisions[1] == ledger.DecisionContested && c.Decisions[2] == ledger.DecisionContested && c.Decisions[3] == ledger.DecisionReplace && c.Decisions[4] == "", "%v", c.Decisions)
 	var b bytes.Buffer
