@@ -8,6 +8,7 @@
 //	go run ./cmd/memeval -suite constraintrot
 //	go run ./cmd/memeval -suite arcbench -arcbench-cases <dir>/data/rule-loss/cases.jsonl
 //	go run ./cmd/memeval -suite retrieval -seeds 20
+//	go run ./cmd/memeval -suite settle -seeds 20
 //
 // The forgetting (Tier 0b) and sharing (Tier 0c) suites print a table of checks each, pass, fail
 // or not built; their only requests are scripted level-1 replies a fake host serves.
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/memeval"
+	"github.com/drvova/pig-observational-memory/memory/rules"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
@@ -34,7 +36,7 @@ func main() {
 	window := flag.Int("window", 0, "context window in tokens (0: the default small window)")
 	summaryMax := flag.Int("summary-max", 0, "summary cap in tokens, as compactionSummaryMaxTokens (0: none)")
 	noSnippets := flag.Bool("no-snippets", false, "do not run the printed snippets (every unshown probe counts as lost)")
-	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), all, constraintrot, arcbench or retrieval")
+	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), settle (the no-op definition replay), all, constraintrot, arcbench or retrieval")
 	arcCases := flag.String("arcbench-cases", "", "ARCBench's data/rule-loss/cases.jsonl (data only; its code is never run)")
 	flag.Parse()
 	serialize.Location = time.UTC
@@ -96,6 +98,23 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// settle prints the no-op definition replay (decision 24, scenario 30).
+	settle := func() {
+		t := time.Now()
+		r, noisy, err := memeval.NoOpSettleRate(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("No-op definition replay: %d seeds, %d compactions, held before each and judged at MinEvidence (%d) compactions under it, 0 model requests, %s\n\n",
+			r.Seeds, r.Compactions, rules.MinEvidence, time.Since(t).Round(time.Millisecond))
+		fmt.Println("The recorded ledgers:")
+		fmt.Println()
+		fmt.Print(r.Table())
+		fmt.Printf("\nThe same ledgers with each compaction's failures drawn from 0 to %d (the noise arm):\n\n", memeval.NoiseMax)
+		fmt.Print(noisy.Table())
+		fmt.Println()
+	}
 	switch *suite {
 	case "tier0", "all":
 	case "constraintrot":
@@ -136,6 +155,9 @@ func main() {
 	case "forgetting", "sharing":
 		suites(nil)
 		return
+	case "settle":
+		settle()
+		return
 	case "retrieval":
 		var runs []memeval.Run
 		for _, seed := range cfg.Seeds {
@@ -157,7 +179,7 @@ func main() {
 		fmt.Print(memeval.RetrievalTable(tallies))
 		return
 	default:
-		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing, all, constraintrot, arcbench or retrieval")
+		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing, settle, all, constraintrot, arcbench or retrieval")
 		os.Exit(2)
 	}
 	m, err := memeval.Measure(context.Background(), cfg, lister)
@@ -188,6 +210,7 @@ func main() {
 	if *suite == "all" {
 		fmt.Println()
 		suites(m.Runs)
+		settle()
 	}
 }
 
