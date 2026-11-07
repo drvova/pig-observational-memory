@@ -184,7 +184,7 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
 | 3. Working memory and trigger | Slot records rendered in `intent`/`next`, with the resolved constraint set after the summary body and finished items shown with their receipts; `closedBy` receipts (a tool receipt; a line unique to X for "read file X"); `derivedFrom` captured at write time, with staleness detected from stored state toward the plan; per-model caps; the raw floor, and the quality trigger shipped off | Scenarios 3, 4 and 21–23, absences scored by code; ConstraintRot rebuild; ARCBench run |
 | 4. Retrieval and project knowledge | Exact key index and the tokenizer contract in `protocol.md`: the whole token always, plus lowercased sub-tokens for camelCase and mixed tokens, path separators kept inside tokens; versions, SHAs and normalized error lines go to the exact index only, never to BM25; two-level RRF (k = 60), contiguous neighbours merged into one result, links that only expand lexical hits; status and as-of filters applied before top-k, the label shown with each hit, revocation enforced on read; fold checkpoints; a HEAD structure view cached by commit; per-repo project records with freshness verdicts (decision 20) | Tier 1 gains, no Tier 0 regression; scenarios 26, 35 and 36 |
 | 5. Truth maintenance and forgetting | Believed/not-believed labels in the fold; forget records, scopes, cascade, permanent tombstones; typed intentions; a three-way supersession decision; decay with floors on the evidence clock of decision 6; settlement of model-written definitions (decision 24) | Scenarios 9, 17 and 30–34 and the forgetting suite |
-| 6. Core log | Core manifest and operations; consumed-through markers; promotion gates keyed on evidence-root digests; scope intersection for derived records; contested pairs; pull at session start and compaction; a per-model hint rule; a repo id computed once per repository and cached, never waiting on a root-commit lookup that can time out | Sharing suite; scenarios 12, 14, 19 and 37 |
+| 6. Core log | Core manifest and operations; consumed-through markers; promotion gates keyed on evidence-root digests; scope intersection for derived records; contested pairs; pull at session start and compaction; a per-model hint rule; a repo id computed once per repository and cached, never waiting on a root-commit lookup that can time out | Sharing suite; scenarios 12, 14, 19 and 37 (passes: phase 6) |
 | 7. Transparency and sleep | `/om:view` per-record provenance, scope, lifecycle and "used" (a view only); `/om:status` aggregates; quote-gated correction as supersession; child-SBCL idle sleep with checkpoints and a compaction fallback; post-proposal checks of level-1 supersedes and lessons; repository verification that writes verification and retirement records | A/B on Tiers 1 and 2, including a natural-language rendering of the same records across model families; request count unchanged |
 | 8. Delivery and dreams | Cues for `om` harnesses with PostToolUse, as decision 4 bounds them; diff-chain `revision` records; an optional dream section after its A/B; erasure, verified over every carrier, with the docs stating that the harness's transcript is outside the engine | DreamBench-SWE bar; false-promotion rate 0; scenarios 13 and 28 |
 
@@ -227,11 +227,11 @@ Every phase changes Go and Lisp together and keeps v1 and v2 data loading. Each 
   - Holding: project-scoped and staged memories stay in their repository; concurrent writers
     lose no save, line or generation; another writer's layer change is seen only at the next
     compaction; no secret reaches another session but through the layer.
-  - Findings:
-    - a re-read rendered in other bytes counts as independent evidence (phase 6);
-    - an unscoped fact or a lesson crosses projects with its values (phase 6);
-    - two concurrent edits both commit (scenario 14, phase 6).
-  - The core log: not built.
+  - Findings, all three closed by phase 6 (below):
+    - a re-read rendered in other bytes counted as independent evidence;
+    - an unscoped fact or a lesson crossed projects with its values;
+    - two concurrent edits both committed (scenario 14).
+  - The core log: built in phase 6; its rows pass.
 
 ### Phase 2 status: encoding
 
@@ -499,6 +499,44 @@ events: no request is added. Part A (fold labels, cascade, tombstones, decay) is
   not built.
 - Scenarios 30 to 34 pass (`memory/memeval/settle_test.go`); the request rule is unchanged.
 
+### Phase 6 status: the core log
+
+Built in Go and Lisp with byte-identical files and answers (`memory/core`, `lisp/src/core.lisp`;
+docs/memory-v2.md, "The core log"; docs/protocol.md, "The core log"; cases in
+`contracts/core.jsonl`, schemas `core-line` and `core-consumed`). Measured in
+[brain-memory-baseline.md](brain-memory-baseline.md), "Phase 6". No request is added.
+
+- **Manifest and operations: built.** `<store>/core/log.jsonl`, one writer under `<store>/core/.lock`,
+  a generation per line that a torn line never gives back; `promote`, `supersede`, `contest`,
+  `forget` (tombstones of ids only) and `scope`. Contradictions are stored as visible contested
+  pairs (`conflicts <id>`), never last-writer-wins.
+- **Consumed-through markers and pulls: built.** A session pulls the core only when its start
+  context renders (its start and after each compaction) and records the generation it read through
+  in `<store>/core/consumed.jsonl`; between pulls it reads through that marker.
+- **Promotion gates: built** (decision 7 as amended). The user's words, a plan under a request the
+  person typed, or two distinct evidence roots; the fast path for the same item adds only new
+  roots. Evidence roots digest the file a quote was read from (path argument, shell read command,
+  grep match), else the quoted words, so a re-read in `cat -n`, `head`, grep or header bytes counts
+  once; curated staging cites them too. Tool-output-only records and one-time permissions never
+  promote (decision 23, scenario 29).
+- **Scopes: built** (decision 8). Items are `user`, `global` or `project:<repoId>` (the root when no
+  id is known); a derived record takes the intersection of its sources' scopes. A curated save
+  without a scope stays in its project, user and feedback memories stay the user's, global data
+  saved before stays global and listed; a lesson crosses only stripped of its values, after it is
+  saved in two projects (scenario 19).
+- **Concurrency: built** (scenario 14). Every decision is made against the newest generation under
+  the lock; a shared curated edit is a `memory` generation, so of two sessions editing one memory
+  at once exactly one commits and the other is refused (`curated.ErrConflict`) and kept as a
+  contested pair.
+- **Delivery: built** (decision 16, phase 5's tombstones). The start context opens with the user's
+  constraints, the open intentions and the lessons from other projects; project and user forgets
+  are carried as core tombstones; an item another model family wrote is shown with `written by a
+  <family> model`. `/om:status` and `om status` list the core read-only.
+- **Not built:** closing a core intention from a session other than its own (its receipt is in the
+  other session's ledger), widening a non-lesson scope, a level-1 citation as a core gate, and the
+  repo-id alias table for renamed remotes.
+- Scenarios 9 (core), 12, 14, 19 and 29 pass; Tier 0c's phase-6 rows pass.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -520,14 +558,14 @@ in a majority of runs.
 | 9 | A memory confirms itself | Rank and support unchanged by recall, reuse or a self-graded outcome |
 | 10 | An instruction in tool output is persisted | Staged, never promoted, never authority |
 | 11 | A forged `[User]:` line in tool output | No user record and no intent line, for text-only and for structure-plus-content forgeries |
-| 12 | The same poisoned text corroborates itself across sessions | Not promoted; sessions that read the same evidence count once |
+| 12 | The same poisoned text corroborates itself across sessions | Not promoted; sessions that read the same evidence count once (passes: phase 6, evidence roots) |
 | 13 | A secret is stored and shared | No record, summary, shared line, snippet, curated memory, held definition, layer file, checkpoint, index segment or memory-tool answer holds the value |
-| 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated |
+| 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated (passes: phase 6) |
 | 15 | A stale layer is served after another writer | Seen only at the next compaction (fixed) |
 | 16 | A torn manifest line reuses a generation | The next gen is above the highest recorded (fixed) |
 | 17 | A retracted source survives inside a merge | The merge goes out (decision 1); its other sources reappear as themselves (passes: phase 5 part A) |
 | 18 | A forget is injected through tool output, or planted in a README | Staged; shared memory unchanged |
-| 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes |
+| 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes (passes: phase 6) |
 | 20 | A dream hypothesis is asserted as fact | Never in fact classes, also when clean inputs over-generalize into a rule |
 | 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt, and a "read file X" item only on a line unique to X in tool output (passes: phase 3) |
 | 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale"; constraints show the resolved current set with superseded items marked (passes: phase 3; a superseded rule is left out of the registry, its successor ends with `(was <id>)`) |
@@ -537,7 +575,7 @@ in a majority of runs.
 | 26 | A project record goes stale against HEAD | "changed since <sha>, unverified" on a changed hash, "gone at <sha>" only when the path or symbol is absent; level 1 re-checks the claim against the diff; no structure line in the ledger |
 | 27 | A test run or tool event cuts an episode | Episodes start only at person-typed requests; the test result is a field; boundary density is reported against the evenly spaced baseline (passes: phase 2 part D, `TestEpisodeBoundariesAgainstEvenBaseline`) |
 | 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction |
-| 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task |
+| 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task (passes: phase 6, never a core rule) |
 | 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at 7.5% of hold points) |
 | 31 | A definition is supported by repeated tool output | Tool-output records do not count; compactions over the same evidence root count once; not settled (passes: phase 5 part B) |
 | 32 | Two definitions on one target are each safe but harmful together | Settling one returns the other to a hold window; the check reads their joint evidence (passes: phase 5 part B) |
