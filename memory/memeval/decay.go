@@ -81,7 +81,7 @@ func decayRows(ctx context.Context, s *Suite, cfg SuiteConfig, off []Run, lister
 				t, b := arm.protected[class][n], base.protected[class][n]
 				cells += t.Total()
 				lost += t.Lost
-				if t.Shown < b.Shown {
+				if shownBelow(t, b) {
 					below++
 				}
 			}
@@ -100,6 +100,13 @@ func decayRows(ctx context.Context, s *Suite, cfg SuiteConfig, off []Run, lister
 	}
 	s.Extra = append(s.Extra, DecayTable(arms))
 	return nil
+}
+
+// shownBelow is a cell shown less with decay than without it: a smaller shown share. The arms can
+// score a different number of probes at one count (their summaries differ, so a seed's compactions
+// fall at other turns and a late probe reaches n in one arm only), so raw counts are not compared.
+func shownBelow(arm, base Tally) bool {
+	return arm.Shown*base.Total() < base.Shown*arm.Total()
 }
 
 // DecayTable compares what each decay arm keeps: shown / reachable / lost, in percent, by class
