@@ -294,6 +294,9 @@ func coreCases(t *testing.T) []Case {
 		{ID: "00000000003a", Content: "The API is at port 8080.", Kind: "fact", Source: ledger.SourceUserSaid, SourceEntryIDs: []string{"u9"}},
 		{ID: "00000000003b", Content: "Maybe use tabs?", Kind: "preference", Status: ledger.StatusHypothetical, Source: ledger.SourceUserSaid},
 	}
+	for i := range recs {
+		recs[i] = valid(t, recs[i])
+	}
 	labels := map[string]string{}
 	for _, o := range recs {
 		labels[o.ID] = ledger.LabelBelieved
@@ -312,11 +315,34 @@ func coreCases(t *testing.T) []Case {
 		{ledger.Observation{ID: "00000000004c", Kind: ledger.KindForget, Scope: ledger.ForgetScopeSession, Forgets: []ledger.Tombstone{{ID: "00000000001b"}}}, []ledger.Observation{recs[1]}},
 		{ledger.Observation{ID: "00000000004d", Kind: ledger.KindForget, Scope: ledger.ForgetScopeProject}, nil},
 	} {
+		f.forget.Content = "The user asked to forget a record."
+		f.forget = valid(t, f.forget)
+		for i := range f.forgotten {
+			f.forgotten[i] = valid(t, f.forgotten[i])
+		}
 		line, ok := ForgetLine(f.forget, f.forgotten, s)
 		cand.Forgets = append(cand.Forgets, ForgetCase{Forget: f.forget, Forgotten: f.forgotten, Line: line, OK: ok})
 	}
 	cases = append(cases, cand)
 	return cases
+}
+
+// valid is o with the members every record needs, read back as ledger.ObservationFrom reads it,
+// so both engines decode it alike.
+func valid(t *testing.T, o ledger.Observation) ledger.Observation {
+	t.Helper()
+	o.Timestamp, o.Relevance, o.TokenCount = "2026-05-02T10:00:00.000Z", "medium", 10
+	if len(o.SourceEntryIDs) == 0 {
+		o.SourceEntryIDs = []string{"e" + o.ID}
+	}
+	raw, _ := json.Marshal(o)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	out, ok := ledger.ObservationFrom(m)
+	if !ok {
+		t.Fatalf("invalid record %+v", o)
+	}
+	return out
 }
 
 // The core's cases (contracts/core.jsonl): Go's answers, rewritten with -args -write, which the

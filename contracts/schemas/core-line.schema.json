@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Core log line",
-  "description": "One line of <store>/core/log.jsonl, the shared core log (docs/brain-memory.md, phase 6; docs/memory-v2.md, \"The core log\"): append-only, written by one writer at a time under <store>/core/log.lock, members in this order, text redacted. A line that does not decode is skipped, but the generation it began with and the log's line count bound the next generation from below, so a torn line's generation is never used again. Source: memory/core/log.go (Line, Fold, Commit) and lisp/src/core.lisp.",
+  "description": "One line of <store>/core/log.jsonl, the shared core log (docs/brain-memory.md, phase 6; docs/memory-v2.md, \"The core log\"): append-only, written by one writer at a time under <store>/core/.lock, members in this order, text redacted. A line that does not decode is skipped, but the generation it began with and the log's line count bound the next generation from below, so a torn line's generation is never used again. Source: memory/core/log.go (Line, Fold, Commit) and lisp/src/core.lisp.",
   "type": "object",
   "required": ["gen", "op", "id", "base", "time"],
   "additionalProperties": false,

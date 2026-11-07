@@ -124,7 +124,7 @@ func In(storeDir string) Log { return Log{Dir: filepath.Join(storeDir, "core"), 
 
 func (l Log) path() string         { return filepath.Join(l.Dir, "log.jsonl") }
 func (l Log) consumedPath() string { return filepath.Join(l.Dir, "consumed.jsonl") }
-func (l Log) lockPath() string     { return filepath.Join(l.Dir, "log.lock") }
+func (l Log) lockPath() string     { return filepath.Join(l.Dir, ".lock") }
 
 func (l Log) now() string {
 	now := time.Now
