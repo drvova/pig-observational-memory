@@ -123,9 +123,12 @@ func referenced(folded ledger.FoldedLedger) map[string]bool {
 }
 
 // eligible is a record the pass may hide as a duplicate: believed, of no link, named by none,
-// and neither a forget nor a host summary.
+// neither a forget nor a host summary, and of no protected class (ledger.DecayProtected: the
+// user's rules and corrections, a failed attempt, a secret's location), which stay shown as they
+// were written.
 func eligible(o ledger.Observation, labels map[string]string, refs map[string]bool) bool {
 	return labels[o.ID] == ledger.LabelBelieved && !refs[o.ID] && o.Kind != ledger.KindForget && o.Origin != ledger.OriginHost &&
+		!ledger.DecayProtected(o, nil) &&
 		len(o.Supersedes) == 0 && len(o.PossiblyUpdates) == 0 && len(o.Conflicts) == 0 && len(o.Replaces) == 0 &&
 		len(o.RespondsTo) == 0 && len(o.Closes) == 0 && len(o.Forgets) == 0
 }

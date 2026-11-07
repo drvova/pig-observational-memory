@@ -655,6 +655,48 @@ and 23; `memory/core`, `lisp/src/core.lisp`; cases in `contracts/core.jsonl`):
   model` (the per-model hint rule). `/om:status` and `om status` list the core read-only
   (`core.StatusLines`).
 
+### Sleep (no request)
+
+Phase 7 of the brain-like memory ([brain-memory.md](brain-memory.md), "Shape" and decision 13;
+`memory/sleep`, `memory/ledger/sleep.go`, `memory/hooks/sleep_v2.go`, `lisp/src/sleep.lisp`,
+`lisp/src/server/sleep.lisp`; cases in `contracts/sleep.jsonl`, `go test ./sleep -run SleepContract
+-args -write`; schemas `entry-sleep` and `sleep-state`): the NREM pass, code only, with no model
+request (`TestSleepFallbackInCompaction` counts them with `testfix.CountRequests`).
+
+- **What one pass does.** Over the fold it finds what no earlier sleep record on the branch said:
+  - *duplicates*: believed records of no link, named by none, with the same kind, status,
+    subject, scope and content (`by: hash`), then evidence records of one tool with the same
+    normalized error lines (`retrieve.ErrorLines`, `by: error`); every copy after the first is a
+    duplicate of the first, so a statement keeps the anchor where it was first made;
+  - *links*: keys (`<kind>:<value>`, `ledger.Keys`) shared by two to eight shown records;
+  - *decayed*: what decay lowers (`ledger.Decayed`), only when the `decay` setting is on;
+  - *verified* and *retired*: the anchored project records against the HEAD structure view
+    (`project.Verdicts`): `holds` or `changed` at HEAD, or retired when the path or symbol is gone;
+    the record stays, and only a view the adapter answers is read;
+  - *checks* (decision 13): each level-1 record that replaces or supersedes records, and each
+    standing reflection (a lesson), against the code records recorded after it: a supersede is
+    challenged by a later record restating a replaced record's text or a later failed attempt on
+    one of its keys, a lesson by a later failed attempt or evidence record on a key of what it
+    cites; with no later record there is no verdict yet.
+- **What it writes.** One `om.sleep` entry (`ledger.SleepData`), through the append path every
+  om.* entry takes (`hooks.appendEntry`, the image's `redact-json-text`). It never deletes or
+  rewrites a record. The summary never shows a duplicate (`selection.Input.Hidden`): the first
+  copy stands for it and the omitted spans still list it. The fold labels a believed record whose
+  latest check challenged it `contested` (`FoldedLedger.Challenged`). Links, decay, verification and
+  retirement are read by `/om:view record` and `/om:status`.
+- **When it runs.** In a compaction once `sleepAfterCompactions` (K, default 4) compactions passed
+  with no sleep record on the branch (`ledger.CompactionsSinceSleep`), before level 1 and the render,
+  skipped over `sleepMaxRecords` active records (default 5,000) or a cancelled request. At the
+  image's idle (no client for `OM_SLEEP_IDLE_SECONDS`, default 60; `sleepIdle: false` turns it off)
+  the image starts one child SBCL (decision 9) that sleeps every session store under the root and
+  exits; a client connecting kills it. `om sleep` runs the same pass by hand. Both take
+  `<root>/sleep/.lock` and checkpoint each finished store's size in `<root>/sleep/state.json`
+  (engine-private, decision 12), so a stopped pass loses at most the store in hand. The idle and
+  manual passes over every store read each store alone (no transcript, no repository); `om sleep
+  --harness h --dir d` sleeps one session with its transcript and repository. PiG's sessions live in
+  PiG's files, so the image's idle child never writes them: their sleep runs in the compaction
+  fallback, on either engine.
+
 ### Thinning aged tool results (no request)
 
 After nodecode's thinning: a tool result is used in the round after it lands and is dead weight in every
@@ -1148,6 +1190,28 @@ level-1 offer (`rules.V2UnitsSinceProposal`): v2 has no revision pass, so the of
 `rules.ProposalDue`'s baseline does. Each held record, reflection and curated memory
 (`contracts/insecure.md`) gets a `held: weakens security (<rule>)` line with its anchor or name.
 `/om:view` stays read-only and leaves out the reflections level 1 replaced.
+
+Phase 7 adds, in both engines with the same text:
+
+- **Aggregates.** After the reflections line: the records by kind, by label (contracts/truth.md's
+  five), and the sleep runs on the branch with the latest one's trigger and through id and the
+  totals of duplicates hidden, links, decayed, verified, retired and checks (challenged). Held
+  items, staged changes, the core and settlement keep their own lines.
+- **Viewing a record.** `/om:view records [page]` lists the fold's records (dropped ones included,
+  forgotten ones never) twenty a page with kind, label, source and authority and the head of the
+  content; `/om:view record <id>` shows one record's provenance (source, authority, hedge, writer,
+  frame), scope, lifecycle (label, replaced by, dropped, supersedes, conflicts), what the sleep
+  records say of it, and where it was used: the compactions whose summary showed it
+  (`details.shown`) and the memory tool calls that returned or recalled it, with their searches.
+  "Used" is a view only and never a rank input (decision 6). A forgotten record's text is never
+  shown.
+- **Correcting a record.** Slash commands stay read-only. The memory tool's `om.Correct(<id>,
+  <text>, om.Quoting(<quote>))` (the image's `correct`) records a correction write, never an edit;
+  level 0 turns it into a correction record that supersedes the record when the quote is a user's
+  words in the conversation (source `user-said`, authority `user`), and otherwise into one that only
+  possibly updates it with the model's authority, which the three-way rule (`ledger.Supersession`)
+  weighs: a model's word never replaces a user's fact. `om.Correct` is in `om.Doc` and the symbol
+  table but not in the manual, which is at its size bound.
 
 ## Measuring it
 

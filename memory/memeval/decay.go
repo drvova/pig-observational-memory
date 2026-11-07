@@ -44,6 +44,7 @@ func decayRows(ctx context.Context, s *Suite, cfg SuiteConfig, off []Run, lister
 		{name: fmt.Sprintf("turns, horizon %d", horizon*perCompaction), clock: ledger.DecayTurns, horizon: horizon * perCompaction},
 	}
 	t0 := DefaultConfig(0)
+	t0.Window.SleepOff = cfg.Window.SleepOff
 	if cfg.Tier0Turns > 0 {
 		t0.Turns, t0.MaxCompactions = cfg.Tier0Turns, cfg.Tier0Compactions
 	}

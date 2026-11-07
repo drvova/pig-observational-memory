@@ -189,6 +189,9 @@ QwenLM/qwen-code and MoonshotAI/kimi-cli sources, npm `@github/copilot-sdk` (gen
 
 ## How it works
 
+- **Sleep at idle.** The image sleeps every session store in a child SBCL once no client has been
+  connected for a minute, and `om sleep` does the same by hand (see [om sleep](#om-sleep)).
+
 - **The harness's files are read, never written.** `memory/transcript` reads Claude Code's session
   transcript (the active branch, across its compaction boundaries), Codex rollouts, Pi session files and
   the generic format into the Pi-shaped entries the engine reads.
@@ -206,6 +209,15 @@ QwenLM/qwen-code and MoonshotAI/kimi-cli sources, npm `@github/copilot-sdk` (gen
   hook has run it takes the newest transcript the harness wrote for the directory.
 - **One process per event.** A hook runs in a fresh `om` process; the MCP server lives as long as the
   harness session, so its namespace child keeps definitions between calls as PiG's does.
+
+## om sleep
+
+`om sleep` runs the sleep pass (memory-v2.md, "Sleep") by hand: code only, no model request,
+under `~/.om/sleep/.lock`, the lock the image's idle child takes. Without flags it sleeps every
+session store under the root that changed since its checkpoint (`~/.om/sleep/state.json`), each
+read alone, and prints one line per store it appended a sleep record to; `om sleep --harness h
+--dir d` sleeps that directory's current session with its transcript and repository, so its project
+records are verified against HEAD. A held lock prints that another pass holds it and does nothing.
 
 ## Any other harness
 

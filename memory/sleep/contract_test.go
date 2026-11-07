@@ -101,8 +101,12 @@ func inputs() []input {
 	fix := obs("000000000a06", "Actually the staging port is 5433.", func(o *ledger.Observation) { o.Kind, o.Supersedes = "correction", []string{f2.ID} })
 	e1 := obs("000000000a07", "main.go:12: undefined: retryLease\nFAIL\tpkg/lease", func(o *ledger.Observation) { o.Kind, o.Tool = ledger.KindEvidence, "bash" })
 	e2 := obs("000000000a08", "main.go:40:  undefined:   retryLease\nFAIL\tpkg/lease", func(o *ledger.Observation) { o.Kind, o.Tool = ledger.KindEvidence, "bash" })
-	dupBranch := []session.Entry{user("u0a01"), recorded("r1", "u0a01", false, a1, f1), user("u0a02"), recorded("r2", "u0a02", false, a2, f2, e1),
-		user("u0a03"), recorded("r3", "u0a03", false, a3, fix, e2)}
+	// A failed attempt repeated is a protected class (ledger.DecayProtected): never hidden.
+	failedAttempt := func(o *ledger.Observation) { attempt(o); o.Outcome = ledger.OutcomeFailed }
+	p1 := obs("000000000a09", "Ran `make ci` [bash failed: exit 2]", failedAttempt)
+	p2 := obs("000000000a10", "Ran `make ci` [bash failed: exit 2]", failedAttempt)
+	dupBranch := []session.Entry{user("u0a01"), recorded("r1", "u0a01", false, a1, f1, p1), user("u0a02"), recorded("r2", "u0a02", false, a2, f2, e1),
+		user("u0a03"), recorded("r3", "u0a03", false, a3, fix, e2, p2)}
 
 	// Links: three records on one path, one on another, a key on more than MaxLinkGroup records.
 	var many []ledger.Observation
@@ -115,7 +119,7 @@ func inputs() []input {
 	linkBranch := append([]session.Entry{user("u0b01"), recorded("r1", "u0b01", false, l1, l2, l3)}, recorded("r2", "u0b01", false, many...))
 
 	// Incremental: the same link and duplicate already in a sleep record are not repeated.
-	prior := ledger.SleepData{Version: ledger.SleepVersion, Trigger: ledger.SleepAtIdle, ThroughEntryID: "r3", Records: 6,
+	prior := ledger.SleepData{Version: ledger.SleepVersion, Trigger: ledger.SleepAtIdle, ThroughEntryID: "r3", Records: 8,
 		Duplicates: []ledger.SleepDuplicate{{ID: a2.ID, Of: a1.ID, By: ledger.DuplicateByHash}}}
 	incremental := append(append([]session.Entry{}, dupBranch...), sleepEntry("s1", prior), user("u0a09"))
 

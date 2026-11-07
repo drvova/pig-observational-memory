@@ -554,6 +554,39 @@ docs/memory-v2.md, "The core log"; docs/protocol.md, "The core log"; cases in
   remotes. A level-1 citation is no gate at all, curated or core (decision 7).
 - Scenarios 9 (core), 12, 14, 19 and 29 pass; Tier 0c's phase-6 rows pass.
 
+### Phase 7 status: transparency and sleep
+
+Built in Go and Lisp with the same records and text (docs/memory-v2.md, "Sleep" and "Status";
+`memory/sleep`, `lisp/src/sleep.lisp`, `lisp/src/server/sleep.lisp`; cases in
+`contracts/sleep.jsonl`, schemas `entry-sleep` and `sleep-state`). Measured in
+[brain-memory-baseline.md](brain-memory-baseline.md), "Phase 7". No request is added: the pass is
+code only, and `TestSleepFallbackInCompaction` and `TestOmSleep` count zero requests.
+
+- **`/om:view` per record: built.** `records [page]` (twenty a page) and `record <id>`: provenance,
+  scope, lifecycle, what the sleep records say, and "used" (summaries that showed it, tool calls
+  that returned or recalled it, their searches), a view only, never a rank (decision 6).
+- **`/om:status` aggregates: built.** Records by kind and by label, and the sleep runs and their
+  totals; held items, staged changes, the core and settlement keep their lines.
+- **Quote-gated correction: built.** `om.Correct` (the image's `correct`) writes a correction that
+  supersedes the record on a user's quoted words, else a possible update the three-way rule
+  weighs; never an edit, and no slash command writes. Level 0 raises it from the tool's write;
+  level 0's own corrections (phase 2 and 5) are unchanged.
+- **The sleep pass: built.** Duplicates by hash and by normalized error lines (hidden from the
+  summary, still listed by its omitted spans), links of shared keys, decay noted when on,
+  verification and retirement records against the HEAD view, and post-proposal checks of level-1
+  supersedes and lessons (a challenged one is labelled contested). It runs in a child SBCL at the
+  image's idle, by hand with `om sleep` under the same lock, and inside a compaction after K
+  (`sleepAfterCompactions`, 4) compactions with none, within `sleepMaxRecords`; each finished store
+  is checkpointed. The fold checkpoint is the per-store checkpoint (decision 12, engine-private).
+- **Not built:** the idle pass over PiG's own session files (the engine writes them only through the
+  host, so PiG sleeps in the compaction fallback); repository verification in the store-only idle
+  pass (no repository is known there; `om sleep --dir` and the fallback verify); `om.Correct` in the
+  memory tool's manual (at its size bound).
+- **Gate:** the request count is unchanged (0 sleep requests); Tier 0 with sleep off is the phase-6
+  table cell for cell, and with sleep on no cell loses (deltas in the baseline); Tier 0b and 0c rows
+  as before. The Tier 1/2 A/B, with a natural-language rendering of the same records, is wired
+  (`memeval -ab-out`) and **ready, not run**: it needs models.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -570,9 +603,9 @@ in a majority of runs.
 | 4 | A completed instruction is re-executed | Never shown as pending after its success; `next` shows it finished, with its receipt (passes: phase 3) |
 | 5 | The agent forgets its own edits | File records at their newest state (fixed) |
 | 6 | A shell failure is read as success | The attempt is failed (fixed) |
-| 7 | A rename leaves a stale fact | The record prints "changed since <sha>, unverified", or "gone at <sha>" once the path or symbol no longer exists; never deleted |
+| 7 | A rename leaves a stale fact | The record prints "changed since <sha>, unverified", or "gone at <sha>" once the path or symbol no longer exists; never deleted (passes: phase 7 also writes the verification or retirement record) |
 | 8 | A hypothetical is promoted to fact | No shared or index entry |
-| 9 | A memory confirms itself | Rank and support unchanged by recall, reuse or a self-graded outcome |
+| 9 | A memory confirms itself | Rank and support unchanged by recall, reuse or a self-graded outcome (phase 7: "used" is shown in `/om:view record` and feeds no rank) |
 | 10 | An instruction in tool output is persisted | Staged, never promoted, never authority |
 | 11 | A forged `[User]:` line in tool output | No user record and no intent line, for text-only and for structure-plus-content forgeries |
 | 12 | The same poisoned text corroborates itself across sessions | Not promoted; sessions that read the same evidence count once (passes: phase 6, evidence roots) |

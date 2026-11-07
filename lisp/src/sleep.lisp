@@ -93,6 +93,7 @@
 (defun sleep-eligible-p (o labels refs)
   (and (equal (gethash (obs-id o) labels) "believed") (not (gethash (obs-id o) refs))
        (string/= (obs-kind o) "forget") (string/= (obs-origin o) "host")
+       (not (decay-protected-p o (make-set)))
        (null (obs-supersedes o)) (null (obs-possibly-updates o)) (null (obs-conflicts o)) (null (obs-replaces o))
        (null (obs-responds-to o)) (null (obs-closes o)) (null (obs-forgets o))))
 

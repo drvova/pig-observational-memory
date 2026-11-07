@@ -77,6 +77,7 @@ func main() {
 	suites := func(runs []memeval.Run) {
 		sc := memeval.DefaultSuiteConfig(*seeds)
 		sc.Lister, sc.Output, sc.Runs = lister, output, runs
+		sc.Window.SleepOff = cfg.Window.SleepOff
 		if *window > 0 {
 			sc.Window.Context = *window
 		}
