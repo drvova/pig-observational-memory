@@ -129,9 +129,10 @@ func ExactKeys(o ledger.Observation, content string) []string {
 			add(value)
 		}
 	}
-	_, exact := Tokens(content)
-	for _, t := range exact {
-		add(t)
+	for _, t := range RawTokens(content) {
+		if ExactOnly(t) {
+			add(t)
+		}
 	}
 	for _, line := range ErrorLines(content, o.Kind == ledger.KindEvidence) {
 		add(line)
@@ -206,37 +207,59 @@ type Result struct {
 	Exact bool
 }
 
-// analyzed is a pool document's terms and exact keys as a search reads them.
+// analyzed is a pool document as one search reads it: its length in terms, and only the
+// counts and exact keys the search can ask about (the searched terms and lookups), so a read
+// never builds a full index of a document.
 type analyzed struct {
 	tf    map[string]int32
 	dl    int64
 	exact map[string]bool
 }
 
-func analyze(d Doc) analyzed {
-	terms, _ := Tokens(d.Text)
-	a := analyzed{tf: make(map[string]int32, len(terms)), dl: int64(len(terms)), exact: make(map[string]bool, len(d.Keys))}
-	for _, t := range terms {
-		a.tf[t]++
+func analyze(d Doc, terms, probes map[string]bool) analyzed {
+	var a analyzed
+	for _, t := range RawTokens(d.Text) {
+		if ExactOnly(t) {
+			continue
+		}
+		for _, term := range TokenTerms(t) {
+			a.dl++
+			if terms[term] {
+				if a.tf == nil {
+					a.tf = map[string]int32{}
+				}
+				a.tf[term]++
+			}
+		}
 	}
 	for _, k := range d.Keys {
-		a.exact[k] = true
+		if probes[k] {
+			if a.exact == nil {
+				a.exact = map[string]bool{}
+			}
+			a.exact[k] = true
+		}
 	}
 	return a
 }
 
+// word is one white-space word of a searched string: lowercased for the substring match, as
+// written for its tokens (so its camelCase parts survive).
+type word struct{ lower, raw string }
+
 // query is one searched string read for matching and scoring.
 type query struct {
-	words   []string   // lowercased white-space words, matched as substrings of Hay
+	words   []word
 	tokens  [][]string // each raw token's terms
-	raw     []string   // each raw token
 	lookups []string
 }
 
 func readQuery(q string) query {
-	out := query{words: strings.Fields(strings.ToLower(q)), lookups: Lookups(q)}
+	out := query{lookups: Lookups(q)}
+	for _, w := range strings.Fields(q) {
+		out.words = append(out.words, word{strings.ToLower(w), w})
+	}
 	for _, t := range RawTokens(q) {
-		out.raw = append(out.raw, t)
 		out.tokens = append(out.tokens, TokenTerms(t))
 	}
 	return out
@@ -265,13 +288,13 @@ func tokenHolds(a analyzed, raw string, terms []string) bool {
 	return true
 }
 
-// wordHolds reports a searched word the document holds: as a substring of its hay, or through
-// every raw token of the word.
-func wordHolds(d Doc, a analyzed, word string) bool {
-	if strings.Contains(d.Hay, word) {
+// wordHolds reports a searched word the document holds: lowercased, as a substring of its hay,
+// or, as written, through every raw token of the word.
+func wordHolds(d Doc, a analyzed, w word) bool {
+	if strings.Contains(d.Hay, w.lower) {
 		return true
 	}
-	raws := RawTokens(word)
+	raws := RawTokens(w.raw)
 	if len(raws) == 0 {
 		return false
 	}
@@ -323,9 +346,20 @@ func matches(d Doc, a analyzed, q query) bool {
 // Each result merges up to Neighbours contiguous pool records on each side that share the hit's
 // episode or first source entry; a record merged into a better result is never a result itself.
 func Search(pool []Doc, searches []string) (results []Result, partial bool) {
+	terms, probes := map[string]bool{}, map[string]bool{}
+	for _, s := range searches {
+		for _, l := range Lookups(s) {
+			probes[l] = true
+		}
+		for _, t := range RawTokens(s) {
+			for _, term := range TokenTerms(t) {
+				terms[term] = true
+			}
+		}
+	}
 	docs := make([]analyzed, len(pool))
 	for i, d := range pool {
-		docs[i] = analyze(d)
+		docs[i] = analyze(d, terms, probes)
 	}
 	return search(pool, docs, searches)
 }
@@ -410,10 +444,14 @@ func search(pool []Doc, docs []analyzed, searches []string) ([]Result, bool) {
 	partial := false
 	words := map[int]int{}
 	if len(hits) == 0 {
-		var all []string
+		var all []word
+		seen := map[string]bool{}
 		for _, q := range qs {
 			for _, w := range q.words {
-				all = appendOnce(all, w)
+				if !seen[w.lower] {
+					seen[w.lower] = true
+					all = append(all, w)
+				}
 			}
 		}
 		for i := range pool {

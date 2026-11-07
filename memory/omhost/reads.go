@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
@@ -76,6 +77,42 @@ type Reader struct {
 	// Off marks the off-path fallback's read over the session file: rows on the branch are left
 	// out and the others labelled OffPathLabel. Nil on the branch.
 	Off *OffPath
+	// checkpoints, when set, are the call's fold checkpoints (foldCheckpoints).
+	checkpoints *foldCheckpoints
+}
+
+// foldCheckpoints are a memory tool call's folded ledgers, one per snapshot it reads (the branch,
+// the session file): a fold checkpoint (docs/brain-memory.md, decision 12), engine-private,
+// rebuilt by every call and never compared between engines, so each of the call's reads folds a
+// snapshot once. A snapshot is the call's own slice, unchanged while the call runs, so its first
+// element and length name it. A checkpoint is read only: no read changes a folded ledger.
+type foldCheckpoints struct {
+	mu   sync.Mutex
+	fold map[foldKey]ledger.FoldedLedger
+}
+
+type foldKey struct {
+	first *session.Entry
+	n     int
+}
+
+// folded is ledger.FoldLedger(r.Entries, ""), from the call's checkpoint when it has one.
+func (r Reader) folded() ledger.FoldedLedger {
+	if r.checkpoints == nil || len(r.Entries) == 0 {
+		return ledger.FoldLedger(r.Entries, "")
+	}
+	key := foldKey{&r.Entries[0], len(r.Entries)}
+	r.checkpoints.mu.Lock()
+	defer r.checkpoints.mu.Unlock()
+	if f, ok := r.checkpoints.fold[key]; ok {
+		return f
+	}
+	f := ledger.FoldLedger(r.Entries, "")
+	if r.checkpoints.fold == nil {
+		r.checkpoints.fold = map[foldKey]ledger.FoldedLedger{}
+	}
+	r.checkpoints.fold[key] = f
+	return f
 }
 
 // OffPath is the off-path fallback's filter: the ids of the entries and records on the branch.
@@ -179,7 +216,7 @@ func (r Reader) Notes(view *PointInTime) Rows {
 	if r.Records != nil {
 		all, active, aliases, contextSubjects = r.Records.Observations, r.Records.Observations, r.Records.Aliases, r.Records.SubjectContext
 	} else {
-		folded := ledger.FoldLedger(r.Entries, "")
+		folded := r.folded()
 		if view != nil {
 			// A link is read through level 1's replacements only as far as they held at the
 			// bound: a correction made before a later relabel supersedes the record it named.
@@ -337,7 +374,7 @@ func (r Reader) Reflections(view *PointInTime) Rows {
 	if r.Records != nil {
 		reflections, dates = r.Records.Reflections, r.Records.ReflectionDates
 	} else {
-		folded := ledger.FoldLedger(r.Entries, "")
+		folded := r.folded()
 		reflections, dates = folded.Reflections, ledger.ReflectionDateRanges(folded)
 		if view != nil {
 			reflections = view.reflections(r.Entries)

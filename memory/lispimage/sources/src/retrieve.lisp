@@ -15,10 +15,10 @@
 (defun rt-lower-p (c) (char<= #\a c #\z))
 (defun rt-alnum-p (c) (or (rt-digit-p c) (rt-upper-p c) (rt-lower-p c)))
 (defun rt-hex-p (c) (or (rt-digit-p c) (char<= #\a c #\f) (char<= #\A c #\F)))
-(defun rt-joiner-p (c) (member c '(#\_ #\- #\. #\/ #\:)))
+(defun rt-joiner-p (c) (case c ((#\_ #\- #\. #\/ #\:) t)))
 (defun rt-word-p (c) (or (rt-alnum-p c) (rt-joiner-p c) (>= (char-code c) 128)))
-(defun rt-edge-p (c) (member c '(#\. #\- #\/ #\:)))
-(defun rt-leading-edge-p (c) (member c '(#\- #\:)))
+(defun rt-edge-p (c) (case c ((#\. #\- #\/ #\:) t)))
+(defun rt-leading-edge-p (c) (case c ((#\- #\:) t)))
 (defun rt-space-p (c) (member c '(#\Space #\Tab #\Newline #\Return #.(code-char 11) #\Page)))
 
 (defun utf8-length (s)
@@ -210,7 +210,7 @@ more than one, lowercased, each once, none shorter than two bytes; none for an e
         (add (obs-target o))
         (let ((colon (position #\: (obs-target o))))
           (when (and colon (string= (obs-kind o) "value")) (add (subseq (obs-target o) (1+ colon))))))
-      (dolist (tok (nth-value 1 (text-tokens content))) (add tok))
+      (dolist (tok (raw-tokens content)) (when (exact-only-p tok) (add tok)))
       (dolist (line (error-lines content (string= (obs-kind o) "evidence"))) (add line)))
     out))
 
@@ -223,13 +223,25 @@ more than one, lowercased, each once, none shorter than two bytes; none for an e
     (make-rdoc :id (obs-id o) :text text :hay (or hay (string-downcase text)) :keys (exact-keys o content)
                :episode (obs-episode o) :source (or (first (obs-source-ids o)) "") :tag tag)))
 
-(defun analyze-doc (d)
-  (unless (rdoc-tf d)
-    (let ((tf (make-hash-table :test 'equal)) (exact (make-hash-table :test 'equal)) (dl 0))
-      (dolist (term (text-tokens (rdoc-text d))) (incf (gethash term tf 0)) (incf dl))
-      (dolist (k (rdoc-keys d)) (setf (gethash k exact) t))
-      (setf (rdoc-tf d) tf (rdoc-dl d) dl (rdoc-exact d) exact)))
-  d)
+(defvar +no-table+ (make-hash-table :test 'equal) "An empty table no one writes.")
+
+(defun analyze-doc (d terms probes)
+  "analyze: the document's length in terms, and only the counts of the searched terms and the
+exact keys among the lookups (hash sets), for one search."
+  (let ((tf nil) (exact nil) (dl 0))
+    (dolist (tok (raw-tokens (rdoc-text d)))
+      (unless (exact-only-p tok)
+        (dolist (term (token-terms tok))
+          (incf dl)
+          (when (gethash term terms)
+            (unless tf (setf tf (make-hash-table :test 'equal)))
+            (incf (gethash term tf 0))))))
+    (dolist (k (rdoc-keys d))
+      (when (gethash k probes)
+        (unless exact (setf exact (make-hash-table :test 'equal)))
+        (setf (gethash k exact) t)))
+    (setf (rdoc-tf d) (or tf +no-table+) (rdoc-dl d) dl (rdoc-exact d) (or exact +no-table+))
+    d))
 
 (defun lookups (q)
   "Lookups."
@@ -268,9 +280,11 @@ more than one, lowercased, each once, none shorter than two bytes; none for an e
 (defstruct rquery words tokens raws lookups)
 
 (defun read-query (q)
+  "A searched string: its white-space words, each (lowercased . as written), its raw tokens'
+terms and its lookups."
   (let ((raws (raw-tokens q)))
-    (make-rquery :words (fields (string-downcase q)) :raws raws :tokens (mapcar #'token-terms raws)
-                 :lookups (lookups q))))
+    (make-rquery :words (mapcar (lambda (w) (cons (string-downcase w) w)) (fields q))
+                 :raws raws :tokens (mapcar #'token-terms raws) :lookups (lookups q))))
 
 (defun token-holds-p (d raw terms)
   (let ((tf (rdoc-tf d)))
@@ -281,8 +295,9 @@ more than one, lowercased, each once, none shorter than two bytes; none for an e
           (t (every (lambda (term) (plusp (gethash term tf 0))) (rest terms))))))
 
 (defun word-holds-p (d word)
-  (or (and (search word (rdoc-hay d)) t)
-      (let ((raws (raw-tokens word)))
+  "wordHolds: word (lowercased . as written) as a substring of the hay, or through its tokens."
+  (or (and (search (car word) (rdoc-hay d)) t)
+      (let ((raws (raw-tokens (cdr word))))
         (and raws
              (every (lambda (raw)
                       (let ((terms (token-terms raw)))
@@ -306,7 +321,11 @@ result (hit-index exact-p with-indexes)."
          (total 0)
          (score (make-array n :initial-element 0))
          (exact (make-array n :initial-element nil)))
-    (loop for d across pool do (analyze-doc d) (incf total (rdoc-dl d)))
+    (let ((terms (make-hash-table :test 'equal)) (probes (make-hash-table :test 'equal)))
+      (dolist (q searches)
+        (dolist (l (lookups q)) (setf (gethash l probes) t))
+        (dolist (tok (raw-tokens q)) (dolist (term (token-terms tok)) (setf (gethash term terms) t))))
+      (loop for d across pool do (analyze-doc d terms probes) (incf total (rdoc-dl d))))
     (dolist (q qs)
       (let* ((terms (let ((out '())) (dolist (ts (rquery-tokens q) out) (dolist (term ts) (setf out (rt-append-once out term))))))
              (weights (mapcar (lambda (term)
@@ -333,7 +352,9 @@ result (hit-index exact-p with-indexes)."
           (words (make-hash-table)) (partial nil))
       (unless hits
         (let ((all '()))
-          (dolist (q qs) (dolist (w (rquery-words q)) (setf all (rt-append-once all w))))
+          (dolist (q qs)
+            (dolist (w (rquery-words q))
+              (unless (find (car w) all :key #'car :test #'string=) (setf all (append all (list w))))))
           (loop for i from 0 below n
                 for c = (count-if (lambda (w) (word-holds-p (aref pool i) w)) all)
                 when (plusp c) do (push i hits) (setf (gethash i words) c))

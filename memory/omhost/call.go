@@ -81,6 +81,8 @@ type Call struct {
 
 	// detector is the pass a detector run reads (DetectorCall), nil for a memory tool call.
 	detector *DetectorPass
+	// checkpoints are the call's fold checkpoints (foldCheckpoints), made on first use.
+	checkpoints *foldCheckpoints
 }
 
 // Write is one curated or layer write that landed.

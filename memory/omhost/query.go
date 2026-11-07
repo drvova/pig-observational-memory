@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
@@ -375,7 +376,20 @@ func (c *Call) reader() Reader {
 	if c.detector != nil {
 		return c.detector.reader()
 	}
-	return Reader{Entries: c.Entries, SessionEntries: c.SessionEntries, ToolCall: true, Skip: c.Skip}
+	return Reader{Entries: c.Entries, SessionEntries: c.SessionEntries, ToolCall: true, Skip: c.Skip, checkpoints: c.foldCheckpoints()}
+}
+
+// checkpointsInit guards the lazy creation of a call's fold checkpoints.
+var checkpointsInit sync.Mutex
+
+// foldCheckpoints are the call's fold checkpoints, made on first use.
+func (c *Call) foldCheckpoints() *foldCheckpoints {
+	checkpointsInit.Lock()
+	defer checkpointsInit.Unlock()
+	if c.checkpoints == nil {
+		c.checkpoints = &foldCheckpoints{}
+	}
+	return c.checkpoints
 }
 
 // list answers a list read.
@@ -430,7 +444,7 @@ type noteSet struct {
 // their rows. Only the kinds fn reads are listed, files as each path's newest state, attempts
 // by outcome.
 func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
-	folded := ledger.FoldLedger(r.Entries, "")
+	folded := r.folded()
 	if fn == omwire.MDropped {
 		var dropped []ledger.Observation
 		for _, obs := range folded.Observations {
@@ -728,7 +742,7 @@ func (c *Call) reflections(ctx context.Context, o omwire.Options, n int) (any, e
 		return nil, err
 	}
 	rows := r.Reflections(v)
-	folded := ledger.FoldLedger(r.Entries, "")
+	folded := r.folded()
 	positions := ledger.EntryIndexByID(r.Entries)
 	values := make([]om.Reflection, len(rows.Rows))
 	for i, row := range rows.Rows {

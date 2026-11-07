@@ -137,6 +137,10 @@ func retrievalInputs() []retrievalInput {
 			rec("b1", "fact", "parseConfig reads settings.json.", "u1"),
 			rec("b2", "fact", "The config parser is strict.", "u2"),
 		}, []string{"parse_config"}},
+		{"camel query finds snake", []ledger.Observation{
+			rec("b3", "fact", "parse_config reads settings.json.", "u1"),
+			rec("b4", "fact", "Parsing the config is strict.", "u2"),
+		}, []string{"parseConfig"}},
 		{"camel parts rank", []ledger.Observation{
 			rec("c1", "fact", "HTTPServer starts on boot.", "u1"),
 			rec("c2", "fact", "The server is an http server.", "u2"),
