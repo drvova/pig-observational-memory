@@ -304,6 +304,10 @@ next boundary. Returns the loaded layer."
   "Holds text, one (om.tool:define name lambda-list . body) form, in model's layer after the
 checks (compile-definition). Returns the held ldef; signals refused."
   (let ((d (make-ldef :model model :text text :digest (digest text) :state :held)))
+    ;; Code is never redacted (a redacted literal changes what it does): a definition holding a
+    ;; secret is refused whole (codepolicy.SecretInCode, docs/memory-v2.md "Erasure").
+    (when (om::contains-secret-p text)
+      (refuse "the definition holds a secret: code is never redacted, so it is refused; read the value from where it lives instead of writing it into the code"))
     (compile-definition d)
     (with-layer-lock (model)
       (write-blob model text)

@@ -20,10 +20,7 @@ import (
 // row passes or is not built, except the findings below, each a failing row with a test that
 // skips naming the phase that fixes it. A finding that starts to pass fails this test, so the
 // phase that fixes it deletes its entry and the skip together.
-var findings = map[string]string{
-	"secret redaction: layer files": "TestLayerWriteHoldsNoSecret",
-	"no value in the shared layer":  "TestLayerWriteHoldsNoSecret",
-}
+var findings = map[string]string{}
 
 // checkSuite asserts s's rows against the findings, makes sure no model was called (every
 // request logged is a scripted level-1 reply the fake host served), and logs the table.
@@ -145,10 +142,9 @@ func TestInjectedLayerForgetLeavesLayer(t *testing.T) {
 	}
 }
 
-// Finding (Tier 0b part b, Tier 0c part d): a layer definition holding a value is stored with it,
-// in the definition's file and its blob, which every session of the model reads.
+// Tier 0b part b, Tier 0c part d (phase 8): a layer definition holding a value is redacted as it
+// is written, in the definition's file and its blob, which every session of the model reads.
 func TestLayerWriteHoldsNoSecret(t *testing.T) {
-	later(t, "phase 8: secret purge (a layer write is not scanned)")
 	p := drawSecrets(5)
 	store := curated.New(t.TempDir())
 	if _, err := store.Layer().Put(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: modelKey, Text: "Keep the deploy line; SESSION_JWT=" + p.values[4] + "."}); err != nil {

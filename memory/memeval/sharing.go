@@ -604,7 +604,7 @@ func secretsAcrossRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
 	s.add(part, "no value in another session's saved searches", verdict(saved == 0), "", "%d values", saved)
 	s.add(part, "no value in another session's summaries or snippets", verdict(summaries == 0 && snippets == 0), "", "%d in summaries, %d in %d snippet answers", summaries, snippets, runs)
 	s.add(part, "no value in the shared usage ledgers", verdict(ledgerLines == 0), "", "%d values", ledgerLines)
-	s.add(part, "no value in the shared layer", verdict(layerLines == 0), "phase 8: secret purge (a layer write is not scanned)", "%d values", layerLines)
+	s.add(part, "no value in the shared layer", verdict(layerLines == 0), "", "%d values", layerLines)
 	s.add(part, "no value in the core log's shared lines or another session's core block", verdict(coreLines == 0), "", "%d values", coreLines)
 	return nil
 }
