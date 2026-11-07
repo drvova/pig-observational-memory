@@ -953,10 +953,10 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
       failures F are `level1-failed` + `level1-refused` for the instructions, and
       `uncited-assistant-specifics` + `cross-scope-supersede` + `decode-failure` for the rest. It is
       rejected when T's harm is above both windows'; otherwise its effect `min(F(A), F(B)) - F(T)`
-      must beat the A-versus-A spread `|F(A) - F(B)|` after its cost, in thousandths of a failure:
-      the instructions text's tokens (as declared) over T at 1,000 tokens a failure, and the turns T
-      took beyond both windows at 10 turns a failure. Short of that it is rejected ("no net effect
-      after cost").
+      after its cost must exceed twice the A-versus-A spread `|F(A) - F(B)|`, and be at least one
+      failure when the spread is 0, in thousandths of a failure: the cost is the instructions text's
+      tokens (as declared) over T at 1,000 tokens a failure, and the turns T took beyond both windows
+      at 10 turns a failure. Short of that it is rejected ("no net effect after cost").
     - *Independence.* 2·`MinEvidence` passes under it with fewer than `MinEvidence` independent ones
       reject it: its evidence came from too few roots.
     - *Scope.* A written one records its scope on its put generation (`scope`: the repositories and

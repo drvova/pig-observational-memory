@@ -30,10 +30,11 @@ import (
 //     windows, B then A. Fewer controls than that is no null arm, and it is rejected;
 //   - harm: T's harm above both A's and B's rejects it;
 //   - effect: min(F(A), F(B)) - F(T), F the failures its kind is judged by (FailureCounts),
-//     must beat the A-versus-A spread |F(A) - F(B)| after its cost: the tokens it adds to each
-//     request it runs in (an instructions text's estimate, CostTokensPerFailure to a failure)
-//     over T, and the turns T took beyond both control windows (CostTurnsPerFailure to a
-//     failure); otherwise it is rejected, "no net effect after cost";
+//     after its cost must exceed twice the A-versus-A spread |F(A) - F(B)|, and be at least one
+//     failure when the spread is 0. Its cost is the tokens it adds to each request it runs in
+//     (an instructions text's estimate, CostTokensPerFailure to a failure) over T, and the turns
+//     T took beyond both control windows (CostTurnsPerFailure to a failure); otherwise it is
+//     rejected, "no net effect after cost";
 //   - 2·MinEvidence units under it with fewer than MinEvidence independent ones reject it: its
 //     evidence came from too few roots;
 //   - a written one's scope is the repositories and task families of T (layer.Scope).
@@ -261,7 +262,7 @@ func settleNullArm(events []curated.ModelEvent, d layer.Definition, id string) S
 	cost := costTokens(d)*MinEvidence*1000/CostTokensPerFailure + addedTurns*1000/CostTurnsPerFailure
 	figures := fmt.Sprintf("failures %d under it over %d compactions against %d and %d without it (spread %d), cost %d.%03d",
 		fT, MinEvidence, fA, fB, spread, cost/1000, cost%1000)
-	if effect*1000-cost <= spread*1000 {
+	if net := effect*1000 - cost; net <= 2*spread*1000 || net < 1000 {
 		return Settlement{Decided: true, Reason: "no net effect after cost: " + figures}
 	}
 	scope := &layer.Scope{}

@@ -320,11 +320,19 @@ func TestLispLevel1OfferMatchesInProcess(t *testing.T) {
 	if held["lisp"] != held["in-process"] {
 		t.Fatalf("held text: in-process %q, lisp %q", held["in-process"], held["lisp"])
 	}
-	// Other sessions' compactions ran under it over other text and refused nothing: its null arm.
+	// Other sessions' compactions ran without it, each refusing two proposals, then under it
+	// over other text, refusing nothing: its null arm. The controls recorded here are the two
+	// windows, so the offer's own pass (which refused nothing) is in neither.
 	for _, home := range homes {
 		store := curated.New(curated.DefaultDir(home))
 		held, err := store.Layer().Held("test-provider/session")
 		must(t, err)
+		for i := range 2 * rules.MinEvidence {
+			harm := 0
+			must(t, store.RecordModel(curated.ModelEvent{Model: "test-provider/session", Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2,
+				Outcome: curated.OutcomeOK, Tokens: 500, Level1: true, Harm: &harm, Roots: []string{fmt.Sprintf("c0ffee00000001%02d", i)},
+				Counts: map[string]int{rules.CountLevel1Refused: 2}}))
+		}
 		for i := range rules.MinEvidence {
 			harm := 0
 			must(t, store.RecordModel(curated.ModelEvent{Model: "test-provider/session", Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2,

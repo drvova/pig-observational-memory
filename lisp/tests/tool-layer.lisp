@@ -134,6 +134,18 @@
       ;; a no-op is rejected; so is an effect inside the spread
       (om::check (subseq (settle (append (controls '(2 2 2 2 2 2)) (treated '(2 2 2))) :kind "remedy" :name "keep-head") 0 2) '(t nil))
       (om::check (subseq (settle (append (controls '(1 1 1 4 4 4)) (treated '(1 1 1))) :kind "remedy" :name "keep-head") 0 2) '(t nil))
+      ;; the effect must exceed twice the spread: exactly twice is rejected, one more settles; with
+      ;; no spread one failure settles, and not once a cost is charged against it
+      (om::check (subseq (settle (append (controls '(2 2 2 2 2 3)) (treated '(2 1 1))) :kind "remedy" :name "keep-head") 0 3)
+                 '(t nil "no net effect after cost: failures 4 under it over 3 compactions against 7 and 6 without it (spread 1), cost 0.000"))
+      (om::check (subseq (settle (append (controls '(2 2 2 2 2 3)) (treated '(1 1 1))) :kind "remedy" :name "keep-head") 0 2) '(t t))
+      (om::check (subseq (settle (append (controls '(2 2 2 2 2 2)) (treated '(2 2 1))) :kind "remedy" :name "keep-head") 0 2) '(t t))
+      (om::check (subseq (settle (append (controls '(2 2 2 2 2 2))
+                                         (loop for f in '(2 2 1) for i from 0
+                                               collect (unit-event (format nil "2026-11-01T11:0~D:00Z" i) :ran (list id) :failures f :turns 5
+                                                                   :root (format nil "t~15,'0D" i))))
+                                 :kind "remedy" :name "keep-head") 0 3)
+                 '(t nil "no net effect after cost: failures 5 under it over 3 compactions against 6 and 6 without it (spread 0), cost 0.300"))
       ;; no null arm, too few units, harm
       (om::check (settle (append (controls '(3 3 3 3)) (treated '(0 0 0))) :kind "remedy" :name "keep-head")
                  '(t nil "no null arm: 4 compactions without it to compare against (needs 6)" nil))

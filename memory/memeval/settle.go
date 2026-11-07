@@ -93,6 +93,29 @@ func WithNoise(events []curated.ModelEvent, rng *rand.Rand) []curated.ModelEvent
 
 // ReplayNoOp replays NoOpDefinition over one model's usage ledger events (above) into tally.
 func ReplayNoOp(events []curated.ModelEvent, tally *SettleReplay) {
+	replayDefinition(events, tally, nil)
+}
+
+// TrueEffectShare is the share of failures, in percent, the true-effect arm's definition removes
+// from each compaction it runs in, rounded up: a compaction counting n keeps TrueEffectKept(n).
+const TrueEffectShare = 50
+
+// TrueEffectKept is the failures a compaction counting n keeps under the true-effect definition:
+// n·(100-TrueEffectShare)/100, rounded down.
+func TrueEffectKept(n int) int {
+	return n * (100 - TrueEffectShare) / 100
+}
+
+// ReplayTrueEffect is ReplayNoOp for a definition with a true effect: every compaction under it
+// counts TrueEffectKept of each failure it is judged by, so the hold points it does not settle
+// are the rule's false negatives.
+func ReplayTrueEffect(events []curated.ModelEvent, tally *SettleReplay) {
+	replayDefinition(events, tally, TrueEffectKept)
+}
+
+// replayDefinition replays NoOpDefinition over events into tally, the failures of the
+// compactions under it mapped through kept when it is not nil.
+func replayDefinition(events []curated.ModelEvent, tally *SettleReplay, kept func(int) int) {
 	units := []int{}
 	for i, e := range events {
 		if rules.IsV2Compaction(e) && e.Outcome != curated.OutcomeEmpty && e.Harm != nil {
@@ -129,6 +152,18 @@ func ReplayNoOp(events []curated.ModelEvent, tally *SettleReplay) {
 				break
 			}
 			replay[i].RanHeld = append(append([]string{}, replay[i].RanHeld...), id)
+			if kept != nil {
+				counts := map[string]int{}
+				for c, n := range replay[i].Counts {
+					counts[c] = n
+				}
+				for _, c := range rules.FailureCounts(d.Kind) {
+					if n, ok := counts[c]; ok {
+						counts[c] = kept(n)
+					}
+				}
+				replay[i].Counts = counts
+			}
 		}
 		tally.HoldPoints++
 		if LegacySettle(replay, d) {
@@ -184,14 +219,15 @@ func reasonHead(reason string) string {
 
 // NoOpSettleRate simulates each seed's session at level 0 with a curated store (its usage
 // ledger) and replays NoOpDefinition over it as recorded (recorded) and with the noise arm's
-// failures (noisy, WithNoise seeded by the seed).
-func NoOpSettleRate(ctx context.Context, cfg Config) (recorded, noisy SettleReplay, err error) {
-	recorded, noisy = SettleReplay{Reasons: map[string]int{}}, SettleReplay{Reasons: map[string]int{}}
+// failures (noisy, WithNoise seeded by the seed), and the true-effect definition over the noisy
+// ledgers (effect, ReplayTrueEffect).
+func NoOpSettleRate(ctx context.Context, cfg Config) (recorded, noisy, effect SettleReplay, err error) {
+	recorded, noisy, effect = SettleReplay{Reasons: map[string]int{}}, SettleReplay{Reasons: map[string]int{}}, SettleReplay{Reasons: map[string]int{}}
 	tally := &recorded
 	for _, seed := range cfg.Seeds {
 		home, err := os.MkdirTemp("", "memeval-settle-")
 		if err != nil {
-			return recorded, noisy, err
+			return recorded, noisy, effect, err
 		}
 		opt := cfg.Options
 		opt.Turns = cfg.Turns
@@ -201,17 +237,20 @@ func NoOpSettleRate(ctx context.Context, cfg Config) (recorded, noisy SettleRepl
 			var events []curated.ModelEvent
 			if events, err = store.ModelEvents(harness.ModelKey(testfix.Model("eval", "session", nil))); err == nil {
 				ReplayNoOp(events, tally)
-				ReplayNoOp(WithNoise(events, rand.New(rand.NewPCG(uint64(seed), 24))), &noisy)
+				noise := WithNoise(events, rand.New(rand.NewPCG(uint64(seed), 24)))
+				ReplayNoOp(noise, &noisy)
+				ReplayTrueEffect(noise, &effect)
 				noisy.Seeds++
+				effect.Seeds++
 			}
 		}
 		os.RemoveAll(home)
 		if err != nil {
-			return recorded, noisy, fmt.Errorf("seed %d: %w", seed, err)
+			return recorded, noisy, effect, fmt.Errorf("seed %d: %w", seed, err)
 		}
 		tally.Seeds++
 	}
-	return recorded, noisy, nil
+	return recorded, noisy, effect, nil
 }
 
 // Table is the replay as the baseline page prints it.

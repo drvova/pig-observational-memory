@@ -633,10 +633,33 @@ failure the no-op is judged by, so the noise arm draws each compaction's
 | noise arm | decision 24, hold points with a full null arm | 440 | 61 | 13.9% |
 
 On the recorded ledgers decision 24 rejects 437 hold points for no net effect after cost, 120 for
-no null arm (fewer than six earlier compactions), and leaves 3 held. Under noise it still settles a
+no null arm (fewer than six earlier compactions), and leaves 3 held. Under noise it still settled a
 no-op at about one hold point in seven with a full null arm: three compactions beating two windows
-of three by more than their spread happens by chance. Longer windows, or the spread taken over more
-than one pair of control windows, would lower it; both are the owner's call.
+of three by more than their spread happens by chance.
+
+**Twice the spread** (branch `claude/settle-2x`, on `d93e389`). The owner accepted a wider margin:
+the effect after cost must exceed twice the spread, and be at least one failure when the spread is
+0. The same command, now with a true-effect arm: the noise arm's ledgers, with the definition
+removing half of each compaction's failures under it (`memeval.TrueEffectShare`, a compaction
+counting n keeps n/2 rounded down), so the hold points it does not settle are false negatives the
+margin costs.
+
+| ledgers | rule | hold points | settled before (one spread) | settled after (twice the spread) |
+|---|---|---|---|---|
+| recorded | decision 24 | 560 | 0 (0.0%) | 0 (0.0%) |
+| recorded | decision 24, hold points with a full null arm | 440 | 0 (0.0%) | 0 (0.0%) |
+| noise arm, no-op | decision 24 | 560 | 61 (10.9%) | 42 (7.5%) |
+| noise arm, no-op | decision 24, hold points with a full null arm | 440 | 61 (13.9%) | 42 (9.5%) |
+| noise arm, true effect | decision 24 | 560 | 192 (34.3%) | 122 (21.8%) |
+| noise arm, true effect | decision 24, hold points with a full null arm | 440 | 192 (43.6%) | 122 (27.7%) |
+
+The margin removes 31% of the no-op's settlements (61 to 42) and 36% of the true-effect
+definition's (192 to 122): at three compactions a window the spread of two noisy windows is about
+as large as a halving's effect, so the wider margin pays for its fewer false positives with about
+as large a share of false negatives. A no-op still settles at about one hold point in eleven with a
+full null arm. Longer windows, or the spread taken over more than one pair of control windows,
+would separate the two arms better; both are the owner's call. The recorded ledgers are unchanged
+(437 rejected for no net effect after cost, 120 for no null arm, 3 held).
 
 ## Tier 0b: forgetting
 

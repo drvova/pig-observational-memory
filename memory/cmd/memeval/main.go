@@ -101,7 +101,7 @@ func main() {
 	// settle prints the no-op definition replay (decision 24, scenario 30).
 	settle := func() {
 		t := time.Now()
-		r, noisy, err := memeval.NoOpSettleRate(context.Background(), cfg)
+		r, noisy, effect, err := memeval.NoOpSettleRate(context.Background(), cfg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "memeval:", err)
 			os.Exit(1)
@@ -113,6 +113,8 @@ func main() {
 		fmt.Print(r.Table())
 		fmt.Printf("\nThe same ledgers with each compaction's failures drawn from 0 to %d (the noise arm):\n\n", memeval.NoiseMax)
 		fmt.Print(noisy.Table())
+		fmt.Printf("\nThe noise arm's ledgers, the definition removing %d%% of each compaction's failures under it, rounded up (the true-effect arm: what it does not settle is a false negative):\n\n", memeval.TrueEffectShare)
+		fmt.Print(effect.Table())
 		fmt.Println()
 	}
 	switch *suite {
