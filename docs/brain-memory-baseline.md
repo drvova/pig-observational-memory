@@ -155,6 +155,11 @@ column gives that result.
 | 24 | an opinion with pushback is not a rule | **pass** (phase 2, episodes and pushback) | |
 | 25 | insecure preference held, not in the index | skip, phase 1 | fails: in the index |
 | 26 | project record stale against HEAD | **pass** (phase 4: "changed since", "gone at", level 1's re-check, no structure line) | |
+| 30 | a no-op definition replayed at `MinEvidence` does not settle; no net effect after cost is rejected | **pass** (phase 5 part B; the noise arm still settles 13.9%) | |
+| 31 | repeated text and tool output never settle a definition | **pass** (phase 5 part B) | |
+| 32 | settling one definition returns those sharing its target to a hold window | **pass** (phase 5 part B) | |
+| 33 | an insecure definition is held out of the layer; one in it rolls the layer back | **pass** (phase 5 part B) | |
+| 34 | a settled definition applies only in its repository and task family; no retirement on no difference | **pass** (phase 5 part B) | |
 | 37 | repo id lookup times out | **pass** (phase 4: computed once, cached by the common git dir) | |
 
 Nine passed at the baseline: 1, 2 (constraint), 3, 4, 5, 6, 9 (session), 15 and 16. Phase 2C
@@ -534,6 +539,39 @@ kept on every compaction, with no model request beyond the suites' scripted leve
 Scenarios 7, 26 and 37 run on real git repositories in temporary directories
 (`memory/memeval/project_test.go`).
 
+## Phase 5 part B: definition settlement
+
+Decision 24's settlement rules (docs/brain-memory.md, "Phase 5 status: definition settlement";
+docs/memory-v2.md, "Settling a definition"). Measured on 2026-11-07 against `5b270fd` (the tree
+before them), no model requests.
+
+**Tier 0, 0b and 0c: no regression.** `go run ./cmd/memeval -suite all -seeds 20` (600 compactions,
+1,549 snippets run, 0 failed) prints the retention, invariant, forgetting and sharing tables
+identical to `5b270fd`'s, cell for cell: settlement changes what a pass records, never a summary.
+
+**The no-op definition replay** (`go run ./cmd/memeval -suite settle -seeds 20`, also printed by
+`-suite all`; `memeval.NoOpSettleRate`). Each seed's session runs at level 0 with a curated store;
+a keep-head catalogue that changes nothing (a remedy, so it costs no request tokens: the no-op
+noise settles most easily) is held before each compaction in turn, run by every later one, and
+judged once `MinEvidence` (3) compactions ran under it. The recorded Tier 0 sessions count no
+failure the no-op is judged by, so the noise arm draws each compaction's
+`uncited-assistant-specifics` again, uniformly from 0 to 3, seeded.
+
+| ledgers | rule | hold points | settled | rate |
+|---|---|---|---|---|
+| recorded | before decision 24 (first compaction under it) | 560 | 560 | 100.0% |
+| recorded | decision 24 | 560 | 0 | 0.0% |
+| recorded | decision 24, hold points with a full null arm | 440 | 0 | 0.0% |
+| noise arm | before decision 24 | 560 | 560 | 100.0% |
+| noise arm | decision 24 | 560 | 61 | 10.9% |
+| noise arm | decision 24, hold points with a full null arm | 440 | 61 | 13.9% |
+
+On the recorded ledgers decision 24 rejects 437 hold points for no net effect after cost, 120 for
+no null arm (fewer than six earlier compactions), and leaves 3 held. Under noise it still settles a
+no-op at about one hold point in seven with a full null arm: three compactions beating two windows
+of three by more than their spread happens by chance. Longer windows, or the spread taken over more
+than one pair of control windows, would lower it; both are the owner's call.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
@@ -744,6 +782,7 @@ finding starts to pass, or when any request is logged besides the scripted ones.
   - `-suite constraintrot` and `-suite arcbench -arcbench-cases <file>` print the phase 3 rule
     benches (data only for ARCBench);
   - `-suite retrieval` prints the phase 4 retrieval check.
+  - `-suite settle` prints the phase 5 no-op definition replay.
 
   It exits non-zero on a broken invariant, a failed snippet or any request.
 - `-suite forgetting` and `-suite sharing` print the Tier 0b and 0c tables below the retention
