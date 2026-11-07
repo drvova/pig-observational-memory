@@ -44,7 +44,8 @@ a positive integer, else 2,000."
              (let ((branch (read-branch session params format)))
                (append-entry session (if (plusp (length branch)) (om::entry-id (aref branch (1- (length branch)))) "")
                              type data-json)))
-   :cwd (param-string params "cwd")))
+   :cwd (param-string params "cwd")
+   :structure (client-structure params)))
 
 (defun compaction-entry-line (after c id parent stamp)
   "The store line neutral.Host writes for a compaction entry: the entry map's keys sorted."

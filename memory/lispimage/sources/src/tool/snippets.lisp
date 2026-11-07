@@ -139,7 +139,7 @@ opts): args the literal arguments, opts a list of (option literal...)."
           (loop
             (ws)
             (if (and (<= (+ pos 3) n) (string= "om." s :start2 pos :end2 (+ pos 3)))
-                (setf opts (chain))
+                (setf opts (append opts (chain)))
                 (push (literal) args))
             (ws)
             (case (peek)
@@ -155,14 +155,15 @@ opts): args the literal arguments, opts a list of (option literal...)."
 (defparameter +snippet-reads+
   '(("Notes" "notes" nil) ("Files" "notes" "file") ("Commits" "notes" "commit")
     ("Attempts" "notes" "attempt") ("History" "history" nil) ("Saved" "saved" nil)
-    ("Recall" "recall" nil))
+    ("Recall" "recall" nil) ("Head" "head" nil))
   "The om reads a Lisp call stands for: (Go name, Lisp function, the kind it keeps).")
 
 (defparameter +snippet-keys+
   '(("notes" "Search" "Kind" "Where" "Subject" "WithStatus" "From" "Through" "Since" "Until" "Limit")
     ("history" "Search" "Limit")
     ("saved" "Search")
-    ("recall" "Offset"))
+    ("recall" "Offset")
+    ("head" "Offset" "Limit"))
   "The options each Lisp read takes, by their om option names.")
 
 (defun lisp-literal (v) (if (stringp v) (prin1-to-string v) (princ-to-string v)))
@@ -182,6 +183,10 @@ what has no Lisp form yet."
           (cond ((string= lisp "recall")
                  (unless (and (= (length args) 1) (stringp (first args)))
                    (snippet-fail "om.Recall takes one id"))
+                 (push (lisp-literal (first args)) parts))
+                ((string= lisp "head")
+                 (unless (and (= (length args) 1) (stringp (first args)))
+                   (snippet-fail "om.Head takes one path prefix"))
                  (push (lisp-literal (first args)) parts))
                 (args (snippet-fail "om.~A takes only options" fn)))
           (when kind (push (format nil ":kind ~A" (lisp-literal kind)) parts))

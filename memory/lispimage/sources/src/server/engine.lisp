@@ -165,6 +165,8 @@ inside the extraction is recovered (extraction never fails a turn) and named in 
           (multiple-value-bind (batches covers)
               (let ((om::*encoding* (neutral-encoding params)))
                 (om::extract branch start (length branch) (om::fold-ledger branch) :cwd (param-string params "cwd")))
+            ;; stampV2: the new project records' body hashes, from the client's HEAD view.
+            (om::stamp-batches (client-structure params) batches)
             (om::jobject "appended" (append-extraction session branch batches covers))))
       (error (e)
         (format *error-output* "om engine: turn-end level 0 recovered: ~A~%" e)

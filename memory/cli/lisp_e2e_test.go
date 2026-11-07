@@ -212,6 +212,8 @@ func lispFlow(t *testing.T, image string) string {
 	om(t, string(pp), "hook", "pi", "turn-end")
 	section("pi before-compact", om(t, string(pp), "hook", "pi", "before-compact"))
 	section("pi store", store("pi", "p1"))
+
+	projectFlow(t, home, image != "", section, func() string { return store("mine", "r1") })
 	flow := out.String()
 	if image != "" {
 		flow = lispTextsAsGo(t, flow)

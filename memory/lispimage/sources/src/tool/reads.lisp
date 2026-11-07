@@ -23,7 +23,10 @@
   (event-date "") (origin "") (outcome "") (tool "") (target "") (source "") (anchor "")
   (superseded-by '())
   ;; A ranked search's status tag and the records merged into the result (om.Note.Tag, With).
-  (tag "") (with '()))
+  (tag "") (with '())
+  ;; A project record's freshness against HEAD (om.Note.Fresh): "gone at <sha>" or "changed
+  ;; since <sha>, unverified", "" when unchanged or not checked; shown after its content.
+  (fresh ""))
 
 (defstruct turn (id "") (when "") (role "") (text ""))
 
@@ -36,7 +39,7 @@
      (defun ,(find-symbol (format nil "~A-P" struct) "OM.TOOL") (x)
        (,(intern (format nil "~A-P" struct) "OM.LAYER") x))))
 
-(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by tag with)
+(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by tag with fresh)
 (export-readers turn id when role text)
 
 (defun om.tool:memory-name (m) (mem-name m))
@@ -51,6 +54,7 @@
     (when (string/= (note-kind n) "") (format b "[~A] " (note-kind n)))
     (when (string/= (note-subject n) "") (format b "~A: " (note-subject n)))
     (write-string (note-content n) b)
+    (when (string/= (note-fresh n) "") (format b " (~A)" (note-fresh n)))
     (when (string/= (note-anchor n) "") (format b " ~A" (note-anchor n)))))
 
 ;;; The adaptable functions the reads use
@@ -233,18 +237,84 @@ carries its note-tag and the contiguous records of its episode or source entry i
                             h))
                         (subseq heads 0 (min n (length heads)))))))))))
 
+(defun call-fresh-texts (call)
+  "The call's freshness verdict texts by record id, read from the host once, at the first notes
+read that shows rows (omhost's Call.freshness); nil for none."
+  (let ((f (call-freshness call)))
+    (when (functionp f)
+      (setf f (funcall f) (call-freshness call) f))
+    f))
+
 (defun with-freshness (notes)
-  "The notes with each project record's freshness verdict after its content (omhost's Note.Fresh,
-which the Go tool prints after the content)."
-  (let ((fresh (call-freshness (the-call))))
+  "The notes with each project record's freshness verdict in note-fresh (omhost's Note.Fresh,
+which note-line prints after the content, as om.Note.Line does)."
+  (let ((fresh (and notes (call-fresh-texts (the-call)))))
     (if (null fresh)
         notes
         (mapcar (lambda (n)
                   (let ((v (gethash (note-id n) fresh)))
                     (if v
-                        (let ((c (copy-note n))) (setf (note-content c) (om::cat (note-content n) " (" v ")")) c)
+                        (let ((c (copy-note n))) (setf (note-fresh c) v) c)
                         n)))
                 notes))))
+
+;;; The HEAD structure view (om.Head)
+
+(defparameter +head-page+ 50 "omhost.HeadPage: om.Head's default page.")
+(defparameter +max-head-page+ 500 "omhost.MaxHeadPage: om.Head's largest page.")
+
+(defparameter +no-view+
+  "this session is in no git repository the host reads (the HEAD structure view is unavailable)"
+  "omhost's errNoView.")
+
+(defstruct head-view
+  "om.HeadView: a page of the session repository's files at HEAD, derived on demand by the host
+and never stored."
+  (repo-id "") (head "") (prefix "") (files '()) (offset 0) (total 0) (truncated nil) (next ""))
+
+(export-readers head-view repo-id head prefix files offset total truncated next)
+
+(defun head-view-string (v)
+  "om.HeadView.String without its last newline (show adds it): a header line, then one path per
+line, then the next page when there is one."
+  (let ((head (head-view-head v)))
+    (when (> (length head) 7) (setf head (subseq head 0 7)))
+    (string-right-trim
+     '(#\Newline)
+     (with-output-to-string (b)
+       (format b "HEAD ~A: ~D files" head (head-view-total v))
+       (when (string/= (head-view-prefix v) "") (format b " under ~A" (head-view-prefix v)))
+       (when (head-view-truncated v)
+         (write-string " (the tree is larger than the host lists: a path missing here is unknown)" b))
+       (when (head-view-files v)
+         (format b ", showing ~D from ~D" (length (head-view-files v)) (head-view-offset v)))
+       (terpri b)
+       (dolist (f (head-view-files v)) (write-string f b) (terpri b))
+       (when (string/= (head-view-next v) "") (format b "next: ~A~%" (head-view-next v)))))))
+
+(defun om.tool:head (prefix &key limit offset)
+  "Pages HEAD's files under prefix (om.Head): the repository's tree at HEAD is read on demand and
+never stored; the page is in path order, limit (50 by default, at most 500) files from offset;
+outside a repository it is an error."
+  (unless (stringp prefix) (tool-fail "head takes a path prefix string"))
+  (let ((structure (call-structure (the-call)))
+        (limit (or limit 0)) (offset (or offset 0)))
+    (unless structure (tool-fail "~A" +no-view+))
+    (unless (and (integerp limit) (integerp offset) (>= limit 0) (>= offset 0))
+      (tool-fail "limit and offset must not be negative"))
+    (when (zerop limit) (setf limit +head-page+))
+    (setf limit (min limit +max-head-page+))
+    (let ((a (funcall structure (om::jobject "list" (om::jobject "prefix" prefix "offset" offset "limit" limit)))))
+      (unless (hash-table-p a) (tool-fail "~A" +no-view+))
+      (let* ((files (remove-if-not #'stringp (om::jlist-of (om::jget a "files"))))
+             (total (let ((n (om::jget a "total"))) (if (realp n) (truncate n) 0)))
+             (end (+ offset (length files))))
+        (make-head-view :repo-id (om::str (om::jget a "repoId")) :head (om::str (om::jget a "head"))
+                        :prefix prefix :files files :offset offset :total total
+                        :truncated (eq (om::jget a "truncated") :true)
+                        :next (if (and files (< end total))
+                                  (format nil "om.Head(~A, om.Offset(~D), om.Limit(~D))" (om::go-quote prefix) end limit)
+                                  ""))))))
 
 (defun om.tool:note-by-id (id)
   "One record by id, dropped ones included."

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/drvova/pig-observational-memory/memory/gitrepo"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,6 +13,9 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/engine"
+	"github.com/drvova/pig-observational-memory/memory/enginerpc"
+	"github.com/drvova/pig-observational-memory/memory/gitrepo"
+	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/lispimage"
 )
 
@@ -87,6 +89,9 @@ type lispClient struct {
 	conn     net.Conn
 	r        *bufio.Reader
 	id       int
+	// view answers the image's host/structure calls during one request (withView), nil
+	// answering none.
+	view func(q host.StructureQuery) (host.StructureAnswer, bool, error)
 }
 
 // newLispClient is the client of the image for root, or nil when om is not in Lisp mode.
@@ -184,17 +189,37 @@ func (c *lispClient) roundTrip(method string, params any, result any) (transport
 	if _, err := c.conn.Write(append(line, '\n')); err != nil {
 		return err, nil
 	}
-	reply, err := c.r.ReadBytes('\n')
-	if err != nil {
-		return err, nil
-	}
 	var resp struct {
 		ID     int             `json:"id"`
 		Result json.RawMessage `json:"result"`
 		Error  *rpcError       `json:"error"`
+		// A request of the image's own (host/structure) carries a method, and its id is the
+		// image's, answered before the answer to ours is read.
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
 	}
-	if err := json.Unmarshal(reply, &resp); err != nil {
-		return fmt.Errorf("bad answer %q: %w", strings.TrimSpace(string(reply)), err), nil
+	for {
+		reply, err := c.r.ReadBytes('\n')
+		if err != nil {
+			return err, nil
+		}
+		resp.ID, resp.Result, resp.Error, resp.Method, resp.Params = 0, nil, nil, "", nil
+		if err := json.Unmarshal(reply, &resp); err != nil {
+			return fmt.Errorf("bad answer %q: %w", strings.TrimSpace(string(reply)), err), nil
+		}
+		if resp.Method == "" {
+			break
+		}
+		var call struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.Unmarshal(reply, &call)
+		if len(call.ID) == 0 || string(call.ID) == "null" {
+			continue // a notification: nothing to answer
+		}
+		if err := c.answerHost(call.ID, resp.Method, resp.Params); err != nil {
+			return err, nil
+		}
 	}
 	if resp.ID != c.id {
 		return fmt.Errorf("answer to request %d, want %d", resp.ID, c.id), nil
@@ -206,6 +231,34 @@ func (c *lispClient) roundTrip(method string, params any, result any) (transport
 		return nil, nil
 	}
 	return nil, json.Unmarshal(resp.Result, result)
+}
+
+// answerHost answers one host call the image made while it ran our request: host/structure
+// from the request's view (c.view, the repository om read; docs/engine-rpc.md), and an error for
+// every other method or with no view. Only a transport failure is returned.
+func (c *lispClient) answerHost(id json.RawMessage, method string, params json.RawMessage) error {
+	reply := map[string]any{"jsonrpc": "2.0", "id": id}
+	switch {
+	case method == enginerpc.MethodStructure && c.view != nil:
+		var p enginerpc.StructureParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			reply["error"] = rpcError{Code: -32602, Message: "om: " + err.Error()}
+			break
+		}
+		var res enginerpc.StructureResult
+		if a, ok, err := c.view(p.Query); err == nil && ok {
+			res.Answer = &a
+		}
+		reply["result"] = res
+	default:
+		reply["error"] = rpcError{Code: -32601, Message: "om: the client answers no " + method}
+	}
+	line, err := json.Marshal(reply)
+	if err != nil {
+		return err
+	}
+	_, err = c.conn.Write(append(line, '\n'))
+	return err
 }
 
 // call runs method on the image: it connects (starting the image when the socket is absent or
@@ -282,11 +335,7 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 	params := a.sessionParams(s, extra)
 	switch event {
 	case "turn-end", "compact", "before-compact", "prompt":
-		// The image's level 0 frames its records with the repository the adapter side reads
-		// (host.Repo), as neutral.Host.Repo hands the Go engine; the image never runs git.
-		if repo, ok, err := (gitrepo.Reader{Store: a.root}).Read(s.Cwd); err == nil && ok {
-			params["repo"] = repo
-		}
+		defer a.withView(params, s.Cwd)()
 	}
 	err = a.lisp.call(event, params, &res)
 	if a.fallsBack(event, err) {
@@ -301,6 +350,24 @@ func (a *app) viaLisp(event string, s Session, extra map[string]any) (res lispRe
 		}
 	}
 	return res, true, a.runRemaining(s, res.Remaining)
+}
+
+// withView hands the image the repository holding cwd and its HEAD structure view, as
+// neutral.Host's Repo and Structure hand them to the Go engine: the repo param (level 0's frame)
+// and "structure": true, so the image asks host/structure on the connection while it runs the
+// request (project records' body hashes and freshness verdicts, om.Head), answered here with
+// gitrepo.Structure. The image never runs git. The returned function ends the view.
+func (a *app) withView(params map[string]any, cwd string) func() {
+	repo, ok, err := (gitrepo.Reader{Store: a.root}).Read(cwd)
+	if err != nil || !ok {
+		return func() {}
+	}
+	params["repo"] = repo
+	params["structure"] = true
+	a.lisp.view = func(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+		return gitrepo.Structure(cwd, repo, q)
+	}
+	return func() { a.lisp.view = nil }
 }
 
 // fallsBack reports whether the Go engine runs instead of the image: falling back is on and the
@@ -365,7 +432,14 @@ func (a *app) mcpViaLisp(harnessName, dir string, raw []byte) (answer json.RawMe
 	var res struct {
 		Message json.RawMessage `json:"message"`
 	}
-	err = a.lisp.call("mcp", a.toolParams(harnessName, dir, map[string]any{"message": json.RawMessage(raw)}), &res)
+	params := a.toolParams(harnessName, dir, map[string]any{"message": json.RawMessage(raw)})
+	var message struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(raw, &message) == nil && message.Method == "tools/call" {
+		defer a.withView(params, params["cwd"].(string))()
+	}
+	err = a.lisp.call("mcp", params, &res)
 	if a.fallsBack("mcp", err) {
 		return nil, false, nil
 	}
@@ -377,7 +451,9 @@ func (a *app) callViaLisp(harnessName, dir string, arguments map[string]any) (re
 	if a.lisp == nil {
 		return nil, false, nil
 	}
-	err = a.lisp.call("call", a.toolParams(harnessName, dir, map[string]any{"arguments": arguments}), &res)
+	params := a.toolParams(harnessName, dir, map[string]any{"arguments": arguments})
+	defer a.withView(params, params["cwd"].(string))()
+	err = a.lisp.call("call", params, &res)
 	if a.fallsBack("call", err) {
 		return nil, false, nil
 	}
