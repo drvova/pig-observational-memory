@@ -1266,7 +1266,10 @@ bound by the caller that knows the session and its repository; nil writes neithe
         (setf (obs-frame o)
               (make-record-frame :repo-id (alist-member frame "repoId") :branch (alist-member frame "branch")
                                  :head (alist-member frame "head")
-                                 :path (if (= (length paths) 1) (repo-path (first paths) (or (getf encoding :root) "")) ""))))))
+                                 :path (if (= (length paths) 1) (repo-path (first paths) (or (getf encoding :root) "")) "")))
+        ;; A project record names its one symbol (project.lisp, decision 20).
+        (let ((sym (project-symbol o)))
+          (when (string/= sym "") (set-frame-member o "symbol" sym))))))
   o)
 
 (defun entry-source (e)

@@ -82,6 +82,8 @@
 
 ;; Preferences that weaken security and the unverified framing (contracts/insecure.md).
 (load (merge-pathnames "tests/insecure.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 4: project records and freshness verdicts (contracts/project.jsonl).
+(load (merge-pathnames "tests/project.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
 (let ((errors 0))
   (dolist (test *tests*)

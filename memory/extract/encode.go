@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/project"
 	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
@@ -28,7 +29,7 @@ func (x *extraction) encode() {
 
 // Encode fills o's empty encoding fields: source (unless o has one), authority from the source,
 // hedge, time hint, the versions its text names, writer and frame (the repository's, with the
-// record's one path made relative to root). An extractor that knows better sets a field before;
+// record's one path made relative to root, and a project record's one symbol). An extractor that knows better sets a field before;
 // Encode never overwrites one.
 func Encode(o *ledger.Observation, source string, writer ledger.Writer, frame ledger.Frame, root string) {
 	if o.Source == "" {
@@ -54,6 +55,9 @@ func Encode(o *ledger.Observation, source string, writer ledger.Writer, frame le
 		if paths := o.Keys.Paths; len(paths) == 1 {
 			o.Frame.Path = repoPath(paths[0], root)
 		}
+		// A project record names its one symbol (docs/brain-memory.md, decision 20), which the
+		// HEAD structure view checks it against.
+		o.Frame.Symbol = project.Symbol(*o)
 	}
 }
 

@@ -34,6 +34,8 @@
                              (:file "transcript")
                              (:file "end-readers")
                              (:file "extract")
+                             ;; Phase 4: per-repository project records and freshness verdicts.
+                             (:file "project")
                              ;; Level 0's reading of tool output (memory/extract/output.go).
                              (:file "output")
                              ;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0.
