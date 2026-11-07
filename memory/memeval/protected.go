@@ -11,9 +11,9 @@ import (
 )
 
 // Tier 0b part (c): the protected classes (docs/brain-memory.md, "Shape" and decision 6) under
-// the current ranking. Decay is not built, so nothing decays; what is measured is whether a
-// protected item stays shown or reachable after 1, 2, 4, 8, 16 and 20 compactions, and how far it
-// moves from shown to reachable by rank alone.
+// the current ranking, decay off (the default): whether a protected item stays shown or reachable
+// after 1, 2, 4, 8, 16 and 20 compactions, and how far it moves from shown to reachable by rank
+// alone. decay.go runs the same with decay on.
 
 // ProtectedCounts are the compaction counts part (c) reports.
 var ProtectedCounts = []int{1, 2, 4, 8, 16, 20}
@@ -224,7 +224,6 @@ func protectedRows(s *Suite, runs []Run, lister Lister) error {
 		s.add(part, string(class)+" never lost after 1-20 compactions", st, phase, "%d cells, %d lost; rank-only movement: %d reachable, not shown", total, lost, moved)
 	}
 	s.Extra = append(s.Extra, ProtectedTable(curves))
-	s.add(part, "decay clock with floors for the protected classes (decision 6)", NotBuilt, "phase 5", "not built: nothing decays, so only rank moves")
 	return nil
 }
 

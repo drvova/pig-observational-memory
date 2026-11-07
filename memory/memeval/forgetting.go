@@ -136,6 +136,9 @@ func Forgetting(ctx context.Context, cfg SuiteConfig) (Suite, error) {
 		if err := protectedRows(&s, runs, cfg.Lister); err != nil {
 			return err
 		}
+		if err := decayRows(ctx, &s, cfg, runs, cfg.Lister); err != nil {
+			return err
+		}
 		return retractRows(ctx, &s, cfg)
 	})
 	s.Requests, s.Scripted = n, scripted

@@ -191,3 +191,34 @@ func TestRenderSupersessionDecisions(t *testing.T) {
 		t.Errorf("no history line:\n%s", r.Text)
 	}
 }
+
+// Decay lowers rank only: a decayed record is taken after the others of its class, and what the
+// budget leaves out stays listed by the omitted spans' snippets (docs/brain-memory.md, decision 6).
+func TestRenderDecayLowersRankOnly(t *testing.T) {
+	entries := branch(30, func(i int, o *ledger.Observation) bool { return true })
+	in := input(entries, 10_000)
+	newest := recordID(29)
+	// A budget that shows some records but not all.
+	var plain map[string]bool
+	for in.Budget = 600; in.Budget < 10_000; in.Budget += 20 {
+		plain = shownIDs(selection.Render(in))
+		if len(plain) > 2 && len(plain) < 30 {
+			break
+		}
+	}
+	if !plain[newest] {
+		t.Fatalf("the newest record is not shown without decay: %d at %d", len(plain), in.Budget)
+	}
+	in.Decayed = map[string]bool{newest: true}
+	r := selection.Render(in)
+	decayed := shownIDs(r)
+	if decayed[newest] {
+		t.Fatalf("a decayed record kept its rank under a tight budget:\n%s", r.Text)
+	}
+	if len(decayed) < len(plain) {
+		t.Fatalf("decay lost room: %d shown, %d without it", len(decayed), len(plain))
+	}
+	if !strings.Contains(r.Text, "omitted") {
+		t.Fatalf("the decayed record is not listed as omitted:\n%s", r.Text)
+	}
+}

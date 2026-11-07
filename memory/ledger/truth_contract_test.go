@@ -6,6 +6,8 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/drvova/pig-observational-memory/memory/ledger"
@@ -37,6 +39,10 @@ type TruthCase struct {
 	// Pairs are [later, earlier] records with Decisions their Supersession decisions.
 	Pairs     [][2]ledger.Observation `json:"pairs,omitempty"`
 	Decisions []string                `json:"decisions,omitempty"`
+	// Decayed are the active records decay lowers, by clock ("compactions:1", "turns:2": a
+	// clock and its horizon; ledger.Decayed), for the cases that list Clocks.
+	Clocks  []string            `json:"clocks,omitempty"`
+	Decayed map[string][]string `json:"decayed,omitempty"`
 	// Plans are records with Intents their types (IntentOf).
 	Plans   []ledger.Observation `json:"plans,omitempty"`
 	Intents []string             `json:"intents,omitempty"`
@@ -173,6 +179,29 @@ func truthInputs() []TruthCase {
 			Entries: entries(append(users("u3a", "u3b", "u3c", "u0f"), recorded("r1", "u3c", false, s1, s2, s3), reflected("f1", "u3c", ref("0000000003aa", s1.ID, s2.ID, s3.ID)), recorded("r2", "u0f", false, forget("00000000000f", stone(s3)))))},
 		{Name: "labels: keep-both, contested by authority and by negation, held",
 			Entries: entries(append(users("u4a", "u4b", "u4c", "u5a", "u5b", "u5c"), recorded("r1", "u5c", false, p1, p2, p3, n1, n2, held)))},
+		{Name: "decay on a compaction clock and a turn clock, with floors", Clocks: []string{"compactions:1", "compactions:2", "turns:2", "turns:9", "off:1"},
+			Entries: entries(func() []session.Entry {
+				old := obs("00000000009a", "The staging bucket is `ops-stage-7`.", func(o *ledger.Observation) {
+					fact(o)
+					o.Source = ledger.SourceUserSaid
+					o.Keys.Add(ledger.KeyPaths, "ops/stage")
+				})
+				rule := obs("00000000009b", "Never run `make deploy` from a laptop.", func(o *ledger.Observation) { o.Kind, o.Source = "preference", ledger.SourceUserSaid })
+				failed := obs("00000000009c", "`make lint` failed: 3 errors.", func(o *ledger.Observation) {
+					o.Kind, o.Outcome, o.Target, o.Source = ledger.KindAttempt, ledger.OutcomeFailed, "make lint", ledger.SourceToolObserved
+				})
+				secret := obs("00000000009d", "The API key is in `.env` as API_KEY=[redacted:generic-api-key].", fact)
+				aside := obs("00000000009e", "The office plant needs water on Fridays.", fact)
+				reused := obs("00000000009f", "Synced `ops/stage` again.", func(o *ledger.Observation) {
+					o.Kind, o.Source = "fact", ledger.SourceToolObserved
+					o.Keys.Add(ledger.KeyPaths, "ops/stage")
+					o.SourceEntryIDs = []string{"u9g"}
+				})
+				out := append(users("u9a", "u9b", "u9c", "u9d", "u9e"), recorded("r1", "u9e", false, old, rule, failed, secret, aside))
+				out = append(out, tf.CompactionEntry("c1", tf.CompactionArgs{FirstKeptEntryID: "u9e"}), tf.RawMessage("u9f", "message u9f"))
+				out = append(out, tf.CompactionEntry("c2", tf.CompactionArgs{FirstKeptEntryID: "u9f"}), tf.RawMessage("u9g", "message u9g"), recorded("r2", "u9g", false, reused))
+				return out
+			}())},
 		{Name: "supersession decisions", Pairs: [][2]ledger.Observation{
 			{p2, p1}, {p3, p2}, {n2, n1},
 			{c1, s1},
@@ -234,6 +263,21 @@ func truthCases(t *testing.T) []TruthCase {
 		}
 		c.Labels, c.Out, c.Forgotten = folded.Labels(), folded.Truth.Out, folded.Truth.Forgotten
 		c.Projection = idsOf(ledger.FullProjection(es, "").Observations)
+		for _, clock := range c.Clocks {
+			name, n, _ := strings.Cut(clock, ":")
+			horizon, _ := strconv.Atoi(n)
+			if c.Decayed == nil {
+				c.Decayed = map[string][]string{}
+			}
+			ids := []string{}
+			decayed := ledger.Decayed(es, folded.ActiveObservations, name, horizon)
+			for _, o := range folded.ActiveObservations {
+				if decayed[o.ID] {
+					ids = append(ids, o.ID)
+				}
+			}
+			c.Decayed[clock] = ids
+		}
 	}
 	return cases
 }
@@ -264,6 +308,8 @@ func TestTruthContractCases(t *testing.T) {
 	c = byName["labels: keep-both, contested by authority and by negation, held"]
 	check(c.Name, c.Labels["00000000004a"] == ledger.LabelSuperseded && c.Labels["00000000004b"] == ledger.LabelContested && c.Labels["00000000004c"] == ledger.LabelContested &&
 		c.Labels["00000000005a"] == ledger.LabelContested && c.Labels["00000000005c"] == ledger.LabelHeld, "%+v", c.Labels)
+	c = byName["decay on a compaction clock and a turn clock, with floors"]
+	check(c.Name, len(c.Decayed["compactions:1"]) == 1 && c.Decayed["compactions:1"][0] == "00000000009e" && len(c.Decayed["off:1"]) == 0 && len(c.Decayed["turns:9"]) == 0, "%v", c.Decayed)
 	c = byName["intentions"]
 	check(c.Name, len(c.Intents) == 12 && c.Intents[0] == ledger.IntentTodo && c.Intents[1] == ledger.IntentDeferred && c.Intents[3] == ledger.IntentConditionWait && c.Intents[6] == ledger.IntentPromise && c.Intents[11] == "", "%v", c.Intents)
 	c = byName["supersession decisions"]

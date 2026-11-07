@@ -141,3 +141,61 @@
         ((regex-match-p +intent-condition+ (obs-content o)) "condition-wait")
         ((or (string= (obs-kind o) "assistant") (regex-match-p +intent-promise+ (obs-content o))) "promise")
         (t "todo")))
+
+;;; decay.go: decay lowers rank only (contracts/truth.md, "Decay"; decision 6)
+
+(defparameter +default-decay-horizon+ 4)
+
+(defun decay-protected-p (o superseded)
+  "DecayProtected."
+  (or (user-priority-p o) (string= (obs-kind o) "correction")
+      (and (string= (obs-kind o) "attempt") (string= (obs-outcome o) "failed") (not (gethash (obs-id o) superseded)))
+      (search "[redacted:" (obs-content o)) (search "[redacted:" (obs-target o))))
+
+(defun decay-evidence (entries records)
+  "DecayEvidence: id -> the branch index of each record's newest evidence event."
+  (let ((positions (entry-index-by-id entries)) (out (make-set)) (latest (make-set)))
+    (flet ((at (o) (let ((n -1))
+                     (dolist (id (obs-source-ids o) n)
+                       (let ((i (gethash id positions))) (when (and i (> i n)) (setf n i))))))
+           (raise (id n) (multiple-value-bind (v ok) (gethash id out) (when (and ok (> n v)) (setf (gethash id out) n)))))
+      (dolist (o records) (setf (gethash (obs-id o) out) (at o)))
+      (dolist (r records)
+        (when (string= (obs-origin r) "code")
+          (let ((n (at r)))
+            (dolist (id (append (obs-supersedes r) (obs-possibly-updates r) (obs-conflicts r) (obs-responds-to r)
+                                (mapcar #'first (obs-closes r))))
+              (unless (string= id (obs-id r)) (raise id n)))
+            (when (member (obs-source r) '("user-said" "tool-observed") :test #'string=)
+              (dolist (kind +key-kinds+)
+                (dolist (k (keys-get (obs-keys r) kind))
+                  (let ((key (cat kind (string (code-char 0)) k)))
+                    (multiple-value-bind (v ok) (gethash key latest)
+                      (when (or (not ok) (> n v)) (setf (gethash key latest) n))))))))))
+      (dolist (o records out)
+        (dolist (kind +key-kinds+)
+          (dolist (k (keys-get (obs-keys o) kind))
+            (multiple-value-bind (n ok) (gethash (cat kind (string (code-char 0)) k) latest)
+              (when ok (raise (obs-id o) n)))))))))
+
+(defun decay-ticks (entries clock)
+  "DecayTicks."
+  (loop for e across entries for i from 0
+        when (cond ((string= clock "compactions") (string= (entry-type e) "compaction"))
+                   ((string= clock "turns") (and (string= (entry-type e) "message") (entry-message e)
+                                                 (equal (jget (entry-message e) "role") "user"))))
+          collect i))
+
+(defun decayed-records (entries records clock horizon)
+  "Decayed: a set of the ids of records that decay on clock with horizon."
+  (let ((out (make-set)) (superseded (make-set)))
+    (when (or (not (member clock '("compactions" "turns") :test #'equal)) (<= horizon 0))
+      (return-from decayed-records out))
+    (dolist (o records)
+      (dolist (id (obs-supersedes o)) (unless (string= id (obs-id o)) (setf (gethash id superseded) t))))
+    (let ((ticks (decay-ticks entries clock)) (evidence (decay-evidence entries records)))
+      (dolist (o records out)
+        (unless (decay-protected-p o superseded)
+          (let ((n (gethash (obs-id o) evidence)))
+            (when (>= (count-if (lambda (tk) (> tk n)) ticks) horizon)
+              (setf (gethash (obs-id o) out) t))))))))

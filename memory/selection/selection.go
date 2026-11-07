@@ -73,6 +73,9 @@ type Input struct {
 	// (project.Texts: "gone at <sha>", "changed since <sha>, unverified"); a record with none is
 	// unchanged or could not be told. A verdict is printed after the record, never drops it.
 	Freshness map[string]string
+	// Decayed are the records decay lowers (ledger.Decayed), by id: classes 4 and 6 take them
+	// after the others. None while the decay setting is off.
+	Decayed map[string]bool
 }
 
 // Slots are the working memory's caps: how many of the user's rules and of their scope
@@ -937,8 +940,17 @@ func (s *state) choose(budget int) *selected {
 			}
 		}
 	}
+	// Decay lowers rank only (ledger.Decayed; docs/brain-memory.md, decision 6): in classes 4 and
+	// 6 the decayed records are taken after the others of their class, never left out of the
+	// omitted spans that list them. Off, nothing is decayed and the order is unchanged.
+	ranks := func(eligible func(*item) bool, roles ...role) {
+		newestFirst(func(it *item) bool { return !s.in.Decayed[it.id()] && eligible(it) }, roles...)
+		if len(s.in.Decayed) > 0 {
+			newestFirst(func(it *item) bool { return s.in.Decayed[it.id()] && eligible(it) }, roles...)
+		}
+	}
 	// 4. Records carrying specifics no selected line carries.
-	newestFirst(func(it *item) bool {
+	ranks(func(it *item) bool {
 		return it.status != ledger.StatusRetracted && len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
 	}, observations...)
 	// 4b. The values tool output printed (docs/memory-v2.md, "Tool output"): each kind's values
@@ -955,7 +967,7 @@ func (s *state) choose(budget int) *selected {
 	// 5. Reflections, which drop the records they cite.
 	newestFirst(func(*item) bool { return true }, roleReflection)
 	// 6. Everything else.
-	newestFirst(func(*item) bool { return true }, observations...)
+	ranks(func(*item) bool { return true }, observations...)
 	return p
 }
 

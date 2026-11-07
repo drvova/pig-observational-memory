@@ -238,7 +238,9 @@
   ;; in ledger order and the caps (constraints scopes actions).
   (closed (make-set)) (stale (make-set)) (members '()) (slots +default-slots+)
   ;; Input.Freshness: the project records' freshness verdicts by record id, or nil.
-  (freshness nil))
+  (freshness nil)
+  ;; Input.Decayed: the ids decay lowers (decayed-records), or nil.
+  (decayed nil))
 
 (defun record-date (timestamp)
   (if (and (>= (length timestamp) 10) (iso-date-p (subseq timestamp 0 10))) (subseq timestamp 0 10) ""))
@@ -384,8 +386,8 @@ codec's tables instructions without a state)."
         collect (let ((n (nth i slots))) (if (and n (>= n 1)) n (nth i +default-slots+)))))
 
 (defun make-state (observations folded branch budget &key request intent reflections (format "tables") codec
-                                                         aliases reflection-dates slots freshness)
-  (let ((s (make-sstate :budget budget :freshness freshness :observations observations :reflections reflections :folded folded :branch branch
+                                                         aliases reflection-dates slots freshness decayed)
+  (let ((s (make-sstate :budget budget :freshness freshness :decayed decayed :observations observations :reflections reflections :folded folded :branch branch
                         :slots (slots-with-defaults slots)
                         :request-in request :intent-in intent :aliases aliases
                         :reflection-dates (or reflection-dates (make-set))
@@ -723,6 +725,13 @@ receipts moved into next."
                    (dolist (other (gethash (item-id it) (sstate-partners s)))
                      (when (or (not (holds-no-value other)) (funcall eligible other))
                        (try other))))))
+             ;; Decay lowers rank only (decayed-records): classes 4 and 6 take the decayed after
+             ;; the others.
+             (ranks (eligible roles)
+               (let ((decayed (sstate-decayed s)))
+                 (newest-first (lambda (it) (and (not (and decayed (gethash (item-id it) decayed))) (funcall eligible it))) roles)
+                 (when (and decayed (plusp (hash-table-count decayed)))
+                   (newest-first (lambda (it) (and (gethash (item-id it) decayed) (funcall eligible it))) roles))))
              (try-clipped (it on-text)
                (if (try it)
                    (funcall on-text (item-text it))
@@ -766,9 +775,9 @@ receipts moved into next."
         (dolist (it (reverse (sstate-intent s)))
           (let ((which (item-which it)))
             (try-clipped it (lambda (text) (setf (gethash which (sel-intent-text p)) text)))))
-        (newest-first (lambda (it) (and (string/= (item-status it) +status-retracted+)
-                                        (missing-specifics (item-text it) (list (coerce (sel-carried p) 'simple-string)))))
-                      observations)
+        (ranks (lambda (it) (and (string/= (item-status it) +status-retracted+)
+                                 (missing-specifics (item-text it) (list (coerce (sel-carried p) 'simple-string)))))
+               observations)
         ;; 4b. The values tool output printed, ranked, a rank at a time across the kinds.
         (let ((ranked (ranked-values s)))
           (dotimes (rank (value-cap (sstate-budget s)))
@@ -778,7 +787,7 @@ receipts moved into next."
                            (not (gethash (obs-id (item-obs (nth rank items))) (sstate-superseded s))))
                   (try (nth rank items)))))))
         (newest-first (lambda (it) (declare (ignore it)) t) '(:reflection))
-        (newest-first (lambda (it) (declare (ignore it)) t) observations))
+        (ranks (lambda (it) (declare (ignore it)) t) observations))
       p)))
 
 (defun ranked-values (s)
@@ -1161,11 +1170,11 @@ receipts moved into next."
                 :folded (omission-folded omitted) :snippets (omission-snippets omitted)))
 
 (defun render-summary (observations folded branch budget &rest options
-                       &key request intent reflections format codec aliases reflection-dates slots freshness)
+                       &key request intent reflections format codec aliases reflection-dates slots freshness decayed)
   "selection.Render. request is (entry-id . text) or nil; intent a list of (which entry-id
 text); format \"tables\" (the default) or \"lines\"; codec :rows (the default) or :jsonl;
 reflection-dates a table of ReflectionDateRanges; freshness a table of verdict texts by record id."
-  (declare (ignore request intent format codec aliases reflection-dates slots freshness))
+  (declare (ignore request intent format codec aliases reflection-dates slots freshness decayed))
   ;; A record holding a preference that weakens security is never shown, nor a reflection
   ;; resting on one (held-rule; docs/brain-memory.md, decision 19).
   (multiple-value-setq (observations reflections)

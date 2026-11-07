@@ -113,3 +113,27 @@ text (ASCII word boundaries, any case):
 
 Receipts are Phase 3's (`closes`, encoding.md "Receipts"); prose closes nothing. The rule reads the
 type from the text (`ledger.IntentOf`), so a plan written before the field closes the same way.
+
+## Decay
+
+Decay lowers rank only, behind the `decay` setting, which ships off (`docs/configuration.md`).
+
+- **Clock.** Ticks are the branch's own entries: its compaction entries (`compactions`), or the
+  person's messages (`turns`, for comparison). Never wall time.
+- **Evidence.** A record's newest evidence event is the branch index of the newest of: its own
+  newest source entry; a later record level 0 wrote (origin `code`) that links to it
+  (`supersedes`, `possiblyUpdates`, `conflicts`, `respondsTo`, a `closes` link); a later record
+  level 0 wrote from the user's words or a tool's output (source `user-said` or `tool-observed`)
+  sharing one of its keys (kind and value). A record's own retrieval, recall, reuse or
+  self-graded outcome is never one, nor a level-1 record: none is written as one.
+- **Decayed.** A record not protected with at least `decayHorizon` (default 4) ticks after its
+  newest evidence event.
+- **Floors.** Never decayed: the user's rules, prohibitions, constraints and corrections (a user
+  preference or correction, a level-1 merge of only those, any record of kind `correction`), a
+  failed attempt no active record supersedes, and a record whose text or target holds the
+  redaction placeholder (where a secret is, never its value). Pinned memories and user
+  definitions are outside the ledger, where decay does not reach.
+- **Rank.** In the summary's classes 4 (records carrying specifics no line carries) and 6
+  (everything else), the decayed records are taken after the others of the class. Nothing is
+  deleted: what the budget leaves out is listed by the omitted spans' snippets, as without decay.
+  `truth.jsonl` holds the decayed sets for both clocks.

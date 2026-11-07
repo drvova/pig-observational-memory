@@ -73,6 +73,11 @@ type Config struct {
 	// model's floor. QualityTrigger turns the quality trigger on (qualityTrigger: true). Both are
 	// off by default (docs/brain-memory.md, decision 15).
 	RawFloor, QualityTrigger bool
+	// Decay is decay's clock (decay: "compactions" or "turns"; ledger.Decayed), "" (off, the
+	// default, or "off") for none; DecayHorizon its horizon in ticks (decayHorizon), 0 for
+	// ledger.DefaultDecayHorizon (docs/brain-memory.md, decision 6).
+	Decay        string
+	DecayHorizon int
 	// RemovedSet are the RemovedSettings a settings file that was read sets to
 	// a valid value, in RemovedSettings order: nothing reads them and /om:status
 	// lists them while they are set (docs/memory-v2.md, "Migration > Settings").
@@ -313,6 +318,8 @@ type partial struct {
 	ints   map[string]int
 	format *string
 	bools  map[string]bool
+	// decay is the decay setting's clock when set ("off" as "").
+	decay *string
 	// floor is kernelFloor's request when floorSet; nil with floorSet is an
 	// explicit lower: false, which overrides a lower-priority source's request.
 	floor    *FloorRequest
@@ -329,6 +336,7 @@ type partial struct {
 var numberKeys = []string{
 	"compactionSummaryMaxTokens",
 	"curatedMemoryIndexTokens",
+	"decayHorizon",
 }
 
 func normalizeSettings(value map[string]any) partial {
@@ -340,6 +348,12 @@ func normalizeSettings(value map[string]any) partial {
 	}
 	if format, ok := isMemoryFormat(value["memoryFormat"]); ok {
 		p.format = &format
+	}
+	if clock, ok := value["decay"].(string); ok && (clock == "off" || clock == "compactions" || clock == "turns") {
+		if clock == "off" {
+			clock = ""
+		}
+		p.decay = &clock
 	}
 	p.limits, _ = readLimits(value)
 	if models, ok := value["modelLimits"].(map[string]any); ok {
@@ -402,7 +416,12 @@ func (p partial) apply(cfg *Config) {
 			cfg.CompactionSummaryMaxTokens = n
 		case "curatedMemoryIndexTokens":
 			cfg.CuratedMemoryIndexTokens = n
+		case "decayHorizon":
+			cfg.DecayHorizon = n
 		}
+	}
+	if p.decay != nil {
+		cfg.Decay = *p.decay
 	}
 	if p.format != nil {
 		cfg.MemoryFormat = *p.format
