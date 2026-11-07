@@ -54,6 +54,16 @@ const (
 	FieldSubjectScope = "subject_scope"
 )
 
+// The fields a ranked search's notes add (Note.Tag, Note.With): the status tag and the records
+// merged into the result.
+const (
+	FieldTag  = "tag"
+	FieldWith = "with"
+)
+
+// SearchFields follow NoteFields in a ranked search's table.
+var SearchFields = []string{FieldTag, FieldWith}
+
 // The fields of each record list, in order.
 var (
 	NoteFields       = []string{"id", "when", "kind", "subject", "scope", "relevance", "content", "superseded_by", FieldRawSubject, FieldSubjectScope, FieldStatus, FieldEventDate, FieldSource, FieldSourceRole, FieldSourceTime}

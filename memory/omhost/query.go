@@ -14,6 +14,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
 	"github.com/drvova/pig-observational-memory/memory/recall"
+	"github.com/drvova/pig-observational-memory/memory/retrieve"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
@@ -166,7 +167,7 @@ func (t *table) apply(ctx context.Context, o omwire.Options) error {
 			return err
 		}
 	}
-	if o.Status != "" {
+	if o.Status != "" && !(retrieve.IsTag(o.Status) && o.Status != ledger.StatusRetracted) {
 		value := o.Status
 		if err := t.match(ctx, om.FieldStatus, func(v string) bool { return strings.EqualFold(v, value) }); err != nil {
 			return err
@@ -416,10 +417,13 @@ func view(r Reader, o omwire.Options) (*PointInTime, error) {
 	return PointInTimeUntil(r.Entries, o.Until), nil
 }
 
-// noteSet is one note read's rows and the records they stand for, in row order.
+// noteSet is one note read's rows and the records they stand for, in row order, with each
+// record's status tag (retrieve.TagOf).
 type noteSet struct {
 	t     *table
 	notes []om.Note
+	obs   []ledger.Observation
+	tags  []string
 }
 
 // noteRows reads the notes of r (records, when set, instead of r's ledger) as om values and
@@ -470,6 +474,10 @@ func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
 	kept.Fields, kept.Also, kept.Clip = rows.Fields, rows.Also, rows.Clip
 	kept.Rows, kept.From, kept.To = [][]string{}, []string{}, []string{}
 	var notes []om.Note
+	var kepts []ledger.Observation
+	var tags []string
+	contested := ledger.Contested(folded.ActiveObservations)
+	byTag := retrieve.IsTag(o.Status) && o.Status != ledger.StatusRetracted
 	for i, row := range rows.Rows {
 		id := strings.TrimSuffix(row[0], OffPathLabel)
 		obs, ok := byID[id]
@@ -486,12 +494,28 @@ func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
 		if fn == omwire.MFiles && obs.Target != "" && newest[obs.Target] != i {
 			continue
 		}
-		kept.add(row, rows.From[i], rows.To[i])
 		n := noteOf(rows.Fields, row, obs, positions, r.Off != nil)
 		n.Dropped = fn == omwire.MDropped
-		notes = append(notes, n)
+		_, isContested := contested[obs.ID]
+		tag := retrieve.TagOf(obs, supersededNow(n.SupersededBy), n.Status == ledger.StatusRetracted, isContested)
+		if byTag && tag != o.Status {
+			continue
+		}
+		kept.add(row, rows.From[i], rows.To[i])
+		notes, kepts, tags = append(notes, n), append(kepts, obs), append(tags, tag)
 	}
-	return noteSet{t: newTable("notes", kept, nil), notes: notes}
+	return noteSet{t: newTable("notes", kept, nil), notes: notes, obs: kepts, tags: tags}
+}
+
+// supersededNow reports a superseded_by list naming a record that holds now: one not marked as
+// recorded after a point-in-time bound (LaterMark).
+func supersededNow(by []string) bool {
+	for _, id := range by {
+		if !strings.HasSuffix(id, LaterMark) {
+			return true
+		}
+	}
+	return false
 }
 
 func recordsOf(r Reader) []ledger.Observation {
@@ -543,6 +567,9 @@ func splitIDs(s string) []string {
 // notes answers Notes, Files, Commits, Attempts and Dropped: on the branch, else (for every
 // read but Dropped) the off-path fallback when the branch has none.
 func (c *Call) notes(ctx context.Context, fn string, o omwire.Options, n int) (any, error) {
+	if c.retrieves(o) {
+		return c.searchNotes(ctx, fn, o, n)
+	}
 	read := func(r Reader, ranked bool) (noteSet, error) {
 		v, err := view(r, o)
 		if err != nil {
@@ -588,6 +615,83 @@ func (c *Call) notes(ctx context.Context, fn string, o omwire.Options, n int) (a
 	for _, i := range set.t.idx[:shown] {
 		out.Rows = append(out.Rows, set.notes[i])
 		hits = append(hits, set.notes[i].ID)
+	}
+	c.Record.read(hits, shown > 0, o.Search)
+	return out, nil
+}
+
+// retrieves reports a notes read the search ranks (retrieve.Search): the memory tool's, with a
+// search and no sort. A detector's read filters as the query language always did, so its counts
+// mean what its search says.
+func (c *Call) retrieves(o omwire.Options) bool {
+	return c.detector == nil && len(o.Search) > 0 && o.SortField == ""
+}
+
+// searchNotes answers a ranked notes search (docs/protocol.md, "Retrieval"): every other
+// filter first, over the branch and else the off-path fallback, so a status or point-in-time
+// filter applies before the bound; then retrieve.Search over what is left, in ledger order. A
+// result is one row whatever it merged (Note.With). The next page of a ranked list is a bigger
+// one (bound).
+func (c *Call) searchNotes(ctx context.Context, fn string, o omwire.Options, n int) (any, error) {
+	type ranked struct {
+		set     noteSet
+		pool    []int
+		results []retrieve.Result
+		partial bool
+	}
+	pooled := o
+	pooled.Search = nil
+	read := func(r Reader) (ranked, error) {
+		v, err := view(r, o)
+		if err != nil {
+			return ranked{}, err
+		}
+		set := noteRows(r, fn, o, v)
+		if r.Off == nil {
+			set.t.anchors = NewAnchors(r.Entries, nil, AnchorNotes)
+		}
+		if err := filterSet(ctx, set.t, pooled); err != nil {
+			return ranked{}, err
+		}
+		docs := make([]retrieve.Doc, len(set.t.idx))
+		for k, i := range set.t.idx {
+			d := retrieve.DocOf(set.obs[i], set.notes[i].Content, set.tags[i])
+			d.Hay = strings.ToLower(strings.Join(set.t.rows[k], "\n"))
+			docs[k] = d
+		}
+		if err := ctx.Err(); err != nil {
+			return ranked{}, err
+		}
+		results, partial := retrieve.Search(docs, o.Search)
+		return ranked{set: set, pool: set.t.idx, results: results, partial: partial}, nil
+	}
+	r := c.reader()
+	got, err := read(r)
+	if err != nil {
+		return nil, err
+	}
+	if (len(got.results) == 0 || got.partial) && fn != omwire.MDropped && len(c.SessionEntries) > 0 {
+		if off, err := read(r.Fallback()); err == nil && len(off.results) > 0 && (!off.partial || len(got.results) == 0) {
+			got = off
+		}
+	}
+	matched := len(got.results)
+	shown, nextSnippet := bound(n, matched, nil, fn, o)
+	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: got.partial}
+	var hits []string
+	note := func(k int) om.Note {
+		i := got.pool[k]
+		nt := got.set.notes[i]
+		nt.Tag = got.set.tags[i]
+		hits = append(hits, nt.ID)
+		return nt
+	}
+	for _, res := range got.results[:shown] {
+		row := note(res.Hit)
+		for _, w := range res.With {
+			row.With = append(row.With, note(w))
+		}
+		out.Rows = append(out.Rows, row)
 	}
 	c.Record.read(hits, shown > 0, o.Search)
 	return out, nil

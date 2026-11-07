@@ -23,7 +23,11 @@ func (o Opt) with(set func(*omwire.Options)) Opt {
 
 // Search keeps rows matching every literal word, case-insensitive, over every column; when no
 // row matches every word, Notes, Reflections and History rank the rows by how many of the words
-// each contains instead, and mark the list Partial.
+// each contains instead, and mark the list Partial. Notes and its kinds also find a record by an
+// exact key (a path, symbol, test, error line, version or SHA, byte for byte) or by identifier
+// parts (parse_config finds parseConfig), and rank: current before superseded or retracted,
+// exact key hits first, then by relevance, newest first; each row carries its Tag and the
+// records merged With it.
 func Search(words string) Opt { return Opt{}.Search(words) }
 
 // From keeps rows at or after this entry id (an anchor or a record id).
@@ -56,7 +60,8 @@ func Kind(k string) Opt { return Opt{}.Kind(k) }
 // Subject keeps records whose canonical or raw subject equals s.
 func Subject(s string) Opt { return Opt{}.Subject(s) }
 
-// WithStatus keeps records with this status: proposed, hypothetical or retracted.
+// WithStatus keeps records with this status: proposed, hypothetical or retracted, or with this
+// tag: believed, superseded, contested or held.
 func WithStatus(s string) Opt { return Opt{}.WithStatus(s) }
 
 // SortBy orders rows by field, descending when desc is true.

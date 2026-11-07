@@ -65,6 +65,13 @@ type Note struct {
 	Dropped bool
 	// Standing is the record standing for this one when it was replaced.
 	Standing string
+	// Tag is a search result's status tag (believed, superseded, retracted, contested or held);
+	// "" outside a ranked search.
+	Tag string
+	// With are the records a search merged into this result: up to two contiguous records on
+	// each side from the same episode or source entry, in ledger order. They are part of this
+	// row, never rows of their own.
+	With []Note
 }
 
 // Line is the record as one summary line, ending with its anchor.
@@ -97,10 +104,18 @@ func (n Note) CitedBy() ReflectionList {
 // offPathLabel follows the id of a row the off-path fallback read, as a table shows it.
 const offPathLabel = " (off-path)"
 
-// cell is a field as a table shows it: the id of an off-path row labelled.
+// cell is a field as a table shows it: the id of an off-path row labelled, and each merged
+// record (With) as its id and line.
 func (n Note) cell(name string) string {
 	if name == "id" && n.OffPath {
 		return n.ID + offPathLabel
+	}
+	if name == FieldWith {
+		lines := make([]string, len(n.With))
+		for i, w := range n.With {
+			lines[i] = w.ID + " " + w.Line()
+		}
+		return strings.Join(lines, "; ")
 	}
 	return n.field(name)
 }
@@ -157,6 +172,14 @@ func (n Note) field(name string) string {
 		return n.Anchor
 	case "standing":
 		return n.Standing
+	case FieldTag:
+		return n.Tag
+	case FieldWith:
+		ids := make([]string, len(n.With))
+		for i, w := range n.With {
+			ids[i] = w.ID
+		}
+		return strings.Join(ids, " ")
 	}
 	return n.Fields[name]
 }
