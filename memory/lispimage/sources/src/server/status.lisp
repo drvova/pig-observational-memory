@@ -64,7 +64,40 @@
                     (length (om::folded-active folded)))
             (format nil "Reflections: ~D recorded / ~D standing" (length (om::folded-reflections folded))
                     (length (om::active-reflections (om::folded-reflections folded)))))
+       (aggregate-lines folded entries)
        (held-lines folded entries)))))
+
+(defun aggregate-lines (folded entries)
+  "commands.aggregateLines: the records by kind and by label, then the sleep line."
+  (if (null (om::folded-observations folded))
+      (list (sleep-status-line entries))
+      (let ((kinds (make-hash-table :test 'equal)) (labels (make-hash-table :test 'equal)) (names '()))
+        (dolist (o (om::folded-observations folded))
+          (incf (gethash (if (string= (om::obs-kind o) "") "untyped" (om::obs-kind o)) kinds 0)))
+        (maphash (lambda (k v) (declare (ignore v)) (push k names)) kinds)
+        (maphash (lambda (k l) (declare (ignore k)) (incf (gethash l labels 0))) (om::folded-labels folded))
+        (list (cat* "Records by kind: " (om::join (loop for k in (sort names #'string<) collect (format nil "~A ~D" k (gethash k kinds))) ", "))
+              (cat* "Records by label: " (om::join (loop for l in '("believed" "superseded" "retracted" "contested" "held")
+                                                       collect (format nil "~A ~D" l (gethash l labels 0)))
+                                                 ", "))
+              (sleep-status-line entries)))))
+
+(defun sleep-status-line (entries)
+  "commands.sleepStatusLine."
+  (let ((runs (loop for e across (coerce entries 'simple-vector) for d = (om::sleep-data e) when d collect d)))
+    (if (null runs)
+        "Sleep: no run on this branch"
+        (let* ((st (om::sleep-state-of (coerce entries 'simple-vector))) (last (car (last runs)))
+               (links (loop for d in runs sum (length (om::sleep-items d "links"))))
+               (decayed (loop for d in runs sum (length (om::jstrs (om::jget d "decayed")))))
+               (challenged (let ((n 0)) (maphash (lambda (k c) (declare (ignore k)) (when (equal (om::jget c "verdict") "challenged") (incf n)))
+                                                 (om::sstate*-checks st))
+                             n)))
+          (format nil "Sleep: ~D run~A (latest ~A, through ~A): ~D duplicates hidden, ~D links, ~D decayed, ~D verified, ~D retired, ~D checks (~D challenged)"
+                  (length runs) (plural-s (length runs)) (om::jget last "trigger") (om::jget last "throughEntryId")
+                  (hash-table-count (om::sstate*-duplicates st)) links decayed
+                  (hash-table-count (om::sstate*-verified st)) (hash-table-count (om::sstate*-retired st))
+                  (hash-table-count (om::sstate*-checks st)) challenged)))))
 
 (defun held-lines (folded entries)
   "commands.heldLines: the active records and standing reflections held because they weaken

@@ -3,6 +3,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/drvova/pig-observational-memory/memory/config"
@@ -136,8 +137,69 @@ func recordsLines(entries []ledger.Entry) []string {
 		line += fmt.Sprintf(", %d by memory v1's workers", n)
 	}
 	line += fmt.Sprintf(") / %d dropped / %d active", len(folded.DroppedObservationIDs), len(folded.ActiveObservations))
-	return append([]string{line, fmt.Sprintf("Reflections: %d recorded / %d standing", len(folded.Reflections), len(ledger.ActiveReflections(folded.Reflections)))},
-		heldLines(folded, entries)...)
+	lines := []string{line, fmt.Sprintf("Reflections: %d recorded / %d standing", len(folded.Reflections), len(ledger.ActiveReflections(folded.Reflections)))}
+	lines = append(lines, aggregateLines(folded, entries)...)
+	return append(lines, heldLines(folded, entries)...)
+}
+
+// aggregateLines are the fold's records counted by kind and by label (docs/brain-memory.md,
+// phase 7), then what the sleep records on the branch say together (sleepStatusLine).
+func aggregateLines(folded ledger.FoldedLedger, entries []ledger.Entry) []string {
+	if len(folded.Observations) == 0 {
+		return []string{sleepStatusLine(entries)}
+	}
+	kinds := map[string]int{}
+	for _, o := range folded.Observations {
+		k := string(o.Kind)
+		if k == "" {
+			k = "untyped"
+		}
+		kinds[k]++
+	}
+	names := make([]string, 0, len(kinds))
+	for k := range kinds {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	byKind := make([]string, 0, len(names))
+	for _, k := range names {
+		byKind = append(byKind, fmt.Sprintf("%s %d", k, kinds[k]))
+	}
+	labels := map[string]int{}
+	for _, l := range folded.Labels() {
+		labels[l]++
+	}
+	byLabel := make([]string, 0, len(ledger.LabelValues))
+	for _, l := range ledger.LabelValues {
+		byLabel = append(byLabel, fmt.Sprintf("%s %d", l, labels[l]))
+	}
+	return []string{"Records by kind: " + strings.Join(byKind, ", "), "Records by label: " + strings.Join(byLabel, ", "), sleepStatusLine(entries)}
+}
+
+// sleepStatusLine is what the sleep records on the branch say together: the runs, the latest
+// one's trigger and through id, and the totals of each list.
+func sleepStatusLine(entries []ledger.Entry) string {
+	data, _ := ledger.Sleeps(entries)
+	if len(data) == 0 {
+		return "Sleep: no run on this branch"
+	}
+	st := ledger.SleepStateOf(entries)
+	links, decayed := 0, 0
+	for _, d := range data {
+		links += len(d.Links)
+		decayed += len(d.Decayed)
+	}
+	challenged := len(st.Challenged())
+	last := data[len(data)-1]
+	return fmt.Sprintf("Sleep: %d run%s (latest %s, through %s): %d duplicates hidden, %d links, %d decayed, %d verified, %d retired, %d checks (%d challenged)",
+		len(data), pluralS(len(data)), last.Trigger, last.ThroughEntryID, len(st.Duplicates), links, decayed, len(st.Verified), len(st.Retired), len(st.Checks), challenged)
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // heldLines list the active records and standing reflections held because they weaken security
