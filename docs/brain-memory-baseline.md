@@ -692,6 +692,14 @@ open intention of session A first in session B, not in another project, a one-ti
 never a rule, the writer's model family named for another family) and a forget carried as a core
 tombstone.
 
+**The restatement lift and the citation that never promotes** (branch `claude/core-fixes`, on
+94d5083). `go run ./cmd/memeval` (Tier 0 default) and `-suite all -seeds 20` print every table
+cell for cell as at 94d5083, timings aside (Tier 0b's injected saves still 0 live and 0 promoted).
+`TestCoreRestatementLiftsTombstone` checks that a forgotten rule comes back on the user's own words
+in a later session and never on a file the agent read or a custom message, and that the old
+forget, offered again, leaves it; `TestV2Level1CitationNeverPromotesStagedMemory` that a citation
+alone leaves a staged memory staged.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
