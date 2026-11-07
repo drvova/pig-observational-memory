@@ -80,7 +80,9 @@ memoryFormat, the working-memory limits (global and per model) and rawFloor."
   (passive nil) (consolidate-off nil) (summary-max 0) (memory-format "tables")
   (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil)
   ;; decay: its clock ("" off, "compactions" or "turns") and horizon (0 for the default).
-  (decay "") (decay-horizon 0))
+  (decay "") (decay-horizon 0)
+  ;; The sleep pass's compaction fallback (sleepAfterCompactions, 0 never; sleepMaxRecords).
+  (sleep-after 4) (sleep-max-records 5000))
 
 ;;; config/working.go: working memory's caps, the raw floor and the quality threshold
 
@@ -374,6 +376,41 @@ summary-codec the summary's codec when it is not rows."
 ;; layer's kernel check (src/layer/go-layer.lisp) then admits every definition, as kernel.Floor.Check.
 (defvar *kernel-floor-lowered* nil)
 
+;;; The sleep pass's compaction fallback (hooks/sleep_v2.go)
+
+(defun sleep-structure (h entries)
+  "SleepInput's repository and view answer: (values repo answer), nil without a view."
+  (let ((repo (encoding-repo)))
+    (when (and (hhost-structure h) repo)
+      (let ((q (project-query (folded-active (fold-ledger entries)) repo)))
+        (unless (project-query-empty-p q)
+          (let ((answer (funcall (hhost-structure h) q)))
+            (when answer (values repo answer))))))))
+
+(defun run-sleep (h cfg entries trigger)
+  "RunSleep: one pass over entries appended through the host; the record's branch entry, nil when
+the branch is empty or its tip is a sleep record."
+  (let ((at (sleep-indexes entries)))
+    (when (or (zerop (length entries)) (and at (= (car (last at)) (1- (length entries)))))
+      (return-from run-sleep nil)))
+  (multiple-value-bind (repo answer) (sleep-structure h entries)
+    (let ((data (sleep-pass entries trigger :decay (hconfig-decay cfg) :decay-horizon (hconfig-decay-horizon cfg)
+                                            :repo repo :structure answer)))
+      (when data
+        (funcall (hhost-append h) "om.sleep" data)
+        (synthetic-entry "om-v2-sleep" "om.sleep" data)))))
+
+(defun sleep-fallback (h cfg entries)
+  "sleepFallbackV2: the pass inside a compaction once sleepAfterCompactions compactions passed with
+no sleep record and the ledger is within sleepMaxRecords; entries with its record."
+  (let ((k (hconfig-sleep-after cfg)))
+    (if (or (<= k 0) (< (compactions-since-sleep entries) k)
+            (and (plusp (hconfig-sleep-max-records cfg))
+                 (> (length (folded-active (fold-ledger entries))) (hconfig-sleep-max-records cfg))))
+        entries
+        (let ((e (run-sleep h cfg entries "compaction")))
+          (if e (concatenate 'simple-vector entries (vector e)) entries)))))
+
 (defun build-compaction (h event cfg &key model own-trigger (context-window 0) (max-output 0) level1)
   "buildCompactionV2: a cresult on the event's exact cut, then the branch it folded (level 0's
 batches and level 1's appends after it) and the cut range's source entries. context-window and
@@ -382,7 +419,7 @@ level1, when given, is consolidateV2 (server/level1.lisp): a function of (entrie
 memory-budget) returning (values appended-entries applied-p report-json usage); without it level 1
 is skipped with level1-skip-reason's report."
   (let* ((cut (source-entries (cut-range (cevent-branch event) event)))
-         (entries (extract-cut h event))
+         (entries (sleep-fallback h cfg (extract-cut h event)))
          (previous (previous-summary entries event))
          (removed (+ (source-tokens cut) (estimate-tokens previous)))
          (budget (profile-budget
@@ -420,6 +457,7 @@ is skipped with level1-skip-reason's report."
                                 :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded))
                                 :slots (subseq (limits-for (hconfig-limits cfg) (hconfig-model-limits cfg) model) 0 3)
                                 :freshness (project-texts verdicts)
+                                :hidden (sleep-hidden entries)
                                 :decayed (and (string/= (hconfig-decay cfg) "")
                                               (decayed-records entries observations (hconfig-decay cfg)
                                                                (if (plusp (hconfig-decay-horizon cfg)) (hconfig-decay-horizon cfg) +default-decay-horizon+))))))

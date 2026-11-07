@@ -53,6 +53,8 @@
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")
+                             ;; Phase 7: the sleep pass (memory/sleep).
+                             (:file "sleep")
                              (:file "end-engine")
                              ;; W2: the transcript readers and the neutral store.
                              (:file "readers/common")

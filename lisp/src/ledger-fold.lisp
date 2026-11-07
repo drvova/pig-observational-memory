@@ -67,7 +67,28 @@
   (cited-by (make-set))
   (replaced-by (make-set))
   ;; truth: what truth maintenance took out (ledger-truth.lisp, FoldedLedger.Truth).
-  (truth (make-truth)))
+  (truth (make-truth))
+  ;; challenged: each record a sleep check read, to t when its latest verdict challenged it
+  ;; (FoldedLedger.Challenged; sleep.lisp).
+  (challenged (make-set)))
+
+;;; om.sleep (ledger/sleep.go SleepEntry): version 1, a trigger and a through id.
+
+(defun sleep-data (e)
+  "SleepEntry: the data of a valid om.sleep entry, else nil."
+  (when (and (string= (entry-type e) "custom") (equal (entry-custom-type e) "om.sleep"))
+    (let ((d (entry-data e)))
+      (and (hash-table-p d)
+           (let ((v (jget d "version"))) (and (realp v) (= v 1)))
+           (non-empty-string-p (jget d "trigger"))
+           (non-empty-string-p (jget d "throughEntryId"))
+           (realp (jget d "records"))
+           d))))
+
+(defun sleep-items (d key)
+  "The objects of a sleep record's list key, in order."
+  (let ((v (jget d key)))
+    (if (and (vectorp v) (not (stringp v))) (remove-if-not #'hash-table-p (coerce v 'list)) '())))
 
 (defun fold-end-index (entries up-to)
   (if (string= up-to "")
@@ -116,7 +137,13 @@
                             (tracker-dropped tracker ids covers consolidated))))
                        ((string= type "om.subjects.aliased")
                         (let ((aliases (subjects-aliased-data e)))
-                          (when aliases (setf (folded-aliases f) (append (folded-aliases f) aliases))))))))))
+                          (when aliases (setf (folded-aliases f) (append (folded-aliases f) aliases)))))
+                       ((string= type "om.sleep")
+                        (let ((d (sleep-data e)))
+                          (when d
+                            (dolist (c (sleep-items d "checks"))
+                              (when (stringp (jget c "id"))
+                                (setf (gethash (jget c "id") (folded-challenged f)) (equal (jget c "verdict") "challenged"))))))))))))
     (multiple-value-bind (kept kept-refl truth)
         (maintain-truth (nreverse observations) (folded-dropped f) (tracker-by tracker) (nreverse reflections))
       (setf (folded-observations f) kept
