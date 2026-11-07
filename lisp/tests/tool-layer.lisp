@@ -378,6 +378,12 @@
       (om::check (text "(notes :limit 0)") "Limit(0): a limit is 1 to 200")
       ;; no record has every word: ranked by matched words
       (om::check (text "(mapcar #'note-id (notes :search \"queue bo billing\"))") "(\"aaaaaaaaaaa2\" \"aaaaaaaaaaa1\")")
+      ;; a ranked search tags its results; a plain read does not; a tag filters before the limit
+      (om::check (text "(mapcar #'note-tag (notes :search \"billing\"))") "(\"believed\")")
+      (om::check (text "(note-tag (first (notes)))") "")
+      (om::check (text "(mapcar #'note-id (notes :search \"billing_job\"))") "(\"aaaaaaaaaaa1\")")
+      (om::check (text "(length (notes :status \"superseded\" :search \"billing\"))") "0")
+      (om::check (text "(note-with (first (notes :search \"billing\")))") "nil")
       ;; history leaves out the current turn, newest first
       (om::check (text "(mapcar #'turn-id (history))") "(\"u2\" \"a1\" \"u1\")")
       (om::check (text "(mapcar #'turn-id (history :search \"usd\"))") "(\"a1\" \"u1\")")

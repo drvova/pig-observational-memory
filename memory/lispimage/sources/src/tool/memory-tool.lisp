@@ -19,9 +19,13 @@ Functions you define with defun last for the call only.
 
 ── Reads ──
 (notes &key search kind status subject since until from through limit)
-  The active records, oldest first. search: a string or a list of strings, every word must
-  appear (case-insensitive, over every field); when no record holds every word, the records
-  holding any are ranked instead. since/until: YYYY-MM-DD. from/through: an entry or record id
+  The active records, oldest first. search: a string or a list of strings; a record matches on
+  an exact key (a path, symbol, test, error line, version or SHA, byte for byte) or when it holds
+  every word (case-insensitive, over every field, or through identifier parts: parse_config finds
+  parseConfig), and the matches are ranked: current before superseded or retracted, exact hits
+  first, then by relevance, newest first; when no record matches, the records holding any word
+  are ranked, most words first. status: proposed, hypothetical or retracted, or a tag: believed,
+  superseded, contested or held. since/until: YYYY-MM-DD. from/through: an entry or record id
   (branch position). limit: 1 to 200, 20 by default.
 (note-by-id id)                 One record by id, dropped ones included.
 (history &key search limit)     User, assistant and tool text, newest first, without the current turn.
@@ -33,6 +37,7 @@ Functions you define with defun last for the call only.
 note-id note-when note-kind note-subject note-scope note-relevance note-content note-status
 note-event-date note-origin note-outcome note-tool note-target note-source note-anchor
 note-superseded-by (the ids of the records that replaced it) note-line (the record as one line)
+note-tag note-with (a search result's status tag and the records merged into it)
 turn-id turn-when turn-role turn-text
 memory-name memory-type memory-description memory-body
 

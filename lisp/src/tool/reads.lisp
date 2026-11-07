@@ -21,7 +21,9 @@
 (defstruct note
   (id "") (when "") (kind "") (subject "") (scope "") (relevance "") (content "") (status "")
   (event-date "") (origin "") (outcome "") (tool "") (target "") (source "") (anchor "")
-  (superseded-by '()))
+  (superseded-by '())
+  ;; A ranked search's status tag and the records merged into the result (om.Note.Tag, With).
+  (tag "") (with '()))
 
 (defstruct turn (id "") (when "") (role "") (text ""))
 
@@ -34,7 +36,7 @@
      (defun ,(find-symbol (format nil "~A-P" struct) "OM.TOOL") (x)
        (,(intern (format nil "~A-P" struct) "OM.LAYER") x))))
 
-(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by)
+(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by tag with)
 (export-readers turn id when role text)
 
 (defun om.tool:memory-name (m) (mem-name m))
@@ -79,9 +81,10 @@
 
 (define-adaptable om.engine::rank-notes (notes words) (:check #'permutation-check)
   "Orders the notes a search ranks when no note has every searched word: each holds at least
-one. The default is omhost's rankBySearch: most distinct searched words first, ties in ledger
-order. The kernel's check: the result holds every candidate exactly once."
-  (stable-sort (copy-list notes) #'> :key (lambda (n) (word-score (note-haystack n) words))))
+one, and they come in the search's order (om.engine::retrieval-search: most searched words first,
+then its ranking). The default keeps that order, as omhost does. The kernel's check: the result
+holds every candidate exactly once."
+  (progn words (copy-list notes)))
 
 (defun phrase-check (line note)
   (cond ((not (stringp line)) "the line is not a string")
@@ -163,29 +166,68 @@ content."
         (when ok (return-from bound-position at)))))
   (tool-fail "entry ~A is not on this branch: take entry ids from history or from a summary line on this branch" id))
 
+(defun tag-filter-p (status)
+  "A status option naming a search tag rather than a record status (retracted is both)."
+  (and status (member status '("believed" "superseded" "contested" "held") :test #'string=)))
+
 (defun om.tool:notes (&key search kind status subject since until from through limit)
-  "The active folded records, oldest first, filtered: search (every word, case-insensitive,
-over every field), kind, status, subject, since and until (YYYY-MM-DD), from and through (an
-entry or record id: the records anchored at or after, at or before its branch position). A
-search no record matches with every word ranks the records holding any of its words instead
-(rank-notes). At most limit (1 to 200, 20 when not given)."
+  "The active folded records, oldest first, filtered: kind, status (a record status, or a tag:
+believed, superseded, contested or held), subject, since and until (YYYY-MM-DD), from and through
+(an entry or record id: the records anchored at or after, at or before its branch position).
+search ranks what those filters leave (docs/protocol.md, \"Retrieval\"; om.engine::retrieval-search):
+a record matches on an exact key (path, symbol, test, error line, version or SHA, byte for byte)
+or when it holds every word, as a substring or through identifier parts; current records before
+superseded or retracted ones, exact hits first, then by relevance, newest first; each result
+carries its note-tag and the contiguous records of its episode or source entry it merged
+(note-with). A search no record matches ranks the records holding any of its words, most first
+(rank-notes). At most limit (1 to 200, 20 when not given) results."
   (let* ((n (limit-of limit))
-         (all (all-notes))
-         (kept (filter-notes all :search search :kind kind :status status :subject subject :since since :until until)))
-    (when (and (null kept) search)
-      (let* ((words (search-words (as-list search)))
-             (candidates (remove-if-not (lambda (x) (plusp (word-score (note-haystack x) words)))
-                                        (filter-notes all :kind kind :status status :subject subject :since since :until until))))
-        (when candidates (setf kept (om.engine::rank-notes candidates words)))))
+         (entries (branch)) (positions (om::entry-index-by-id entries)) (folded (om::fold-ledger entries))
+         (superseded (superseded-by-map folded))
+         (retracted (om::retracted-ids (om::folded-observations folded)))
+         (active (om::folded-active folded))
+         (contested (om::contested active))
+         (pairs (mapcar (lambda (o)
+                          (let ((note (note-of o positions superseded)))
+                            (setf (note-tag note)
+                                  (om::tag-of o (and (note-superseded-by note) t) (gethash (om::obs-id o) retracted)
+                                              (nth-value 1 (gethash (om::obs-id o) contested))))
+                            (cons note o)))
+                        active))
+         (by-tag (tag-filter-p status))
+         (kept-notes (filter-notes (mapcar #'car pairs) :kind kind :status (if by-tag nil status)
+                                   :subject subject :since since :until until)))
+    (when by-tag
+      (setf kept-notes (remove-if-not (lambda (x) (string= (note-tag x) status)) kept-notes)))
     (when (or from through)
-      (let* ((entries (branch)) (positions (om::entry-index-by-id entries)) (folded (om::fold-ledger entries))
-             (lo (and from (bound-position from folded positions)))
+      (let* ((lo (and from (bound-position from folded positions)))
              (hi (and through (bound-position through folded positions))))
-        (setf kept (remove-if-not (lambda (x)
-                                    (multiple-value-bind (pos ok) (gethash (note-anchor x) positions)
-                                      (and ok (or (null lo) (>= pos lo)) (or (null hi) (<= pos hi)))))
-                                  kept))))
-    (subseq kept 0 (min n (length kept)))))
+        (setf kept-notes (remove-if-not (lambda (x)
+                                          (multiple-value-bind (pos ok) (gethash (note-anchor x) positions)
+                                            (and ok (or (null lo) (>= pos lo)) (or (null hi) (<= pos hi)))))
+                                        kept-notes))))
+    (let ((searches (as-list search)))
+      (if (null searches)
+          (progn (dolist (x kept-notes) (setf (note-tag x) ""))
+                 (subseq kept-notes 0 (min n (length kept-notes))))
+          (let* ((records (let ((h (make-hash-table :test 'eq)))
+                            (dolist (p pairs h) (setf (gethash (car p) h) (cdr p)))))
+                 (pool (map 'vector (lambda (x)
+                                      (om::doc-of (gethash x records) (note-content x) (note-tag x)
+                                                  :hay (note-haystack x)))
+                            kept-notes))
+                 (notes (coerce kept-notes 'vector)))
+            (multiple-value-bind (results partial) (om::retrieval-search pool searches)
+              (let ((heads (mapcar (lambda (r)
+                                     (destructuring-bind (hit exact with) r
+                                       (declare (ignore exact))
+                                       (let ((head (copy-note (aref notes hit))))
+                                         (setf (note-with head) (mapcar (lambda (i) (aref notes i)) with))
+                                         head)))
+                                   results)))
+                (when partial
+                  (setf heads (om.engine::rank-notes heads (search-words searches))))
+                (subseq heads 0 (min n (length heads))))))))))
 
 (defun om.tool:note-by-id (id)
   "One record by id, dropped ones included."
