@@ -91,6 +91,14 @@ type State struct {
 	byID  map[string]*Item
 	// Tombstoned are the tombstoned ids (items and records), with the generation of the forget.
 	Tombstoned map[string]int
+	// ForgotAt is the time of the forget that set each tombstone (its line's time, which a
+	// forget record's line takes from the request, ForgetLine): a restatement lifts the
+	// tombstone only when said after it (Restates).
+	ForgotAt map[string]string
+	// Lifted are the item ids a restatement lifted (ViaRestated), with the lifting generation,
+	// until a new forget tombstones them again; a forget the log already holds, written again,
+	// never re-tombstones one (ForgetDue, the fold).
+	Lifted map[string]int
 	// Torn counts the lines no reader decodes.
 	Torn int
 }
@@ -100,6 +108,20 @@ func (s *State) Item(id string) *Item { return s.byID[id] }
 
 // Forgotten reports whether a tombstone names id.
 func (s *State) Forgotten(id string) bool { _, ok := s.Tombstoned[id]; return ok }
+
+// WasLifted reports whether a restatement lifted id's tombstone and no new forget set it again.
+func (s *State) WasLifted(id string) bool { _, ok := s.Lifted[id]; return ok }
+
+// ForgetDue reports whether forget line f, as a session offers it again at each compaction
+// (hooks.promoteCoreV2), adds a tombstone: a forget the log does not hold yet always does; one it
+// holds (its id a tombstone) only for an id neither tombstoned nor lifted by a restatement since,
+// so the old forget's repetition never undoes the user's restatement.
+func (s *State) ForgetDue(f Line) bool {
+	if !s.Forgotten(f.ID) {
+		return true
+	}
+	return slices.ContainsFunc(f.Tombstones, func(id string) bool { return !s.Forgotten(id) && !s.WasLifted(id) })
+}
 
 // LiveByKey is the live items of kind, scope and key (NormKey), in birth order.
 func (s *State) LiveByKey(kind, scope, key string) []*Item {
@@ -182,7 +204,7 @@ func tornGen(line []byte) int {
 // log's lines, still bound the next generation from below: a torn last line never has its
 // generation used again (scenario 16).
 func Fold(data []byte, through int) State {
-	st := State{byID: map[string]*Item{}, Tombstoned: map[string]int{}}
+	st := State{byID: map[string]*Item{}, Tombstoned: map[string]int{}, ForgotAt: map[string]string{}, Lifted: map[string]int{}}
 	lines, highest := 0, 0
 	for _, raw := range bytes.Split(data, []byte("\n")) {
 		if len(bytes.TrimSpace(raw)) == 0 {
@@ -212,8 +234,22 @@ func (st *State) apply(line Line) {
 		writer = *line.Writer
 	}
 	add := func(status string) *Item {
-		if st.Forgotten(line.ID) || (line.Record != "" && st.Forgotten(line.Record)) {
+		if line.Record != "" && st.Forgotten(line.Record) {
 			return nil
+		}
+		if st.Forgotten(line.ID) {
+			if line.Via != ViaRestated || line.Record == "" {
+				return nil
+			}
+			// A restatement lifts the tombstone its id names: the forgotten item leaves the fold
+			// and the restated one is born of this line's own text.
+			delete(st.Tombstoned, line.ID)
+			delete(st.ForgotAt, line.ID)
+			st.Lifted[line.ID] = line.Gen
+			if old := st.byID[line.ID]; old != nil {
+				delete(st.byID, line.ID)
+				st.Items = slices.DeleteFunc(st.Items, func(it *Item) bool { return it == old })
+			}
 		}
 		if it := st.byID[line.ID]; it != nil {
 			for _, r := range line.Roots {
@@ -262,19 +298,24 @@ func (st *State) apply(line Line) {
 			it.Status = StatusContested
 		}
 	case OpForget:
+		// A forget the log already holds (its id a tombstone), written again, never re-tombstones
+		// what a restatement lifted since; a new forget does.
+		repeat := st.Forgotten(line.ID)
 		for _, id := range append([]string{line.ID}, line.Tombstones...) {
-			if id == "" {
+			if id == "" || repeat && st.WasLifted(id) {
 				continue
 			}
 			if _, on := st.Tombstoned[id]; !on {
-				st.Tombstoned[id] = line.Gen
+				st.Tombstoned[id], st.ForgotAt[id] = line.Gen, line.Time
+				delete(st.Lifted, id)
 			}
 		}
 		for _, it := range st.Items {
 			if st.Forgotten(it.ID) || (it.Record != "" && st.Forgotten(it.Record)) {
 				it.Status, it.Text, it.Gen = StatusForgotten, "", line.Gen
 				if _, on := st.Tombstoned[it.ID]; !on {
-					st.Tombstoned[it.ID] = line.Gen
+					st.Tombstoned[it.ID], st.ForgotAt[it.ID] = line.Gen, line.Time
+					delete(st.Lifted, it.ID)
 				}
 				for _, w := range it.With {
 					if other := st.byID[w]; other != nil && other.Status == StatusContested {
@@ -303,7 +344,8 @@ func Encode(line Line) ([]byte, error) {
 }
 
 // Commit runs decide on the log as it stands, under the one-writer lock: each line decide emits
-// is numbered from the next generation, stamped with the time, appended and folded at once, so
+// is numbered from the next generation, stamped with the time (unless it carries one: a forget
+// record's line carries its request's, ForgetLine), appended and folded at once, so
 // the next decision reads it. What one writer decides is always decided against the newest
 // state, so a second writer's change is re-evaluated, never overwritten unseen. It returns the
 // lines written, as stored.
@@ -320,7 +362,9 @@ func (l Log) Commit(decide func(st *State, emit func(Line))) ([]Line, error) {
 				return
 			}
 			line.Gen = st.Next
-			line.Time = l.now()
+			if line.Time == "" {
+				line.Time = l.now()
+			}
 			raw, err := Encode(line)
 			if err == nil {
 				_, err = jsonl.Append(l.path(), raw)

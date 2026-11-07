@@ -2,7 +2,6 @@ package hooks
 
 import (
 	"context"
-	"slices"
 
 	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/debuglog"
@@ -31,7 +30,8 @@ func CoreSession(log core.Log, h host.Host, repoID string) core.Session {
 }
 
 // promoteCoreV2 offers the ledger's candidates (core.Candidates) to the core and appends a forget
-// line for each project or user forget record it does not hold yet.
+// line for each project or user forget record it does not hold yet (core.State.ForgetDue, which
+// never re-offers what a restatement lifted).
 func promoteCoreV2(ctx context.Context, rt *runtime.Runtime, h host.Host, entries []ledger.Entry) {
 	store, on := harness.StoreOf(h, rt.Config())
 	if !on {
@@ -77,7 +77,7 @@ func promoteCoreV2(ctx context.Context, rt *runtime.Runtime, h host.Host, entrie
 	verdicts := make([]string, len(cands))
 	lines, err := log.Commit(func(st *core.State, emit func(core.Line)) {
 		for _, f := range forgets {
-			if !st.Forgotten(f.ID) || slices.ContainsFunc(f.Tombstones, func(id string) bool { return !st.Forgotten(id) }) {
+			if st.ForgetDue(f) {
 				emit(f)
 			}
 		}

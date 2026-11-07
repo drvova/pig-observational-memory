@@ -169,7 +169,8 @@
   (writer-model "") (writer-session "") (born 0) (gen 0) (status "") (with '()) (replaced-by ""))
 
 (defstruct cstate (gen 0) (next 1) (items '()) (by-id (make-hash-table :test 'equal))
-  (tombstoned (make-hash-table :test 'equal)) (torn 0))
+  (tombstoned (make-hash-table :test 'equal)) (forgot-at (make-hash-table :test 'equal))
+  (lifted (make-hash-table :test 'equal)) (torn 0))
 
 (defparameter +core-ops+ '("promote" "supersede" "contest" "forget" "scope"))
 
@@ -178,6 +179,16 @@
 (defun core-forgotten-p (st id) (nth-value 1 (gethash id (cstate-tombstoned st))))
 
 (defun core-item (st id) (gethash id (cstate-by-id st)))
+
+(defun core-lifted-p (st id)
+  "State.WasLifted: a restatement lifted id's tombstone and no new forget set it again."
+  (nth-value 1 (gethash id (cstate-lifted st))))
+
+(defun core-forget-due-p (st f)
+  "State.ForgetDue: forget line f, offered again, adds a tombstone: a forget the log does not hold
+yet always does; one it holds only for an id neither tombstoned nor lifted by a restatement since."
+  (or (not (core-forgotten-p st (cline-id f)))
+      (some (lambda (id) (not (or (core-forgotten-p st id) (core-lifted-p st id)))) (cline-tombstones f))))
 
 (defun live-by-key (st kind scope key)
   (remove-if-not (lambda (it) (and (citem-live-p it) (string= (citem-kind it) kind) (string= (citem-scope it) scope)
@@ -248,9 +259,20 @@ is no line (generation 0 or less, an unknown op)."
 (defun core-apply (st line)
   (setf (cstate-gen st) (max (cstate-gen st) (cline-gen line)))
   (flet ((add (status)
-           (when (or (core-forgotten-p st (cline-id line))
-                     (and (string/= (cline-record line) "") (core-forgotten-p st (cline-record line))))
+           (when (and (string/= (cline-record line) "") (core-forgotten-p st (cline-record line)))
              (return-from add nil))
+           (when (core-forgotten-p st (cline-id line))
+             (when (or (string/= (cline-via line) "restated") (string= (cline-record line) ""))
+               (return-from add nil))
+             ;; A restatement lifts the tombstone its id names: the forgotten item leaves the fold
+             ;; and the restated one is born of this line's own text.
+             (remhash (cline-id line) (cstate-tombstoned st))
+             (remhash (cline-id line) (cstate-forgot-at st))
+             (setf (gethash (cline-id line) (cstate-lifted st)) (cline-gen line))
+             (let ((old (core-item st (cline-id line))))
+               (when old
+                 (remhash (cline-id line) (cstate-by-id st))
+                 (setf (cstate-items st) (remove old (cstate-items st) :test #'eq)))))
            (let ((it (core-item st (cline-id line))))
              (if it
                  (progn
@@ -285,15 +307,22 @@ is no line (generation 0 or less, an unknown op)."
                (setf (citem-with it) (append (citem-with it) (list (citem-id old)))))
              (setf (citem-status it) "contested"))))
         ((string= op "forget")
-         (dolist (id (cons (cline-id line) (cline-tombstones line)))
-           (when (and (string/= id "") (not (core-forgotten-p st id)))
-             (setf (gethash id (cstate-tombstoned st)) (cline-gen line))))
+         ;; A forget the log already holds, written again, never re-tombstones what a
+         ;; restatement lifted since; a new forget does.
+         (let ((repeat (core-forgotten-p st (cline-id line))))
+           (dolist (id (cons (cline-id line) (cline-tombstones line)))
+             (when (and (string/= id "") (not (and repeat (core-lifted-p st id))) (not (core-forgotten-p st id)))
+               (setf (gethash id (cstate-tombstoned st)) (cline-gen line)
+                     (gethash id (cstate-forgot-at st)) (cline-time line))
+               (remhash id (cstate-lifted st)))))
          (dolist (it (cstate-items st))
            (when (or (core-forgotten-p st (citem-id it))
                      (and (string/= (citem-record it) "") (core-forgotten-p st (citem-record it))))
              (setf (citem-status it) "forgotten" (citem-text it) "" (citem-gen it) (cline-gen line))
              (unless (core-forgotten-p st (citem-id it))
-               (setf (gethash (citem-id it) (cstate-tombstoned st)) (cline-gen line)))
+               (setf (gethash (citem-id it) (cstate-tombstoned st)) (cline-gen line)
+                     (gethash (citem-id it) (cstate-forgot-at st)) (cline-time line))
+               (remhash (citem-id it) (cstate-lifted st)))
              (uncontest st it))))
         ((string= op "scope")
          (let ((it (core-item st (cline-id line))))
@@ -349,8 +378,9 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
         (funcall decide st
                  (lambda (line)
                    (let ((line (copy-cline line)))
-                     (setf (cline-gen line) (cstate-next st)
-                           (cline-time line) (format-rfc3339 (now)))
+                     (setf (cline-gen line) (cstate-next st))
+                     (when (string= (cline-time line) "")
+                       (setf (cline-time line) (format-rfc3339 (now))))
                      (append-line (core-log-path core-dir) (encode-cline line))
                      (setf (cline-text line) (om::redact-secrets (cline-text line))
                            (cline-key line) (om::redact-secrets (cline-key line)))
@@ -394,7 +424,16 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
 ;;; The gate
 
 (defstruct ccand (kind "") (key "") (text "") (scope "") (via "") (roots '()) (tool-only nil) (one-time nil)
-  (record "") (writer-model "") (writer-session "") (base 0))
+  (record "") (said "") (writer-model "") (writer-session "") (base 0))
+
+(defun core-restates-p (st id c)
+  "core.Restates: candidate c lifts the tombstone on id: the user's words from a fresh record of
+the words the person typed, said after the forget that set it (parse-timestamp, to the millisecond)."
+  (and (string= (ccand-via c) "quote") (string/= (ccand-said c) "") (string/= (ccand-record c) "")
+       (not (ccand-tool-only c)) (not (ccand-one-time c)) (not (core-forgotten-p st (ccand-record c)))
+       (let ((said (om::parse-timestamp (ccand-said c)))
+             (forgot (om::parse-timestamp (or (gethash id (cstate-forgot-at st)) ""))))
+         (and said forgot (> said forgot)))))
 
 (defun unique-roots (roots)
   (let ((out '()))
@@ -410,9 +449,11 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
   (let* ((key (let ((k (norm-key (ccand-key c)))) (if (string= k "") (norm-key (ccand-text c)) k)))
          (id (item-id (ccand-kind c) (ccand-scope c) key (ccand-text c)))
          (roots (unique-roots (ccand-roots c))))
-    (when (or (core-forgotten-p st id) (and (string/= (ccand-record c) "") (core-forgotten-p st (ccand-record c))))
+    (when (or (and (string/= (ccand-record c) "") (core-forgotten-p st (ccand-record c)))
+              (and (core-forgotten-p st id) (not (core-restates-p st id c))))
       (return-from core-decide (values nil "refused: forgotten")))
-    (let ((line (make-cline :id id :kind (ccand-kind c) :key key :text (ccand-text c) :scope (ccand-scope c) :roots roots
+    (let ((lifts (core-forgotten-p st id))
+          (line (make-cline :id id :kind (ccand-kind c) :key key :text (ccand-text c) :scope (ccand-scope c) :roots roots
                             :record (ccand-record c) :base (ccand-base c) :writer-model (ccand-writer-model c)
                             :writer-session (ccand-writer-session c)))
           (it (core-item st id)))
@@ -421,19 +462,19 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
           (unless added (return-from core-decide (values nil "same")))
           (setf (cline-op line) "promote" (cline-via line) "fast" (cline-roots line) added (cline-record line) "")
           (return-from core-decide (values line "fast"))))
-      (let ((via (ccand-via c)))
+      (let ((via (if lifts "restated" (ccand-via c))))
         (when (and (string= via "") (>= (length roots) 2)) (setf via "roots"))
         (when (string= via "") (return-from core-decide (values nil "pending")))
         (setf (cline-via line) via)
         (let ((live (live-by-key st (ccand-kind c) (ccand-scope c) key)))
           (unless live
             (setf (cline-op line) "promote")
-            (return-from core-decide (values line "promote")))
+            (return-from core-decide (values line (if lifts "lift" "promote"))))
           (let* ((newest (car (last live)))
                  (seen (or (>= (ccand-base c) (citem-gen newest))
                            (and (string/= (ccand-writer-session c) "") (string= (citem-writer-session newest) (ccand-writer-session c))))))
             (setf (cline-of line) (citem-id newest))
-            (if (and (member via '("quote" "edit") :test #'string=) seen)
+            (if (and (member via '("quote" "edit" "restated") :test #'string=) seen)
                 (progn (setf (cline-op line) "supersede") (values line "supersede"))
                 (progn (setf (cline-op line) "contest") (values line "contest")))))))))
 
@@ -461,6 +502,17 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
 (defun untrusted-source-p (o)
   (member (om::obs-source o) '("tool-observed" "other-session" "external-untrusted" "host-summary") :test #'string=))
 
+(defun restating-p (o)
+  "core.Restating: a level-0 record of the words the person typed that restates as the pushback
+contest reads a restatement (restater-p, restates-claim-p of itself)."
+  (and (string= (om::obs-origin o) "code") (string= (om::obs-source o) "user-said") (om::obs-source-ids o)
+       (om::restater-p o) (om::restates-claim-p o o)))
+
+(defun forget-time (stamp)
+  "core.forgetTime: a forget record's time, RFC 3339 UTC whole seconds, \"\" when unreadable."
+  (let ((ms (and (stringp stamp) (om::parse-timestamp stamp))))
+    (if ms (format-rfc3339 (cons (* ms 1000000) 0)) "")))
+
 (defun core-candidates (records labels closed scope writer-model writer-session base one-time-p)
   "core.Candidates: records (obs), labels an id -> label table, closed a list of ids."
   (let ((by-id (make-hash-table :test 'equal)) (out '()))
@@ -484,6 +536,8 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
                        t))
             (when (and (string= (ccand-via c) "quote") (om::obs-source-ids o))
               (setf (ccand-roots c) (list (user-root (first (om::obs-source-ids o)) (om::obs-content o)))))
+            (when (and (string= (ccand-via c) "quote") (restating-p o))
+              (setf (ccand-said c) (om::obs-timestamp o)))
             (setf (ccand-scope c) (record-core-scope o by-id scope))
             (when (and one-time-p (funcall one-time-p (om::obs-content o))) (setf (ccand-one-time c) t))
             (push c out)))))))
@@ -506,7 +560,8 @@ each emitted line is numbered, stamped, appended and folded at once. The lines w
             (add (item-id "intention" s (norm-key (om::obs-content o)) (om::obs-content o)))))))
     (if ids
         (values (make-cline :op "forget" :id (om::obs-id forget) :scope (car (last scopes)) :tombstones ids :base base
-                            :writer-model writer-model :writer-session writer-session)
+                            :writer-model writer-model :writer-session writer-session
+                            :time (forget-time (om::obs-timestamp forget)))
                 t)
         (values nil nil))))
 

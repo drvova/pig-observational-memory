@@ -602,7 +602,8 @@ const (
 	// EventStaged is a save that staged a memory's name and description in one more session
 	// (memory v2).
 	EventStaged = "staged"
-	// EventCited is a level-1 citation of a memory (memory v2): evidence for a staged one.
+	// EventCited is a level-1 citation of a memory (memory v2), recorded as its use: never
+	// promotion evidence (decision 7).
 	EventCited = "cited"
 	// EventCorrected is a level-0 user correction whose subject matches the memory (memory
 	// v2): it ranks the memory lower and flags it until the memory is edited.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,6 +47,13 @@ type ForgetCase struct {
 	OK        bool                 `json:"ok"`
 }
 
+// DueCase is whether a forget line, offered again, is due on a script's final state
+// (State.ForgetDue).
+type DueCase struct {
+	Line Line `json:"line"`
+	Due  bool `json:"due"`
+}
+
 // SessionCase is core.Session without the one-time test (both engines use their own, the same
 // pattern: extract.IsOneTime, +rule-one-time+).
 type SessionCase struct {
@@ -82,6 +90,8 @@ type Case struct {
 	Items    []map[string]any `json:"items,omitempty"`
 	Sections []SectionCase    `json:"sections,omitempty"`
 	Status   []StatusCase     `json:"status,omitempty"`
+	// ForgetDue are forget lines offered again on the script's final state.
+	ForgetDue []DueCase `json:"forgetDue,omitempty"`
 	// Candidates from a ledger.
 	Records    []ledger.Observation `json:"records,omitempty"`
 	Labels     map[string]string    `json:"labels,omitempty"`
@@ -276,6 +286,67 @@ func coreCases(t *testing.T) []Case {
 	runScript(t, &script, views, []string{"s1", "s2", "s3"})
 	cases = append(cases, script)
 
+	// A user's fresh restatement lifts a tombstone; nothing else does, and the old forget's
+	// repetition never undoes it.
+	rule := "Never push to `main`."
+	ruleID := ItemID(KindRule, proj, "pushing", rule)
+	planText := "Next we will add the 3 timings to `api/limit.go`."
+	planID := ItemID(KindIntention, proj, NormKey(planText), planText)
+	restate := func(record, said string, mod func(*Candidate)) Candidate {
+		c := Candidate{Kind: KindRule, Key: "pushing", Text: rule, Scope: proj, Via: ViaQuote, Record: record, Said: said, Writer: claude}
+		if mod != nil {
+			mod(&c)
+		}
+		return c
+	}
+	first := Line{Op: OpForget, ID: "00000000005f", Tombstones: []string{"00000000005a", ruleID, "00000000005b"}, Scope: proj, Base: 2, Writer: &gpt, Time: "2026-11-02T10:00:00Z"}
+	second := Line{Op: OpForget, ID: "00000000009f", Tombstones: []string{ruleID}, Scope: proj, Base: 6, Writer: &gpt, Time: "2026-11-04T10:00:00Z"}
+	lift := Case{Name: "a user's restatement lifts a tombstone", Steps: []Step{
+		{Op: "promote", Candidates: []Candidate{
+			{Kind: KindRule, Key: "pushing", Text: rule, Scope: proj, Via: ViaQuote, Record: "00000000005a", Said: "2026-11-01T10:00:00.000Z", Roots: []string{"u1"}, Writer: gpt},
+			{Kind: KindIntention, Text: planText, Scope: proj, Via: ViaQuote, Record: "00000000005b", Said: "2026-11-01T10:05:00.000Z", Writer: gpt},
+		}},
+		{Op: "commit", Lines: []Line{first}},
+		{Op: "promote", Candidates: []Candidate{
+			// The forgotten record itself, a write with no user's words of its own (level 1, a
+			// model's), tool output, words said before the forget, a plan under a request, words
+			// in the forget's own second and an unreadable time: none lifts.
+			restate("00000000005a", "2026-11-03T10:00:00.000Z", nil),
+			restate("00000000006a", "", nil),
+			restate("00000000006b", "2026-11-03T10:00:00.000Z", func(c *Candidate) { c.ToolOnly = true }),
+			restate("00000000006c", "2026-11-01T12:00:00.000Z", nil),
+			restate("00000000006d", "2026-11-03T10:00:00.000Z", func(c *Candidate) { c.Via = ViaRequest }),
+			restate("00000000006e", "2026-11-02T10:00:00.000Z", nil),
+			restate("00000000006f", "yesterday", nil),
+			// The user's own fresh words do; the same again is the same item.
+			restate("00000000007a", "2026-11-03T10:00:00.000Z", func(c *Candidate) { c.Roots = []string{"u7"} }),
+			restate("00000000007b", "2026-11-03T11:00:00.000+01:00", nil),
+			{Kind: KindIntention, Text: planText, Scope: proj, Via: ViaQuote, Record: "00000000007c", Said: "2026-11-03T10:30:00.000Z", Writer: claude},
+		}},
+		// The old forget written again re-tombstones nothing a restatement lifted.
+		{Op: "commit", Lines: []Line{first}},
+		{Op: "pull", Session: "s2"},
+		// A new forget does, and only words said after it lift it again.
+		{Op: "commit", Lines: []Line{second}},
+		{Op: "promote", Candidates: []Candidate{
+			restate("00000000009a", "2026-11-03T12:00:00.000Z", nil),
+			restate("00000000009b", "2026-11-05T10:00:00.000Z", func(c *Candidate) { c.Base = 6 }),
+		}},
+	}}
+	runScript(t, &lift, []SectionCase{{Scopes: []string{ScopeUser, proj}, Model: "anthropic/claude-sonnet-5"}}, []string{"s2"})
+	final := Fold([]byte(lift.Log), -1)
+	fresh := first
+	fresh.Tombstones = append(append([]string{}, first.Tombstones...), "0000000000aa")
+	other := second
+	other.ID = "0000000000af"
+	for _, f := range []Line{first, second, fresh, other} {
+		lift.ForgetDue = append(lift.ForgetDue, DueCase{Line: f, Due: final.ForgetDue(f)})
+	}
+	if !final.Forgotten("00000000005a") || final.Forgotten(ruleID) || final.Forgotten(planID) || !final.WasLifted(ruleID) {
+		t.Fatalf("tombstones %v, lifted %v", final.Tombstoned, final.Lifted)
+	}
+	cases = append(cases, lift)
+
 	// Candidates from a ledger fold.
 	session := SessionCase{Scope: proj, Writer: Writer{Model: "eval/session", Session: "s1"}, Base: 3}
 	recs := []ledger.Observation{
@@ -293,6 +364,14 @@ func coreCases(t *testing.T) []Case {
 		{ID: "00000000002f", Content: "Use tabs everywhere.", Kind: "preference", Source: ledger.SourceUserSaid, Scope: ScopeUser, SourceEntryIDs: []string{"u8"}},
 		{ID: "00000000003a", Content: "The API is at port 8080.", Kind: "fact", Source: ledger.SourceUserSaid, SourceEntryIDs: []string{"u9"}},
 		{ID: "00000000003b", Content: "Maybe use tabs?", Kind: "preference", Status: ledger.StatusHypothetical, Source: ledger.SourceUserSaid},
+		// Records that may restate a forgotten item (Restating) carry when they were said: level
+		// 0's of the user's own words, with keys or specifics, not giving in.
+		{ID: "00000000005c", Content: "Always run `make lint` before a push.", Kind: "preference", Source: ledger.SourceUserSaid, Origin: ledger.OriginCode, SourceEntryIDs: []string{"u10"}, Subject: "lint"},
+		{ID: "00000000005d", Content: "You're right, always run `make lint`.", Kind: "preference", Source: ledger.SourceUserSaid, Origin: ledger.OriginCode, SourceEntryIDs: []string{"u11"}, Subject: "lint"},
+		{ID: "00000000005e", Content: "Keep things tidy.", Kind: "preference", Source: ledger.SourceUserSaid, Origin: ledger.OriginCode, SourceEntryIDs: []string{"u12"}},
+		{ID: "00000000005f", Content: "Next we will run `make bench` on Friday.", Kind: "fact", Status: ledger.StatusProposed, Source: ledger.SourceUserSaid, Origin: ledger.OriginCode, SourceEntryIDs: []string{"u13"}},
+		{ID: "00000000006a", Content: "I'll rerun `make bench` after that.", Kind: "fact", Status: ledger.StatusProposed, Source: ledger.SourceAssistantClaim, Origin: ledger.OriginCode, DerivedFrom: "u13", SourceEntryIDs: []string{"a13"}},
+		{ID: "00000000006b", Content: "Never edit `vendor/` by hand.", Kind: "preference", Source: ledger.SourceToolObserved, Origin: ledger.OriginCode, SourceEntryIDs: []string{"t14"}},
 	}
 	for i := range recs {
 		recs[i] = valid(t, recs[i])
@@ -360,6 +439,23 @@ func TestCoreContractCases(t *testing.T) {
 	}
 	if c.Torn != 0 || c.Next != c.Gen+1 {
 		t.Fatalf("%+v", c)
+	}
+	c = byName["a user's restatement lifts a tombstone"]
+	wantV := [][]string{{VerdictPromote, VerdictPromote},
+		{VerdictForgotten, VerdictForgotten, VerdictTool, VerdictForgotten, VerdictForgotten, VerdictForgotten, VerdictForgotten, VerdictLift, VerdictSame, VerdictLift},
+		{VerdictForgotten, VerdictLift}}
+	if fmt.Sprint(c.Verdicts) != fmt.Sprint(wantV) {
+		t.Fatalf("restatement verdicts %v", c.Verdicts)
+	}
+	if len(c.ForgetDue) != 4 || c.ForgetDue[0].Due || c.ForgetDue[1].Due || !c.ForgetDue[2].Due || !c.ForgetDue[3].Due {
+		t.Fatalf("forget due %+v", c.ForgetDue)
+	}
+	said := map[string]string{}
+	for _, cand := range byName["candidates from a ledger"].Candidates {
+		said[cand.Record] = cand.Said
+	}
+	if said["00000000005c"] == "" || said["00000000005f"] == "" || said["00000000005d"] != "" || said["00000000005e"] != "" || said["00000000006a"] != "" || said["00000000006b"] != "" || said["00000000001a"] != "" {
+		t.Fatalf("said %v", said)
 	}
 	var b bytes.Buffer
 	for _, c := range cases {

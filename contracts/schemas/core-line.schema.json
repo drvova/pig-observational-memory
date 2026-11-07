@@ -14,10 +14,10 @@
     "key": { "description": "What items are matched by (core.NormKey): a rule's subject, a curated memory's name, else the text.", "type": "string" },
     "text": { "description": "The item's text, redacted (contracts/secrets.md); a lesson's stripped of its values.", "type": "string" },
     "scope": { "description": "user, global, or project:<repoId, else work-tree root>.", "type": "string" },
-    "via": { "description": "The evidence: quote (the user's words), request (a plan under a request the person typed), roots (two evidence roots), fast (the same item with new roots), projects (a lesson seen in two projects), edit (a shared curated edit).", "enum": ["quote", "request", "roots", "fast", "projects", "edit"] },
+    "via": { "description": "The evidence: quote (the user's words), request (a plan under a request the person typed), roots (two evidence roots), fast (the same item with new roots), projects (a lesson seen in two projects), edit (a shared curated edit), restated (the user's own fresh words restating a forgotten item: the line lifts the tombstone its id names).", "enum": ["quote", "request", "roots", "fast", "projects", "edit", "restated"] },
     "roots": { "description": "The evidence roots (sha256 hex), deduplicated: what support counts, never sessions.", "type": "array", "items": { "type": "string" } },
     "record": { "description": "The session record (or curated memory name) the item came from.", "type": "string" },
-    "tombstones": { "description": "A forget's ids: core items and session records, never text.", "type": "array", "items": { "type": "string" } },
+    "tombstones": { "description": "A forget's ids: core items and session records, never text. Only a restated line lifts one, for its own id; a forget already held, written again, never re-tombstones a lifted id.", "type": "array", "items": { "type": "string" } },
     "base": { "description": "The generation the writer had read through (its consumed-through marker).", "type": "integer", "minimum": 0 },
     "writer": {
       "type": "object",
@@ -27,6 +27,6 @@
         "session": { "type": "string" }
       }
     },
-    "time": { "description": "RFC 3339, UTC, whole seconds.", "type": "string" }
+    "time": { "description": "RFC 3339, UTC, whole seconds: the commit's, or a forget record's line the forget request's, which a restatement must come after.", "type": "string" }
   }
 }
