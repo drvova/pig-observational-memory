@@ -317,13 +317,15 @@ unit of evidence. Only a compaction pass counts, and it must meet all of these c
 
 The rule by kind:
 
-- **Consolidation instructions** need a pass whose level 1 answered. They are clean unless level 1
-  counted a loss.
 - **A Go detector** is judged by its detector-pass runs.
 - **A query detector** is never judged.
-- **Every other kind** is decided once the passes have source tokens, and is clean.
+- **Every other kind but `adaptable`** (the consolidation instructions, a remedy, a kernel-check
+  detector, a rule) is settled by decision 24's null arm with its cost, over independent evidence
+  roots with a harm signal (`settle-null-arm` in `src/rules/evidence.lisp`; docs/memory-v2.md,
+  "Settling a definition"); a clean one returns its scope as a fourth value.
 
-The image adds one kind, `adaptable`. It is decided as the token-judged kinds are. It is reverted when any
+The image adds one kind, `adaptable`. It keeps the rule from before decision 24: decided once the
+passes have source tokens, and clean. It is reverted when any
 of those passes counted `adaptable-failed:<name>`, in the way `settleCodeDetector` reverts a detector one
 of whose runs gave no count. This addition is mine, not Go's. It is the conservative reading of the
 design's "the failure counts against it." `layer-settle` settles a clean decision and reverts an unclean

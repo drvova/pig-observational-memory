@@ -893,12 +893,61 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
     held text count. The compaction that held it read its layer before the hold, so its pass never
     names it, nor does another session's or process's compaction whose layer was read before the hold,
     wherever its pass lands in the shared ledger; a text held again is judged only on passes that ran
-    with the new text. An empty compaction is counted (`outcome: empty`) and is no evidence. The `consolidation` instructions need a later compaction
-    whose level-1 request answered under them (`curated.ModelEvent.Level1`) and are reverted when its
-    code checks counted `level1-failed`, `level1-specifics-refused` or `level1-union-kept`; a detector,
-    a catalogue and a rule need detector runs over turns under them and are written, since they
-    change only what code counts or keeps (the kernel's counts judge rules from there). Written on such
-    evidence (`layer.Store.ClaimHeld`), reverted otherwise; with none yet it stays held.
+    with the new text. An empty compaction is counted (`outcome: empty`) and is no evidence. A Go
+    detector is judged on its own runs (`detector-pass` events: reverted when one gave no count,
+    written when one counted); every other definition by decision 24's rules, below. Written
+    (`layer.Store.ClaimHeldScoped`, with its scope), reverted otherwise; with too little evidence it
+    stays held.
+  - **Settling a definition** (docs/brain-memory.md, decision 24; `memory/rules/settle_v2.go`,
+    `lisp/src/rules/evidence.lisp` `settle-null-arm`, byte for byte through `TestLispSettleParity` and
+    `TestLispEvidenceParity`). All code over recorded events, so none adds a request.
+    - *What a pass records.* Beside its counts, each non-empty v2 compaction pass records its
+      evidence roots (`roots`: `rules.RootOf`, the first 16 hex of the SHA-256 of `root`, the
+      record's kind and its content, NUL-separated, over the records citing its cut range that are
+      not `tool-observed` or `external-untrusted`; sorted, at most 64), its harm signal (`harm`:
+      `dropped-then-queried` + `level1-specifics-refused` + `level1-union-kept`), its `turns` (the
+      assistant messages it removed), its scope (`repo`: the commonest `frame.repoId` of those
+      records; `family`: the commonest lower-cased path extension of their `paths` keys, the task
+      family) and `ranWritten` (the model's own written definitions it ran with, by held id). A pass
+      without `harm` was recorded before these rules and is no evidence for them.
+    - *Units.* A unit is a non-empty pass with the harm signal (for the consolidation instructions,
+      also a level-1 answer). It is independent when one of its roots was in no earlier unit, so
+      compactions over the same file, summary or poisoned text count once, whichever session recorded
+      them. The treated units are the independent ones after the hold that ran its text; the controls
+      the independent ones that ran no text of its name, held or written.
+    - *The null arm and the cost.* At `MinEvidence` treated units T, the last 2·`MinEvidence`
+      controls before T's end are two windows, B then A (fewer is no null arm: rejected). Its
+      failures F are `level1-failed` + `level1-refused` for the instructions, and
+      `uncited-assistant-specifics` + `cross-scope-supersede` + `decode-failure` for the rest. It is
+      rejected when T's harm is above both windows'; otherwise its effect `min(F(A), F(B)) - F(T)`
+      must beat the A-versus-A spread `|F(A) - F(B)|` after its cost, in thousandths of a failure:
+      the instructions text's tokens (as declared) over T at 1,000 tokens a failure, and the turns T
+      took beyond both windows at 10 turns a failure. Short of that it is rejected ("no net effect
+      after cost").
+    - *Independence.* 2·`MinEvidence` passes under it with fewer than `MinEvidence` independent ones
+      reject it: its evidence came from too few roots.
+    - *Scope.* A written one records its scope on its put generation (`scope`: the repositories and
+      task families of T), and `layer.Harness.InScope` leaves it out where they do not reach: the
+      compaction reads its layer scoped to its cut range's records (`hooks.scopedLayerV2`), and
+      keep-head applies by the extraction's records (`rules.ForScope`), so the seed stands
+      elsewhere. Widening on evidence from a second scope is not built: out of scope it never runs.
+    - *The active set.* One proposal holds one rule, never a bundle: the first definition or rule
+      that passes its checks takes the proposal, the rest are refused ("one proposal holds one rule").
+      When one settles, the model's written definitions sharing a target with it
+      (`rules.Targets`: the kind/name, and a rule's detector and remedy) are held again
+      (`layer.Store.Recheck`, whose revert puts back what stood before their put), so the passes
+      after it run them beside it.
+    - *Security.* A level-1 definition that matches `contracts/insecure.md`'s patterns is never held
+      as a file: `layer.Store.HoldInsecure` keeps its text in a blob with a `hold-insecure`
+      generation, listed in `/om:status`, never run, settled or proposed over. After each
+      compaction's settlement a written definition of the model that matches them rolls the layer
+      back to the generation before its put (`layer.Store.RollbackBefore`, rules kept; a refused
+      rollback removes the name alone), with a reason starting `security:`: code acting on code
+      evidence, so the quote gate, which gates the memory tool's layer writes, does not apply.
+    - *Retirement.* Nothing retires a written definition on "no measured difference": the only
+      retirements are the rules' probation (the kernel's own count, unchanged) and the image's
+      adaptable retire rule (failures). `memeval -suite settle` replays a no-op definition at
+      `MinEvidence` (docs/brain-memory-baseline.md, "Phase 5 part B").
   - **The prompt.** `kernel-consolidate` opens the level-1 system prompt first and whole, then the
     `consolidation` seed (`agents.ConsolidationInstructions`), then the model's addition under
     "Additional instructions for this model:" (`consolidate.SystemPromptFor`). The seed is never

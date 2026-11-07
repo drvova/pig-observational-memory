@@ -418,6 +418,42 @@ records"); the adapter runs git, the engine never does. Part A is above.
 - Scenarios 7, 26 and 37 pass; memeval Tier 0, 0b and 0c are unchanged cell for cell
   ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 4 part B").
 
+### Phase 5 status: definition settlement (part B)
+
+Decision 24's five rules, built in Go and Lisp together (docs/memory-v2.md, "Settling a
+definition"; `memory/rules/settle_v2.go`, `lisp/src/rules/evidence.lisp`), all code over recorded
+events: no request is added. Part A (fold labels, cascade, tombstones, decay) is a separate branch.
+
+- **Null arm and cost: built.** A held definition settles only when its failures over its first
+  `MinEvidence` independent compactions beat both of two control windows of `MinEvidence` (the
+  model's latest compactions without it) by more than their spread, after the tokens its text adds
+  to each request and the turns beyond the control windows; otherwise it is rejected. Fewer than
+  2·`MinEvidence` controls is no null arm, and rejects it. The no-op replay (`memeval -suite
+  settle`) settles a no-op at every hold point under the rule before and at none of the recorded
+  Tier 0 hold points after; with per-compaction failure noise it still settles a no-op at about one
+  hold point in seven ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 5 part B").
+- **Independent recurrence: built.** Each pass records the evidence roots of its records that are
+  not tool output (the digest of a record's kind and content, never its session or entry); a pass
+  with no new root is no evidence, and 2·`MinEvidence` passes under a definition from fewer than
+  `MinEvidence` roots reject it. Each pass records its harm signal, which rejects a definition whose
+  compactions counted more harm than either control window.
+- **The active set: built.** One level-1 proposal holds one definition or rule; when one settles,
+  the model's written definitions sharing its target (kind and name, a rule's detector and remedy)
+  are held again and judged on the passes that run them beside it. The image offers only the
+  consolidation instructions, one slot, so its active set is that slot.
+- **Retirement and rollback: built.** No path retires a written definition on "no measured
+  difference". A level-1 definition matching `contracts/insecure.md` is kept out of the layer
+  (`hold-insecure`), listed in `/om:status`; a written one that matches rolls the layer back to the
+  generation before it after the next compaction's settlement, through the layer's rollback with the
+  rules kept, its generation recording why the quote gate does not apply (code evidence, no model or
+  tool request).
+- **Read-time scope: built.** A settled definition's put records the repositories (`frame.repoId`)
+  and task families (the commonest path extension of a compaction's records) of the compactions
+  that settled it; the compaction reads its layer scoped to its cut range, keep-head applies by the
+  extraction's records, and `/om:status` prints the scope. Widening on a second scope's evidence is
+  not built.
+- Scenarios 30 to 34 pass (`memory/memeval/settle_test.go`); the request rule is unchanged.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -457,11 +493,11 @@ in a majority of runs.
 | 27 | A test run or tool event cuts an episode | Episodes start only at person-typed requests; the test result is a field; boundary density is reported against the evenly spaced baseline (passes: phase 2 part D, `TestEpisodeBoundariesAgainstEvenBaseline`) |
 | 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction |
 | 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task |
-| 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected |
-| 31 | A definition is supported by repeated tool output | Tool-output records do not count; compactions over the same evidence root count once; not settled |
-| 32 | Two definitions on one target are each safe but harmful together | Settling one returns the other to a hold window; the check reads their joint evidence |
-| 33 | A security-weakening definition enters the layer | Held; on detection the layer rolls back to the generation before it; listed in `/om:status` |
-| 34 | A definition settled in one scope is applied in another | Not applied outside its model, repository and task family; not retired on "no difference" alone |
+| 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at about one hold point in seven) |
+| 31 | A definition is supported by repeated tool output | Tool-output records do not count; compactions over the same evidence root count once; not settled (passes: phase 5 part B) |
+| 32 | Two definitions on one target are each safe but harmful together | Settling one returns the other to a hold window; the check reads their joint evidence (passes: phase 5 part B) |
+| 33 | A security-weakening definition enters the layer | Held; on detection the layer rolls back to the generation before it; listed in `/om:status` (passes: phase 5 part B) |
+| 34 | A definition settled in one scope is applied in another | Not applied outside its model, repository and task family; not retired on "no difference" alone (passes: phase 5 part B) |
 | 35 | A superseded or revoked record crowds out its update in search | Status and as-of filters apply before top-k; the current record is returned with its label (passes: phase 4 part A) |
 | 36 | A version, SHA or error line is split by the tokenizer | Found through the exact index byte for byte; never indexed for BM25 (passes: phase 4 part A) |
 | 37 | The repo id lookup times out on a large repository | The id is computed once and cached per repository; a compaction never waits on the root-commit lookup |
