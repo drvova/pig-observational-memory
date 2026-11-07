@@ -434,7 +434,12 @@
             "" "")))
 
 (defun preference-p (sentence)
-  (and (not (question-p sentence)) (some (lambda (p) (regex-match-p p sentence)) +preference-patterns+)))
+  "isPreference: an explicit preference construction, neither a question, posed hypothetically
+(+rule-hypothetical+) nor reported from someone else (reported-p), as rule-p excludes them."
+  (let ((sentence (replace-all sentence "’" "'")))
+    (and (not (question-p sentence)) (not (regex-match-p +rule-hypothetical+ sentence))
+         (not (reported-p sentence))
+         (some (lambda (p) (regex-match-p p sentence)) +preference-patterns+))))
 
 (defun self-statement-p (sentence)
   (and (not (question-p sentence)) (some (lambda (p) (regex-match-p p sentence)) +self-statements+)))

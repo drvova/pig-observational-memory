@@ -7,6 +7,7 @@
 //	go run ./cmd/memeval -suite sharing -seeds 5
 //	go run ./cmd/memeval -suite constraintrot
 //	go run ./cmd/memeval -suite arcbench -arcbench-cases <dir>/data/rule-loss/cases.jsonl
+//	go run ./cmd/memeval -suite retrieval -seeds 20
 //
 // The forgetting (Tier 0b) and sharing (Tier 0c) suites print a table of checks each, pass, fail
 // or not built; their only requests are scripted level-1 replies a fake host serves.
@@ -33,7 +34,7 @@ func main() {
 	window := flag.Int("window", 0, "context window in tokens (0: the default small window)")
 	summaryMax := flag.Int("summary-max", 0, "summary cap in tokens, as compactionSummaryMaxTokens (0: none)")
 	noSnippets := flag.Bool("no-snippets", false, "do not run the printed snippets (every unshown probe counts as lost)")
-	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), all, constraintrot or arcbench")
+	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), all, constraintrot, arcbench or retrieval")
 	arcCases := flag.String("arcbench-cases", "", "ARCBench's data/rule-loss/cases.jsonl (data only; its code is never run)")
 	flag.Parse()
 	serialize.Location = time.UTC
@@ -135,8 +136,28 @@ func main() {
 	case "forgetting", "sharing":
 		suites(nil)
 		return
+	case "retrieval":
+		var runs []memeval.Run
+		for _, seed := range cfg.Seeds {
+			opt := cfg.Options
+			opt.Turns = cfg.Turns
+			run, err := memeval.Simulate(context.Background(), memeval.Generate(seed, opt), cfg.Window, cfg.MaxCompactions)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "memeval:", err)
+				os.Exit(1)
+			}
+			runs = append(runs, run)
+		}
+		tallies, err := memeval.RetrievalCheck(context.Background(), runs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Retrieval check: %d seeds, om.Notes(om.Search(<key>)) over each session's last branch, in process, 0 model requests, %s\n\n", len(cfg.Seeds), time.Since(start).Round(time.Millisecond))
+		fmt.Print(memeval.RetrievalTable(tallies))
+		return
 	default:
-		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing, all, constraintrot or arcbench")
+		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing, all, constraintrot, arcbench or retrieval")
 		os.Exit(2)
 	}
 	m, err := memeval.Measure(context.Background(), cfg, lister)

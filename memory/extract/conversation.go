@@ -165,9 +165,12 @@ type correctionTarget struct {
 	phrase string
 }
 
-// isPreference reports an explicit preference construction that is not a question.
+// isPreference reports an explicit preference construction that is neither a question, posed
+// hypothetically (ruleHypothetical) nor reported from someone else (isReported), the exclusions
+// isRule applies: "my manager said never deploy on Fridays" is not the user's preference.
 func isPreference(sentence string) bool {
-	if isQuestion(sentence) {
+	sentence = strings.ReplaceAll(sentence, "’", "'")
+	if isQuestion(sentence) || ruleHypothetical.MatchString(sentence) || isReported(sentence) {
 		return false
 	}
 	for _, p := range preferencePatterns {
