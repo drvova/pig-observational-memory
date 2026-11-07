@@ -19,12 +19,119 @@ custom entry after the tip from its type and its data's JSON text and returns th
   ;; detect, when set, is the harness's detectV2 (om.layer:harness-detect over the session model
   ;; and store): a function of (entries start end folded batches covers) returning the batches and
   ;; a function that records the run, called once the extraction landed on a fresh branch.
-  (detect nil))
+  (detect nil)
+  ;; structure, when set, is host.StructureReader (host/structure): a function of a decoded
+  ;; host.StructureQuery returning the decoded answer, or nil when the host reads none.
+  (structure nil))
+
+;;; Project knowledge (project.lisp; hooks/project_v2.go)
+
+(defun encoding-repo ()
+  "The session's repository as *encoding* holds it (repoOfV2): a host.Repo object with its id and
+head, nil outside one."
+  (let ((frame (getf *encoding* :frame)))
+    (when (string/= (alist-member frame "repoId") "")
+      (jobject "repoId" (alist-member frame "repoId") "head" (alist-member frame "head")))))
+
+(defun stamp-batches (structure batches)
+  "stampV2: the new project records' body hashes from their paths' blobs at HEAD."
+  (when structure
+    (let ((q (project-stamp-query (loop for b in batches append (batch-observations b)))))
+      (unless (project-query-empty-p q)
+        (let ((answer (funcall structure q)))
+          (when answer
+            (dolist (b batches) (project-stamp (batch-observations b) answer))))))))
+
+(defvar *freshness* '()
+  "The compaction's freshness verdicts (compaction-freshness), bound around level 1, which offers the
+changed ones as possibly stale (stale-records).")
+
+(defun stale-records (structure verdicts)
+  "staleRecordsV2: the changed verdicts as stale-recs, at most +project-max-diffs+, each with its
+path's diff from the commit it was written at to HEAD, asked in one query."
+  (let ((q (project-diff-query verdicts)) (diffs (make-set)) (out '()))
+    (when (or (project-query-empty-p q) (null structure)) (return-from stale-records '()))
+    (let ((answer (funcall structure q)))
+      (dolist (d (jlist-of (jget answer "diffs")))
+        (setf (gethash (cat (str (jget d "path")) (string #\Nul) (str (jget d "from"))) diffs) d)))
+    (dolist (v verdicts out)
+      (when (and (string= (freshness-kind v) "changed") (< (length out) +project-max-diffs+))
+        (let ((d (gethash (cat (freshness-path v) (string #\Nul) (freshness-sha v)) diffs)))
+          (push-end (make-stale-rec :id (freshness-id v) :path (freshness-path v) :since (freshness-sha v)
+                                    :head (freshness-head v) :blob (freshness-blob v)
+                                    :diff (if d (str (jget d "diff")) "") :diff-known (and d (jtrue-p (jget d "known")))
+                                    :truncated (and d (jtrue-p (jget d "truncated"))))
+                    out))))))
+
+(defun compaction-freshness (h entries)
+  "freshnessV2: the active project records of entries judged against HEAD, as (values verdicts
+repo); none without a view, a repository or a record to ask about."
+  (let ((repo (encoding-repo)))
+    (when (and (hhost-structure h) repo)
+      (let* ((records (folded-active (fold-ledger entries)))
+             (q (project-query records repo)))
+        (unless (project-query-empty-p q)
+          (let ((answer (funcall (hhost-structure h) q)))
+            (when answer (values (project-verdicts records repo answer) repo))))))))
 
 (defstruct hconfig
   "The settings the hook reads (config.Config): passive, consolidate, compactionSummaryMaxTokens,
-memoryFormat."
-  (passive nil) (consolidate-off nil) (summary-max 0) (memory-format "tables"))
+memoryFormat, the working-memory limits (global and per model) and rawFloor."
+  (passive nil) (consolidate-off nil) (summary-max 0) (memory-format "tables")
+  (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil)
+  ;; decay: its clock ("" off, "compactions" or "turns") and horizon (0 for the default).
+  (decay "") (decay-horizon 0))
+
+;;; config/working.go: working memory's caps, the raw floor and the quality threshold
+
+(defparameter +limit-keys+
+  '("workingMemoryConstraints" "workingMemoryScopeExclusions" "workingMemoryActions" "rawFloorTokens" "qualityTriggerTokens")
+  "config.limitKeys, in ModelLimits order.")
+(defparameter +limit-defaults+ '(10 10 5 32000 64000)
+  "The defaults: constraints, scope exclusions, actions, the raw floor and the quality threshold.")
+
+(defun read-limits (object)
+  "readLimits: the limit keys of one settings object, 0 for unset."
+  (mapcar (lambda (key)
+            (let ((v (and (hash-table-p object) (jget object key))))
+              (if (and (realp v) (> v 0) (= v (ftruncate v))) (truncate v) 0)))
+          +limit-keys+))
+
+(defun limits-over (base over)
+  "ModelLimits.over: over's set limits laid over base."
+  (mapcar (lambda (b o) (if (> o 0) o b)) base over))
+
+(defun read-model-limits (object into)
+  "modelLimits: each \"<provider>/<id>\" entry's set limits laid over into's (a hash table, made
+when nil); returns it."
+  (when (hash-table-p object)
+    (maphash (lambda (key value)
+               (let ((limits (read-limits value)))
+                 (when (and (hash-table-p value) (some #'plusp limits))
+                   (unless into (setf into (make-hash-table :test 'equal)))
+                   (setf (gethash key into) (limits-over (gethash key into (list 0 0 0 0 0)) limits)))))
+             object))
+  into)
+
+(defun hook-model-pair (model)
+  "host.ModelProvider and host.ModelID of a session model (a decoded object), \"\" for none."
+  (if (hash-table-p model)
+      (let ((id (str (jget model "id"))))
+        (values (str (jget model "provider")) (if (string/= id "") id (str (jget model "modelId")))))
+      (values "" "")))
+
+(defun limits-for (limits model-limits model)
+  "Config.LimitsFor: the session model's modelLimits entry, else the global setting, else the
+default, field by field: (constraints scope-exclusions actions raw-floor quality-threshold)."
+  (multiple-value-bind (provider id) (hook-model-pair model)
+    (let ((out (limits-over +limit-defaults+ limits)))
+      (if (and model-limits (or (string/= provider "") (string/= id "")))
+          (limits-over out (gethash (cat provider "/" id) model-limits (list 0 0 0 0 0)))
+          out))))
+
+(defun below-raw-floor-p (raw-floor limits model-limits model tokens-before)
+  "BelowRawFloor: the floor is on and tokensBefore is known and below the model's floor."
+  (and raw-floor (> tokens-before 0) (< tokens-before (fourth (limits-for limits model-limits model)))))
 
 (defstruct cevent
   "hooks.BeforeCompactEvent with its preparation's members."
@@ -160,7 +267,7 @@ not back, or nil."
     (when (< index 0) (return-from host-summary nil))
     (let ((c (aref entries index)))
       (when (or (memory-details-from (entry-details c)) (string= (entry-id c) "")) (return-from host-summary nil))
-      (let ((summary (one-line (if (stringp (entry-summary c)) (entry-summary c) ""))))
+      (let ((summary (redact-secrets (one-line (if (stringp (entry-summary c)) (entry-summary c) "")))))
         (when (string= summary "") (return-from host-summary nil))
         (dolist (o (folded-observations folded))
           (when (member-str (entry-id c) (obs-source-ids o)) (return-from host-summary nil)))
@@ -169,7 +276,8 @@ not back, or nil."
           (when (< boundary 1) (return-from host-summary nil))
           (let ((o (make-obs :content summary :timestamp (format-timestamp (entry-time c))
                              :relevance +code-relevance+ :source-ids (list (entry-id c))
-                             :token-count (estimate-tokens summary) :origin "host")))
+                             :token-count (estimate-tokens summary) :origin "host"
+                             :source "host-summary" :authority "model" :hedge (hedge-of summary))))
             (setf (obs-id o) (hash-id (cat "host" (string (code-char 0)) (entry-id c))))
             (values o (entry-id (aref entries (1- boundary))))))))))
 
@@ -203,6 +311,7 @@ not back, or nil."
                (let ((record nil))
                  (when (hhost-detect h)
                    (multiple-value-setq (batches record) (funcall (hhost-detect h) entries start cut folded batches covers)))
+                 (stamp-batches (hhost-structure h) batches)
                  (let ((out (append-extraction-entries h batches covers)))
                    ;; Counted only for an extraction that landed on a range measured on the fresh
                    ;; branch, as extractCutV2 records it.
@@ -222,6 +331,8 @@ own-trigger is runtime.CompactInFlight: the extension's own compaction."
         ((hconfig-passive cfg) "passive mode")
         (own-trigger "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only")
         ((string= (cevent-reason event) "overflow") "an overflow compaction runs level 0 only, so recovery is not delayed")
+        ((below-raw-floor-p (hconfig-raw-floor cfg) (hconfig-limits cfg) (hconfig-model-limits cfg) model (cevent-tokens-before event))
+         "the context is below the session model's raw floor: nothing is consolidated")
         ((or (null cut) (< (entry-index-for-id entries (cevent-first-kept event)) 0)) "the cut range is not on the branch")
         ((null model) "the session model is unavailable: no session model")
         (t (error "level 1 with a session model is not ported"))))
@@ -286,7 +397,10 @@ is skipped with level1-skip-reason's report."
                             budget))
          ;; Level 1: at most one request; its appends are folded through PiG's cut, and when it
          ;; applied, the instructions shaped it and the memory gets their room.
-         (level1-result (and level1 (multiple-value-list (funcall level1 entries cut memory-budget))))
+         ;; The project records' freshness against HEAD (decision 20), before level 1.
+         (verdicts (compaction-freshness h entries))
+         (level1-result (and level1 (let ((*freshness* verdicts))
+                                      (multiple-value-list (funcall level1 entries cut memory-budget)))))
          (entries (if (first level1-result) (concatenate 'simple-vector entries (first level1-result)) entries))
          (iblock (if (second level1-result) "" iblock))
          (memory-budget (if (second level1-result) budget memory-budget))
@@ -303,7 +417,12 @@ is skipped with level1-skip-reason's report."
              (r (render-summary observations folded entries memory-budget
                                 :reflections reflections :request request :intent (v2-intent entries cut request)
                                 :format fmt :codec (profile-codec fmt) :aliases (projection-aliases projection)
-                                :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded)))))
+                                :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded))
+                                :slots (subseq (limits-for (hconfig-limits cfg) (hconfig-model-limits cfg) model) 0 3)
+                                :freshness (project-texts verdicts)
+                                :decayed (and (string/= (hconfig-decay cfg) "")
+                                              (decayed-records entries observations (hconfig-decay cfg)
+                                                               (if (plusp (hconfig-decay-horizon cfg)) (hconfig-decay-horizon cfg) +default-decay-horizon+))))))
         (when (and (string/= (summary-text r) "") (<= (estimate-tokens (summary-text r)) memory-budget))
           (setf summary (summary-text r) kind "records"
                 shown (append (mapcar #'refl-id (summary-reflections r)) (mapcar #'obs-id (summary-observations r))))

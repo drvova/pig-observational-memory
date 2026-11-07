@@ -102,7 +102,7 @@ func TestForgetRetires(t *testing.T) {
 func TestSettlePromotesStagedOnEvidence(t *testing.T) {
 	s := v2Store(t)
 	for _, name := range []string{"by-quote", "by-citation", "by-sessions", "no-evidence"} {
-		if _, err := s.Save(Memory{Name: name, Type: TypeUser, Description: "Memory " + name + ".", Staged: true}, "s1"); err != nil {
+		if _, err := s.SaveCiting(Memory{Name: name, Type: TypeUser, Description: "Memory " + name + ".", Staged: true}, "s1", SourceDigest("the file s1 read")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -128,7 +128,7 @@ func TestSettlePromotesStagedOnEvidence(t *testing.T) {
 	if err := s.RecordCited("by-citation", "aaaaaaaaaaa1"); err != nil {
 		t.Fatal(err)
 	}
-	joined, err := s.Save(Memory{Name: "by-sessions", Type: TypeUser, Description: "memory   BY-SESSIONS.", Staged: true}, "s2")
+	joined, err := s.SaveCiting(Memory{Name: "by-sessions", Type: TypeUser, Description: "memory   BY-SESSIONS.", Staged: true}, "s2", SourceDigest("another file s2 read"))
 	if err != nil || len(joined.StagedBy) != 2 {
 		t.Fatalf("the same save in another session joins it: %+v, %v", joined, err)
 	}

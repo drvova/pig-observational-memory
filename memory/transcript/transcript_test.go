@@ -70,6 +70,57 @@ func TestClaudeCode(t *testing.T) {
 	}
 }
 
+// A user line with origin.kind other than "human" (a background subagent's result, a message
+// from another session) is a custom_message, never a user entry; its meta lines stay left out,
+// and a line with origin.kind "human" or no origin stays a user entry.
+func TestClaudeCodeOrigin(t *testing.T) {
+	es, err := File{Path: filepath.Join("testdata", "synthetic", "claude-code-origin.jsonl"), Format: ClaudeCode}.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range es {
+		kind := e.Type
+		if e.Type == "message" {
+			kind = e.Message["role"].(string)
+		} else if e.CustomType != "" {
+			kind += "(" + e.CustomType + ")"
+		}
+		got = append(got, e.ID+":"+kind)
+	}
+	want := "h1:user a1:assistant r1:toolResult a2:assistant n1:custom_message(origin:task-notification) p2:custom_message(origin:peer) a3:assistant u1:user"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("entries\n got %s\nwant %s", strings.Join(got, " "), want)
+	}
+	n1 := es[4]
+	blocks, _ := n1.Content.([]any)
+	if len(blocks) != 1 || !strings.Contains(blocks[0].(map[string]any)["text"].(string), "<task-notification>") || n1.Timestamp != "2026-11-06T09:01:00.000Z" {
+		t.Fatalf("notification entry %+v", n1.Raw)
+	}
+	for _, e := range es {
+		if e.Type == "message" && e.Message["role"] == "user" {
+			if text := blocksText(e.Message["content"]); strings.Contains(text, "always") || strings.Contains(text, "Forget") || strings.Contains(text, "Never") {
+				t.Fatalf("a non-human line became a user entry: %s", e.ID)
+			}
+		}
+	}
+	// A Claude Code-shaped reader whose lines carry an origin with no kind (Cline) keeps them.
+	if kind := originKind(map[string]any{"origin": map[string]any{"mode": "user", "source": "cli"}}); kind != "" {
+		t.Fatalf("origin without kind read as %q", kind)
+	}
+}
+
+func blocksText(v any) string {
+	var out []string
+	for _, raw := range blocks(v) {
+		if b, ok := raw.(map[string]any); ok {
+			s, _ := b["text"].(string)
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 // Codex: assistant-side items group into one entry; tool output is a toolResult named by
 // its call; Codex's own context messages are left out; ids are line positions.
 func TestCodex(t *testing.T) {

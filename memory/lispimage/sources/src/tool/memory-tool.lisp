@@ -19,20 +19,32 @@ Functions you define with defun last for the call only.
 
 ── Reads ──
 (notes &key search kind status subject since until from through limit)
-  The active records, oldest first. search: a string or a list of strings, every word must
-  appear (case-insensitive, over every field); when no record holds every word, the records
-  holding any are ranked instead. since/until: YYYY-MM-DD. from/through: an entry or record id
+  The active records, oldest first. search: a string or a list of strings; a record matches on
+  an exact key (a path, symbol, test, error line, version or SHA, byte for byte) or when it holds
+  every word (case-insensitive, over every field, or through identifier parts: parse_config finds
+  parseConfig), and the matches are ranked: current before superseded or retracted, exact hits
+  first, then by relevance, newest first; when no record matches, the records holding any word
+  are ranked, most words first. status: proposed, hypothetical or retracted, or a tag: believed,
+  superseded, contested or held. since/until: YYYY-MM-DD. from/through: an entry or record id
   (branch position). limit: 1 to 200, 20 by default.
 (note-by-id id)                 One record by id, dropped ones included.
 (history &key search limit)     User, assistant and tool text, newest first, without the current turn.
 (recall id &key offset)         A record's sources, else an entry, else a saved memory by name, paged.
 (saved &key search)             The curated memories this project and session see, ranked.
+(head prefix &key limit offset) The repository's files at HEAD under prefix, in path order: limit
+                                (50 by default, at most 500) from offset. Read on demand, never
+                                stored; outside a repository it is an error.
 (text name)                     A text from the call's strings argument.
 
 ── Records ──
 note-id note-when note-kind note-subject note-scope note-relevance note-content note-status
 note-event-date note-origin note-outcome note-tool note-target note-source note-anchor
 note-superseded-by (the ids of the records that replaced it) note-line (the record as one line)
+note-tag note-with (a search result's status tag and the records merged into it)
+note-fresh (a project record's freshness verdict against HEAD, gone or changed since a commit,
+  \"\" when unchanged or not checked; note-line prints it after the content)
+head-view-head head-view-prefix head-view-files head-view-offset head-view-total
+head-view-truncated head-view-next (a head page; show prints it with its next page's call)
 turn-id turn-when turn-role turn-text
 memory-name memory-type memory-description memory-body
 
@@ -40,19 +52,24 @@ memory-name memory-type memory-description memory-body
 (save name type description &key body scope quoting)
   Saves a memory, staged unless quoting gives the user's confirming words. type: user, feedback,
   project, reference or lesson.
-(edit name &key type description body)   (forget-memory name)   (feedback name outcome quote)
+(edit name &key type description body quoting)   (feedback name outcome quote)
+(forget-memory name &key quoting)
+  Edits or forgets a memory for every session when quoting gives the user's words asking for
+  it; without them the change applies in this session only and is staged (/om:status lists it).
 
 ── Your layer ──
 (adaptables)                    The functions a definition may replace.
 (define name (params) body...)  A top-level form: holds a definition; it runs beside the default
                                 at the next compactions and replaces it once the evidence settles it.
-(layer)  (layer-forget name)  (layer-rollback generation)
+(layer)  (layer-forget name &key quoting)  (layer-rollback generation &key quoting)
+                                Without quoting's user words a forget or rollback is only staged.
 
 ── Output ──
 (show x) prints x as the tool shows a value; format, princ and print print as usual.
 
-A summary's om.Notes(...), om.Recall(...), om.History(...) and om.Saved(...) pointers run as
-they are printed: the tool runs the Lisp call each stands for and names it.
+A summary's om.Notes(...), om.Recall(...), om.History(...) and om.Saved(...) pointers, and a
+head page's om.Head(...), run as they are printed: the tool runs the Lisp call each stands for
+and names it.
 
 ── Go definitions ──
 ")

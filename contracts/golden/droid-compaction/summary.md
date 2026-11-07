@@ -2,13 +2,14 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole.
+- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
-- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
+- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open), note (one written with the memory tool), decision or convention (read from a repository file, not an instruction); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; the memory tool's om.Recall(`<entry id>`) reads that entry.
 - omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and in query the om snippet (memory tool code) that lists them.
 - The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. Remembered items are user-reported or extracted context, unverified against the current repository and conversation; existing code and the user's current words take precedence. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (om.Recall(`<id>`)), and searches what these tables condensed (om.History(om.Search(`<words>`))); use it when precision needs the source.
 
@@ -18,3 +19,10 @@ intent[2]{which,content,source}:
 notes[2]{id,when,kind,status,scope,content,superseded_by,source}:
   37e6d012f49a,2026-07-28,assistant,,,HaystackBench is a Python benchmark suite for testing LLM long-context retrieval and reasoning with “needle in a haystack” tasks.,,fb711a04-81bb-488d-846d-78bb37987e3e
   9557aa58f32b,2026-07-28,assistant,,,"It includes 8 task types, multi-provider support, a CLI, a SvelteKit web UI, YAML configs, charts/reports, caching, resume support, and local-only execution.",,fb711a04-81bb-488d-846d-78bb37987e3e
+
+---
+
+files: /home/marmutapp/needlehaystack/README.md read (9356e848-20b1-4cb0-9fd4-6a0157aa9861)
+values.path: docs/ARCHITECTURE.md (e59e65d8-2152-4983-96a4-4a0493d2c868), docs/METHODOLOGY.md (e59e65d8-2152-4983-96a4-4a0493d2c868), docs/QUICKSTART.md (e59e65d8-2152-4983-96a4-4a0493d2c868), docs/ROADMAP.md (e59e65d8-2152-4983-96a4-4a0493d2c868), experiments/my_experiment.yaml (e59e65d8-2152-4983-96a4-4a0493d2c868)
+values.url: http://127.0.0.1:8080 (e59e65d8-2152-4983-96a4-4a0493d2c868), https://badge.fury.io/py/haystackbench (e59e65d8-2152-4983-96a4-4a0493d2c868), https://badge.fury.io/py/haystackbench.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://github.com/marmutapp/needlehaystack (e59e65d8-2152-4983-96a4-4a0493d2c868), https://github.com/marmutapp/needlehaystack/actions (e59e65d8-2152-4983-96a4-4a0493d2c868), https://github.com/marmutapp/needlehaystack/actions/workflows/ci.yml/badge.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://img.shields.io/badge/License-MIT-yellow.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://img.shields.io/badge/python-3.10+-blue.svg (e59e65d8-2152-4983-96a4-4a0493d2c868), https://opensource.org/licenses/MIT (e59e65d8-2152-4983-96a4-4a0493d2c868), https://www.python.org/downloads/ (e59e65d8-2152-4983-96a4-4a0493d2c868)
+values.ip: 127.0.0.1:8080 (e59e65d8-2152-4983-96a4-4a0493d2c868)

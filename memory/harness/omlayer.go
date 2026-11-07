@@ -29,25 +29,27 @@ func OMLayer(h host.ToolHost, store curated.Store, session string) omhost.Layer 
 	return omLayer{w: layerWriter{h: h, store: store, session: session}}
 }
 
-// Forget forgets one definition from the session model's layer. A retired defined tool is
-// listed by om.Retired and stays stored; a rule is the harness's.
-func (l omLayer) Forget(kind, name string) (string, error) {
+// Forget forgets one definition from the session model's layer on a user's words asking for it
+// (q), else stages the forget (layerWriter.Forget). A retired defined tool is listed by
+// om.Retired and stays stored; a rule is the harness's.
+func (l omLayer) Forget(kind, name string, q omhost.Quote) (string, error) {
 	if strings.TrimSpace(kind) == layer.KindTool {
 		return "", fmt.Errorf("defined tools are retired and stay stored (om.Retired lists %s); nothing is forgotten from the layer", strings.TrimSpace(name))
 	}
 	if l.w.session == "" {
 		return "", fmt.Errorf("no session model is known, so there is no layer to forget %s/%s from", kind, name)
 	}
-	return l.w.Forget(kind, name)
+	return l.w.Forget(kind, name, q)
 }
 
 // Rollback makes the session model's layer what it was at generation gen (the old rollback N's
-// meaning, which the result text names), rules left as they are.
-func (l omLayer) Rollback(gen int) (string, error) {
+// meaning, which the result text names), rules left as they are, on a user's words asking for
+// it (q), else stages the rollback (layerWriter.Rollback).
+func (l omLayer) Rollback(gen int, q omhost.Quote) (string, error) {
 	if l.w.session == "" {
 		return "", fmt.Errorf("no session model is known, so there is no layer to roll back")
 	}
-	return l.w.Rollback(gen, "")
+	return l.w.Rollback(gen, "", q)
 }
 
 // Listing is every model's layer (AllLayerRows).

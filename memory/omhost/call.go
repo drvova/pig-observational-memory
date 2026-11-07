@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"maps"
 	"slices"
 	"strconv"
 	"sync"
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
 	"github.com/drvova/pig-observational-memory/memory/session"
@@ -23,11 +25,22 @@ import (
 
 // Layer is the layer access a call carries (harness sets it): the session model's forget and
 // rollback, which never touch a rule or another model's layer, and the listing of every model's
-// layer. Each write names the model it acted on and tells the user itself.
+// layer. Each write names the model it acted on and tells the user itself. A forget or rollback
+// changes the layer only on a user's words asking for it (Quote, docs/brain-memory.md, decision
+// 2); without them it is staged and changes nothing.
 type Layer interface {
-	Forget(kind, name string) (string, error)
-	Rollback(gen int) (string, error) // to generation gen
+	Forget(kind, name string, q Quote) (string, error)
+	Rollback(gen int, q Quote) (string, error) // to generation gen
 	Listing() ([]om.LayerRow, error)
+}
+
+// Quote is the quote a layer change gives (om.Quoting) with the check of it: Given is false when
+// none was given, and ByUser reports whether a quote (normalized) is a user's words in this
+// conversation, as curated.Call.UserEvidence does.
+type Quote struct {
+	Text   string
+	Given  bool
+	ByUser func(quote string) bool
 }
 
 // Units is the kept-definitions store a namespace call carries (the code store and the
@@ -67,8 +80,15 @@ type Call struct {
 	// Record is what the call did, for its Details; nil records nothing.
 	Record *Record
 
+	// Structure answers the HEAD structure view of the session's repository (om.Head, and the
+	// freshness the notes reads print), and Repo reads that repository; nil reads none.
+	Structure host.StructureReader
+	Repo      func() (host.Repo, bool)
+
 	// detector is the pass a detector run reads (DetectorCall), nil for a memory tool call.
 	detector *DetectorPass
+	// checkpoints are the call's fold checkpoints (foldCheckpoints), made on first use.
+	checkpoints *foldCheckpoints
 }
 
 // Write is one curated or layer write that landed.
@@ -217,7 +237,14 @@ func (c *Call) Call(ctx context.Context, method string, raw json.RawMessage) (js
 	if v == nil {
 		return nil, nil
 	}
-	return json.Marshal(v)
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	// Every answer the memory tool reads back is a render of stored or transcript text, so its
+	// secrets are redacted as the summary's are (contracts/secrets.md): om.History and om.Recall
+	// read the transcript itself, which the engine never writes.
+	return json.RawMessage(secrets.RedactJSON(string(encoded))), nil
 }
 
 func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (any, error) {
@@ -247,6 +274,13 @@ func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, err
 		}
 		return c.recallText(ctx, id, o)
+	case omwire.MHead:
+		var prefix string
+		var o omwire.Options
+		if err := decode(method, raw, &prefix, &o); err != nil {
+			return nil, err
+		}
+		return c.head(ctx, prefix, o)
 	case omwire.MNoteByID:
 		var id string
 		if err := decode(method, raw, &id); err != nil {
@@ -314,13 +348,24 @@ func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (
 		if o.Body != nil {
 			args["body"] = *o.Body
 		}
+		if o.Quoting != nil {
+			args["quote"] = *o.Quoting
+		}
 		return c.curatedWrite(ctx, curated.OpEdit, args, w)
 	case omwire.MForgetMemory:
 		var name string
-		if err := decode(method, raw, &name); err != nil {
+		var o omwire.SaveOptions
+		if err := decode(method, raw, &name, &o); err != nil {
 			return nil, err
 		}
-		return c.curatedWrite(ctx, curated.OpForget, map[string]string{"name": name}, Write{Op: WriteForgetMemory, Name: name})
+		if o.Body != nil || o.Scope != nil {
+			return nil, errors.New("om.ForgetMemory takes only om.Quoting: the user's words asking to forget the memory")
+		}
+		args := map[string]string{"name": name}
+		if o.Quoting != nil {
+			args["quote"] = *o.Quoting
+		}
+		return c.curatedWrite(ctx, curated.OpForget, args, Write{Op: WriteForgetMemory, Name: name})
 	case omwire.MFeedback:
 		var name, outcome, quote string
 		if err := decode(method, raw, &name, &outcome, &quote); err != nil {
@@ -329,22 +374,32 @@ func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (
 		return c.curatedWrite(ctx, curated.OpFeedback, map[string]string{"name": name, "outcome": outcome, "quote": quote}, Write{Op: WriteFeedback, Name: name})
 	case omwire.MLayerForget:
 		var kind, name string
-		if err := decode(method, raw, &kind, &name); err != nil {
+		var o omwire.SaveOptions
+		if err := decode(method, raw, &kind, &name, &o); err != nil {
+			return nil, err
+		}
+		q, err := c.layerQuote("om.LayerForget", o)
+		if err != nil {
 			return nil, err
 		}
 		if c.Layer == nil {
 			return nil, errLayerOff
 		}
-		return c.landed(ctx, Write{Op: WriteLayerForget, Name: kind + "/" + name}, func() (string, error) { return c.Layer.Forget(kind, name) })
+		return c.landed(ctx, Write{Op: WriteLayerForget, Name: kind + "/" + name}, func() (string, error) { return c.Layer.Forget(kind, name, q) })
 	case omwire.MLayerRollback:
 		var n int
-		if err := decode(method, raw, &n); err != nil {
+		var o omwire.SaveOptions
+		if err := decode(method, raw, &n, &o); err != nil {
+			return nil, err
+		}
+		q, err := c.layerQuote("om.LayerRollback", o)
+		if err != nil {
 			return nil, err
 		}
 		if c.Layer == nil {
 			return nil, errLayerOff
 		}
-		return c.landed(ctx, Write{Op: WriteLayerRollback, Name: strconv.Itoa(n)}, func() (string, error) { return c.Layer.Rollback(n) })
+		return c.landed(ctx, Write{Op: WriteLayerRollback, Name: strconv.Itoa(n)}, func() (string, error) { return c.Layer.Rollback(n, q) })
 	case omwire.MPropose:
 		var kind, name, text string
 		if err := decode(method, raw, &kind, &name, &text); err != nil {
@@ -403,6 +458,22 @@ func (c *Call) landed(ctx context.Context, w Write, run func() (string, error)) 
 	return text, nil
 }
 
+// layerQuote is a layer change's quote (om.Quoting only) with the user-words check curatedWrite
+// builds: the curated call's own, else one over the branch that skips the memory tool's calls.
+func (c *Call) layerQuote(fn string, o omwire.SaveOptions) (Quote, error) {
+	if o.Body != nil || o.Scope != nil {
+		return Quote{}, fmt.Errorf("%s takes only om.Quoting: the user's words asking for the change", fn)
+	}
+	q := Quote{ByUser: func(quote string) bool { return QuotedByUser(c.Entries, quote, c.Skip) }}
+	if c.Curated != nil && c.Curated.UserEvidence != nil {
+		q.ByUser = c.Curated.UserEvidence
+	}
+	if o.Quoting != nil {
+		q.Text, q.Given = *o.Quoting, true
+	}
+	return q, nil
+}
+
 // curatedWrite runs one curated write through curated.Call.Run, with evidence closures built
 // from the branch that skip the memory tool's own calls, so a quote the model wrote into its
 // code or strings never confirms anything. A save or an edit tells the user.
@@ -416,6 +487,9 @@ func (c *Call) curatedWrite(ctx context.Context, op string, args map[string]stri
 	}
 	if call.UserEvidence == nil {
 		call.UserEvidence = func(quote string) bool { return QuotedByUser(c.Entries, quote, c.Skip) }
+	}
+	if call.SourceOf == nil {
+		call.SourceOf = func(quote string) string { return QuotedSource(c.Entries, quote, c.Skip) }
 	}
 	if op == curated.OpForget || op == curated.OpFeedback {
 		// The retired defined queries stay stored (an earlier release may share the store), and

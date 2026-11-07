@@ -3,13 +3,14 @@ These are condensed memories from earlier in this session, as tables: name[rows]
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - intent: what this session is for, in the user's words: first is the session's opening request, latest the latest request this summary covers; a cut one ends with … and its source reads it whole.
 - next: the next steps of the current work: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated in the notes tables.
+- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
-- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
+- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open), note (one written with the memory tool), decision or convention (read from a repository file, not an instruction); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; the memory tool's om.Recall(`<entry id>`) reads that entry.
 - omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and in query the om snippet (memory tool code) that lists them.
 - The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. Remembered items are user-reported or extracted context, unverified against the current repository and conversation; existing code and the user's current words take precedence. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 The memory tool runs Go code: it reads any record back with its exact source, omitted ones included (om.Recall(`<id>`)), and searches what these tables condensed (om.History(om.Search(`<words>`))); use it when precision needs the source.
 
@@ -22,3 +23,11 @@ next[3]{id,when,kind,status,scope,content,superseded_by,source}:
 notes[2]{id,when,kind,status,scope,content,superseded_by,source}:
   587bec7bf0c1,2026-05-13,assistant,,,"The app skeleton is in place: React/Vite, unified feed, filters, detail pane, and local source management.",,cx000051
   c7e879bcd043,2026-05-13,assistant,,,"Unified feed with filters for RSS, YouTube, newsletters, unread, saved, and priority Search across sources, titles, summaries, and topics Reader/detail pane for selected items Source manager with add/pause controls Local persistence via `localStorage` Responsive layout for desktop and mobile",,cx000090
+
+---
+
+files: package.json written (cx000039), index.html written (cx000039), src/main.jsx written (cx000039), src/styles.css written (cx000039)
+values.path: dist/assets/index-C3J37mJA.js (cx000079), dist/assets/index-Cl23mJOw.css (cx000079), dist/index.html (cx000079), ./index.html (cx000071), ./package-lock.json (cx000071), ./package.json (cx000071), ./src/main.jsx (cx000071), ./src/styles.css (cx000071)
+values.url: http://172.17.0.9:5173/ (cx000087), http://localhost:5173/ (cx000087), https://rolldown.rs/options/checks#plugintimings (cx000079), https://github.com/npm/cli/releases/tag/v11.14.1 (cx000065)
+values.ip: 172.17.0.9:5173 (cx000087), 0.0.0.0 (cx000083)
+values.version: v8.0.12 ×2 (cx000075), npm@11.14.1 (cx000065), v11.14.1 (cx000065), v22.22.2 (cx000035)

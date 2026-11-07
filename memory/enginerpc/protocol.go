@@ -40,6 +40,9 @@ const (
 	MethodSessionID                 = "host/sessionId"
 	MethodSessionFile               = "host/sessionFile"
 	MethodConfigHome                = "host/configHome"
+	MethodRepo                      = "host/repo"
+	MethodStructure                 = "host/structure"
+	MethodHarness                   = "host/harness"
 	MethodNotify                    = "host/notify"
 	MethodIsIdle                    = "host/isIdle"
 	MethodCompact                   = "host/compact"
@@ -235,7 +238,24 @@ type AppendEntryParams struct {
 	Data       any    `json:"data"`
 }
 
-// StringResult is a string answer (session id, session file, config home).
+// RepoResult is host/repo's result: the session's repository (host.Repo), null outside one.
+type RepoResult struct {
+	Repo *host.Repo `json:"repo"`
+}
+
+// StructureParams are host/structure's params: the scope and the query (host.StructureQuery).
+type StructureParams struct {
+	Scope string              `json:"scope"`
+	Query host.StructureQuery `json:"query"`
+}
+
+// StructureResult is host/structure's result: the HEAD structure view's answer, null outside a
+// repository or for a host that reads none.
+type StructureResult struct {
+	Answer *host.StructureAnswer `json:"answer"`
+}
+
+// StringResult is a string answer (session id, session file, config home, harness).
 type StringResult struct {
 	Value string `json:"value"`
 }

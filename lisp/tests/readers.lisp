@@ -255,6 +255,24 @@
   (check (cdr (assoc "toolResult" (role-counts (real-entries "neovate" "neovate-tool.jsonl")) :test #'string=)) 1)
   (check (entry-roles (real-entries "copilot" "copilot-user-message.json")) "11111111-1111-1111-1111-111111111111:user"))
 
+(deftest readers-claude-code-origin
+  ;; TestClaudeCodeOrigin: a user line with origin.kind other than human is a custom_message,
+  ;; never a user entry; its meta lines stay left out; human and no origin stay user entries.
+  (let ((es (transcript-file-entries "claude-code" (namestring (merge-pathnames "../../memory/transcript/testdata/synthetic/claude-code-origin.jsonl" *readers-tests-here*)))))
+    (check (join (mapcar (lambda (e)
+                           (cat (entry-id e) ":"
+                                (if (string= (entry-type e) "message")
+                                    (entry-role e)
+                                    (cat (entry-type e) "(" (entry-custom-type e) ")"))))
+                         es)
+                 " ")
+           "h1:user a1:assistant r1:toolResult a2:assistant n1:custom_message(origin:task-notification) p2:custom_message(origin:peer) a3:assistant u1:user")
+    (check (search "<task-notification>" (str (jget (aref (entry-content (fifth es)) 0) "text"))) 0)
+    (check (entry-timestamp (fifth es)) "2026-11-06T09:01:00.000Z"))
+  (check (om.readers::origin-kind (jobject "origin" (jobject "mode" "user" "source" "cli"))) "")
+  (check (om.readers::origin-kind (jobject "origin" (jobject "kind" "human"))) "")
+  (check (om.readers::origin-kind (jobject "origin" "peer")) ""))
+
 (deftest readers-sqlite-rows
   ;; real_test.go's Goose rows: a tool request, then its result in the legacy and new shapes.
   (let ((rows '()))

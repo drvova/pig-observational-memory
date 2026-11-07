@@ -452,7 +452,16 @@ func TestCuratedWrites(t *testing.T) {
 		t.Fatal("an invalid type was saved")
 	}
 	body := "new body"
-	if s := must[string](t, c, omwire.MEdit, "rye", omwire.EditOptions{Body: &body}); !strings.HasPrefix(s, "Updated memory rye") {
+	if s := must[string](t, c, omwire.MEdit, "rye", omwire.EditOptions{Body: &body}); !strings.HasPrefix(s, "Changed memory rye [user] in this session only") {
+		t.Fatal(s)
+	}
+	if m, err := store.GetAs("rye", "/p", "s1"); err != nil || m.Body != "new body" {
+		t.Fatalf("the staged edit is not seen in its session: %+v %v", m, err)
+	}
+	if m, err := store.GetAs("rye", "/p", "s2"); err != nil || m.Body != "" {
+		t.Fatalf("a staged edit reached another session: %+v %v", m, err)
+	}
+	if s := must[string](t, c, omwire.MEdit, "rye", omwire.EditOptions{Body: &body, Quoting: &quote}); !strings.HasPrefix(s, "Updated memory rye") {
 		t.Fatal(s)
 	}
 	m, err := store.GetAs("rye", "/p", "s1")
@@ -479,10 +488,10 @@ func TestCuratedWrites(t *testing.T) {
 	for _, w := range got.Writes {
 		ops = append(ops, w.Op+":"+w.Name)
 	}
-	if strings.Join(ops, " ") != "save:sourdough save:rye edit:rye feedback:rye forget:sourdough" {
+	if strings.Join(ops, " ") != "save:sourdough save:rye edit:rye edit:rye feedback:rye forget:sourdough" {
 		t.Fatalf("writes %v", ops)
 	}
-	if len(*notified) != 3 {
+	if len(*notified) != 4 {
 		t.Fatalf("notified %v", *notified)
 	}
 	if text := must[om.Text](t, c, omwire.MRecall, "rye", omwire.Options{}); !strings.Contains(text.Body, "Uses rye") || text.Status != "saved" {
@@ -550,11 +559,11 @@ func TestRetiredDefinedQueriesTakeNoFeedbackAndUnreadableOnesStay(t *testing.T) 
 
 type fakeLayer struct{ forgot, rolled []string }
 
-func (f *fakeLayer) Forget(kind, name string) (string, error) {
+func (f *fakeLayer) Forget(kind, name string, q omhost.Quote) (string, error) {
 	f.forgot = append(f.forgot, kind+"/"+name)
 	return "Forgot " + kind + "/" + name + " for p/m.", nil
 }
-func (f *fakeLayer) Rollback(n int) (string, error) {
+func (f *fakeLayer) Rollback(n int, q omhost.Quote) (string, error) {
 	f.rolled = append(f.rolled, strconv.Itoa(n))
 	return "p/m's harness rolled back", nil
 }

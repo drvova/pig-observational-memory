@@ -17,6 +17,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/tables"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
@@ -65,6 +66,41 @@ type Input struct {
 	Aliases []ledger.SubjectAlias
 	// ReflectionDates date the reflections (ledger.ReflectionDateRanges).
 	ReflectionDates map[string]string
+	// Slots are the session model's working-memory caps (docs/memory-v2.md, "Working
+	// memory"); a zero cap takes its default (DefaultSlots).
+	Slots Slots
+	// Freshness are the project records' freshness verdicts against HEAD, by record id
+	// (project.Texts: "gone at <sha>", "changed since <sha>, unverified"); a record with none is
+	// unchanged or could not be told. A verdict is printed after the record, never drops it.
+	Freshness map[string]string
+	// Decayed are the records decay lowers (ledger.Decayed), by id: classes 4 and 6 take them
+	// after the others. None while the decay setting is off.
+	Decayed map[string]bool
+}
+
+// Slots are the working memory's caps: how many of the user's rules and of their scope
+// exclusions the constraints registry shows, and how many finished plans the next section
+// shows with their receipts. What a cap leaves out is named in the also: line.
+type Slots struct {
+	Constraints, Scopes, Actions int
+}
+
+// DefaultSlots are the caps for a model with none set: about 10 constraints (and 10 scope
+// exclusions) and the last 5 actions (docs/brain-memory.md, decision 16).
+var DefaultSlots = Slots{Constraints: 10, Scopes: 10, Actions: 5}
+
+// withDefaults is s with each cap below 1 at its default.
+func (s Slots) withDefaults() Slots {
+	if s.Constraints < 1 {
+		s.Constraints = DefaultSlots.Constraints
+	}
+	if s.Scopes < 1 {
+		s.Scopes = DefaultSlots.Scopes
+	}
+	if s.Actions < 1 {
+		s.Actions = DefaultSlots.Actions
+	}
+	return s
 }
 
 // Result is a rendered summary and what it shows.
@@ -95,18 +131,24 @@ const (
 	roleNote
 	roleFile
 	roleCommit
+	roleValue
 )
 
 // The groups that are not a notes table.
 const (
-	groupRequest     = "request"
-	groupIntent      = "intent"
-	groupNext        = "next"
+	groupRequest = "request"
+	groupIntent  = "intent"
+	groupNext    = "next"
+	// groupConstraints is the constraints registry, rendered after the notes tables.
+	groupConstraints = "constraints"
 	groupReflections = "reflections"
 	groupFiles       = "files"
 	groupCommits     = "commits"
-	groupOmitted     = "omitted"
-	groupNotes       = "notes"
+	// groupValues is the values list's tail; each value kind's list is its own group
+	// (valueGroup).
+	groupValues  = "values"
+	groupOmitted = "omitted"
+	groupNotes   = "notes"
 )
 
 // item is one record (or the request) as selection sees it.
@@ -132,6 +174,21 @@ type item struct {
 	// status is the record's status as shown (statusOf); links the pointers its line ends
 	// with before its source (linksOf).
 	status, links string
+	// contested marks a user claim standing contested (ledger.Contested), contestedBy the
+	// pushback records answering it: it is shown as a claim, never as a rule.
+	contested   bool
+	contestedBy []string
+	// extra is the instructions line the item's kind adds once to the summary that shows one
+	// (extraLine), "" for none.
+	extra string
+	// slot is a working-memory member's slot (slotConstraint, slotScope, slotDone), "" for
+	// none; receiptAt is a finished plan's receipt anchor, -1 when off the branch.
+	slot      string
+	receiptAt int
+	// value, valueKind and count are a value record's (extract.ValueParts); last is the branch
+	// index of its latest sighting, -1 when off the branch.
+	value, valueKind string
+	count, last      int
 	// cost is what the item adds to its group; cells or line render it.
 	cost  int
 	cells []string
@@ -173,6 +230,10 @@ func estimate(text string) int { return tokens.EstimateStringTokens(text) }
 // limit. The result's text is at most in.Budget tokens, or "" when nothing
 // fits.
 func Render(in Input) Result {
+	// A record holding a preference that weakens security is never shown, nor a reflection
+	// resting on one (ledger.HeldRule; docs/brain-memory.md, decision 19): it is kept, listed in
+	// /om:status, and counts as neither shown nor left out.
+	in.Observations, in.Reflections = ledger.WithoutHeld(in.Observations, in.Reflections, in.Folded.ObservationsByID)
 	if in.Budget <= 0 || len(in.Reflections)+len(in.Observations) == 0 {
 		return Result{}
 	}
@@ -198,7 +259,9 @@ func Render(in Input) Result {
 	// The costs bound the estimate from above, so the text normally fits as chosen; if it does
 	// not, the item chosen last is let go until it does.
 	for {
-		text := s.l.render(s, pick, omitted)
+		// Secrets are redacted in what is shown, records written before the scanner included
+		// (contracts/secrets.md).
+		text := secrets.Redact(s.l.render(s, pick, omitted))
 		if estimate(text) <= in.Budget && pick.count() > 0 {
 			return s.result(text, pick, omitted)
 		}
@@ -231,10 +294,29 @@ type state struct {
 	// partners are, by record id, the active records a possibly_updates or conflicts link joins
 	// it to, either way, in ledger order: taking one tries the others next.
 	partners map[string][]*item
+	// closed are the plans a receipt closed (ledger.ClosedBy); stale the open plans a newer
+	// request bears on, by plan id, with that request's entry id.
+	closed map[string]ledger.Closure
+	stale  map[string]string
+	// members are the working memory's members in ledger order: the constraints registry's
+	// (slotConstraint, slotScope) and the finished plans (slotDone); slots their caps.
+	members []*item
+	slots   Slots
 }
 
+// The working-memory slots of an item (item.slot).
+const (
+	slotConstraint = "constraint"
+	slotScope      = "scope"
+	slotDone       = "done"
+)
+
+// StatusDone is the status a plan a receipt closed shows (docs/memory-v2.md, "Working memory"):
+// shown, never stored; the plan's record keeps status proposed.
+const StatusDone = "done"
+
 func newState(in Input) *state {
-	s := &state{in: in, positions: ledger.EntryIndexByID(in.Branch), superseded: map[string]bool{}, byID: map[string]*item{}, records: map[string]ledger.Observation{}, partners: map[string][]*item{}}
+	s := &state{in: in, positions: ledger.EntryIndexByID(in.Branch), superseded: map[string]bool{}, byID: map[string]*item{}, records: map[string]ledger.Observation{}, partners: map[string][]*item{}, slots: in.Slots.withDefaults()}
 	s.l = newLayout(in)
 	for id, o := range in.Folded.ObservationsByID {
 		s.records[id] = o
@@ -276,10 +358,26 @@ func newState(in Input) *state {
 			it.role, it.group = roleFile, groupFiles
 		case ledger.KindCommit:
 			it.role, it.group = roleCommit, groupCommits
+		case ledger.KindValue:
+			if kind, value, count, ok := extract.ValueParts(o); ok {
+				it.role, it.group, it.extra = roleValue, valueGroup(kind), extraValues
+				it.valueKind, it.value, it.count = kind, value, count
+				it.last = -1
+				if n := len(o.SourceEntryIDs); n > 0 {
+					if at, ok := s.positions[o.SourceEntryIDs[n-1]]; ok {
+						it.last = at
+					}
+				}
+				break
+			}
+			it.group = groupNotes
 		default:
 			it.group = ledger.SubjectTableName(canonical[o.Subject].Subject)
 			if it.group == "" {
 				it.group = groupNotes
+			}
+			if o.Kind == ledger.KindEvidence {
+				it.extra = extraEvidence
 			}
 		}
 		it.anchorID, it.anchor, it.anchored = ledger.ObservationAnchor(o, s.positions)
@@ -288,13 +386,25 @@ func newState(in Input) *state {
 		s.items = append(s.items, it)
 		s.byID[o.ID] = it
 	}
-	retracted := ledger.RetractedIDs(all)
+	// The status a note shows reads the fold's labels (ledger.LabelsOf): retracted for a record
+	// a retraction withdrew.
+	retracted := map[string]bool{}
+	for id, l := range ledger.LabelsOf(all) {
+		retracted[id] = l == ledger.LabelRetracted
+	}
+	s.closed = ledger.ClosedBy(all)
 	for _, it := range s.items {
 		if it.role == roleNote {
 			it.status = statusOf(it.obs, retracted)
+			if _, done := s.closed[it.obs.ID]; done && it.status == ledger.StatusProposed {
+				it.status = StatusDone
+			}
 		}
 	}
+	s.contest(all)
+	s.markStale()
 	s.markNext()
+	s.markConstraints()
 	s.link()
 	supersededBy := map[string][]string{}
 	for _, o := range all {
@@ -328,6 +438,38 @@ func newState(in Input) *state {
 	return s
 }
 
+// contest marks the user claims standing contested (ledger.Contested over every record of the
+// ledger), and puts each pushback in the table of the first claim it answers, so it is shown
+// beside it.
+func (s *state) contest(all []ledger.Observation) {
+	for id, by := range ledger.Contested(all) {
+		if it := s.byID[id]; it != nil && it.role == roleNote {
+			it.contested, it.contestedBy, it.extra = true, by, extraContest
+		}
+	}
+	for _, it := range s.items {
+		if it.role != roleNote || it.obs.Kind != ledger.KindPushback {
+			continue
+		}
+		it.extra = extraContest
+		for _, id := range it.obs.RespondsTo {
+			if claim := s.byID[id]; claim != nil && claim.role == roleNote {
+				it.group = claim.group
+				break
+			}
+		}
+	}
+}
+
+// shownKind is the kind a note's line shows: a contested claim is a "claim", never the
+// preference or correction it would be as a rule.
+func (it *item) shownKind() string {
+	if it.contested {
+		return "claim"
+	}
+	return string(it.obs.Kind)
+}
+
 // markNext moves the next steps into the next section (docs/memory-v2.md, "Selection"): the
 // plans still standing (status proposed, not superseded) and the open or failed attempts no
 // later attempt resolved, said at or after the latest user request the summary quotes (the
@@ -347,6 +489,7 @@ func (s *state) markNext() {
 			start = at
 		}
 	}
+	s.markDone()
 	if start < 0 {
 		return
 	}
@@ -360,6 +503,88 @@ func (s *state) markNext() {
 			it.noteGroup, it.group = it.group, groupNext
 		}
 	}
+}
+
+// markDone moves the finished plans into the next section (docs/memory-v2.md, "Working
+// memory"): the plans a receipt closed that nothing supersedes, the Actions cap of them whose
+// receipts are newest, shown with status done and the receipt. Older ones stay in their notes
+// tables, and the also: line names those the summary leaves out.
+func (s *state) markDone() {
+	var done []*item
+	for _, it := range s.items {
+		if it.role != roleNote || it.status != StatusDone || s.superseded[it.obs.ID] {
+			continue
+		}
+		it.receiptAt = -1
+		if receipt, ok := s.records[s.closed[it.obs.ID].ClosedBy]; ok {
+			if _, at, on := ledger.ObservationAnchor(receipt, s.positions); on {
+				it.receiptAt = at
+			}
+		}
+		it.slot = slotDone
+		s.members = append(s.members, it)
+		done = append(done, it)
+	}
+	sort.SliceStable(done, func(a, b int) bool { return done[a].receiptAt > done[b].receiptAt })
+	for i, it := range done {
+		if i < s.slots.Actions {
+			it.noteGroup, it.group = it.group, groupNext
+		}
+	}
+}
+
+// markStale finds the open plans a newer request bears on (docs/memory-v2.md, "Working
+// memory"): a plan stated under a request (ledger.Observation.DerivedFrom) that a later request
+// the person typed, after the plan and opening another episode, names a key of
+// (ledger.StaleTerms, ledger.BearsOn), questions left out. The newest such request is the one
+// the plan's line names.
+func (s *state) markStale() {
+	s.stale = map[string]string{}
+	for _, it := range s.items {
+		if it.role != roleNote || it.status != ledger.StatusProposed || it.obs.DerivedFrom == "" || !it.anchored || s.superseded[it.obs.ID] {
+			continue
+		}
+		from, ok := s.positions[it.obs.DerivedFrom]
+		terms := ledger.StaleTerms(it.obs)
+		if !ok || len(terms) == 0 {
+			continue
+		}
+		for i := len(s.in.Branch) - 1; i > it.anchor && i > from; i-- {
+			entry := s.in.Branch[i]
+			if !extract.IsRequest(entry) {
+				continue
+			}
+			text := extract.RequestText(entry)
+			if extract.IsQuestionText(text) || !ledger.BearsOn(text, terms) {
+				continue
+			}
+			s.stale[it.obs.ID] = entry.ID
+			if it.extra == "" {
+				it.extra = extraStale
+			}
+			break
+		}
+	}
+}
+
+// markConstraints moves the constraints registry's members into their own group
+// (docs/memory-v2.md, "Working memory"): the user's own preferences, rules and scope
+// exclusions in force (kind preference, ledger.UserPriority), none superseded, retracted,
+// hypothetical or contested.
+func (s *state) markConstraints() {
+	for _, it := range s.items {
+		if it.role != roleNote || it.group == groupNext || it.obs.Kind != "preference" || !ledger.UserPriority(it.obs) || it.contested ||
+			s.superseded[it.obs.ID] || it.status == ledger.StatusRetracted || it.status == ledger.StatusHypothetical {
+			continue
+		}
+		it.slot = slotConstraint
+		if extract.IsScopeExclusion(it.obs.Content) {
+			it.slot = slotScope
+		}
+		it.noteGroup, it.group = it.group, groupConstraints
+		s.members = append(s.members, it)
+	}
+	sort.SliceStable(s.members, func(a, b int) bool { return s.members[a].index < s.members[b].index })
 }
 
 // statusOf is a record's status as the summary shows it (docs/memory-v2.md, "Selection"):
@@ -380,6 +605,34 @@ func (s *state) link() {
 	join := func(a, b *item) {
 		if !slices.Contains(s.partners[a.id()], b) {
 			s.partners[a.id()] = append(s.partners[a.id()], b)
+		}
+	}
+	// The supersession decisions of the possible updates and conflicts between shown records
+	// (ledger.Supersession; contracts/truth.md): an older value a keep-both update leaves is
+	// marked (updated by <id>), and both ends of a contested pair (conflicts <id>), so a value
+	// another replaced is never shown as current and a contest never settles by order.
+	updatedBy := map[string][]string{}
+	conflictsWith := map[string][]string{}
+	contestedUpdate := map[string][]string{}
+	for _, it := range s.items {
+		if it.role != roleNote {
+			continue
+		}
+		for _, id := range it.obs.PossiblyUpdates {
+			other := s.byID[id]
+			if other == nil || other == it || other.role != roleNote {
+				continue
+			}
+			switch ledger.Supersession(it.obs, other.obs) {
+			case ledger.DecisionKeepBoth:
+				updatedBy[id] = append(updatedBy[id], it.obs.ID)
+			case ledger.DecisionContested:
+				contestedUpdate[it.obs.ID] = append(contestedUpdate[it.obs.ID], id)
+				conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+			}
+		}
+		for _, id := range it.obs.Conflicts {
+			conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
 		}
 	}
 	for _, it := range s.items {
@@ -411,8 +664,57 @@ func (s *state) link() {
 				parts = append(parts, "("+label+" "+strings.Join(shown, " ")+")")
 			}
 		}
-		pointer("may update", it.obs.PossiblyUpdates, func(other *item) bool { return !s.superseded[other.obs.ID] })
-		pointer("conflicts", it.obs.Conflicts, func(*item) bool { return true })
+		var mayUpdate, conflicts []string
+		for _, id := range it.obs.PossiblyUpdates {
+			if slices.Contains(contestedUpdate[it.obs.ID], id) {
+				conflicts = append(conflicts, id)
+			} else {
+				mayUpdate = append(mayUpdate, id)
+			}
+		}
+		for _, id := range append(slices.Clone(it.obs.Conflicts), conflictsWith[it.obs.ID]...) {
+			if !slices.Contains(conflicts, id) {
+				conflicts = append(conflicts, id)
+			}
+		}
+		pointer("may update", mayUpdate, func(other *item) bool { return !s.superseded[other.obs.ID] })
+		pointer("conflicts", conflicts, func(*item) bool { return true })
+		n := len(parts)
+		pointer("updated by", updatedBy[it.obs.ID], func(other *item) bool { return !s.superseded[other.obs.ID] })
+		if len(parts) > n && it.extra == "" {
+			it.extra = extraHistory
+		}
+		// A contested claim names the pushback answering it, and the pushback the claims it
+		// answers (ledger.Contested, Observation.RespondsTo).
+		if it.contested {
+			n := len(parts)
+			pointer("contested by", it.contestedBy, func(*item) bool { return true })
+			if len(parts) == n {
+				parts = append(parts, "(contested)")
+			}
+		}
+		if it.obs.Kind == ledger.KindPushback {
+			pointer("responds to", it.obs.RespondsTo, func(*item) bool { return true })
+		}
+		// A finished plan names its receipt, an open one the newer request it may be stale
+		// against (markDone, markStale).
+		if it.status == StatusDone {
+			c := s.closed[it.obs.ID]
+			parts = append(parts, "(closed by "+c.ClosedBy+": "+c.Receipt+")")
+			if it.extra == "" {
+				it.extra = extraClosed
+			}
+		}
+		if request, ok := s.stale[it.obs.ID]; ok {
+			parts = append(parts, "(may be stale "+request+")")
+		}
+		// A project record's freshness against HEAD (project.Verdicts; decision 20).
+		if verdict := s.in.Freshness[it.obs.ID]; verdict != "" {
+			parts = append(parts, "("+verdict+")")
+			if it.extra == "" {
+				it.extra = extraFresh
+			}
+		}
 		it.links = strings.Join(parts, " ")
 	}
 	for id, items := range s.partners {
@@ -485,6 +787,13 @@ func (p *selected) unselect(s *state, it *item) {
 		p.used -= s.l.headerCost(it.group)
 		delete(p.opened, it.group)
 	}
+	if it.extra != "" {
+		p.opened[it.extra]--
+		if p.opened[it.extra] == 0 {
+			p.used -= s.l.extraCost(it.extra)
+			delete(p.opened, it.extra)
+		}
+	}
 }
 
 // choose selects items under budget in the ordered classes.
@@ -498,6 +807,9 @@ func (s *state) choose(budget int) *selected {
 		if p.opened[it.group] == 0 {
 			cost += s.l.headerCost(it.group)
 		}
+		if it.extra != "" && p.opened[it.extra] == 0 {
+			cost += s.l.extraCost(it.extra)
+		}
 		if p.used+cost > budget {
 			return false
 		}
@@ -505,6 +817,9 @@ func (s *state) choose(budget int) *selected {
 		p.order = append(p.order, it)
 		p.used += cost
 		p.opened[it.group]++
+		if it.extra != "" {
+			p.opened[it.extra]++
+		}
 		p.carried.WriteString(it.text)
 		p.carried.WriteByte('\n')
 		// What the item replaces leaves the summary, and frees its room when it was shown.
@@ -541,6 +856,37 @@ func (s *state) choose(budget int) *selected {
 		}
 	}
 	records := s.items
+	// 1a. The constraints registry (markConstraints), newest first, at most each slot's cap: its
+	// reserve is the room the request leaves, ahead of every other class, so the user's rules
+	// stay shown when the budget is tight and the caps bound what it takes. One the registry has
+	// no room or cap for goes back to its notes table for good and competes in class 2.
+	taken := map[string]int{}
+	for i := len(records) - 1; i >= 0; i-- {
+		it := records[i]
+		if it.group != groupConstraints {
+			continue
+		}
+		cap := s.slots.Constraints
+		if it.slot == slotScope {
+			cap = s.slots.Scopes
+		}
+		if taken[it.slot] >= cap || !try(it) {
+			continue
+		}
+		taken[it.slot]++
+		// Its link partners come next, as in every class (newestFirst).
+		for _, other := range s.partners[it.id()] {
+			if !holdsNoValue(other) {
+				try(other)
+			}
+		}
+	}
+	for _, it := range records {
+		if it.group == groupConstraints && !p.on[it] {
+			it.group = it.noteGroup
+			s.l.price(it, s.canonical, s.supersededBy)
+		}
+	}
 	// Taking a record tries the records its links join it to next, in the same class, which may
 	// still not fit; a class a record may not hold refuses it as a partner too.
 	newestFirst := func(eligible func(*item) bool, roles ...role) {
@@ -572,7 +918,7 @@ func (s *state) choose(budget int) *selected {
 	newestFirst(func(it *item) bool { return slices.Contains(fallen, it) }, roleNote)
 	// 2. Unsuperseded user corrections and preferences.
 	newestFirst(func(it *item) bool {
-		return ledger.UserPriority(it.obs) && !s.superseded[it.obs.ID] && it.status != ledger.StatusRetracted
+		return ledger.UserPriority(it.obs) && !it.contested && !s.superseded[it.obs.ID] && it.status != ledger.StatusRetracted
 	}, observations...)
 	// 3. Open and failed attempts not resolved by a later one.
 	newestFirst(func(it *item) bool {
@@ -594,15 +940,74 @@ func (s *state) choose(budget int) *selected {
 			}
 		}
 	}
+	// Decay lowers rank only (ledger.Decayed; docs/brain-memory.md, decision 6): in classes 4 and
+	// 6 the decayed records are taken after the others of their class, never left out of the
+	// omitted spans that list them. Off, nothing is decayed and the order is unchanged.
+	ranks := func(eligible func(*item) bool, roles ...role) {
+		newestFirst(func(it *item) bool { return !s.in.Decayed[it.id()] && eligible(it) }, roles...)
+		if len(s.in.Decayed) > 0 {
+			newestFirst(func(it *item) bool { return s.in.Decayed[it.id()] && eligible(it) }, roles...)
+		}
+	}
 	// 4. Records carrying specifics no selected line carries.
-	newestFirst(func(it *item) bool {
+	ranks(func(it *item) bool {
 		return it.status != ledger.StatusRetracted && len(ledger.MissingSpecifics(it.text, []string{p.carried.String()})) > 0
 	}, observations...)
+	// 4b. The values tool output printed (docs/memory-v2.md, "Tool output"): each kind's values
+	// ranked by recurrence (rankedValues), at most valueCap of a kind, taken a rank at a time
+	// across the kinds in their order, so a tight budget shows the top of every kind.
+	ranked := s.rankedValues()
+	for rank := range valueCap(s.in.Budget) {
+		for _, kind := range extract.ValueKinds {
+			if items := ranked[kind]; rank < len(items) && !s.superseded[items[rank].obs.ID] {
+				try(items[rank])
+			}
+		}
+	}
 	// 5. Reflections, which drop the records they cite.
 	newestFirst(func(*item) bool { return true }, roleReflection)
 	// 6. Everything else.
-	newestFirst(func(*item) bool { return true }, observations...)
+	ranks(func(*item) bool { return true }, observations...)
 	return p
+}
+
+// valueCap is how many values of one kind a summary of budget tokens shows at most: one per
+// 200 tokens, at most maxValuesPerKind (40 at 8,192 tokens and above, 20 at 4,096).
+func valueCap(budget int) int { return min(maxValuesPerKind, max(1, budget/200)) }
+
+// maxValuesPerKind bounds a value kind's list, as Compact-Bench's mechanical reference does.
+const maxValuesPerKind = 40
+
+// valueGroup is the list group of a value kind.
+func valueGroup(kind string) string { return groupValues + "." + kind }
+
+// rankedValues are the value items by kind, each kind's in a fixed total order: the most
+// often seen first, then the latest seen, then by value, then in ledger order.
+func (s *state) rankedValues() map[string][]*item {
+	out := map[string][]*item{}
+	for _, it := range s.items {
+		if it.role == roleValue {
+			out[it.valueKind] = append(out[it.valueKind], it)
+		}
+	}
+	for _, items := range out {
+		sort.SliceStable(items, func(a, b int) bool { return valueBefore(items[a], items[b]) })
+	}
+	return out
+}
+
+// valueBefore is the values' rank order.
+func valueBefore(a, b *item) bool {
+	if a.count != b.count {
+		return a.count > b.count
+	}
+	if a.last != b.last {
+		return a.last > b.last
+	}
+	if a.value != b.value {
+		return a.value < b.value
+	}
+	return a.index < b.index
 }
 
 // settleDrops sets p's drops to what the compaction drops for p's final choice (extract.Drops

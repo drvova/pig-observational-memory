@@ -75,6 +75,22 @@ unknown, window the reported one else the session model's (0 unknown)."
   "V2Threshold.Exceeded: context > window - reserveTokens, false while either is unknown."
   (and tokens (> window 0) (> tokens (- window reserve))))
 
+;;; The quality trigger (hooks/working_v2.go), off by default
+
+(defun raw-tokens-since-compaction (entries)
+  "RawTokensSinceCompaction: the source entries' estimated tokens after the latest compaction."
+  (om::source-tokens (coerce (subseq entries (1+ (om::find-last-compaction-index entries))) 'list)))
+
+(defun read-quality-trigger (cfg entries)
+  "ReadQualityTrigger: (values raw threshold floor), nil with the trigger off."
+  (when (rcfg-quality-trigger cfg)
+    (let ((limits (om::limits-for (rcfg-limits cfg) (rcfg-model-limits cfg) (session-model))))
+      (values (raw-tokens-since-compaction entries) (fifth limits) (fourth limits)))))
+
+(defun quality-due-p (tokens window raw threshold floor)
+  "QualityTrigger.Due: usage known, the context above the floor, the raw tokens over the threshold."
+  (and raw tokens (> window 0) (> tokens floor) (> raw threshold)))
+
 ;;; The trigger's state (runtime.CompactInFlight, CompactionBackoff)
 
 (defstruct (backoff (:conc-name backoff-)) (identity "") (boundary "") (reason "") (tip ""))
@@ -131,7 +147,10 @@ with the slot held: the extension's own compaction)."
     (return-from deferred-compaction))
   (let ((entries (handler-case (get-branch c)
                    (error () (set-compact-in-flight c nil) (return-from deferred-compaction)))))
-    (unless (multiple-value-call #'threshold-exceeded-p (read-threshold c cfg))
+    (unless (multiple-value-bind (tokens window reserve) (read-threshold c cfg)
+              (or (threshold-exceeded-p tokens window reserve)
+                  (multiple-value-bind (raw threshold floor) (read-quality-trigger cfg entries)
+                    (quality-due-p tokens window raw threshold floor))))
       (set-compact-in-flight c nil)
       (notify-ui "Observational memory: compaction skipped — the context is no longer over PiG's threshold" "info")
       (return-from deferred-compaction))
@@ -181,14 +200,20 @@ nil when nothing was scheduled."
            (let ((entries (handler-case (get-branch c) (error () (return-from maybe-trigger-compaction nil)))))
              (when (active-suspension c entries) (return-from maybe-trigger-compaction nil))
              (multiple-value-bind (tokens window reserve) (read-threshold c cfg)
-               (unless (threshold-exceeded-p tokens window reserve) (return-from maybe-trigger-compaction nil))
+               (multiple-value-bind (raw threshold floor) (read-quality-trigger cfg entries)
+               (let ((exceeded (threshold-exceeded-p tokens window reserve)))
+               (unless (or exceeded (quality-due-p tokens window raw threshold floor)) (return-from maybe-trigger-compaction nil))
                (set-backoff c nil)
                (let ((identity (session-identity)))
-                 (notify-ui (format nil "Observational memory: context ~~~A tokens is over PiG's threshold ~A (window - reserveTokens) and PiG's auto-compaction is off; compacting (level 0)"
-                                    (om::locale-int tokens) (om::locale-int (- window reserve)))
-                            "info")
+                 (if exceeded
+                     (notify-ui (format nil "Observational memory: context ~~~A tokens is over PiG's threshold ~A (window - reserveTokens) and PiG's auto-compaction is off; compacting (level 0)"
+                                        (om::locale-int tokens) (om::locale-int (- window reserve)))
+                                "info")
+                     (notify-ui (format nil "Observational memory: ~~~A raw tokens since the last compaction are over the quality threshold ~A (context ~~~A tokens); compacting (level 0)"
+                                        (om::locale-int raw) (om::locale-int threshold) (om::locale-int tokens))
+                                "info"))
                  (setf deferred t)
-                 (start-deferred-compaction c cfg identity))))
+                 (start-deferred-compaction c cfg identity))))))
         (unless deferred (set-compact-in-flight c nil))))))
 
 (define-method "event/agentSettled" (params)
@@ -255,7 +280,9 @@ its pointer form, bounded by the range, else the fallback summary."
 (defun pig-hook-config (cfg)
   "The hook's settings (om::hconfig) from the connection's configuration."
   (om::make-hconfig :passive (rcfg-passive cfg) :consolidate-off (rcfg-consolidate-off cfg)
-                    :summary-max (rcfg-summary-max cfg) :memory-format (rcfg-memory-format cfg)))
+                    :summary-max (rcfg-summary-max cfg) :memory-format (rcfg-memory-format cfg)
+                    :limits (rcfg-limits cfg) :model-limits (rcfg-model-limits cfg) :raw-floor (rcfg-raw-floor cfg)
+                    :decay (rcfg-decay cfg) :decay-horizon (rcfg-decay-horizon cfg)))
 
 (defun pig-hook-host (c)
   "The hook's host over engine-rpc: the branch through the cache, appends through
@@ -263,11 +290,12 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
   (om::make-hhost
    :read (lambda () (get-branch c))
    :append (lambda (type data-json)
-             (handler-case (host-call "host/appendEntry" "customType" type "data" (om::raw-json data-json))
+             (handler-case (host-call "host/appendEntry" "customType" type "data" (om::raw-json (om::redact-json-text data-json)))
                (error (e) (log-line "compaction: append ~A: ~A" type e)))
              "")
    :cwd (scope-cwd)
-   :skip-tools (conn-skip-tools c)))
+   :skip-tools (conn-skip-tools c)
+   :structure #'host-structure))
 
 (define-method "event/sessionBeforeCompact" (params)
   ;; engine.BeforeCompact: always a compaction on PiG's exact cut, never a decline or a
@@ -292,11 +320,14 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
                                             :store-dir store :cfg cfg :event event)))
           (let ((refusal (compaction-harness-refusal ch)))
             (when refusal (not-ported refusal)))
+          ;; The session's boundary of its Lisp layer, before the snapshot (harness-hook-host).
+          (layer-session-boundary (ch-model-key ch))
           (handler-case
               (multiple-value-bind (result entries cut)
                   (sb-thread:with-mutex ((conn-extract-mutex c))
                     ;; The session model's profile (harness.Ledger.ProfileWith), applied to the render.
                     (let ((om::*summary-profile* (ch-profile ch))
+                          (om::*encoding* (session-encoding c (or (ignore-errors (get-branch c)) (om::cevent-branch event))))
                           (om::*kernel-floor-lowered* (conn-floor-lowered-p c store))
                           (hh (harness-hook-host ch (pig-hook-host c))))
                       ;; runtime.Snapshot's CompactHookInFlight, which /om:status shows.

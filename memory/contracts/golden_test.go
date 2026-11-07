@@ -49,7 +49,7 @@ func runGolden(t *testing.T, f fixture) golden {
 	if !ok {
 		t.Fatalf("%s: no reader %q", f.file, f.format)
 	}
-	h := &neutral.Host{Session: f.name(), Dir: "/work", Root: root, Transcript: transcript.File{Path: f.path(t), Format: format}, Store: neutral.StoreFor(root, "golden", f.name()), Now: fixedNow}
+	h := &neutral.Host{Session: f.name(), Dir: "/work", Root: root, Transcript: transcript.File{Path: f.path(t), Format: format}, Store: neutral.StoreFor(root, "golden", f.name()), Now: fixedNow, HarnessName: "golden"}
 	rt := runtime.New()
 	hooks.OnTurnEnd(rt, h)
 	turn, err := os.ReadFile(h.Store.Path)

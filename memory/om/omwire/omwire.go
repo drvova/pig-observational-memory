@@ -82,6 +82,7 @@ const (
 	MPropose        = "Propose"
 	MDefine         = "Define"
 	MStr            = "Str"
+	MHead           = "Head"
 	// The seeded store functions of the namespace: man's store part, kept and forget.
 	MMan    = "man"
 	MKept   = "kept"
@@ -93,7 +94,7 @@ var Methods = []string{
 	MNotes, MReflections, MHistory, MRecall, MNoteByID, MReflectionByID, MFiles, MCommits,
 	MAttempts, MDropped, MSubjects, MSaved, MInfo, MLayer, MRetired, MCitedBy, MSupporting,
 	MSave, MEdit, MForgetMemory, MFeedback, MLayerForget, MLayerRollback, MPropose, MDefine,
-	MStr, MMan, MKept, MForget,
+	MStr, MMan, MKept, MForget, MHead,
 }
 
 // DetectorMethods are the methods a detector child may call (docs/code-tool.md, "The
@@ -143,6 +144,7 @@ type EditOptions struct {
 	Type        *string `json:"type,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Body        *string `json:"body,omitempty"`
+	Quoting     *string `json:"quoting,omitempty"`
 }
 
 // ErrBadArgs is wrapped by the host's answer to a call whose arguments do not decode into its

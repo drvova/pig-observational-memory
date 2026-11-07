@@ -133,6 +133,90 @@ repeated compactions, which rendering from records avoids.
   not give (`ledger.AddedSpecifics`). Subjects come from words matched against the subjects and
   aliases already in the ledger (`ledger.CanonicalSubjects`), so meaning recorded once by level 1 is
   reused by code for every later line.
+- **Standing rules and scope exclusions** (`memory/extract/rules.go`, from the user's own turns
+  only), recorded verbatim as `preference`, so they take selection's class 2 like any user rule:
+  always/never with the rule verbs the preference list lacks (touch, edit, modify, change, import,
+  install, bump, upgrade, delete, rename, commit, push, deploy, run); scope exclusions ("don't/do
+  not/never touch|edit|modify|change X", "leave X alone", "only modify X", "stay out of X"), counted
+  only when X is more than a pronoun or the sentence quotes a key; substitutions ("use X instead of
+  Y", "use X, not Y", "prefer X over Y"); standing instructions ("from now on", "always/never … from
+  now"); process rules ("before you commit/push/merge", "after each change … run", "make sure to …
+  before"); and team forms ("we always/never/use/prefer", "our convention is"). Policy forms
+  (`isPolicyRule`) count only when the sentence quotes a key or names a word beyond pronouns,
+  function words and fillers: "never/always <any verb> X" as an imperative or a policy (at the
+  sentence start, after a clause mark or after "and", "please", "should", "to"; no past, third-person
+  or "-ing" form, and not of a bare "it", "this" or "that", which is the thing at hand); "must / must
+  not / mustn't / shall / shall not" (not a guess: "it must be the cache", "you must have deleted
+  it", "they must be busy"); "is/are (not) allowed", "is/are prohibited / forbidden / not permitted";
+  "requires … approval / review / sign-off" and "needs … approval" (not the speaker's own "I need a
+  review"); "policy:", "company/team/org policy is", "rule:", "we have a rule that", "the rule is
+  that"; and "only <verb> X" or "X only" with X a key. They are read outside double-quoted spans. A
+  question, a rule posed under the speaker's own condition ("if we", "if I", "suppose", "what if";
+  "if you change the schema, run …" is a rule addressed to the agent and counts), one reported from
+  someone else ("he said", "my manager said", "Alice said", "according to", "I was told"), a
+  one-time permission ("you can push this once", "just this once", "for this task"; decision 23 of
+  docs/brain-memory.md: recorded as it would be without the rule, never as a rule) and a retraction
+  are not rules, and a later retraction never withdraws one (`ledger.MaySupersede`); only a
+  correction replaces it. A policy-form rule that weakens security is held like any other
+  (`ledger.HeldRule`, decision 19).
+  Assistant text never makes a rule. A rule, preference or decision from the user's turn is set
+  `source: user-said` and `authority: user` by its extractor, with its keys (`ledger.RecordKeys`)
+  in `keys.paths` (a key with a slash or a file name) or `keys.commands` (any other); consecutive
+  rules that merge hold both keys. No rule sets `scope`: level 0 widens no scope yet
+  (`contracts/encoding.md`), so a scope exclusion's path stays in its keys. A sentence naming a phrase with specifics ("use ruff, not
+  flake8") stays the correction it reads as.
+- **Keys.** A rule's or a decision's keys (`ledger.RecordKeys`) are the code spans it quotes and the
+  bare paths it names: "Don't touch `migrations/`" carries no specific but has the key
+  `migrations/`. Level 1 never lets a merge, a supersede or a reflection stand for a user rule, a
+  user correction or a decision unless its text holds every key byte for byte
+  (`consolidate.dropsRecord`), so the path, tool or command a rule is about is never summarized
+  away.
+- **Decisions** (kind `decision`, a code kind level 1 never merges or relabels): a user sentence in
+  fixed decision wording ("let's go with X", "we're going with X", "we'll use X because Y",
+  "decided to/on/against X", "chose/opted for/settled on X", "rejected Y because Z"), verbatim with
+  its chosen option, reason and rejected alternative when stated; not a question, a condition or a
+  decision not taken ("haven't decided"). Its status is read as for any statement, so "let's go
+  with X" is `proposed` and a retraction can withdraw it; a decision stated as fact is replaced
+  only by a correction. An assistant sentence in the same wording with a stated reason ("because",
+  "since", "so that") is kept as its own `assistant` record even when it gives no new specific,
+  unless the exchange already holds the user's decision; it never takes the user's kind. Tool
+  output never makes a decision.
+- **Pushback** (kind `pushback`, a code kind level 1 never merges or relabels;
+  `memory/extract/episode.go`, `ledger/contest.go`, `lisp/src/contest.lisp`; contracts/encoding.md,
+  "Pushback"): when the user makes a claim level 0 records (a preference, a rule or a correction)
+  and the first assistant message after it disagrees in fixed wording ("I'd push back", "that's not
+  quite right", "I disagree", "however, this would", "that could break", "actually," unless it
+  opens a self-correction such as "actually, let me"), the disagreeing sentence is kept verbatim as
+  its own record, with `respondsTo` naming the exchange's claims, source `assistant-claim` and
+  authority `model`; the claims written in the same extraction get hedge `contested`. A question,
+  a later turn of the exchange or an exchange with no claim gives none, and the words before a tool
+  call count as the reply's would. The pushback supersedes, links, retracts and closes nothing and
+  is never a rule. A later user record that restates the claim (it names every key the claim
+  quotes, or carries every specific of a claim without keys, with no negation conflict and no
+  concession such as "you're right") lifts the contest; such a sentence is recorded even when it
+  gives no specific. Selection reads the contest from the ledger (`ledger.Contested`), since a
+  restatement comes after the claim was written.
+- **Episodes** (`extract.Episodes`; contracts/encoding.md, "Episode"): every new record's
+  `episode` is the id of the episode its newest source entry is in. An episode starts only at a
+  request the person typed: a `user` message one of whose sentences is neither a bare
+  acknowledgement nor harness markup. A custom message, a tool result or a test outcome never
+  starts one (test outcomes stay on the records), and the id is `ledger.EpisodeID` of the session
+  and the request's entry id, so two extractions of one range give the same ids. Nothing reads
+  episodes yet; no id includes them.
+- **Repository conventions** (kind `convention`, `memory/extract/convention.go`): from a read
+  tool's successful result only (never the disk, never a shell `cat`): a lockfile's package
+  manager (package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, Cargo.lock, go.sum, poetry.lock,
+  uv.lock, Pipfile.lock, Gemfile.lock, composer.lock), a formatter or linter config (.prettierrc*,
+  prettier.config.*, .eslintrc*, eslint.config.*, ruff.toml, rustfmt.toml, .golangci.*, gofmt
+  implied by go.mod, pyproject.toml's `[tool.ruff]`/`[tool.black]`), the indentation and line
+  settings of an .editorconfig, a GitHub workflow's `run:` lines (block scalars line by line) and a
+  Makefile's targets. The record is an observation of the file, never an instruction: "CI runs
+  `go test ./...` (repo file `.github/workflows/ci.yml`, sha256 <12 hex>)", with the path as its
+  target, the read tool as its tool and the SHA-256 prefix of what was read. A later read with the
+  same content adds nothing; one with other content supersedes it. Its encoding fields
+  (`contracts/encoding.md`) are `source: tool-observed` (a read tool showed it) and
+  `authority: repo-file`, with the file in `keys.config` and a workflow's run lines in
+  `keys.commands`.
 - **Event dates** (after past.dev's temporal anchors and `occurredAt`). A record whose text
   `ledger.ResolveRelativeDates` resolves to one absolute date ("yesterday", "on Friday", a deadline
   "by the 31st") carries it as `event_date`, a field separate from the entry time it was said at;
@@ -191,12 +275,76 @@ repeated compactions, which rendering from records avoids.
     tombstoned only on unambiguous evidence (a delete tool, or an exact literal path in a successful
     `rm`, `git rm` or `git mv`), and shown as `reverted` after a successful `git checkout -- path` or
     `git restore path`; `fileOps` adds only an unordered set of touched paths at compaction;
+  - a file tool's call gives its path's state only when its result did not fail. Tool names match
+    whatever their case, underscores and hyphens (`extract.toolKey`), so `Read`, `read_file` and
+    `ReadFile` are one tool; the path is the `path`, `file_path`, `filePath` or `notebook_path`
+    argument. Read: `read`, `read_file`, `read_files` (Kiro), `view`; written: `write`, `write_file`,
+    `create_file`, `Create` (Droid); edited: `edit`, `edit_file`, `MultiEdit`, `NotebookEdit`
+    (Claude Code), `replace` (Gemini), and Kiro's `write` whose `command` is `strReplace`; deleted:
+    `delete`, `delete_file`, `remove`, `remove_file`. Confirmed by the readers' fixtures
+    (`memory/transcript/testdata/real`) for Cursor (`Read`), Droid, Qoder (`Write`), Cortex, Gemini,
+    Kimi (`ReadFile`, `WriteFile`), Kiro, Copilot and Pi, and by Claude Code's tool inputs for its
+    own;
+  - Codex's `apply_patch` (`extract/patch.go`): the patch is the custom tool's arguments (or its
+    `input`), or a shell call running `apply_patch` on it (argv `["apply_patch", patch]`,
+    `["bash", "-lc", script]`, or a `command`/`cmd` script starting with `apply_patch`). Each path
+    between `*** Begin Patch` and `*** End Patch` gets its state in the patch's order: `Add File`
+    written, `Update File` edited, `Delete File` deleted, and an `Update File` followed by
+    `Move to` moves the old path to the new one. Only a result holding apply_patch's own
+    `Success. Updated the following files:` applies it; any other result makes the call failed;
+  - not covered, since no fixture or reader shows their shape: Cline and Roo (`write_to_file`,
+    `replace_in_file`, `apply_diff`), Goose's `text_editor` (its `command`), Kimi's
+    `StrReplaceFile`, Qwen's and OpenCode's or Crush's edit tools beyond the names above (they match
+    if they use them);
+  - a shell call's command from its `command` argument, else `cmd` (Codex's `exec_command`), so
+    its `rm`/`git mv`/`git commit` are read like any other shell call;
   - commits, as the `git commit` subject plus the hash from its result;
-  - `attempt` records whose outcome code sets: `failed` on `isError` or a nonzero exit; `worked` when
+  - `attempt` records whose outcome code sets: `failed` on `isError` or a nonzero exit (read from
+    `Command exited with code N`, or `Process exited with code N` as Codex and some other harnesses
+    write it, bracketed or not); `worked` when
     the identical command, or the same tool on the same path, later succeeds; `open` otherwise.
   The summary renders the files as a line of its own, so the list stays readable by the session model,
   after an uninstall, and after a later native PiG compaction (which drops a hook compaction's
   `details` file lists).
+- **Tool output** (`extract/output.go`, `lisp/src/output.lisp`): a tool's result is read by code
+  into two record kinds, anchored to the result's entry so they fall into its cut-point segment's
+  batch. Measured and designed in `docs/bench-results.md` ("Tool output values").
+  - **Values** (`kind: value`): one record per value kind and raw spelling per session, `target`
+    `kind:value`, content `kind value` with ` (seen N times)` when N results printed it, citing the
+    entry it was first seen in and the latest; a later sighting appends a record that supersedes the
+    earlier one (`extract.ValueParts` reads it back). The kinds, in the summary's order: `path`,
+    `error` (an identifier ending in Error, Exception, Denied, Timeout or Overflow, or Go's
+    `ErrName`), `sha` (7 to 40 lower-case hex characters with a letter and a digit, accepted only in
+    git's output or a git-shaped line, else at 40), `url` (http and https, cut at 120 characters,
+    without trailing punctuation or a bracket it did not open), `kv` (`KEY=value`, the name two or
+    more of `[A-Z0-9_]`), `ip` (IPv4, octets at most 255, optional port), `issue` (`#` and one to six
+    digits), `test` (a failing test's id), `branch`, `symbol` (the identifier a search looked for,
+    when its result holds it) and `version` (`name@1.2.3`, `v1.2`). A value's spelling is kept as
+    printed, but backslashes in a path become one slash. At most 20 new values per result.
+  - **Evidence** (`kind: evidence`): at most 8 lines of a result, each at most 160 characters, with
+    durations, timestamps and `[ 52%]` counters removed, lines equal but for their digits collapsed,
+    and role-like labels quoted (`serialize.EscapeRoleLabels`), joined by ` ⏎ ` after
+    `<tool> "<target>" output: `; its `tool` and `target` are the call's attempt key. It is written
+    only when the result failed or a failure grammar matched, so it keeps what an attempt's first
+    line does not.
+  - The extractors run in order, each adding values and lines: test runners (go test, pytest, jest
+    and vitest, cargo test, JUnit through maven and gradle: the failing ids, their lines, the first
+    assertions, the tally), compiler and linter diagnostics (an `error:` line, tsc's `error TS`,
+    rustc's `error[E…]` and its `-->`, eslint's stylish line; severity-less ones in a failed build),
+    search (the symbol), git (status paths without a slash too, branches, conflicts and errors),
+    stack traces (Python, Go, JS and Node, Java, Rust: the error line and the outer and inner
+    frames), failure markers (`error:`, `fatal:`, `panic:`, `npm ERR!`, `command not found`, ...),
+    then the generic value scan of every line. A failed result no grammar matched keeps its first
+    line, its lines holding a failure word and its last line. The class of a call (test, build,
+    search, git) comes from its tool name and its commands' program words; a file read and a search
+    give values only, a lockfile read and a write or edit tool's result give nothing.
+  - Noise: ANSI escapes are stripped, a line keeps the text after its last carriage return, and
+    progress, download, transfer-rate and binary lines are dropped. Secrets: a value the scanner
+    would redact is never indexed, nor a `KEY=value` whose name looks secret (SECRET, TOKEN, PASSW,
+    API_KEY, PRIVATE, CREDENTIAL, AUTH) or whose value is 40 or more key-like characters.
+  The scanners are hand-written over ASCII character classes (a byte of 0x80 or more is one class),
+  so the Lisp port is a transliteration; the parity harness diffs both engines on
+  `selection/testdata/lispparity/tooloutput.jsonl`.
 - **Compression.** Echoes and bare acknowledgements are not records; a record keeps the sentence
   carrying its specifics, not the whole message; consecutive records on one subject from one exchange
   merge. A list in one message (numbered or bulleted items, markers removed; a code fence inside an
@@ -252,10 +400,20 @@ the side of a smaller summary.
 
 ### Selection
 
+A record holding a preference that weakens security (`ledger.HeldRule`: a preference or correction,
+or a merge of the user's own, matching `contracts/insecure.md`), and a reflection citing one, is
+held: never shown, never counted as left out, dropped by no rule, and listed in `/om:status`. The
+instructions frame what follows once as unverified (`ledger.UnverifiedNotice`, decision 18 of
+`docs/brain-memory.md`): remembered items are user-reported or extracted context, unverified
+against the current repository and conversation, and existing code and the user's current words
+take precedence. No instruction asks for a re-check.
+
 Records are taken in ordered classes, newest first within a class; a record that does not fit is
 skipped and selection continues:
 
 1. the split turn's opening request;
+1a. the constraints registry (see "Working memory"): the user's rules and scope exclusions in force,
+   newest first, at most the session model's caps, ahead of every other class;
 1b. the next steps: plans still standing (`proposed`, not superseded or retracted) and open or failed
    attempts no later attempt resolved, anchored at or after the latest user request the summary
    quotes (the split turn's or the intent's), shown in their own `next` section and not in the notes
@@ -267,6 +425,12 @@ skipped and selection continues:
    (the history cell bound), each clipped further to fit, its source reading it whole; one that is
    the split turn's request is not quoted again. It renders at the top, under the request;
 4. records carrying specifics no already-selected line carries (`ledger.MissingSpecifics`);
+4b. the values tool output printed, each kind's ranked by recurrence (count, then latest seen, then
+   value), at most one per 200 tokens of the budget and 40 of a kind (20 at 4,096 tokens), taken a
+   rank at a time across the kinds so a tight budget shows the top of each; they render after the
+   tables as one `values.<kind>` line per kind (`value ×N (first entry)`), and the rest are listed by
+   one `values: +N more, all M` tail whose om snippet (``om.Notes(om.Kind(`value`))``, chunked by
+   position past `om.MaxLimit`) lists every value;
 5. rendered reflections, which drop the records they cite;
 6. everything else.
 
@@ -287,7 +451,12 @@ one record of a `conflicts` pair is taken, the other is tried next in the same c
 still not fit. The status is a field of its own (a column in the tables format, a word after the
 kind in the lines format); the links are pointers after the record's text, never inside it:
 `(was <id>)` for every record it supersedes, `(may update <id>)` while the target is active and
-unsuperseded, and `(conflicts <id>)` while the other record is active. They depend only on the
+unsuperseded, and `(conflicts <id>)` while the other record is active. A user claim standing
+contested (`ledger.Contested`) is shown with kind `claim`, never as the preference or correction it
+would be as a rule, is not in class 2, and ends with `(contested by <id>)` naming its pushback (or
+`(contested)` when no pushback record is in the input); the pushback is put in the claim's table,
+ends with `(responds to <id>)`, and each is tried next when the other is taken. Their
+instructions line is printed only in a summary showing one. They depend only on the
 ledger, so a line's cost does not change with the choice. Every rendered line ends with its first
 source entry id when that id is on the current branch. What does not fit becomes `omitted` spans with date range,
 count and first id.
@@ -307,6 +476,120 @@ so an omitted row's snippet or ``om.History(om.Search(`<words>`))`` runs before 
 not mentioned. The numbers are the choice's (`Result.Omitted`, `Result.Spans`); the line costs its
 estimate inside the summary budget, and a summary that leaves nothing out prints none.
 `ledger.TablesSummaryBody` skips it (`ledger.OmittedNoticeStart`), so the tables still decode.
+
+### Working memory
+
+Phase 3 of `docs/brain-memory.md` (decisions 15 and 16) gives the summary working-memory slots, all
+built by code from the ledger at compaction and never shown as per-turn cues:
+
+- **The constraints registry.** After the notes tables (before `omitted`) a `constraints` table
+  (`content`, `source`; a `## constraints` heading in the lines format) holds the resolved current set
+  of the user's own rules, constraints and scope exclusions: records of kind preference that
+  `ledger.UserPriority` grants, none superseded, retracted, hypothetical, contested
+  (`ledger.Contested`) or held (`ledger.HeldRule`, dropped before rendering). Each is verbatim, with
+  its `(was <id>)` pointer when it replaced a rule, and its source. A rule naming what it replaces by
+  the correction forms ("use `make ci`, not `make test`", "instead of X", "not X but Y") with a key in
+  the replaced phrase supersedes every earlier standing rule of the user's holding all of that
+  phrase's keys (`extract.resolveRuleReplacements`), so the registry never shows both. The registry is
+  class 1a: its reserve is all the room the split turn's request leaves, bounded by the caps, so the
+  rules stay shown under a tight cap. A member the registry has no room or cap for goes back to its
+  notes table and competes in class 2.
+- **Finished plans with their receipts.** A plan (status `proposed`) closes only on a tool receipt
+  matching its keys (`ledger.PlanKeys`, `ledger.KeyMatches`: the same key, an absolute path ending
+  in the relative one, or a command holding it as whole words): a shell command that exited 0 (a test
+  run that passed is one), a successful file write or edit, or a commit. A "read file X" plan
+  (`ledger.IsReadPlan`) closes only on a worked call on X whose output holds a line, at least 8 bytes
+  with a letter, that no other tool output of the extraction holds. Assistant prose never closes
+  anything. Level 0 records the closing link on the receipt record (`closes: [{id, closedBy,
+  receipt}]`, `ledger.Closure`; a worked call that would close a plan is recorded even without the
+  model's words), and the first link naming a plan closes it (`ledger.ClosedBy`). A closed plan shows
+  status `done` and ends with `(closed by <id>: <receipt>)`; the session model's Actions cap of them
+  (the newest receipts) are in `next` beside the open steps, the rest in their notes tables, and none
+  is ever shown as pending.
+- **Staleness.** A plan's record carries `derivedFrom`, the entry id of the request it was made under
+  (the newest request the person typed at or before it; contracts/encoding.md, "Derived from"). An
+  open plan is shown `(may be stale <entry id>)` when a later request of the person's, opening
+  another episode and not a question, names one of the plan's keys or a path key's file stem of at
+  least four characters as a whole word (`ledger.StaleTerms`, `ledger.BearsOn`): detection runs from
+  stored state toward the plan, so the plan's own text never needs to say what changed.
+- **Caps and the also: line.** The caps are per model (`workingMemoryConstraints` 10,
+  `workingMemoryScopeExclusions` 10 and `workingMemoryActions` 5 by default, each also under
+  `modelLimits["<provider>/<id>"]`; `config.Config.LimitsFor`, `hooks.V2Slots`). Members the summary
+  shows nowhere are named in one `also:` line after `---`, counted per slot, with an om snippet that
+  lists them (``om.Notes(om.Kind(`preference`))`` for constraints, ``om.Notes(om.WithStatus(`proposed`))``
+  for finished plans, whose records keep status proposed).
+
+Each section's or row kind's instructions line (`constraints`, `done`, `may be stale`, `also`) is
+printed only in a summary showing one, as the other sections' are. Working memory is session-scoped:
+it is read from the branch's ledger. Carrying the open intentions and constraints into the next
+session first needs the shared core of phase 6 and is not built.
+
+### The raw floor and the quality trigger
+
+Both ship off (decision 15) until the engine's own effective-length measurements show a gain for a
+model:
+
+- **Raw floor** (`rawFloor: true`; `rawFloorTokens`, 32,000 for a model with none set, per model under
+  `modelLimits`): a compaction whose PiG-reported `tokensBefore` is known and below the session
+  model's floor makes no level-1 request (`hooks.BelowRawFloor`; its report says so), so nothing below
+  the floor is consolidated.
+- **Quality trigger** (`qualityTrigger: true`; `qualityTriggerTokens`, 64,000 by default, per model):
+  with PiG's auto-compaction off, at an idle `agent_settled`, the trigger also asks PiG to compact
+  when the estimated tokens of the source entries after the latest compaction entry exceed the
+  threshold (`hooks.RawTokensSinceCompaction`, local estimates, since PiG reports no per-entry
+  usage), PiG's reported context is known and above the floor value. Window − reserve stays the hard
+  backstop, every rule of "Auto-compaction off" holds (never on unknown usage, the "Nothing to
+  compact" suspension until the tip changes), and the compaction it asks for is the extension's own,
+  so it runs level 0 only.
+
+### Project knowledge (no request)
+
+The adapter answers a HEAD structure view of the session's repository (`host.StructureReader`,
+`memory/gitrepo`; docs/brain-memory.md, decision 20): whether a path exists at HEAD and its blob,
+whether a symbol appears in a file, a path's blob at an older commit, a bounded diff, and a paged file
+list, read from HEAD's tree once per (repository, HEAD). Nothing of it is stored as fact. Project
+records (contracts/encoding.md, "Project records": decisions, repository conventions and the user's
+own rules, corrections and facts, framed in the repository) carry their one path and symbol, and the
+blob of the path when the record was written. At each compaction (`hooks/project_v2.go`,
+`compaction-freshness`) the active project records are judged against HEAD and the summary prints
+`(gone at <sha>)` or `(changed since <sha>, unverified)` after a record, with one `- fresh:`
+instructions line; the memory tool's notes reads print the same, and `om.Head(prefix)` (the Lisp
+tool's `(head prefix)`) pages HEAD's files. The changed records go to level 1 as a POSSIBLY STALE list with their diffs,
+inside its one request: `stale` confirms one, a record or merge supersedes one. No verdict deletes
+or supersedes anything by itself.
+
+### Truth maintenance and forgetting (no request)
+
+Phase 5 of the brain-like memory ([brain-memory.md](brain-memory.md), decisions 1 and 6;
+[contracts/truth.md](../contracts/truth.md) is the contract both engines check):
+
+- **Labels.** The fold gives every record it holds one label, the first that holds of retracted,
+  superseded, held, contested and believed (`ledger.LabelsOf`, `FoldedLedger.Labels`). The memory
+  tool's search tags are these labels, the summary's statuses read them, and level 1 refuses a
+  merge of a record labelled retracted or held.
+- **Supersession.** A newer record level 0 linked to an older one on the same subject and scope is
+  decided three ways (`ledger.Supersession`, under `MaySupersede`): replace (it supersedes it),
+  contested (a negation, or a different value on less authority: neither wins, both shown with
+  `(conflicts <id>)`), or keep-both (the history of a value: the older is labelled superseded and
+  shown with `(updated by <id>)`, so a stale value is never shown as current).
+- **Decision 1's cascade.** A level-1 merge whose source a retraction withdraws as written, or a
+  tombstone forgets, goes out; its other sources' replacements and drops are undone, so they
+  reappear as themselves until a later level 1 merges them again. Level 0 withdraws a merge's
+  matching sources rather than the merge. A reflection survives while `ceil(n/2)` of its `n`
+  supports stand.
+- **Forget records.** A user's own sentence asking to forget something ("forget my home address
+  from memory", "stop remembering X", "forget what I said about X") becomes a record of kind
+  `forget` with a scope (`session`, `project:<repoId>`, `user`) and tombstones naming what it
+  forgets by id, kind and source entries, never by text. The fold leaves those records out for
+  good, with a later re-extraction of the same source, a level-1 relabel and a merge holding the
+  text; level 0 never writes a tombstoned record again. Erasing the stored bytes is phase 8's.
+- **Typed intentions.** Every plan has an `intent`: todo, promise, condition-wait or deferred,
+  from fixed wording. All close only on a tool receipt; a deferred one only on a receipt made under
+  a later request than its own.
+- **Decay (off by default).** With `decay: "compactions"` (or `"turns"`, for comparison) a record
+  whose newest evidence event (its own sources, a later level-0 link to it, a later user or tool
+  record sharing a key) lies `decayHorizon` ticks back is taken after the others of the summary's
+  classes 4 and 6. Never on wall time or retrieval, never the protected classes, never a deletion.
 
 ### Thinning aged tool results (no request)
 
@@ -377,7 +660,7 @@ evidence sat wholly in the retained tail scored 57% while every other type score
   - a merge's source ids are set by code to the union of its candidates' ids;
   - a merge or supersede whose text drops a specific of its sources (`ledger.Specifics`, compared as
     whole items with `ledger.AddedSpecifics`, so `30` is not carried by `300`) is refused and the
-    sources stay; records whose fields code keeps (attempt, file, commit, note) and records with
+    sources stay; records whose fields code keeps (attempt, file, commit, note, decision, convention) and records with
     different scopes are never merged;
   - a reflection cites only records whose specifics it carries, checked against the record that
     stands for each id when it renders (a merge or label replacing it);
@@ -425,7 +708,8 @@ extension then triggers a compaction at `agent_settled`, only when the agent is 
 reported context exceeds `window − reserveTokens` (PiG's own inequality, with `reserveTokens` read
 through the trusted config path with model overrides), and never while usage is unknown. That
 compaction runs level 0 only. A "Nothing to compact" answer suspends the trigger until the branch tip
-changes. `/om:status` says compaction is off and only level 0 runs.
+changes. `/om:status` says compaction is off and only level 0 runs. The quality trigger ("The raw
+floor and the quality trigger"), when on, may ask earlier under the same rules.
 
 ### Branches
 
@@ -461,8 +745,14 @@ work step 8): none is registered or run, and `om.Retired()` lists each with its 
 - Matching and display run on the same filtered text extraction uses, so thinking is never matched,
   counted or returned, by ``om.Recall(`<record id>`)``'s source entries either. Search tokens are literal
   (no wildcards). A tool the agent defined runs its query the same way.
-- Matching stays literal and ranked newest first; pi-vcc's BM25 floor, caps and page size are tuned on
-  its benchmark and are not adopted.
+- Matching stays literal for `history`, `reflections` and `saved`. A notes search (Phase 4,
+  [protocol.md](protocol.md), "Retrieval"; [code-tool.md](code-tool.md), "Ranked notes searches")
+  also matches an exact key byte for byte (a key, a value, a version, a SHA, a normalized error line)
+  and identifier parts, and ranks after every other filter: current records before superseded or
+  retracted ones, exact hits first, then integer BM25 fused with the exact list by reciprocal rank
+  (k = 60), newest first; each result carries its status tag and merges up to two contiguous records
+  of its episode or source entry. pi-vcc's BM25 floor, caps and page size are tuned on its benchmark
+  and are not adopted; a detector's reads keep the plain filter.
 - **Point-in-time view** (after past.dev's `queryTimestamp`). With `until DATE asof` or
   `through ID asof`, `notes` and `reflections` read the memory as it stood at the bound: drops and
   reflections recorded after it are not applied, and a record that supersedes after it (one that
@@ -501,16 +791,24 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
   "never at a keep").
 - Any other `save` is staged: visible in its session through `saved`, absent from the always-loaded
   index. Code checks evidence at `agent_settled` and `session_start`, with no request: a later user
-  quote, a level-1 citation, or the same normalized name and description staged in another session.
+  quote, a level-1 citation, or the same normalized name and description staged in another session
+  from distinct source content. A save quoting tool output is staged citing it (the digest of the
+  tool result holding the quote, `curated.SourceDigest`); two sessions' stagings count only when
+  their digests differ (`docs/brain-memory.md`, decision 7), so two sessions that read the same file
+  never corroborate each other, and a staging that cites nothing is no evidence.
   Evidence counts only from the memory's last save or edit, so evidence given for one text never
   promotes another. Level 1 lists only the staged memories of its own session (another session's
-  is visible only there); the same save staged here is the cross-session evidence.
+  is visible only there).
   Staged memories are never deleted automatically. A later user quote is a `feedback ... outcome=helped`
   whose quote is in a user message (the assistant's words and harness markup confirm nothing); a
   level-1 citation names a listed memory with at least one shown record code picked from a user
   message, so the model never confirms its own save; level 1 also runs the check after recording
   citations.
-- A `forget` through the memory tool retires a memory. A level-0 user correction whose subject matches a
+- A `forget` through the memory tool retires a memory other sessions see only on a user's words
+  quoted with it (`om.Quoting`, at most three memories per quote); without them it hides the memory
+  in its own session at once and stages the forget, leaving shared memory unchanged
+  (`docs/brain-memory.md`, decision 2; `docs/code-tool.md`, "The forget gate"). A memory only its own
+  session staged is retired at once. A level-0 user correction whose subject matches a
   curated memory ranks it lower and flags it in `/om:status` and `saved`; it never retires it and never
   touches a pinned memory. Nothing cools by time.
 - One validator on every write and every load: allowed fields, a body bound derived from what one
@@ -524,6 +822,11 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
 - The store under PiG's config root is shared by every session (and by an earlier release still
   running v1 on it): a name another session staged is refused to a save, and a staged memory stays
   out of the index and `saved` until promoted.
+- A memory whose description or body matches the security-weakening pattern list
+  (`contracts/insecure.md`; `docs/brain-memory.md`, decision 19) is held: kept and listed in
+  `/om:status`, but out of the index, `saved` and the level-1 input, and never promoted, in every
+  session but one whose user's words restate it (a save or helped feedback whose user quote itself
+  matches the list appends a `released` usage line for that session, until the next edit).
 - Matching a correction to a memory: the correction's subject words, hyphen-joined, are a whole
   hyphen-separated run of the memory's name, or the reverse. The flag counts corrections made after
   the memory's last save or edit, so an edit clears it; a flagged memory ranks after every other,
@@ -623,12 +926,61 @@ The writes named here are the om calls `om.Save`, `om.Edit`, `om.ForgetMemory` a
     held text count. The compaction that held it read its layer before the hold, so its pass never
     names it, nor does another session's or process's compaction whose layer was read before the hold,
     wherever its pass lands in the shared ledger; a text held again is judged only on passes that ran
-    with the new text. An empty compaction is counted (`outcome: empty`) and is no evidence. The `consolidation` instructions need a later compaction
-    whose level-1 request answered under them (`curated.ModelEvent.Level1`) and are reverted when its
-    code checks counted `level1-failed`, `level1-specifics-refused` or `level1-union-kept`; a detector,
-    a catalogue and a rule need detector runs over turns under them and are written, since they
-    change only what code counts or keeps (the kernel's counts judge rules from there). Written on such
-    evidence (`layer.Store.ClaimHeld`), reverted otherwise; with none yet it stays held.
+    with the new text. An empty compaction is counted (`outcome: empty`) and is no evidence. A Go
+    detector is judged on its own runs (`detector-pass` events: reverted when one gave no count,
+    written when one counted); every other definition by decision 24's rules, below. Written
+    (`layer.Store.ClaimHeldScoped`, with its scope), reverted otherwise; with too little evidence it
+    stays held.
+  - **Settling a definition** (docs/brain-memory.md, decision 24; `memory/rules/settle_v2.go`,
+    `lisp/src/rules/evidence.lisp` `settle-null-arm`, byte for byte through `TestLispSettleParity` and
+    `TestLispEvidenceParity`). All code over recorded events, so none adds a request.
+    - *What a pass records.* Beside its counts, each non-empty v2 compaction pass records its
+      evidence roots (`roots`: `rules.RootOf`, the first 16 hex of the SHA-256 of `root`, the
+      record's kind and its content, NUL-separated, over the records citing its cut range that are
+      not `tool-observed` or `external-untrusted`; sorted, at most 64), its harm signal (`harm`:
+      `dropped-then-queried` + `level1-specifics-refused` + `level1-union-kept`), its `turns` (the
+      assistant messages it removed), its scope (`repo`: the commonest `frame.repoId` of those
+      records; `family`: the commonest lower-cased path extension of their `paths` keys, the task
+      family) and `ranWritten` (the model's own written definitions it ran with, by held id). A pass
+      without `harm` was recorded before these rules and is no evidence for them.
+    - *Units.* A unit is a non-empty pass with the harm signal (for the consolidation instructions,
+      also a level-1 answer). It is independent when one of its roots was in no earlier unit, so
+      compactions over the same file, summary or poisoned text count once, whichever session recorded
+      them. The treated units are the independent ones after the hold that ran its text; the controls
+      the independent ones that ran no text of its name, held or written.
+    - *The null arm and the cost.* At `MinEvidence` treated units T, the last 2·`MinEvidence`
+      controls before T's end are two windows, B then A (fewer is no null arm: rejected). Its
+      failures F are `level1-failed` + `level1-refused` for the instructions, and
+      `uncited-assistant-specifics` + `cross-scope-supersede` + `decode-failure` for the rest. It is
+      rejected when T's harm is above both windows'; otherwise its effect `min(F(A), F(B)) - F(T)`
+      must beat the A-versus-A spread `|F(A) - F(B)|` after its cost, in thousandths of a failure:
+      the instructions text's tokens (as declared) over T at 1,000 tokens a failure, and the turns T
+      took beyond both windows at 10 turns a failure. Short of that it is rejected ("no net effect
+      after cost").
+    - *Independence.* 2·`MinEvidence` passes under it with fewer than `MinEvidence` independent ones
+      reject it: its evidence came from too few roots.
+    - *Scope.* A written one records its scope on its put generation (`scope`: the repositories and
+      task families of T), and `layer.Harness.InScope` leaves it out where they do not reach: the
+      compaction reads its layer scoped to its cut range's records (`hooks.scopedLayerV2`), and
+      keep-head applies by the extraction's records (`rules.ForScope`), so the seed stands
+      elsewhere. Widening on evidence from a second scope is not built: out of scope it never runs.
+    - *The active set.* One proposal holds one rule, never a bundle: the first definition or rule
+      that passes its checks takes the proposal, the rest are refused ("one proposal holds one rule").
+      When one settles, the model's written definitions sharing a target with it
+      (`rules.Targets`: the kind/name, and a rule's detector and remedy) are held again
+      (`layer.Store.Recheck`, whose revert puts back what stood before their put), so the passes
+      after it run them beside it.
+    - *Security.* A level-1 definition that matches `contracts/insecure.md`'s patterns is never held
+      as a file: `layer.Store.HoldInsecure` keeps its text in a blob with a `hold-insecure`
+      generation, listed in `/om:status`, never run, settled or proposed over. After each
+      compaction's settlement a written definition of the model that matches them rolls the layer
+      back to the generation before its put (`layer.Store.RollbackBefore`, rules kept; a refused
+      rollback removes the name alone), with a reason starting `security:`: code acting on code
+      evidence, so the quote gate, which gates the memory tool's layer writes, does not apply.
+    - *Retirement.* Nothing retires a written definition on "no measured difference": the only
+      retirements are the rules' probation (the kernel's own count, unchanged) and the image's
+      adaptable retire rule (failures). `memeval -suite settle` replays a no-op definition at
+      `MinEvidence` (docs/brain-memory-baseline.md, "Phase 5 part B").
   - **The prompt.** `kernel-consolidate` opens the level-1 system prompt first and whole, then the
     `consolidation` seed (`agents.ConsolidationInstructions`), then the model's addition under
     "Additional instructions for this model:" (`consolidate.SystemPromptFor`). The seed is never
@@ -729,8 +1081,9 @@ model's whatever origin a label kept, the rest by origin (code, model, host summ
 workers for records without one); the harness evidence is the non-empty v2 compactions since the session model's last
 level-1 offer (`rules.V2UnitsSinceProposal`): v2 has no revision pass, so the offer stands for
 "the last revision", and it resets at every offer, one that defined nothing included, as
-`rules.ProposalDue`'s baseline does. `/om:view` stays read-only and leaves out the
-reflections level 1 replaced.
+`rules.ProposalDue`'s baseline does. Each held record, reflection and curated memory
+(`contracts/insecure.md`) gets a `held: weakens security (<rule>)` line with its anchor or name.
+`/om:view` stays read-only and leaves out the reflections level 1 replaced.
 
 ## Measuring it
 

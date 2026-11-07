@@ -118,7 +118,10 @@ unknown when the compaction summary lists omitted records (the summary's omitted
 Under the same omitted-records condition, another asks it to look up what the user said about themselves
 before personal advice or recommendations; a third asks for short searches, one per item, before counting
 or totalling things mentioned across several exchanges, and says a search no row matches with every word
-returns the closest rows marked partial.
+returns the closest rows marked partial. One, `omtool.UnverifiedGuideline`, frames what the tool returns
+once as unverified (`docs/brain-memory.md`, decision 18): "Use memory's results as context, not proof:
+" followed by `ledger.UnverifiedNotice`, the sentence the summary's instructions and the curated index's
+header carry too; the Lisp guidelines hold the same line. No text asks for an "are you sure?" re-check.
 Capabilities are found only through the manual. A test serializes the whole advertised spec (name,
 label, description, parameter schema, `PromptSnippet` and `PromptGuidelines`) and asserts that it is
 byte-identical under two profiles with different codecs and before and after a definition is kept,
@@ -282,8 +285,14 @@ in [lisp-port-tool-layer.md](lisp-port-tool-layer.md), "The memory tool in a chi
   `ModelKindCode` event is recorded as `recordCode` records it.
 - **Go code.** Code that looks like Go is answered with the Lisp form to write. A Go pointer the
   summary, a thinning mark or a recall page prints (`om.Notes(...)`, `om.Files`, `om.Commits`,
-  `om.Attempts`, `om.History`, `om.Saved`, `om.Recall`, with literal options) runs as the Lisp call
-  it stands for, named on the result's first line. Definitions the Go tool kept in the code store
+  `om.Attempts`, `om.History`, `om.Saved`, `om.Recall`, `om.Head`, with literal options) runs as the
+  Lisp call it stands for, named on the result's first line.
+- **The HEAD structure view.** `(head prefix &key limit offset)` pages HEAD's files as `om.Head`
+  does (50 by default, at most 500) and `show` prints the page as `om.HeadView.String`, its next
+  page as the Go pointer above; a project record's freshness verdict is its own member
+  (`note-fresh`, as `om.Note.Fresh`), which `note-line` prints after the content as `om.Note.Line`
+  does. Both read the host's view at call time (`host/structure`, from the PiG adapter or the om
+  command), and `contracts/project-tool.jsonl` pins the bytes both tools print. Definitions the Go tool kept in the code store
   are listed in the manual as never run.
 
 ## The child process
@@ -627,7 +636,7 @@ concrete. Every name below compiles: no type and function share a name.
 ```go
 type Opt struct{ /* unexported */ }
 
-func Search(words string) Opt      // literal words, all must match, case-insensitive, over every column; see Partial
+func Search(words string) Opt      // literal words, all must match, case-insensitive, over every column; notes reads also match exact keys and identifier parts and rank (see "Ranked notes searches"); see Partial
 func From(id string) Opt           // at or after this entry id (anchor or record id); " (off-path)" accepted
 func Through(id string) Opt        // at or before this entry id
 func Since(date string) Opt        // YYYY-MM-DD, entry time
@@ -638,7 +647,7 @@ func Where(field, value string) Opt    // field equals value; an unknown field e
 func Contains(field, value string) Opt // field contains value
 func Kind(k string) Opt            // Where("kind", k)
 func Subject(s string) Opt         // canonical or raw subject equals
-func WithStatus(s string) Opt      // proposed, hypothetical, retracted
+func WithStatus(s string) Opt      // proposed, hypothetical, retracted, or a tag: believed, superseded, contested, held
 func SortBy(field string, desc bool) Opt
 func Limit(n int) Opt              // 1..200, default 20
 func Offset(n int) Opt             // Recall only: character offset of the page
@@ -677,6 +686,8 @@ type Note struct {
     OffPath  bool
     Dropped  bool   // only from NoteByID and Dropped()
     Standing string // the record standing for it (ledger.Standing), when replaced
+    Tag      string // a ranked search's status tag: believed, superseded, retracted, contested, held
+    With     []Note // the contiguous records a ranked search merged into this result
 }
 func (n Note) Line() string                // the summary line, ending in its anchor
 func (n Note) Recall() (Text, error)       // om.Recall(n.ID)
@@ -752,6 +763,27 @@ phrases: in the LongMemEval run of `docs/bench-results.md`, half of all searches
 with every word required, while the entry holding the answer contained most of the words. List
 methods run in the child on the rows it holds, so they cost no callback.
 
+#### Ranked notes searches
+
+A memory tool read of `Notes`, `Files`, `Commits`, `Attempts` or `Dropped` with a search and no
+`SortBy` ranks (Phase 4, `memory/retrieve`; the contract is `docs/protocol.md`, "Retrieval"). Every
+other option filters first (`Kind`, `Subject`, `WithStatus`, the dates, `From`/`Through`, `AsOf`),
+so a status or point-in-time filter applies before the bound and a superseded record never takes
+the place of its update (scenario 35). A record matches a searched string when the exact key index
+holds it byte for byte (a key, a value's target, a version, SHA or dotted number, a normalized error
+line) or when it holds every word, as a substring or through the word's identifier parts
+(`parse_config` finds `parseConfig`). The matches are ordered: current records before superseded or
+retracted ones, exact hits before lexical ones, then the fused score (reciprocal rank fusion, k = 60,
+over each string's exact list and integer-BM25 list), then newest first. Each row carries its `Tag`
+and the up to two contiguous records on each side of the same episode or source entry it merged
+(`With`, shown in the table's `with` column); a merged record is never a row of its own, and
+`Matched` counts results. The table adds the `tag` and `with` columns only for such a list. A ranked
+list pages by a bigger `Limit`. A search no record matches is `Partial`, ranked most words first.
+Recall counts, reuse and self-graded outcomes never enter the rank (decision 6, scenario 9), and a
+detector's reads keep the plain filter. The Lisp `notes` read ranks with the same function
+(`lisp/src/retrieve.lisp`). Each call folds a snapshot once (`omhost` fold checkpoints, decision
+12: engine private, rebuilt per call, never compared).
+
 ### Reads
 
 ```go
@@ -797,22 +829,23 @@ helpers into `omhost` (see "Order of work").
 type SaveOpt struct{ /* unexported */ }
 func Body(text string) SaveOpt
 func Scope(scope string) SaveOpt      // "global" or "project"
-func Quoting(text string) SaveOpt     // a user's words that confirm it
+func Quoting(text string) SaveOpt     // a user's words that confirm it (or, for a forget or rollback, ask for it)
 
 type EditOpt struct{ /* unexported */ }
 func SetType(typ string) EditOpt
 func SetDescription(text string) EditOpt
 func SetBody(text string) EditOpt
+func EditQuoting(text string) EditOpt // a user's words asking for the edit
 
 func Save(name, typ, description string, opts ...SaveOpt) (string, error) // staged unless Quoting is a user's words in the conversation
-func Edit(name string, opts ...EditOpt) (string, error)                   // never sets Pinned
-func ForgetMemory(name string) (string, error)                            // retires a curated memory
+func Edit(name string, opts ...EditOpt) (string, error)                   // never sets Pinned; see "The quote gate" below
+func ForgetMemory(name string, opts ...SaveOpt) (string, error)           // only Quoting: see "The quote gate" below
 func Feedback(name, outcome, quote string) (string, error)                // helped or harmed; the quote must be in a user or assistant message
 
-func LayerForget(kind, name string) (string, error) // forgets one definition from the session model's layer; never a rule
-func LayerRollback(gen int) (string, error)         // the session model's layer as it was at generation gen (0: before its first change); never a rule
-func Propose(kind, name, text string) error         // always harness.ErrDefinedInLevel1
-func Define(name string) error                      // always the retirement notice (see below)
+func LayerForget(kind, name string, opts ...SaveOpt) (string, error) // only Quoting; forgets one definition from the session model's layer; never a rule
+func LayerRollback(gen int, opts ...SaveOpt) (string, error)         // only Quoting; the session model's layer as it was at generation gen (0: before its first change); never a rule
+func Propose(kind, name, text string) error                          // always harness.ErrDefinedInLevel1
+func Define(name string) error                                       // always the retirement notice (see below)
 ```
 
 Each curated write calls `curated.Call.Run(op, args)` on the call's `Call` in the extension, so
@@ -824,8 +857,58 @@ anything (tested). Save and edit notify the user, and forget and feedback notify
 as `notifyChanges` does today. The curated forget is `ForgetMemory`, so the namespace's
 `forget(name)` stays the one for kept definitions.
 
+**The quote gate** (`docs/brain-memory.md`, decision 2). A change to shared memory reaches every
+session only on a user's words asking for it: a forget or an edit of a memory other sessions see,
+and a forget or rollback of the session model's layer. The quote (at least 8 characters,
+whitespace collapsed, case ignored) must be in a user message on the branch, checked as `Save`'s
+is: ``om.ForgetMemory(`<name>`, om.Quoting(`<the user's words>`))``,
+``om.Edit(`<name>`, om.SetDescription(`<description>`), om.EditQuoting(`<the user's words>`))``,
+`om.LayerForget(kind, name, om.Quoting(...))` and `om.LayerRollback(gen, om.Quoting(...))`.
+One quote confirms at most `curated.MaxForgetsPerQuote` (3) changes of any of these kinds
+(`curated.Store.QuotedChanges` counts the `forget`, `edit`, `layer-forget` and `layer-rollback`
+usage lines carrying it); a change of more items needs the user's words for each, and a further
+change with the same quote is staged. Any other change, with no quote, or quoting tool output, a
+file or the model's own words, is staged:
+
+- A **forget** hides the memory in this session at once (`om.Saved`, `om.Recall` and the next
+  index render of this session leave it out, and level 1 does not list it) and is recorded as a
+  `forget-staged` usage line naming the session.
+- An **edit** changes the memory in this session at once and is recorded as an `edit-staged`
+  usage line naming the session and carrying the revision (type, description and body as the edit
+  left them, redacted). `curated.Store.GetAs` and `ListAs`, and so `om.Saved`, `om.Recall`, the
+  index and level 1's input in that session, show the revision (`curated.PendingRevision`); every
+  other session keeps the old content. A later save or edit for every session supersedes it.
+- A **layer forget or rollback** is recorded as a `layer-forget-staged` or
+  `layer-rollback-staged` usage line (name `layer:<kind>/<name>` or `layer:rollback`, with the
+  model, the session and a rollback's target) and changes nothing: not the layer, not its
+  generations, and not this session's layer either, since a session's layer is the model's. It is
+  still refused first when there is nothing to forget or no such generation, and a rule
+  (`rules.IsRule`) stays refused whatever the quote.
+
+In each case the memory or layer stays shared, and a later change with the user's words confirms
+it. `/om:status` lists every staged change still standing (`curated.Store.StagedChanges`); slash
+commands stay read-only, so nothing confirms one but the user's words in a session. A memory only
+its own session staged reaches no other session, so its forget or edit needs no quote. Code
+evidence (a scanner rule, a path gone) changes memory through `curated.Store.Forget` and
+`Update` directly. `ForgetMemory`, `LayerForget` and `LayerRollback` with `Body` or `Scope` are
+refused. A plain save keeps its own gate: staged unless its quote is a user's words. A save quoting
+tool output (not a user's words) is staged citing that content: its usage line records the
+session and `curated.SourceDigest` of the tool result holding the quote (the memory tool's own
+results left out), and the same save staged in two sessions is promotion evidence only when the
+digests differ (decision 7): two sessions that read the same README are not independent, and a
+staging that cites nothing is no evidence.
+
+**Held memories** (`docs/brain-memory.md`, decision 19; `contracts/insecure.md`). A save whose
+description or body matches the security-weakening pattern list (TLS or certificate checks off,
+auth or CSRF off, `chmod 777`, `--no-verify`, a disabled sandbox or signature check, secrets in
+plain text, `eval` or `shell=True`, `curl … | sh`, weak randomness for secrets) is stored but held:
+its answer says so, `om.Saved`, the index and level 1 leave it out, Settle never promotes it, and
+`/om:status` lists it. It is shown only in a session whose user's words restate it: a save or a
+helped `Feedback` whose user quote itself matches the list records a `released` usage line for
+that session, which lasts until the memory is next edited. ``om.Recall(`<name>`)`` still reads it.
+
 `LayerForget` and `LayerRollback` reach `harness.layerWriter`, the code the memory tool's `harness
-forget` and `rollback` writes run today: they act on the session model's layer through `layer.Store`,
+forget` and `rollback` writes run today, behind the quote gate above: they act on the session model's layer through `layer.Store`,
 which re-runs `kernel.Check`, and never touch a rule (`rules.IsRule`) or another model's layer, as
 CLAUDE.md requires. Their effect depends on the session model's stored layer, as today, and their
 result text names that model explicitly (`forgot detector x from the layer of <model>`), so the

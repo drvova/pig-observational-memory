@@ -9,7 +9,9 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/insecure"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
@@ -69,9 +71,18 @@ func NotifySettled(h host.Host, settled curated.Settled) {
 	}
 }
 
+// StagedChangesHeading and stagedChangesNote open /om:status's line of the changes to shared
+// memory staged until a user's words confirm them (curated.Store.StagedChanges,
+// docs/brain-memory.md, decision 2).
+const (
+	StagedChangesHeading = "Staged changes to shared memory, waiting for a user's words"
+	stagedChangesNote    = "a staged forget or edit applies in its own session only, a staged layer change nowhere"
+)
+
 // CuratedStatusLines are /om:status's curated memory lines: live, staged, pinned and flagged
-// memories in this project, and the files the validator refuses (curated.Store.Refused); none
-// without a store.
+// memories in this project, the held ones (curated.Store.Held) by name, the staged changes to
+// shared memory (curated.Store.StagedChanges), and the files the validator refuses
+// (curated.Store.Refused); none without a store.
 func CuratedStatusLines(h host.Host, cfg config.Config) []string {
 	project := ProjectRoot(h.Cwd())
 	store, ok := StoreOf(h, cfg)
@@ -102,6 +113,18 @@ func CuratedStatusLines(h host.Host, cfg config.Config) []string {
 	lines := []string{"── Curated memory ──", fmt.Sprintf("Memories: %d live (%d pinned), %d staged (out of the index until evidence confirms them)", live, pinned, staged)}
 	if len(flagged) > 0 {
 		lines = append(lines, "Flagged by a user correction since their last edit (ranked last): "+strings.Join(flagged, ", "))
+	}
+	if held, err := store.Held(project); err == nil {
+		for _, m := range held {
+			lines = append(lines, insecure.HeldNotice+" ("+m.Rule+"): "+m.Name+" ["+m.Type+"]: "+secrets.Redact(m.Description))
+		}
+	}
+	if staged, err := store.StagedChanges(project); err == nil && len(staged) > 0 {
+		parts := make([]string, 0, len(staged))
+		for _, c := range staged {
+			parts = append(parts, c.String())
+		}
+		lines = append(lines, fmt.Sprintf("%s (%d; %s): %s", StagedChangesHeading, len(staged), stagedChangesNote, strings.Join(parts, "; ")))
 	}
 	if refused, err := store.Refused(project); err == nil && len(refused) > 0 {
 		parts := make([]string, 0, len(refused))

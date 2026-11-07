@@ -1,0 +1,238 @@
+// Command memeval runs the Tier 0 retention harness (memory/memeval, docs/brain-memory-baseline.md)
+// and prints the retention curves and the invariants as markdown tables. It makes no model
+// request: level 0 only, over generated transcripts.
+//
+//	go run ./cmd/memeval -seeds 20
+//	go run ./cmd/memeval -suite forgetting -seeds 5
+//	go run ./cmd/memeval -suite sharing -seeds 5
+//	go run ./cmd/memeval -suite constraintrot
+//	go run ./cmd/memeval -suite arcbench -arcbench-cases <dir>/data/rule-loss/cases.jsonl
+//	go run ./cmd/memeval -suite retrieval -seeds 20
+//	go run ./cmd/memeval -suite settle -seeds 20
+//
+// The forgetting (Tier 0b) and sharing (Tier 0c) suites print a table of checks each, pass, fail
+// or not built; their only requests are scripted level-1 replies a fake host serves.
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/drvova/pig-observational-memory/memory/memeval"
+	"github.com/drvova/pig-observational-memory/memory/rules"
+	"github.com/drvova/pig-observational-memory/memory/serialize"
+	"github.com/drvova/pig-observational-memory/memory/session"
+)
+
+func main() {
+	seeds := flag.Int("seeds", 5, "seeds 1..n to run")
+	turns := flag.Int("turns", 0, "turns per transcript (0: the default)")
+	compactions := flag.Int("compactions", 0, "compactions per transcript at most (0: the default)")
+	window := flag.Int("window", 0, "context window in tokens (0: the default small window)")
+	summaryMax := flag.Int("summary-max", 0, "summary cap in tokens, as compactionSummaryMaxTokens (0: none)")
+	noSnippets := flag.Bool("no-snippets", false, "do not run the printed snippets (every unshown probe counts as lost)")
+	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), settle (the no-op definition replay), all, constraintrot, arcbench or retrieval")
+	arcCases := flag.String("arcbench-cases", "", "ARCBench's data/rule-loss/cases.jsonl (data only; its code is never run)")
+	flag.Parse()
+	serialize.Location = time.UTC
+
+	cfg := memeval.DefaultConfig(*seeds)
+	if *turns > 0 {
+		cfg.Turns = *turns
+	}
+	if *compactions > 0 {
+		cfg.MaxCompactions = *compactions
+	}
+	if *window > 0 {
+		cfg.Window.Context = *window
+	}
+	cfg.Window.SummaryMaxTokens = *summaryMax
+	var lister memeval.Lister
+	child := &memeval.ChildLister{}
+	defer child.Close()
+	if !*noSnippets {
+		lister = child
+	}
+	start := time.Now()
+	var output func([]session.Entry, string) (string, error)
+	if !*noSnippets {
+		output = child.Printed
+	}
+	suites := func(runs []memeval.Run) {
+		sc := memeval.DefaultSuiteConfig(*seeds)
+		sc.Lister, sc.Output, sc.Runs = lister, output, runs
+		if *window > 0 {
+			sc.Window.Context = *window
+		}
+		var run []func(context.Context, memeval.SuiteConfig) (memeval.Suite, error)
+		if *suite == "forgetting" || *suite == "all" {
+			run = append(run, memeval.Forgetting)
+		}
+		if *suite == "sharing" || *suite == "all" {
+			run = append(run, memeval.Sharing)
+		}
+		bad := false
+		for _, fn := range run {
+			t := time.Now()
+			s, err := fn(context.Background(), sc)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "memeval:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("%s: %d seeds, %d model requests, all %d of them scripted level-1 replies the fake host served (no model called), %s\n\n",
+				s.Name, s.Seeds, s.Requests, s.Scripted, time.Since(t).Round(time.Millisecond))
+			fmt.Print(s.Table())
+			for _, extra := range s.Extra {
+				fmt.Println()
+				fmt.Print(extra)
+			}
+			fmt.Println()
+			bad = bad || s.Requests != s.Scripted
+		}
+		if bad {
+			os.Exit(1)
+		}
+	}
+	// settle prints the no-op definition replay (decision 24, scenario 30).
+	settle := func() {
+		t := time.Now()
+		r, noisy, err := memeval.NoOpSettleRate(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("No-op definition replay: %d seeds, %d compactions, held before each and judged at MinEvidence (%d) compactions under it, 0 model requests, %s\n\n",
+			r.Seeds, r.Compactions, rules.MinEvidence, time.Since(t).Round(time.Millisecond))
+		fmt.Println("The recorded ledgers:")
+		fmt.Println()
+		fmt.Print(r.Table())
+		fmt.Printf("\nThe same ledgers with each compaction's failures drawn from 0 to %d (the noise arm):\n\n", memeval.NoiseMax)
+		fmt.Print(noisy.Table())
+		fmt.Println()
+	}
+	switch *suite {
+	case "tier0", "all":
+	case "constraintrot":
+		w := cfg.Window
+		results, err := memeval.ConstraintRot(context.Background(), w, 1, []int{1, 2, 4}, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		capped := w
+		capped.SummaryMaxTokens = 1200
+		cappedResults, err := memeval.ConstraintRot(context.Background(), capped, 1, []int{1, 2, 4}, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("ConstraintRot rebuild: %d policies, level 0, 0 model requests (violations need an agent model: ready, not run)\n\n", len(memeval.ConstraintRotPolicies))
+		fmt.Print(memeval.RuleTable(results))
+		fmt.Println()
+		fmt.Println("With the summary capped at 1,200 tokens:")
+		fmt.Println()
+		fmt.Print(memeval.RuleTable(cappedResults))
+		return
+	case "arcbench":
+		cases, err := readARCBench(*arcCases)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(2)
+		}
+		results, err := memeval.ARCBench(context.Background(), cases, []int{0, 750, 300})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("ARCBench rule-loss cases: %d, level 0, 0 model requests (violation@3 needs the agent model: ready, not run)\n\n", len(cases))
+		fmt.Print(memeval.ARCBenchTable(results))
+		return
+	case "forgetting", "sharing":
+		suites(nil)
+		return
+	case "settle":
+		settle()
+		return
+	case "retrieval":
+		var runs []memeval.Run
+		for _, seed := range cfg.Seeds {
+			opt := cfg.Options
+			opt.Turns = cfg.Turns
+			run, err := memeval.Simulate(context.Background(), memeval.Generate(seed, opt), cfg.Window, cfg.MaxCompactions)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "memeval:", err)
+				os.Exit(1)
+			}
+			runs = append(runs, run)
+		}
+		tallies, err := memeval.RetrievalCheck(context.Background(), runs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Retrieval check: %d seeds, om.Notes(om.Search(<key>)) over each session's last branch, in process, 0 model requests, %s\n\n", len(cfg.Seeds), time.Since(start).Round(time.Millisecond))
+		fmt.Print(memeval.RetrievalTable(tallies))
+		return
+	default:
+		fmt.Fprintln(os.Stderr, "memeval: -suite is tier0, forgetting, sharing, settle, all, constraintrot, arcbench or retrieval")
+		os.Exit(2)
+	}
+	m, err := memeval.Measure(context.Background(), cfg, lister)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memeval:", err)
+		os.Exit(1)
+	}
+	snippets, failed, compacted := 0, 0, 0
+	for i, r := range m.Results {
+		snippets += r.Snippets
+		failed += len(r.SnippetErrors)
+		compacted += len(m.Runs[i].Snapshots)
+	}
+	fmt.Printf("Tier 0: %d seeds, %d compactions, %d snippets run (%d failed), %d model requests, %s\n\n",
+		len(cfg.Seeds), compacted, snippets, failed, m.Requests, time.Since(start).Round(time.Millisecond))
+	fmt.Println("Shown / reachable / lost, by compactions since the probe left the context:")
+	fmt.Println()
+	fmt.Print(memeval.Table(m.Results, memeval.Counts))
+	fmt.Println()
+	fmt.Print(memeval.InvariantTable(m.Results))
+	broken := false
+	for _, t := range memeval.InvariantTallies(m.Results) {
+		broken = broken || t.Broken > 0
+	}
+	if broken || failed > 0 || m.Requests > 0 {
+		os.Exit(1)
+	}
+	if *suite == "all" {
+		fmt.Println()
+		suites(m.Runs)
+		settle()
+	}
+}
+
+// readARCBench reads ARCBench's cases file as data: one JSON object per line.
+func readARCBench(path string) ([]memeval.ARCBenchCase, error) {
+	if path == "" {
+		return nil, fmt.Errorf("-suite arcbench needs -arcbench-cases")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []memeval.ARCBenchCase
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<24)
+	for scanner.Scan() {
+		var c memeval.ARCBenchCase
+		if err := json.Unmarshal(scanner.Bytes(), &c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, scanner.Err()
+}

@@ -36,8 +36,7 @@ request, nil for none."
   (om.layer::with-store-lock (store)
     (let ((path (om.layer::join-path store "harness" "floor.jsonl")))
       (ensure-directories-exist path)
-      (with-open-file (out path :direction :output :if-exists :append :if-does-not-exist :create :external-format :utf-8)
-        (write-string line out) (write-char #\Newline out) (finish-output out)))))
+      (om::append-jsonl path line))))
 
 (defun floor-lower (store kf by reason)
   "Floor.Lower: nil, or the refusal's text."

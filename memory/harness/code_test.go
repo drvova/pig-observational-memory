@@ -207,7 +207,7 @@ func TestCuratedWritesFromCode(t *testing.T) {
 	r := codeOK(t, h, m, `fmt.Println(om.Save("tabs", "user", "The user indents with tabs.", om.Quoting("I indent with tabs")))
 fmt.Println(om.Save("spaces", "user", "The user likes spaces.", om.Quoting("I like spaces, always")))
 fmt.Println(om.Save("staged", "user", "The user may like spaces."))
-fmt.Println(om.Edit("tabs", om.SetBody("Said twice.")))`)
+fmt.Println(om.Edit("tabs", om.SetBody("Said twice."), om.EditQuoting("I indent with tabs")))`)
 	if len(r.Details.Writes) != 3 || r.Details.Writes[0].Op != omtool.WriteSave || r.Details.Writes[1].Name != "staged" || r.Details.Writes[2].Op != omtool.WriteEdit || !strings.Contains(r.Text, "not a user's words") {
 		t.Fatalf("writes %+v\n%s", r.Details.Writes, r.Text)
 	}
@@ -441,7 +441,7 @@ func TestResultsRenderTheValueOrTheError(t *testing.T) {
 	h, _, m := session(t, tf.RawMessage("u2", "I indent with tabs, always."))
 	cases := []struct{ src, want string }{
 		{`om.Save("tabs", "user", "The user indents with tabs.", om.Quoting("I indent with tabs"))`, "Saved memory tabs [user]: The user indents with tabs."},
-		{`om.Edit("tabs", om.SetDescription("The user indents with tabs, always."))`, "Updated memory tabs [user]: The user indents with tabs, always."},
+		{`om.Edit("tabs", om.SetDescription("The user indents with tabs, always."), om.EditQuoting("I indent with tabs"))`, "Updated memory tabs [user]: The user indents with tabs, always."},
 		{`om.Edit("nope", om.SetBody("x"))`, "error: om.Edit: no memory by that name"},
 		{"om.Recall(`" + obsBake + "zz`)", "error: om.Recall: nothing called \"" + obsBake + "zz\": no record or reflection id, entry id or saved name on this branch; find ids with " + om.SnippetHistorySearch + " and names with " + om.SnippetSavedSearch},
 		{`fmt.Println("printed")`, "printed\n"},
@@ -494,7 +494,7 @@ func TestDiscardedValuesAreNamed(t *testing.T) {
 // an om call another way (a named string) is refused by the extension too.
 func TestPlaceholdersAreRefused(t *testing.T) {
 	h, _, m := session(t)
-	for _, fixed := range []string{om.SnippetRecall, om.SnippetRecallEntry, om.SnippetRecallName, om.SnippetHistorySearch, om.SnippetSavedSearch, om.SnippetNotesSpan, om.SnippetSave, om.SnippetFeedback, "fmt.Println(" + om.SnippetHistorySearch + ".Len())"} {
+	for _, fixed := range []string{om.SnippetRecall, om.SnippetRecallEntry, om.SnippetRecallName, om.SnippetHistorySearch, om.SnippetSavedSearch, om.SnippetNotesSpan, om.SnippetSave, om.SnippetFeedback, om.SnippetEditQuoted, om.SnippetForgetQuoted, "fmt.Println(" + om.SnippetHistorySearch + ".Len())"} {
 		r := code(t, h, m, fixed)
 		if !r.IsError || !strings.HasPrefix(r.Text, "Error: nothing ran: `<") || !om.NamesPlaceholder(r.Text) || strings.Contains(r.Text, "──") || len(r.Details.Writes) > 0 || len(r.Details.Searches) > 0 || len(r.Details.Recalled) > 0 {
 			t.Errorf("%s: %q %+v", fixed, r.Text, r.Details)

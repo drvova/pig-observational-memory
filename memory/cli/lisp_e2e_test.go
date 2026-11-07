@@ -212,6 +212,8 @@ func lispFlow(t *testing.T, image string) string {
 	om(t, string(pp), "hook", "pi", "turn-end")
 	section("pi before-compact", om(t, string(pp), "hook", "pi", "before-compact"))
 	section("pi store", store("pi", "p1"))
+
+	projectFlow(t, home, image != "", section, func() string { return store("mine", "r1") })
 	flow := out.String()
 	if image != "" {
 		flow = lispTextsAsGo(t, flow)
@@ -232,7 +234,8 @@ func lispTextsAsGo(t *testing.T, flow string) string {
 		"om.Recall(`<name>`)", `(recall "<name>")`,
 		"om.Saved(om.Search(`<words>`))", `(saved :search "<words>")`,
 		"om.Save(`<name>`, `<type>`, `<description>`, om.Body(`<body>`))", `(save "<name>" "<type>" "<description>" :body "<body>")`,
-		"om.Edit", "edit", "om.ForgetMemory", "forget-memory",
+		"om.EditQuoting or om.Quoting", ":quoting",
+		"om.Edit", "edit", "om.ForgetMemory", "forget-memory", "om.Quoting", ":quoting",
 		"om.Feedback(`<name>`, `<outcome>`, `<quote>`)", `(feedback "<name>" "<outcome>" "<quote>")`,
 	)
 	more := "find them with the memory tool's " + omapi.SnippetSavedSearch + ".)"
@@ -414,8 +417,11 @@ var (
 )
 
 // normalizeFlow names the random entry ids by order of first appearance, blanks the append
-// times, and replaces the run's own directories.
+// times, replaces the run's own directories, and names the writer's engine (the one member the
+// engines write differently by design, contracts/encoding.md) as one.
 func normalizeFlow(s, root, home string) string {
+	s = strings.ReplaceAll(s, `"engine":"lisp"`, `"engine":"<engine>"`)
+	s = strings.ReplaceAll(s, `"engine":"go"`, `"engine":"<engine>"`)
 	s = strings.ReplaceAll(s, root, "<root>")
 	s = strings.ReplaceAll(s, home, "<home>")
 	s = flowStampPattern.ReplaceAllString(s, `"timestamp":"<now>"`)

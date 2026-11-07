@@ -5,11 +5,13 @@ package sdkhost
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	sdk "github.com/MichaelKinsy/PiG/extensions/sdk"
 
+	"github.com/drvova/pig-observational-memory/memory/gitrepo"
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
@@ -235,6 +237,33 @@ func (h *Host) ProjectTrusted() (trusted bool, err error) {
 	return h.ctx.IsProjectTrusted()
 }
 
+// Harness is "pig", the harness every record this adapter's engine writes names.
+func (h *Host) Harness() string { return "pig" }
+
+// Repo is the git repository holding the session's working directory, read by running git there
+// (gitrepo.Reader): the engine reads it once per compaction (runtime.Runtime.CachedRepo) and never
+// runs git itself. Its id is computed once per repository and cached under the extension's own
+// store in PiG's config root (<config>/observational-memory/repos), never in the repository.
+func (h *Host) Repo() (host.Repo, bool, error) { return h.repoReader().Read(h.cwd) }
+
+// Structure answers the HEAD structure view of the session's repository (gitrepo.Structure,
+// cached per repository and HEAD).
+func (h *Host) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	repo, ok, err := h.Repo()
+	if err != nil || !ok {
+		return host.StructureAnswer{}, false, err
+	}
+	return gitrepo.Structure(h.cwd, repo, q)
+}
+
+// repoReader is the repository reader with the extension's id cache, none without a config root.
+func (h *Host) repoReader() gitrepo.Reader {
+	if home := h.ConfigHome(); home != "" {
+		return gitrepo.Reader{Store: filepath.Join(home, "observational-memory")}
+	}
+	return gitrepo.Reader{}
+}
+
 // ConfigHome is PiG's config root (PIG_HOME, else XDG_CONFIG_HOME/pig, else
 // ~/.pig), "" when it cannot be found.
 func (h *Host) ConfigHome() string {
@@ -324,3 +353,9 @@ func Definition(spec host.ToolSpec) sdk.ToolDefinition {
 	}
 	return def
 }
+
+var (
+	_ host.RepoReader      = (*Host)(nil)
+	_ host.StructureReader = (*Host)(nil)
+	_ host.HarnessNamer    = (*Host)(nil)
+)

@@ -21,7 +21,12 @@
 (defstruct note
   (id "") (when "") (kind "") (subject "") (scope "") (relevance "") (content "") (status "")
   (event-date "") (origin "") (outcome "") (tool "") (target "") (source "") (anchor "")
-  (superseded-by '()))
+  (superseded-by '())
+  ;; A ranked search's status tag and the records merged into the result (om.Note.Tag, With).
+  (tag "") (with '())
+  ;; A project record's freshness against HEAD (om.Note.Fresh): "gone at <sha>" or "changed
+  ;; since <sha>, unverified", "" when unchanged or not checked; shown after its content.
+  (fresh ""))
 
 (defstruct turn (id "") (when "") (role "") (text ""))
 
@@ -34,7 +39,7 @@
      (defun ,(find-symbol (format nil "~A-P" struct) "OM.TOOL") (x)
        (,(intern (format nil "~A-P" struct) "OM.LAYER") x))))
 
-(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by)
+(export-readers note id when kind subject scope relevance content status event-date origin outcome tool target source anchor superseded-by tag with fresh)
 (export-readers turn id when role text)
 
 (defun om.tool:memory-name (m) (mem-name m))
@@ -49,6 +54,7 @@
     (when (string/= (note-kind n) "") (format b "[~A] " (note-kind n)))
     (when (string/= (note-subject n) "") (format b "~A: " (note-subject n)))
     (write-string (note-content n) b)
+    (when (string/= (note-fresh n) "") (format b " (~A)" (note-fresh n)))
     (when (string/= (note-anchor n) "") (format b " ~A" (note-anchor n)))))
 
 ;;; The adaptable functions the reads use
@@ -79,9 +85,10 @@
 
 (define-adaptable om.engine::rank-notes (notes words) (:check #'permutation-check)
   "Orders the notes a search ranks when no note has every searched word: each holds at least
-one. The default is omhost's rankBySearch: most distinct searched words first, ties in ledger
-order. The kernel's check: the result holds every candidate exactly once."
-  (stable-sort (copy-list notes) #'> :key (lambda (n) (word-score (note-haystack n) words))))
+one, and they come in the search's order (om.engine::retrieval-search: most searched words first,
+then its ranking). The default keeps that order, as omhost does. The kernel's check: the result
+holds every candidate exactly once."
+  (progn words (copy-list notes)))
 
 (defun phrase-check (line note)
   (cond ((not (stringp line)) "the line is not a string")
@@ -163,29 +170,151 @@ content."
         (when ok (return-from bound-position at)))))
   (tool-fail "entry ~A is not on this branch: take entry ids from history or from a summary line on this branch" id))
 
+(defun tag-filter-p (status)
+  "A status option naming a search tag rather than a record status (retracted is both)."
+  (and status (member status '("believed" "superseded" "contested" "held") :test #'string=)))
+
 (defun om.tool:notes (&key search kind status subject since until from through limit)
-  "The active folded records, oldest first, filtered: search (every word, case-insensitive,
-over every field), kind, status, subject, since and until (YYYY-MM-DD), from and through (an
-entry or record id: the records anchored at or after, at or before its branch position). A
-search no record matches with every word ranks the records holding any of its words instead
-(rank-notes). At most limit (1 to 200, 20 when not given)."
+  "The active folded records, oldest first, filtered: kind, status (a record status, or a tag:
+believed, superseded, contested or held), subject, since and until (YYYY-MM-DD), from and through
+(an entry or record id: the records anchored at or after, at or before its branch position).
+search ranks what those filters leave (docs/protocol.md, \"Retrieval\"; om.engine::retrieval-search):
+a record matches on an exact key (path, symbol, test, error line, version or SHA, byte for byte)
+or when it holds every word, as a substring or through identifier parts; current records before
+superseded or retracted ones, exact hits first, then by relevance, newest first; each result
+carries its note-tag and the contiguous records of its episode or source entry it merged
+(note-with). A search no record matches ranks the records holding any of its words, most first
+(rank-notes). At most limit (1 to 200, 20 when not given) results."
   (let* ((n (limit-of limit))
-         (all (all-notes))
-         (kept (filter-notes all :search search :kind kind :status status :subject subject :since since :until until)))
-    (when (and (null kept) search)
-      (let* ((words (search-words (as-list search)))
-             (candidates (remove-if-not (lambda (x) (plusp (word-score (note-haystack x) words)))
-                                        (filter-notes all :kind kind :status status :subject subject :since since :until until))))
-        (when candidates (setf kept (om.engine::rank-notes candidates words)))))
+         (entries (branch)) (positions (om::entry-index-by-id entries)) (folded (om::fold-ledger entries))
+         (superseded (superseded-by-map folded))
+         (retracted (om::retracted-ids (om::folded-observations folded)))
+         (active (om::folded-active folded))
+         (contested (om::contested active))
+         (pairs (mapcar (lambda (o)
+                          (let ((note (note-of o positions superseded)))
+                            (setf (note-tag note)
+                                  (om::tag-of o (and (note-superseded-by note) t) (gethash (om::obs-id o) retracted)
+                                              (nth-value 1 (gethash (om::obs-id o) contested))))
+                            (cons note o)))
+                        active))
+         (by-tag (tag-filter-p status))
+         (kept-notes (filter-notes (mapcar #'car pairs) :kind kind :status (if by-tag nil status)
+                                   :subject subject :since since :until until)))
+    (when by-tag
+      (setf kept-notes (remove-if-not (lambda (x) (string= (note-tag x) status)) kept-notes)))
     (when (or from through)
-      (let* ((entries (branch)) (positions (om::entry-index-by-id entries)) (folded (om::fold-ledger entries))
-             (lo (and from (bound-position from folded positions)))
+      (let* ((lo (and from (bound-position from folded positions)))
              (hi (and through (bound-position through folded positions))))
-        (setf kept (remove-if-not (lambda (x)
-                                    (multiple-value-bind (pos ok) (gethash (note-anchor x) positions)
-                                      (and ok (or (null lo) (>= pos lo)) (or (null hi) (<= pos hi)))))
-                                  kept))))
-    (subseq kept 0 (min n (length kept)))))
+        (setf kept-notes (remove-if-not (lambda (x)
+                                          (multiple-value-bind (pos ok) (gethash (note-anchor x) positions)
+                                            (and ok (or (null lo) (>= pos lo)) (or (null hi) (<= pos hi)))))
+                                        kept-notes))))
+    (let ((searches (as-list search)))
+      (if (null searches)
+          (progn (dolist (x kept-notes) (setf (note-tag x) ""))
+                 (with-freshness (subseq kept-notes 0 (min n (length kept-notes)))))
+          (let* ((records (let ((h (make-hash-table :test 'eq)))
+                            (dolist (p pairs h) (setf (gethash (car p) h) (cdr p)))))
+                 (pool (map 'vector (lambda (x)
+                                      (om::doc-of (gethash x records) (note-content x) (note-tag x)
+                                                  :hay (note-haystack x)))
+                            kept-notes))
+                 (notes (coerce kept-notes 'vector)))
+            (multiple-value-bind (results partial) (om::retrieval-search pool searches)
+              (let ((heads (mapcar (lambda (r)
+                                     (destructuring-bind (hit exact with) r
+                                       (declare (ignore exact))
+                                       (let ((head (copy-note (aref notes hit))))
+                                         (setf (note-with head) (mapcar (lambda (i) (aref notes i)) with))
+                                         head)))
+                                   results)))
+                (when partial
+                  (setf heads (om.engine::rank-notes heads (search-words searches))))
+                (mapcar (lambda (h)
+                          (let ((h (first (with-freshness (list h)))))
+                            (setf (note-with h) (with-freshness (note-with h)))
+                            h))
+                        (subseq heads 0 (min n (length heads)))))))))))
+
+(defun call-fresh-texts (call)
+  "The call's freshness verdict texts by record id, read from the host once, at the first notes
+read that shows rows (omhost's Call.freshness); nil for none."
+  (let ((f (call-freshness call)))
+    (when (functionp f)
+      (setf f (funcall f) (call-freshness call) f))
+    f))
+
+(defun with-freshness (notes)
+  "The notes with each project record's freshness verdict in note-fresh (omhost's Note.Fresh,
+which note-line prints after the content, as om.Note.Line does)."
+  (let ((fresh (and notes (call-fresh-texts (the-call)))))
+    (if (null fresh)
+        notes
+        (mapcar (lambda (n)
+                  (let ((v (gethash (note-id n) fresh)))
+                    (if v
+                        (let ((c (copy-note n))) (setf (note-fresh c) v) c)
+                        n)))
+                notes))))
+
+;;; The HEAD structure view (om.Head)
+
+(defparameter +head-page+ 50 "omhost.HeadPage: om.Head's default page.")
+(defparameter +max-head-page+ 500 "omhost.MaxHeadPage: om.Head's largest page.")
+
+(defparameter +no-view+
+  "this session is in no git repository the host reads (the HEAD structure view is unavailable)"
+  "omhost's errNoView.")
+
+(defstruct head-view
+  "om.HeadView: a page of the session repository's files at HEAD, derived on demand by the host
+and never stored."
+  (repo-id "") (head "") (prefix "") (files '()) (offset 0) (total 0) (truncated nil) (next ""))
+
+(export-readers head-view repo-id head prefix files offset total truncated next)
+
+(defun head-view-string (v)
+  "om.HeadView.String without its last newline (show adds it): a header line, then one path per
+line, then the next page when there is one."
+  (let ((head (head-view-head v)))
+    (when (> (length head) 7) (setf head (subseq head 0 7)))
+    (string-right-trim
+     '(#\Newline)
+     (with-output-to-string (b)
+       (format b "HEAD ~A: ~D files" head (head-view-total v))
+       (when (string/= (head-view-prefix v) "") (format b " under ~A" (head-view-prefix v)))
+       (when (head-view-truncated v)
+         (write-string " (the tree is larger than the host lists: a path missing here is unknown)" b))
+       (when (head-view-files v)
+         (format b ", showing ~D from ~D" (length (head-view-files v)) (head-view-offset v)))
+       (terpri b)
+       (dolist (f (head-view-files v)) (write-string f b) (terpri b))
+       (when (string/= (head-view-next v) "") (format b "next: ~A~%" (head-view-next v)))))))
+
+(defun om.tool:head (prefix &key limit offset)
+  "Pages HEAD's files under prefix (om.Head): the repository's tree at HEAD is read on demand and
+never stored; the page is in path order, limit (50 by default, at most 500) files from offset;
+outside a repository it is an error."
+  (unless (stringp prefix) (tool-fail "head takes a path prefix string"))
+  (let ((structure (call-structure (the-call)))
+        (limit (or limit 0)) (offset (or offset 0)))
+    (unless structure (tool-fail "~A" +no-view+))
+    (unless (and (integerp limit) (integerp offset) (>= limit 0) (>= offset 0))
+      (tool-fail "limit and offset must not be negative"))
+    (when (zerop limit) (setf limit +head-page+))
+    (setf limit (min limit +max-head-page+))
+    (let ((a (funcall structure (om::jobject "list" (om::jobject "prefix" prefix "offset" offset "limit" limit)))))
+      (unless (hash-table-p a) (tool-fail "~A" +no-view+))
+      (let* ((files (remove-if-not #'stringp (om::jlist-of (om::jget a "files"))))
+             (total (let ((n (om::jget a "total"))) (if (realp n) (truncate n) 0)))
+             (end (+ offset (length files))))
+        (make-head-view :repo-id (om::str (om::jget a "repoId")) :head (om::str (om::jget a "head"))
+                        :prefix prefix :files files :offset offset :total total
+                        :truncated (eq (om::jget a "truncated") :true)
+                        :next (if (and files (< end total))
+                                  (format nil "om.Head(~A, om.Offset(~D), om.Limit(~D))" (om::go-quote prefix) end limit)
+                                  ""))))))
 
 (defun om.tool:note-by-id (id)
   "One record by id, dropped ones included."
@@ -309,8 +438,7 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
                      (let ((hay (string-downcase (om::join (list (mem-name m) (mem-type m) (mem-description m) (mem-body m))
                                                            (string #\Newline)))))
                        (every (lambda (w) (search w hay)) needles)))
-                   (curated-rank (remove-if-not (lambda (m) (seen-by-p m (call-session c)))
-                                                (list-memories (call-curated-dir c) (call-project c)))
+                   (curated-rank (shown-as (call-curated-dir c) (list-as (call-curated-dir c) (call-project c) (call-session c)) (call-session c))
                                  (handler-case (curated-usage (call-curated-dir c)) (error () nil))))))
 
 (defun write-call ()
@@ -318,7 +446,23 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
     (unless (call-curated-dir c) (tool-fail "curated memory is off"))
     (make-curated-call :dir (call-curated-dir c) :project (call-project c) :source (call-session c)
                        :evidence (lambda (quote) (quoted-in-p (conversation-texts) quote))
-                       :user-evidence (lambda (quote) (quoted-in-p (user-texts) quote)))))
+                       :user-evidence (lambda (quote) (quoted-in-p (user-texts) quote))
+                       :source-of (lambda (quote) (quoted-source (tool-texts) quote)))))
+
+(defun tool-texts ()
+  "The tool results' texts on the branch, the memory tool's own left out (omhost.QuotedSource's
+skip), so text the model printed through it is no source."
+  (loop for e across (branch)
+        for (role text) = (multiple-value-list (history-text e))
+        when (and (equal role "tool")
+                  (not (equal (om::jget (om::entry-message e) "toolName") "memory")))
+          collect text))
+
+(defun quoted-source (texts quote)
+  "omhost.QuotedSource over texts: the source-digest of the first holding quote, \"\" for none."
+  (let* ((needle (string-downcase (one-line quote)))
+         (text (find-if (lambda (text) (search needle (string-downcase (one-line text)))) texts)))
+    (if text (source-digest text) "")))
 
 (defun run-write (op &rest pairs)
   (let ((args (make-hash-table :test 'equal)))
@@ -331,13 +475,15 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
   "Saves a curated memory, staged unless quoting gives the user's confirming words."
   (run-write "save" "name" name "type" type "description" description "body" body "scope" scope "quote" quoting))
 
-(defun om.tool:edit (name &key type description body)
-  "Changes a curated memory; it never pins one."
-  (run-write "edit" "name" name "type" type "description" description "body" body))
+(defun om.tool:edit (name &key type description body quoting)
+  "Changes a curated memory for every session when quoting gives a user's words asking for it;
+without them it changes the memory in this session only and stages the edit. It never pins one."
+  (run-write "edit" "name" name "type" type "description" description "body" body "quote" quoting))
 
-(defun om.tool:forget-memory (name)
-  "Retires a curated memory."
-  (run-write "forget" "name" name))
+(defun om.tool:forget-memory (name &key quoting)
+  "Forgets a curated memory for every session when quoting gives a user's words asking for it;
+without them it hides the memory in this session only and stages the forget."
+  (run-write "forget" "name" name "quote" quoting))
 
 (defun om.tool:feedback (name outcome quote)
   "Records that a memory helped or harmed, quoting the conversation."
@@ -362,17 +508,46 @@ keeps the ones holding every word (case-insensitive, over name, type, descriptio
             (mapcar (lambda (r) (format nil "refused ~A" r)) (loaded-reports l))
             (list (format nil "generation ~D" (layer-generations model))))))
 
-(defun om.tool:layer-forget (name)
-  "Forgets the session model's definition of the adaptable function: the default stands now."
-  (let* ((model (model-of-call)) (gen (handler-case (layer-forget model (name-of name))
-                                        (refused (e) (tool-fail "~A" (refused-reason e))))))
-    (format nil "Forgot ~A from ~A's layer (generation ~D); the default stands." (name-of name) model gen)))
+(defun layer-gate (quoting what)
+  "The quote gate on a layer change (layerWriter.gate): (values quote ok reason) over the curated
+store's usage ledger, which counts the user's words; with curated memory off nothing is changed
+or staged."
+  (let ((c (write-call)) (args (make-hash-table :test 'equal)))
+    (when quoting (setf (gethash "quote" args) (if (stringp quoting) quoting (princ-to-string quoting))))
+    (multiple-value-bind (quote err)
+        (handler-case (values (gate-quote args what) nil) (curated-error (e) (values nil (curated-error-message e))))
+      (when err (tool-fail "~A" err))
+      (multiple-value-bind (ok reason) (covers c quote)
+        (values quote ok reason c)))))
 
-(defun om.tool:layer-rollback (generation)
-  "Makes the session model's layer what it was at the generation (0: every default)."
-  (let* ((model (model-of-call)) (gen (handler-case (layer-rollback model generation)
-                                        (refused (e) (tool-fail "~A" (refused-reason e))))))
-    (format nil "Rolled ~A's layer back to generation ~D (generation ~D)." model generation gen)))
+(defun om.tool:layer-forget (name &key quoting)
+  "Forgets the session model's definition of the adaptable function, the default standing now,
+when quoting gives a user's words asking for it; without them it stages the forget and changes
+nothing."
+  (let ((model (model-of-call)) (name (name-of name)))
+    (unless (layer-holds-p model name) (tool-fail "~A's layer holds no definition of ~A" model name))
+    (multiple-value-bind (quote ok reason c) (layer-gate quoting "layer forget")
+      (unless ok
+        (record-layer-change (cc-dir c) "layer-forget-staged" (layer-key +kind-adaptable+ name) model (cc-source c) nil nil)
+        (return-from om.tool:layer-forget
+          (format nil "Staged the forget of ~A from ~A's layer: ~A, so the layer is unchanged for every session, this one included, and /om:status lists the staged forget. Forgetting it needs words copied verbatim from a user message asking for it, quoted with the forget." name model reason)))
+      (let ((gen (handler-case (layer-forget model name) (refused (e) (tool-fail "~A" (refused-reason e))))))
+        (record-layer-change (cc-dir c) "layer-forget" (layer-key +kind-adaptable+ name) model (cc-source c) quote nil)
+        (format nil "Forgot ~A from ~A's layer (generation ~D); the default stands." name model gen)))))
+
+(defun om.tool:layer-rollback (generation &key quoting)
+  "Makes the session model's layer what it was at the generation (0: every default) when quoting
+gives a user's words asking for it; without them it stages the rollback and changes nothing."
+  (let ((model (model-of-call)))
+    (handler-case (check-rollback-target model generation) (refused (e) (tool-fail "~A" (refused-reason e))))
+    (multiple-value-bind (quote ok reason c) (layer-gate quoting "layer rollback")
+      (unless ok
+        (record-layer-change (cc-dir c) "layer-rollback-staged" +layer-rollback-key+ model (cc-source c) nil generation)
+        (return-from om.tool:layer-rollback
+          (format nil "Staged the rollback of ~A's layer to generation ~D: ~A, so the layer is unchanged for every session, this one included, and /om:status lists the staged rollback. Rolling it back needs words copied verbatim from a user message asking for it, quoted with the rollback." model generation reason)))
+      (let ((gen (handler-case (layer-rollback model generation) (refused (e) (tool-fail "~A" (refused-reason e))))))
+        (record-layer-change (cc-dir c) "layer-rollback" +layer-rollback-key+ model (cc-source c) quote generation)
+        (format nil "Rolled ~A's layer back to generation ~D (generation ~D)." model generation gen)))))
 
 (defun om.tool:adaptables ()
   "The adaptable functions a definition may replace, with what each does."

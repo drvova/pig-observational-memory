@@ -26,19 +26,26 @@
           ((user-home) (apply #'join-path (user-home) under-home))
           (t nil))))
 
+(defun js-slug (s)
+  "JSSlug: s with every character that is not an ASCII letter or digit as -, one per UTF-16 code
+unit as JavaScript's replace(/[^a-zA-Z0-9]/g, \"-\") writes it (a character outside the Basic
+Multilingual Plane becomes two)."
+  (with-output-to-string (out)
+    (loop for c across s
+          for code = (char-code c)
+          do (cond ((or (<= 97 code 122) (<= 65 code 90) (<= 48 code 57)) (write-char c out))
+                   ((> code #xFFFF) (write-string "--" out))
+                   (t (write-char #\- out))))))
+
 (defun kode-session-path (cwd session-id)
-  "KodeSessionPath: ${KODE_CONFIG_DIR:-${ANYKODE_CONFIG_DIR:-~/.kode}}/projects/<slug>/<session>.jsonl,
-the slug being cwd with every byte that is not an ASCII letter or digit as -."
+  "KodeSessionPath: ${KODE_CONFIG_DIR:-${ANYKODE_CONFIG_DIR:-~/.kode}}/projects/<js-slug cwd>/<session>.jsonl."
   (if (or (string= cwd "") (string= session-id ""))
       ""
       (let ((root (let ((k (getenv-string "KODE_CONFIG_DIR")))
                     (if (string/= k "") k (env-or-home "ANYKODE_CONFIG_DIR" ".kode")))))
         (if (null root)
             ""
-            (let ((slug (with-output-to-string (out)
-                          (loop for b across (sb-ext:string-to-octets cwd :external-format :utf-8)
-                                do (write-char (if (or (<= 97 b 122) (<= 65 b 90) (<= 48 b 57)) (code-char b) #\-) out)))))
-              (join-path root "projects" slug (cat session-id ".jsonl")))))))
+            (join-path root "projects" (js-slug cwd) (cat session-id ".jsonl"))))))
 
 (defun copilot-events-path (session-id)
   "CopilotEventsPath: ${COPILOT_HOME:-~/.copilot}/session-state/<session>/events.jsonl."

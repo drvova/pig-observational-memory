@@ -155,7 +155,19 @@ func layerStatusLines(store curated.Store, model string) []string {
 	for _, s := range stale {
 		lines = append(lines, "  stale override skipped, the seed stands: "+s)
 	}
-	_, reports, _ := ls.Load(model)
+	// Decision 24: where each settled definition applies, the definitions held for weakening
+	// security, and the rollbacks a security hit made.
+	loaded, reports, _ := ls.Load(model)
+	for _, d := range loaded.List("") {
+		if d.Model == model && d.State == layer.StateWritten && d.Scope != nil {
+			lines = append(lines, fmt.Sprintf("  %s applies only in %s (its settled evidence)", d.Key(), d.Scope))
+		}
+	}
+	for _, g := range gens {
+		if g.Op == layer.OpHoldInsecure || g.Op == layer.OpRollback && strings.HasPrefix(g.Reason, "security:") {
+			lines = append(lines, "  "+g.Describe())
+		}
+	}
 	for _, r := range reports {
 		if !r.Stale {
 			lines = append(lines, "  "+strings.TrimPrefix(r.Message(), "Observational memory: "))

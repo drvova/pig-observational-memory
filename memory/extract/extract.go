@@ -13,6 +13,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ids"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/session"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
@@ -57,6 +58,14 @@ type Input struct {
 	Cwd string
 	// FileOps are the touched paths PiG reported for a compaction; none at a turn end.
 	FileOps FileOps
+	// Writer is who writes the records (ledger.Writer: the harness, the session, the session
+	// model, the engine); zero leaves the records without one.
+	Writer ledger.Writer
+	// Frame is the repository the session runs in (its RepoID, Branch and Head, from the host's
+	// host.Repo), and RepoRoot its work-tree root, against which a record's path is made
+	// relative; zero outside a repository.
+	Frame    ledger.Frame
+	RepoRoot string
 }
 
 // Batch is records to append in one om.observations.recorded entry, with the coverage marker
@@ -88,8 +97,9 @@ func (r Result) Observations() []ledger.Observation {
 // record is a record being built, with where it sits on the branch.
 type record struct {
 	obs ledger.Observation
-	// anchor is the branch index of the newest source entry the record cites.
-	anchor int
+	// anchor is the branch index of the newest source entry the record cites; first the index
+	// of the first, whose role gives the record's source (sourceOf).
+	anchor, first int
 	// exchange is the branch index of the user message that opened the record's exchange, -1
 	// before any.
 	exchange int
@@ -110,6 +120,19 @@ type record struct {
 	// undated marks a merged record whose parts named different event dates, or a part naming
 	// dates but no one date (ledger.NamesNoOneDate).
 	undated bool
+	// answers is a pushback record's exchange: the branch index of the user message whose
+	// claims it answers (resolvePushbacks); -1 for any other record.
+	answers int
+	// receipt is what the record's tool call or file state can close (resolveClosures), nil
+	// for none.
+	receipt *receipt
+	// replacesRule is the phrase a user rule says it replaces ("use X, not Y"; the Y holding a
+	// key), "" for none (resolveRuleReplacements).
+	replacesRule string
+	// forgetting marks a forget request (forgetOf), with the phrase it names (forget); it stands
+	// only once it names a record (resolveForgets).
+	forgetting bool
+	forget     namedPhrase
 }
 
 // extraction is one Extract call's state.
@@ -130,6 +153,12 @@ type extraction struct {
 	fileOrder  []string
 	// notes are the active note record ids by note name.
 	notes map[string][]string
+	// values are the value states by "kind:value" (outputRecords), valueOrder the values seen
+	// in this extraction in first-seen order.
+	values     map[string]*valueState
+	valueOrder []string
+	// conventions are the active convention records by file path (toolResult).
+	conventions map[string][]convention
 	// subjects are the ledger's subjects, which name a record's subject (ledger.SubjectInText).
 	subjects []string
 	// knownGiven are the specifics the ledger's active records already give; known their
@@ -140,27 +169,36 @@ type extraction struct {
 	// user texts.
 	exchange      int
 	exchangeTexts []string
+	// episodes are the episode ids by branch index (Episodes), "" before the first request;
+	// requests the newest request's index by branch index (Requests).
+	episodes []string
+	requests []int
+	// outputs are the tool calls' outputs in the range, in order, for a read receipt's unique
+	// line.
+	outputs []callOutput
 }
 
 // Extract reads the source entries of in.Entries[in.Start:in.End] and returns the records
 // level 0 picks from them (docs/memory-v2.md, "Level 0: code only"): conversation facts, the
 // model's own words on its tool calls, memory tool notes, attempts, files at their newest
-// state and commits. It is a pure function of its input: the same branch and ledger always
-// give the same records with the same ids, and a record the ledger already holds is not
-// returned again.
+// state, commits and the repository conventions the files the session read set. It is a pure
+// function of its input: the same branch and ledger always give the same records with the same
+// ids, and a record the ledger already holds is not returned again.
 func Extract(in Input) Result {
 	in.Start = max(in.Start, 0)
 	in.End = min(in.End, len(in.Entries))
 	x := &extraction{
-		in:         in,
-		superseded: map[string]bool{},
-		unresolved: map[string][]string{},
-		words:      map[string]string{},
-		files:      map[string][]string{},
-		fileEvents: map[string]fileEvent{},
-		notes:      map[string][]string{},
-		known:      map[string]bool{},
-		exchange:   -1,
+		in:          in,
+		superseded:  map[string]bool{},
+		unresolved:  map[string][]string{},
+		words:       map[string]string{},
+		files:       map[string][]string{},
+		fileEvents:  map[string]fileEvent{},
+		notes:       map[string][]string{},
+		conventions: map[string][]convention{},
+		values:      map[string]*valueState{},
+		known:       map[string]bool{},
+		exchange:    -1,
 	}
 	x.loadLedger()
 	last := -1
@@ -181,6 +219,8 @@ func Extract(in Input) Result {
 			x.assistant(i)
 		case "bashExecution":
 			x.bashExecution(i)
+		case "toolResult":
+			x.toolResult(i)
 		}
 	}
 	// The touched paths are cited inside the compaction's cut range even when every entry of it
@@ -198,14 +238,22 @@ func Extract(in Input) Result {
 		return Result{}
 	}
 	x.fileOps(cite)
+	x.emitValues()
 	x.emitFiles()
 	x.merge()
 	x.assignIDs()
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil })
 	x.resolveRetractions()
+	x.resolveForgets()
 	// A phrase retraction that withdrew nothing became the correction it would have been.
 	x.resolveCorrections(func(r *record) bool { return r.correction != nil && r.correction == r.fallback })
+	x.resolveRuleReplacements()
 	x.linkRecords()
+	x.resolvePushbacks()
+	x.resolveClosures()
+	x.episodes = Episodes(in.Entries, in.End, in.Writer.Session)
+	x.requests = Requests(in.Entries, in.End)
+	x.encode()
 	result := Result{Batches: x.batches(cite)}
 	if last >= 0 {
 		result.CoversUpToID = in.Entries[last].ID
@@ -240,25 +288,38 @@ func (x *extraction) loadLedger() {
 			x.files[o.Target] = append(x.files[o.Target], o.ID)
 		case ledger.KindNote:
 			x.notes[o.Target] = append(x.notes[o.Target], o.ID)
+		case ledger.KindConvention:
+			x.conventions[o.Target] = append(x.conventions[o.Target], convention{o.ID, o.Content})
 		}
 	}
+	x.loadValues(active)
 	x.subjects = ledger.SubjectsOf(active)
 	x.knownGiven = ledger.NewGiven(contents)
 }
 
 // add appends a record built from obs, anchored at the newest of its sources.
 func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
-	anchor := -1
+	anchor, first := -1, -1
 	for _, i := range sources {
 		if i < 0 || i >= len(x.in.Entries) {
 			continue
 		}
 		anchor = max(anchor, i)
+		if first < 0 {
+			first = i
+		}
 		if id := x.in.Entries[i].ID; id != "" && !slices.Contains(obs.SourceEntryIDs, id) {
 			obs.SourceEntryIDs = append(obs.SourceEntryIDs, id)
 		}
 	}
-	obs.Content = serialize.TruncateRecordContent(obs.Content)
+	// Secrets are redacted before the content is cut, so a cut never leaves part of one
+	// (contracts/secrets.md); the record's id and token count are of the redacted text.
+	obs.Content = serialize.TruncateRecordContent(secrets.Redact(obs.Content))
+	obs.Target = secrets.Redact(obs.Target)
+	for name, value := range obs.Fields {
+		obs.Fields[name] = secrets.Redact(value)
+	}
+	obs.Keys = redactKeys(obs.Keys)
 	if obs.Timestamp == "" && anchor >= 0 {
 		obs.Timestamp = serialize.FormatTimestamp(entryTime(x.in.Entries[anchor]))
 	}
@@ -266,7 +327,7 @@ func (x *extraction) add(obs ledger.Observation, sources ...int) *record {
 	if obs.Origin == "" {
 		obs.Origin = ledger.OriginCode
 	}
-	r := &record{obs: obs, anchor: anchor, exchange: x.exchange}
+	r := &record{obs: obs, anchor: anchor, first: first, exchange: x.exchange, answers: -1}
 	x.records = append(x.records, r)
 	return r
 }
@@ -302,13 +363,14 @@ func (x *extraction) merge() {
 			// A part whose text names dates but no one date (ledger.NamesNoOneDate) leaves the
 			// joined text none, whichever side it is on.
 			prevUndated, partUndated := prev.undated || ledger.NamesNoOneDate(prev.obs), r.undated || ledger.NamesNoOneDate(r.obs)
-			prev.obs.Content = serialize.TruncateRecordContent(prev.obs.Content + " " + r.obs.Content)
+			prev.obs.Content = serialize.TruncateRecordContent(secrets.Redact(prev.obs.Content + " " + r.obs.Content))
 			for _, id := range r.obs.SourceEntryIDs {
 				if !slices.Contains(prev.obs.SourceEntryIDs, id) {
 					prev.obs.SourceEntryIDs = append(prev.obs.SourceEntryIDs, id)
 				}
 			}
 			prev.anchor = max(prev.anchor, r.anchor)
+			prev.obs.Keys.Union(r.obs.Keys)
 			// The joined text has one event date when its parts name at most one between them
 			// (ledger.EventDate): a part naming none adds no date, two different dates leave none.
 			switch {
@@ -354,7 +416,7 @@ func (x *extraction) assignIDs() {
 		if r.obs.ID == "" {
 			r.obs.ID = recordID(r.obs)
 		}
-		if _, held := x.in.Ledger.ObservationsByID[r.obs.ID]; held || seen[r.obs.ID] {
+		if _, held := x.in.Ledger.ObservationsByID[r.obs.ID]; held || seen[r.obs.ID] || x.in.Ledger.Tombstoned(r.obs) {
 			continue
 		}
 		seen[r.obs.ID] = true

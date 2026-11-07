@@ -134,6 +134,9 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// section 6; level 1 defines no format). With no evidence and no definitions the profile is the default and the render is
 	// unchanged.
 	active := harness.LayerFor(h, cfg, model)
+	// Read-time scope (decision 24): a settled definition applies only in the repository and
+	// task family its evidence certified, here those of the records citing the cut range.
+	active = scopedLayerV2(active, entries, cut)
 	profile := harness.Default(harness.ModelKey(model))
 	if l, ok := harness.For(h, cfg, model); ok {
 		profile = l.ProfileWith(active)
@@ -168,7 +171,10 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// settled by the compaction that proposed it.
 	snapshot := active.Harness()
 	level0Entries := entries
-	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, active, spent)
+	// The project records' freshness against HEAD (decision 20): printed after each record, and
+	// the changed ones offered to level 1 as possibly stale. Nothing of the view is stored.
+	fresh := freshnessV2(ctx, rt, h, entries)
+	level1 := consolidateV2(ctx, request, rt, h, event, entries, cut, memoryBudget, active, fresh, spent)
 	if len(level1.entries) > 0 {
 		entries = append(append(make([]ledger.Entry, 0, len(entries)+len(level1.entries)), entries...), level1.entries...)
 	}
@@ -205,6 +211,9 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			Codec:           codec,
 			Aliases:         projection.Aliases,
 			ReflectionDates: ledger.ReflectionDateRanges(folded),
+			Slots:           V2Slots(cfg, model),
+			Freshness:       fresh.texts(),
+			Decayed:         v2Decayed(cfg, entries, projection.Observations),
 		})
 		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords
@@ -502,4 +511,17 @@ func v2SourceTokens(entries []ledger.Entry) int {
 		}
 	}
 	return total
+}
+
+// v2Decayed are the records decay lowers at this compaction (ledger.Decayed), none while the
+// decay setting is off (docs/brain-memory.md, decision 6).
+func v2Decayed(cfg config.Config, entries []session.Entry, records []ledger.Observation) map[string]bool {
+	if cfg.Decay == "" {
+		return nil
+	}
+	horizon := cfg.DecayHorizon
+	if horizon <= 0 {
+		horizon = ledger.DefaultDecayHorizon
+	}
+	return ledger.Decayed(entries, records, cfg.Decay, horizon)
 }

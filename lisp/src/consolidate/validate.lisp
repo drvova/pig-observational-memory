@@ -24,13 +24,16 @@
 (defparameter +reason-self+ "supersedes itself")
 (defparameter +reason-no-support+ "cites no record whose specifics it carries")
 (defparameter +reason-malformed+ "is not an object")
-(defparameter +reason-code-kind+ "merges an attempt, file, commit or note record, whose fields code keeps")
+(defparameter +reason-code-kind+ "merges an attempt, file, commit, note, decision or convention record, whose fields code keeps")
 (defparameter +reason-merge-statuses+ "merges records with different statuses (proposed, hypothetical, retracted or stated as fact)")
+(defparameter +reason-not-believed+ "merges a record the memory labels retracted or held")
 (defparameter +reason-not-link+ "names a pair the input did not list as a possible update")
 (defparameter +reason-verdict+ "has no verdict: confirm or reject")
 (defparameter +reason-link-settled+ "settles a possible update another verdict already settled")
 (defparameter +reason-link-merged+ "settles a possible update between records its merge joins")
 (defparameter +reason-status-replace+ "replaces a record of another status (a plan or condition never replaces a fact, a retraction only a plan or condition)")
+(defparameter +reason-not-stale+ "names a record the input did not list as possibly stale")
+(defparameter +reason-stale-verdict+ "has no stale verdict: confirm")
 (defparameter +reason-not-curated+ "names a curated memory the input did not list")
 (defparameter +reason-no-user-support+ "cites no shown record of the user's own words")
 (defparameter +reason-not-offered+ "defines what the input did not offer (definitions are offered only with HARNESS EVIDENCE)")
@@ -43,13 +46,17 @@
 (defstruct vinput
   "consolidate.Input: what the prompt showed, the folded ledger, the subjects, the links and
 curated memories listed, the branch, and the offer (nil refuses every definition)."
-  candidates active reflections folded subjects links curated branch offer)
+  candidates active reflections folded subjects links curated branch offer
+  ;; writer is Input.Writer: who writes the new records (an alist, nil for none).
+  (writer '())
+  ;; stale is Input.Stale: the possibly stale records the prompt listed (stale-rec).
+  (stale '()))
 
 (defstruct vresult
   "consolidate.Result. replaced is an equal hash table id -> replacing id; refusals are
 (what index reason) lists; cited (name . ids); definitions (kind name text); rules (detector . remedy)."
   records (merges 0) (replaced (make-set)) reflections aliases (unchanged 0) (confirmed 0)
-  (rejected 0) (link-records 0) cited definitions rules refusals (failure ""))
+  (rejected 0) (link-records 0) cited definitions rules refusals (failure "") (rechecked 0))
 
 (defun vresult-accounted (r)
   (+ (length (vresult-records r)) (vresult-unchanged r) (length (vresult-reflections r))
@@ -59,7 +66,9 @@ curated memories listed, the branch, and the offer (nil refuses every definition
 (defstruct (vstate (:conc-name v-))
   in (shown (make-set)) (candidates (make-set)) (reflections (make-set)) (used (make-set))
   (replaced (make-set)) (superseded (make-set)) (standing-superseded (make-set))
-  (standing-cited (make-set)) (edges (make-set)) (verdicts '()) (result (make-vresult)))
+  (standing-cited (make-set)) (edges (make-set)) (verdicts '()) (result (make-vresult))
+  ;; labels: the fold's labels of the records the input shows (labels-of; contracts/truth.md).
+  (labels (make-set)))
 
 ;; verdict: (index (later . earlier) confirm settled), as a struct for setf.
 (defstruct verdict index link confirm settled)
@@ -84,6 +93,11 @@ curated memories listed, the branch, and the offer (nil refuses every definition
 (defun drops-specifics-p (source replacement)
   "dropsSpecifics: replacement does not give a specific of source as a whole item."
   (and (added-specifics source (list replacement)) t))
+
+(defun drops-record-p (o replacement)
+  "dropsRecord: dropsSpecifics, or a rule, correction or decision whose key replacement misses."
+  (or (drops-specifics-p (obs-content o) replacement)
+      (and (keeps-keys-p o) (missing-keys (obs-content o) replacement) t)))
 
 (defun drops-specifics-besides-update-p (earlier later)
   (let ((updated (updated-specifics later earlier)))
@@ -168,12 +182,35 @@ curated memories listed, the branch, and the offer (nil refuses every definition
               ((and (string/= (obs-scope record) "") (string/= (obs-scope target) "") (string/= (obs-scope record) (obs-scope target)))
                (return (values nil +reason-cross-scope+)))
               ((not (may-supersede-obs-p record target)) (return (values nil +reason-status-replace+)))
-              ((drops-specifics-p (obs-content target) (obs-content record)) (return (values nil +reason-drops-specifics+)))
+              ((drops-record-p target (obs-content record)) (return (values nil +reason-drops-specifics+)))
               ((v-reaches v tg sources) (return (values nil +reason-cycle+))))))))
 
-(defun v-accept (v record sources)
+(defun origin-rank (origin)
+  "consolidate.originRank: model (and any origin not known) lowest, then host, then code."
+  (cond ((string= origin "code") 2) ((string= origin "host") 1) (t 0)))
+
+(defun v-least-provenance (v record sources)
+  "validator.leastProvenance: a record replacing sources has no origin above the lowest source's,
+and stands for the user only when every source does."
+  (dolist (id sources)
+    (let ((o (gethash id (v-shown v))))
+      (when o
+        (when (< (origin-rank (obs-origin o)) (origin-rank (obs-origin record)))
+          (setf (obs-origin record) (obs-origin o)))
+        (unless (or (obs-from-user o) (user-priority-p o))
+          (setf (obs-from-user record) nil))
+        (setf (obs-authority record) (least-authority (obs-authority record) (obs-authority o))
+              (obs-hedge record) (strongest-hedge (obs-hedge record) (obs-hedge o))))))
+  (let ((writer (and (vinput-p (v-in v)) (vinput-writer (v-in v)))))
+    (when writer (setf (obs-writer record) writer))))
+
+(defun v-accept (v record sources &optional (salt ""))
+  "accept, and acceptAs with salt (a stale confirmation's HEAD) salting the id."
+  (v-least-provenance v record sources)
   (setf (obs-replaces record) (copy-list sources))
   (setf (obs-id record) (level1-record-id record))
+  (when (string/= salt "")
+    (setf (obs-id record) (hash-id (join (list "level1-recheck" (obs-id record) salt) (string (code-char 0))))))
   (setf (obs-token-count record) (observation-line-tokens (obs-id record) (obs-timestamp record) (obs-relevance record) (obs-content record)))
   (dolist (id sources) (setf (gethash id (v-used v)) t))
   (when (nth-value 1 (gethash (obs-id record) (folded-by-id (vinput-folded (v-in v)))))
@@ -246,10 +283,14 @@ curated memories listed, the branch, and the offer (nil refuses every definition
     (dolist (o (rest sources))
       (when (string/= (obs-status o) (obs-status (first sources)))
         (return-from v-merge (refuse v "merge" index +reason-merge-statuses+))))
+    (dolist (o sources)
+      (let ((l (gethash (obs-id o) (v-labels v))))
+        (when (member l '("retracted" "held") :test #'equal)
+          (return-from v-merge (refuse v "merge" index +reason-not-believed+)))))
     (let ((content (one-line-of (jget item "content"))))
       (when (string= content "") (return-from v-merge (refuse v "merge" index +reason-empty+)))
       (dolist (o sources)
-        (when (drops-specifics-p (obs-content o) content) (return-from v-merge (refuse v "merge" index +reason-drops-specifics+))))
+        (when (drops-record-p o content) (return-from v-merge (refuse v "merge" index +reason-drops-specifics+))))
       (let ((record (make-obs :content content :timestamp (newest-timestamp sources) :relevance (highest-relevance sources)
                               :kind (common-field sources #'obs-kind) :subject (common-field sources #'obs-subject)
                               :scope (common-scope sources) :origin "model" :status (obs-status (first sources))
@@ -265,6 +306,15 @@ curated memories listed, the branch, and the offer (nil refuses every definition
           (dolist (id (obs-source-ids o))
             (unless (member-str id (obs-source-ids record))
               (setf (obs-source-ids record) (append (obs-source-ids record) (list id))))))
+        ;; The text is level 1's: its authority starts at the top and is lowered to the least
+        ;; source's (v-least-provenance), its hedge never below the text's or a source's.
+        (setf (obs-source record) "model-inferred" (obs-authority record) "user"
+              (obs-hedge record) (hedge-of content)
+              (obs-frame record) (if (every (lambda (o) (equal (obs-frame o) (obs-frame (first sources)))) (rest sources))
+                                     (obs-frame (first sources)) '())
+              (obs-time-hint record) (common-field sources #'obs-time-hint)
+              (obs-episode record) (common-field sources #'obs-episode))
+        (dolist (o sources) (setf (obs-keys record) (keys-union (obs-keys record) (obs-keys o))))
         (v-apply-labels record item nil)
         (setf (obs-from-user record)
               (and (null (added-specifics content (mapcar #'obs-content sources)))
@@ -301,7 +351,8 @@ curated memories listed, the branch, and the offer (nil refuses every definition
         (incf (vresult-unchanged (v-result v)))
         (return-from v-label))
       (when (string/= (obs-kind record) (obs-kind candidate))
-        (setf (obs-origin record) "model" (obs-from-user record) nil))
+        (setf (obs-origin record) "model" (obs-from-user record) nil
+              (obs-source record) "model-inferred" (obs-authority record) (least-authority (obs-authority record) "model")))
       (v-accept v record (list id)))))
 
 (defun v-links (v items)
@@ -343,7 +394,7 @@ curated memories listed, the branch, and the offer (nil refuses every definition
     (flet ((support (id known)
              (let* ((resolved (v-resolve v id)) (cited (v-record v resolved)))
                (unless (or (and (null cited) known)
-                           (and cited (drops-specifics-p (obs-content cited) content))
+                           (and cited (drops-record-p cited content))
                            (member-str resolved supporting))
                  (push-end resolved supporting)))))
       (dolist (id (unique-strings (jget item "supportingIds")))
@@ -438,6 +489,31 @@ curated memories listed, the branch, and the offer (nil refuses every definition
                               ((member r seen :test #'equal) (refuse v "rule" i +reason-defined-twice+))
                               (t (push r seen) (push-end r (vresult-rules (v-result v)))))))))))
 
+(defun v-stale (v items)
+  "validator.stale: each verdict names a listed possibly stale record, once, that no other proposal
+took or superseded; a confirmed one is replaced by itself framed at HEAD with its path's blob."
+  (loop for item in items for i from 0
+        do (block one
+             (unless (hash-table-p item) (refuse v "stale" i +reason-malformed+) (return-from one))
+             (let* ((id (trim-space (jstr item "id")))
+                    (r (find id (vinput-stale (v-in v)) :key #'stale-rec-id :test #'string=)))
+               (cond ((or (null r) (not (nth-value 1 (gethash id (v-shown v)))))
+                      (refuse v "stale" i +reason-not-stale+))
+                     ((string/= (trim-space (jstr item "verdict")) "confirm")
+                      (refuse v "stale" i +reason-stale-verdict+))
+                     ((gethash id (v-used v)) (refuse v "stale" i +reason-used+))
+                     ((gethash id (v-superseded v)) (refuse v "stale" i +reason-superseded+))
+                     (t
+                      (let ((record (copy-obs (gethash id (v-shown v))))
+                            (before (length (vresult-records (v-result v)))))
+                        (setf (obs-id record) "" (obs-token-count record) 0
+                              (obs-supersedes record) (copy-list (obs-supersedes record)))
+                        (set-frame-member record "head" (stale-rec-head r))
+                        (set-frame-member record "bodyHash" (stale-rec-blob r))
+                        (v-accept v record (list id) (stale-rec-head r))
+                        (when (> (length (vresult-records (v-result v))) before)
+                          (incf (vresult-rechecked (v-result v)))))))))))
+
 (defun validate-level1 (args in)
   "consolidate.Validate: args is the tool's decoded arguments (nil when the response did not
 call it)."
@@ -452,12 +528,20 @@ call it)."
     (dolist (r (vinput-reflections in)) (setf (gethash (refl-id r) (v-reflections v)) r))
     (dolist (o (append (folded-active folded) (vinput-active in) (vinput-candidates in)))
       (dolist (id (obs-supersedes o)) (setf (gethash id (v-standing-superseded v)) t)))
+    (let ((labelled (copy-list (folded-active folded))) (seen (make-set)))
+      (dolist (o labelled) (setf (gethash (obs-id o) seen) t))
+      (dolist (o (append (vinput-active in) (vinput-candidates in)))
+        (unless (gethash (obs-id o) seen)
+          (setf (gethash (obs-id o) seen) t)
+          (push-end o labelled)))
+      (setf (v-labels v) (labels-of labelled)))
     (dolist (r (append (folded-reflections folded) (vinput-reflections in)))
       (dolist (id (refl-supporting r)) (setf (gethash id (v-standing-cited v)) t)))
     (v-links v (json-items (jget args "links")))
     (loop for item in (json-items (jget args "merges")) for i from 0 do (v-merge v i item))
     (loop for item in (json-items (jget args "records")) for i from 0 do (v-label v i item))
     (v-settle-remaining v)
+    (v-stale v (json-items (jget args "stale")))
     (loop for item in (json-items (jget args "reflections")) for i from 0 do (v-reflection v i item))
     (v-aliases v (json-items (jget args "aliases")))
     (v-curated v (json-items (jget args "curated")))
@@ -480,14 +564,14 @@ call it)."
       (multiple-value-bind (replacement ok) (gethash (obs-id o) (vresult-replaced result))
         (when ok
           (let ((r (gethash replacement by-id)))
-            (if (or (null r) (string= replacement (obs-id o)) (drops-specifics-p (obs-content o) (obs-content r)))
+            (if (or (null r) (string= replacement (obs-id o)) (drops-record-p o (obs-content r)))
                 (incf kept)
                 (unless (member-str (obs-id o) drop) (push-end (obs-id o) drop)))))))
     (dolist (r (vresult-reflections result))
       (let ((supporting '()))
         (dolist (id (refl-supporting r))
           (let ((o (gethash id by-id)))
-            (if (and o (drops-specifics-p (obs-content o) (refl-content r)))
+            (if (and o (drops-record-p o (refl-content r)))
                 (incf kept)
                 (push-end id supporting))))
         (when supporting

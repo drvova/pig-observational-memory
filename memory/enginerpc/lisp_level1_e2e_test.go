@@ -2,6 +2,8 @@ package enginerpc_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/rules"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,7 +107,7 @@ func sameRun(t *testing.T, name string, want, got level1Run) {
 		what      string
 		want, got any
 	}{{"result", want.Result, got.Result}, {"appended", want.Appended, got.Appended}, {"requests", want.Requests, got.Requests}, {"notifications", want.Notifications, got.Notifications}} {
-		if !reflect.DeepEqual(part.want, part.got) {
+		if !reflect.DeepEqual(asGo(part.want), asGo(part.got)) {
 			w, _ := json.MarshalIndent(part.want, "", " ")
 			g, _ := json.MarshalIndent(part.got, "", " ")
 			t.Fatalf("%s: %s differ\nin-process: %s\nlisp:       %s", name, part.what, clip(w), clip(g))
@@ -178,6 +180,44 @@ func TestLispLevel1MatchesInProcess(t *testing.T) {
 			}
 		}
 	}
+	// A merge of the user's statement and a record from the assistant's text is the model's,
+	// never the user's (docs/brain-memory.md, "Provenance, not detection"), on both paths.
+	var user, other map[string]any
+	for _, o := range probe.Result.(map[string]any)["compaction"].(map[string]any)["details"].(map[string]any)["observations"].([]any) {
+		o := o.(map[string]any)
+		switch sources, _ := o["sourceEntryIds"].([]any); {
+		case len(sources) > 0 && sources[0] == "h6b" && user == nil:
+			user = o
+		case len(sources) > 0 && sources[0] != "h6b" && other == nil:
+			other = o
+		}
+	}
+	if user == nil || other == nil {
+		t.Fatalf("no user and assistant records among the candidates: %v", ids)
+	}
+	mixed := level1Call(map[string]any{"merges": []any{map[string]any{
+		"ids":     []any{user["id"], other["id"]},
+		"content": user["content"].(string) + " " + other["content"].(string),
+	}}})
+	want := level1Compact(t, inProcess, "", testfix.ToJSONValue(mixed).(map[string]any))
+	got := level1Compact(t, lisp, "", testfix.ToJSONValue(mixed).(map[string]any))
+	sameRun(t, "mixed merge", want, got)
+	merged := 0
+	for _, e := range got.Appended.([]any) {
+		data, _ := e.(map[string]any)["Data"].(map[string]any)
+		for _, o := range func() []any { list, _ := data["observations"].([]any); return list }() {
+			o := o.(map[string]any)
+			if replaces, _ := o["replaces"].([]any); len(replaces) == 2 {
+				merged++
+				if o["origin"] != "model" || o["fromUser"] == true {
+					t.Fatalf("a merge of the user's words and another record claims more provenance: %v", o)
+				}
+			}
+		}
+	}
+	if merged != 1 {
+		t.Fatalf("the mixed merge was not recorded (%d): %v", merged, consolidationOf(got))
+	}
 	if lines := log.lines(); len(lines) != 0 {
 		t.Fatalf("fallbacks:\n%s", strings.Join(lines, "\n"))
 	}
@@ -191,6 +231,11 @@ func offerStore(t *testing.T) string {
 	path := filepath.Join(curated.DefaultDir(home), "models", layer.ModelDir("test-provider/session")+".jsonl")
 	must(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	line := `{"time":"2026-11-01T09:00:00Z","model":"test-provider/session","kind":"pass","outcome":"ok","stage":"compaction","tokens":500,"counts":{"level1-union-kept":1},"engine":"v2","level1":true}` + "\n"
+	// The null arm's control windows (rules.SettleV2): 2·MinEvidence compactions without a
+	// definition, each refusing two proposals over its own evidence root.
+	for i := range 2 * rules.MinEvidence {
+		line += fmt.Sprintf(`{"time":"2026-11-01T09:1%d:00Z","model":"test-provider/session","kind":"pass","outcome":"ok","stage":"compaction","tokens":500,"counts":{"level1-refused":2},"engine":"v2","level1":true,"roots":["c0ffee000000000%d"],"harm":0}`+"\n", i, i)
+	}
 	must(t, os.WriteFile(path, []byte(line), 0o600))
 	// A memory this session staged, which a citation of the user's own words promotes.
 	if _, err := curated.New(curated.DefaultDir(home)).Save(curated.Memory{Name: "billing-first", Type: curated.TypeProject,
@@ -274,6 +319,17 @@ func TestLispLevel1OfferMatchesInProcess(t *testing.T) {
 	}
 	if held["lisp"] != held["in-process"] {
 		t.Fatalf("held text: in-process %q, lisp %q", held["in-process"], held["lisp"])
+	}
+	// Other sessions' compactions ran under it over other text and refused nothing: its null arm.
+	for _, home := range homes {
+		store := curated.New(curated.DefaultDir(home))
+		held, err := store.Layer().Held("test-provider/session")
+		must(t, err)
+		for i := range rules.MinEvidence {
+			harm := 0
+			must(t, store.RecordModel(curated.ModelEvent{Model: "test-provider/session", Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2,
+				Outcome: curated.OutcomeOK, Tokens: 500, Level1: true, Harm: &harm, RanHeld: []string{held[0].HeldID()}, Roots: []string{fmt.Sprintf("beef00000000000%d", i)}}))
+		}
 	}
 	// The next compaction runs with the held text (no offer while it waits), credits it in its
 	// pass, and SettleV2 writes it: the same prompt, entries, notices and pass on both paths.

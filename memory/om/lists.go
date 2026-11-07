@@ -104,8 +104,18 @@ func (l NoteList) IDs() []string {
 	return out
 }
 
-// Table is the rows in the rows codec, the same for every model.
-func (l NoteList) Table() string { return tableOf("notes", NoteFields, l.Rows, Note.cell) }
+// Table is the rows in the rows codec, the same for every model; a ranked search's rows add
+// their tag and the records merged into them (SearchFields).
+func (l NoteList) Table() string {
+	fields := NoteFields
+	for _, r := range l.Rows {
+		if r.Tag != "" {
+			fields = append(slices.Clone(NoteFields), SearchFields...)
+			break
+		}
+	}
+	return tableOf("notes", fields, l.Rows, Note.cell)
+}
 
 // Count counts the rows by the value of a field.
 func (l NoteList) Count(field string) map[string]int { return countOf(l.Rows, field, Note.field) }

@@ -93,6 +93,8 @@
 (defstruct rec
   obs
   (anchor -1)
+  ;; first is the branch index of the record's first source entry, whose role gives its source.
+  (first -1)
   (exchange -1)
   correction
   retraction
@@ -100,7 +102,17 @@
   (named-words "")
   fallback
   (fallback-status "")
-  undated)
+  undated
+  ;; answers: a pushback record's exchange (resolve-pushbacks, contest.lisp); -1 for any other.
+  (answers -1)
+  ;; receipt: what the record's call or file state can close (working.lisp), nil for none;
+  ;; replaces-rule: the phrase a user rule says it replaces, "" for none.
+  (receipt nil)
+  (replaces-rule "")
+  ;; forgetting marks a forget request (forget-of), with the phrase and words it names.
+  forgetting
+  (forget-phrase "")
+  (forget-words ""))
 
 (defstruct (xstate (:conc-name x-))
   entries
@@ -118,11 +130,23 @@
   (file-events (make-set))
   (file-order '())
   (notes (make-set))
+  ;; value-states are the value states by "kind:value" (output.lisp), value-order the values seen
+  ;; in this extraction in first-seen order.
+  (value-states (make-set))
+  (value-order '())
+  ;; conventions: the active convention records by file path, as (id . content) (encoding.lisp).
+  (conventions (make-set))
   (subjects '())
   known-given
   (known (make-set))
   (exchange -1)
-  (exchange-texts '()))
+  (exchange-texts '())
+  ;; episodes: the episode ids by branch index (episodes-of, contest.lisp); requests the newest
+  ;; request's index by branch index (requests-of, working.lisp).
+  (episodes #())
+  (requests #())
+  ;; outputs: the tool calls' outputs in the range, in order, as (target . text).
+  (outputs '()))
 
 (defstruct batch observations covers)
 
@@ -141,19 +165,24 @@
 (defun normalized (text) (to-lower (one-line text)))
 
 (defun x-add (x o &rest sources)
-  (let ((anchor -1) (n (length (x-entries x))))
+  (let ((anchor -1) (first -1) (n (length (x-entries x))))
     (dolist (i sources)
       (when (and (>= i 0) (< i n))
         (setf anchor (max anchor i))
+        (when (< first 0) (setf first i))
         (let ((id (entry-id (entry-at x i))))
           (when (and (string/= id "") (not (member-str id (obs-source-ids o))))
             (push-end id (obs-source-ids o))))))
-    (setf (obs-content o) (truncate-record-content (obs-content o)))
+    ;; Secrets are redacted before the content is cut (contracts/secrets.md).
+    (setf (obs-content o) (truncate-record-content (redact-secrets (obs-content o)))
+          (obs-target o) (redact-secrets (obs-target o))
+          (obs-fields o) (mapcar (lambda (f) (cons (car f) (redact-secrets (cdr f)))) (obs-fields o))
+          (obs-keys o) (redact-keys (obs-keys o)))
     (when (and (string= (obs-timestamp o) "") (>= anchor 0))
       (setf (obs-timestamp o) (format-timestamp (entry-time (entry-at x anchor)))))
     (setf (obs-relevance o) +code-relevance+)
     (when (string= (obs-origin o) "") (setf (obs-origin o) "code"))
-    (let ((r (make-rec :obs o :anchor anchor :exchange (x-exchange x))))
+    (let ((r (make-rec :obs o :anchor anchor :first first :exchange (x-exchange x))))
       (push-end r (x-records x))
       r)))
 
@@ -182,7 +211,10 @@
                    (push-end (obs-id o) (gethash key (x-unresolved x)))
                    (setf (gethash (obs-id o) (x-words x)) (attempt-words o)))))
               ((string= (obs-kind o) "file") (push-end (obs-id o) (gethash (obs-target o) (x-files x))))
-              ((string= (obs-kind o) "note") (push-end (obs-id o) (gethash (obs-target o) (x-notes x)))))))
+              ((string= (obs-kind o) "note") (push-end (obs-id o) (gethash (obs-target o) (x-notes x))))
+              ((string= (obs-kind o) "convention")
+               (push-end (cons (obs-id o) (obs-content o)) (gethash (obs-target o) (x-conventions x)))))))
+    (x-load-values x active)
     (setf (x-subjects x) (mapcar #'obs-subject active))
     (setf (x-known-given x) (new-given (nreverse contents)))))
 
@@ -405,8 +437,88 @@
                 (and (regex-match-p +named-retraction+ sentence) (has-specifics-p sentence)))
             "" "")))
 
+;;; forget.go: forget requests (contracts/truth.md, "Forget records")
+
+(defparameter +forget-scope+
+  #r§(\s+(?:for\s+(?:this|the)\s+session|in\s+this\s+session|for\s+now|(?:in|for)\s+this\s+(?:project|repo(?:sitory)?)|everywhere|for\s+good|permanently|in\s+every\s+project|across\s+(?:all\s+)?projects))?§)
+
+(defparameter +forget-patterns+
+  (list
+   (compile-regex (cat #r§(?i)^§ +retraction-opening+ #r§(?:please\s+)?(?:forget|erase|delete|remove|purge|wipe)\s+(?:about\s+)?(§ +retraction-phrase+ #r§)\s+from\s+(?:your\s+|the\s+|my\s+)?memory§ +forget-scope+ +retraction-close+))
+   (compile-regex (cat #r§(?i)^§ +retraction-opening+ #r§(?:please\s+)?(?:don'?t|do\s+not|stop)\s+remember(?:ing)?\s+(§ +retraction-phrase+ #r§)§ +forget-scope+ +retraction-close+))
+   (compile-regex (cat #r§(?i)^§ +retraction-opening+ #r§(?:please\s+)?forget\s+(?:everything\s+|what\s+)?i\s+(?:said|told\s+you)\s+about\s+(§ +retraction-phrase+ #r§)§ +forget-scope+ +retraction-close+))))
+
+(defun forget-scope-of (phrase)
+  "ForgetScopeOf."
+  (let ((p (to-lower phrase)))
+    (cond ((or (search "session" p) (search "for now" p)) "session")
+          ((or (search "this project" p) (search "this repo" p)) "project")
+          (t "user"))))
+
+(defun forget-of (sentence)
+  "forgetOf: (values ok phrase words scope)."
+  (when (question-p sentence) (return-from forget-of (values nil "" "" "")))
+  (let ((sentence (replace-all sentence "’" "'")))
+    (dolist (pattern +forget-patterns+)
+      (let ((m (regex-find-submatch pattern sentence)))
+        (when m
+          (let ((words (retraction-words (second m))))
+            (when (string/= words "")
+              (return-from forget-of (values t (second m) words (forget-scope-of (or (third m) ""))))))))))
+  (values nil "" "" ""))
+
+(defun forget-content (ids)
+  "forgetContent."
+  (format nil "The user asked to forget ~D ~A: ~A." (length ids) (if (= (length ids) 1) "record" "records") (join ids " ")))
+
+(defun resolve-forgets (x)
+  "resolveForgets: each forget request's tombstones; the records of this extraction it names are
+not written, and a forget naming nothing is no record."
+  (let ((forgotten (make-set)) (kept '()) (before '()))
+    (dolist (r (x-records x))
+      (if (not (rec-forgetting r))
+          (push r kept)
+          (let ((stones '()))
+            (flet ((matches (content)
+                     (if (phrase-specifics (rec-forget-phrase r))
+                         (carries-phrase-p content (rec-forget-phrase r))
+                         (contains-words-p content (rec-forget-words r))))
+                   (add (o)
+                     (unless (find (obs-id o) stones :key #'first :test #'string=)
+                       (push-end (list (obs-id o) (obs-kind o) (copy-list (obs-source-ids o))) stones))))
+              (dolist (o (folded-active (x-ledger x)))
+                (unless (or (string= (obs-kind o) "forget") (gethash (obs-id o) forgotten) (not (matches (obs-content o))))
+                  (setf (gethash (obs-id o) forgotten) t)
+                  (let ((hit '()))
+                    (dolist (id (obs-replaces o))
+                      (let ((src (gethash id (folded-by-id (x-ledger x)))))
+                        (when (and src (matches (obs-content src))) (push-end src hit))))
+                    (if (and (> (length (obs-replaces o)) 1) hit (< (length hit) (length (obs-replaces o))))
+                        (dolist (src hit) (add src))
+                        (add o)))))
+              (dolist (e (reverse before))
+                (unless (or (rec-forgetting e) (gethash (obs-id (rec-obs e)) forgotten) (not (matches (obs-content (rec-obs e)))))
+                  (setf (gethash (obs-id (rec-obs e)) forgotten) t)
+                  (add (rec-obs e)))))
+            (when stones
+              (let ((o (rec-obs r)))
+                (setf (obs-content o) (forget-content (mapcar #'first stones))
+                      (obs-forgets o) stones)
+                (setf (obs-id o) (record-id o))
+                (setf (obs-token-count o) (observation-line-tokens (obs-id o) (obs-timestamp o) (obs-relevance o) (obs-content o))))
+              (push r kept))))
+      (push r before))
+    (setf (x-records x)
+          (remove-if (lambda (r) (and (not (rec-forgetting r)) (gethash (obs-id (rec-obs r)) forgotten)))
+                     (nreverse kept)))))
+
 (defun preference-p (sentence)
-  (and (not (question-p sentence)) (some (lambda (p) (regex-match-p p sentence)) +preference-patterns+)))
+  "isPreference: an explicit preference construction, neither a question, posed hypothetically
+(+rule-hypothetical+) nor reported from someone else (reported-p), as rule-p excludes them."
+  (let ((sentence (replace-all sentence "’" "'")))
+    (and (not (question-p sentence)) (not (regex-match-p +rule-hypothetical+ sentence))
+         (not (reported-p sentence))
+         (some (lambda (p) (regex-match-p p sentence)) +preference-patterns+))))
 
 (defun self-statement-p (sentence)
   (and (not (question-p sentence)) (some (lambda (p) (regex-match-p p sentence)) +self-statements+)))
@@ -440,6 +552,14 @@
       (dolist (sentence (sentences text))
         (unless (or (bare-ack-p sentence) (markup-only-p sentence) (gethash (normalized sentence) (x-known x)))
           (block next
+            (multiple-value-bind (forget phrase words scope) (forget-of sentence)
+              (when forget
+                (let ((repo (alist-member (getf *encoding* :frame) "repoId")))
+                  (when (and (string= scope "project") (string/= repo ""))
+                    (setf scope (cat scope ":" repo))))
+                (let ((r (x-add x (make-obs :content sentence :kind "forget" :scope scope) i)))
+                  (setf (rec-forgetting r) t (rec-forget-phrase r) phrase (rec-forget-words r) words))
+                (return-from next)))
             (multiple-value-bind (target correction) (correction-of sentence)
               (multiple-value-bind (retraction named-phrase named-words) (retraction-of sentence)
                 (let ((kind "") (status "") (fallback nil))
@@ -448,12 +568,17 @@
                   (setf retraction (and retraction (not correction)))
                   (cond (correction (setf kind "correction" status (status-of-sentence sentence)))
                         (retraction (setf kind "correction" status +status-retracted+))
-                        ((preference-p sentence) (setf kind "preference"))
-                        ((or (has-specifics-p sentence) (self-statement-p sentence))
+                        ((or (preference-p sentence) (rule-p sentence)) (setf kind "preference"))
+                        ((decision-p sentence) (setf kind "decision" status (status-of-sentence sentence)))
+                        ((or (has-specifics-p sentence) (self-statement-p sentence) (x-restates-contested-p x sentence))
                          (setf kind "fact" status (status-of-sentence sentence)))
                         (t (return-from next)))
-                  (let ((r (x-add x (conversation-record x sentence kind status day) i)))
+                  (let ((r (x-add x (let ((o (conversation-record x sentence kind status day)))
+                                      (when (member-str kind '("preference" "decision")) (user-rule o))
+                                      o)
+                                  i)))
                     (when correction (setf (rec-correction r) target))
+                    (when (string= kind "preference") (setf (rec-replaces-rule r) (replaced-rule-phrase sentence)))
                     (setf (rec-retraction r) retraction)
                     (when retraction
                       (setf (rec-named-phrase r) named-phrase (rec-named-words r) named-words)
@@ -479,11 +604,14 @@
   (let* ((e (entry-at x i)) (day (anchor-day e)) (exchange (new-given (x-exchange-texts x))))
     (flet ((keep (statement)
              (unless (bare-ack-p statement)
+               ;; A statement disagreeing with a claim the user made in the exchange is its pushback.
+               (when (x-pushback-at x i statement day) (return-from keep))
                (let ((given (list exchange (x-known-given x))))
                  (dolist (r (x-records x))
                    (when (= (rec-exchange r) (x-exchange x))
                      (push-end (new-given (list (obs-content (rec-obs r)))) given)))
-                 (when (added statement given)
+                 (when (or (added statement given)
+                           (and (assistant-decision-p statement) (not (exchange-has-decision-p x))))
                    (x-add x (conversation-record x statement "assistant" (status-of-sentence statement) day) i))))))
       (dolist (u (units text))
         (if (unit-items u)
@@ -491,7 +619,7 @@
             (dolist (s (unit-sentences u)) (keep s)))))))
 
 (defun conversational-p (kind)
-  (member kind '("fact" "preference" "correction" "assistant" "event" "plan" "") :test #'string=))
+  (member kind '("fact" "preference" "correction" "assistant" "event" "plan" "" "decision") :test #'string=))
 
 (defun resolve-corrections (x resolve)
   (let ((earlier '()))
@@ -540,27 +668,44 @@
           (let ((o (rec-obs r)))
             (when (rec-retraction r)
               (let ((withdrawn nil) (phrase (rec-named-phrase r)) (words (rec-named-words r)))
-                (flet ((withdraw (id) (push-end id (obs-supersedes o)) (setf (gethash id (x-superseded x)) t withdrawn t)))
+                ;; withdraw supersedes what c names: c itself, or, when c is a level-1 merge some
+                ;; but not all of whose sources match, those sources (decision 1's cascade).
+                (flet ((withdraw (id match)
+                         (let* ((by-id (folded-by-id (x-ledger x))) (m (gethash id by-id)) (ids (list id)))
+                           (when (and m match (> (length (obs-replaces m)) 1))
+                             (let ((hit '()))
+                               (dolist (sid (obs-replaces m))
+                                 (let ((src (gethash sid by-id)))
+                                   (when (and src (pending-p src) (funcall match (obs-content src)))
+                                     (push-end sid hit))))
+                               (when (and hit (< (length hit) (length (obs-replaces m))))
+                                 (setf ids hit))))
+                           (dolist (i ids)
+                             (unless (member-str i (obs-supersedes o)) (push-end i (obs-supersedes o))))
+                           (setf (gethash id (x-superseded x)) t withdrawn t))))
                   (cond
                     ((and (string/= words "") (phrase-specifics phrase))
-                     (dolist (c earlier)
-                       (when (and (not (gethash (first c) (x-superseded x))) (carries-phrase-p (second c) phrase))
-                         (withdraw (first c)))))
+                     (let ((match (lambda (content) (carries-phrase-p content phrase))))
+                       (dolist (c earlier)
+                         (when (and (not (gethash (first c) (x-superseded x))) (funcall match (second c)))
+                           (withdraw (first c) match)))))
                     ((string/= words "")
-                     (dolist (c (reverse earlier))
-                       (when (and (not (gethash (first c) (x-superseded x))) (may-supersede-p (obs-status o) (third c))
-                                  (contains-words-p (second c) words))
-                         (withdraw (first c))
-                         (return))))
+                     (let ((match (lambda (content) (contains-words-p content words))))
+                       (dolist (c (reverse earlier))
+                         (when (and (not (gethash (first c) (x-superseded x))) (may-supersede-p (obs-status o) (third c))
+                                    (funcall match (second c)))
+                           (withdraw (first c) match)
+                           (return)))))
                     ((has-specifics-p (obs-content o))
-                     (dolist (c earlier)
-                       (when (and (not (gethash (first c) (x-superseded x))) (null (added-specifics (obs-content o) (list (second c)))))
-                         (withdraw (first c)))))
+                     (let ((match (lambda (content) (null (added-specifics (obs-content o) (list content))))))
+                       (dolist (c earlier)
+                         (when (and (not (gethash (first c) (x-superseded x))) (funcall match (second c)))
+                           (withdraw (first c) match)))))
                     (t
                      (let ((from (previous-exchange x (rec-exchange r))))
                        (dolist (c (reverse earlier))
                          (when (and (not (gethash (first c) (x-superseded x))) (>= (fourth c) from))
-                           (withdraw (first c))
+                           (withdraw (first c) nil)
                            (return)))))))
                 (unless withdrawn
                   (cond ((rec-fallback r)
@@ -605,17 +750,94 @@ subject and scope."
 
 ;;; work.go
 
+;; fileTools, keyed by tool-key: one entry covers every harness's spelling of a name.
 (defparameter +file-tools+
-  '(("read" . "read") ("read_file" . "read") ("view" . "read")
-    ("write" . "written") ("write_file" . "written") ("create_file" . "written")
-    ("edit" . "edited") ("edit_file" . "edited") ("multiedit" . "edited")
-    ("delete" . "deleted") ("delete_file" . "deleted") ("remove" . "deleted") ("remove_file" . "deleted")))
-(defparameter +path-args+ '("path" "file_path" "filePath"))
-(defregex +exit-code+ #r§Command exited with code (\d+)§)
+  '(("read" . "read") ("readfile" . "read") ("readfiles" . "read") ("view" . "read")
+    ("write" . "written") ("writefile" . "written") ("createfile" . "written") ("create" . "written")
+    ("edit" . "edited") ("editfile" . "edited") ("multiedit" . "edited") ("notebookedit" . "edited") ("replace" . "edited")
+    ("delete" . "deleted") ("deletefile" . "deleted") ("remove" . "deleted") ("removefile" . "deleted")))
+(defparameter +path-args+ '("path" "file_path" "filePath" "notebook_path"))
+(defregex +exit-code+ #r§(?:Command|Process) exited with code (\d+)§)
 
-(defstruct tcall (id "") (name "") args)
+(defun tool-key (name)
+  "toolKey: ASCII lower case, without underscores or hyphens."
+  (with-output-to-string (out)
+    (loop for c across name
+          do (cond ((find c "_-"))
+                   ((char<= #\A c #\Z) (write-char (char-downcase c) out))
+                   (t (write-char c out))))))
+
+(defstruct tcall (id "") (name "") args raw)
+
+(defun file-tool-state (call)
+  "fileToolState: the state a successful call leaves its path in, nil when its tool names no file.
+Kiro's write replacing a string (its command strReplace) edits the file."
+  (let ((key (tool-key (tcall-name call))))
+    (if (and (string= key "write") (equal (jget (tcall-args call) "command") "strReplace"))
+        "edited"
+        (cdr (assoc key +file-tools+ :test #'string=)))))
+
+;;; patch.go
+
+(defparameter +apply-patch-success+ "Success. Updated the following files:")
+
+(defun apply-patch-word-p (w) (or (string= w "apply_patch") (string= w "applypatch")))
+
+(defun path-base-name (p)
+  "path.Base for a command word."
+  (let* ((p (trim-right p "/")) (slash (position #\/ p :from-end t)))
+    (cond ((string= p "") "/") (slash (subseq p (1+ slash))) (t p))))
+
+(defun patch-of (call)
+  "patchOf: (values patch t) for a call that hands Codex's apply_patch a patch, else (values \"\" nil)."
+  (let ((args (tcall-args call)))
+    (when (string= (tool-key (tcall-name call)) "applypatch")
+      (let ((raw (tcall-raw call)))
+        (return-from patch-of
+          (values (cond ((stringp raw) raw) ((stringp (jget args "input")) (jget args "input")) (t "")) t))))
+    (let ((script "") (command (jget args "command")))
+      (cond ((stringp command) (setf script command))
+            ((vectorp command)
+             (unless (every #'stringp command) (return-from patch-of (values "" nil)))
+             (let ((argv (coerce command 'list)))
+               (cond ((and (= (length argv) 2) (apply-patch-word-p (first argv)))
+                      (return-from patch-of (values (second argv) t)))
+                     ((and (= (length argv) 3) (string= (path-base-name (first argv)) "bash")
+                           (member-str (second argv) '("-lc" "-c")))
+                      (setf script (third argv)))))))
+      (when (string= script "")
+        (let ((cmd (jget args "cmd"))) (when (stringp cmd) (setf script cmd))))
+      (let ((words (fields (first (split script (string #\Newline))))))
+        (if (and words (apply-patch-word-p (first words)) (contains script "*** Begin Patch"))
+            (values script t)
+            (values "" nil))))))
+
+(defun patch-path-events (patch)
+  "patchPathEvents: the (path state other) a patch touches, in its order."
+  (let ((events (make-array 0 :adjustable t :fill-pointer t)) (in nil) (update -1))
+    (dolist (raw (split patch (string #\Newline)))
+      (let ((line (trim-right raw (coerce '(#\Space #\Tab #\Return) 'string))))
+        (flet ((marker (prefix)
+                 (when (has-prefix line prefix)
+                   (let ((p (trim-space (subseq line (length prefix)))))
+                     (and (string/= p "") p)))))
+          (cond ((string= line "*** Begin Patch") (setf in t update -1))
+                ((not in))
+                (t (let ((moved update) p)
+                     (setf update -1)
+                     (cond ((string= line "*** End Patch") (setf in nil))
+                           ((setf p (marker "*** Add File: ")) (vector-push-extend (list p "written" "") events))
+                           ((setf p (marker "*** Delete File: ")) (vector-push-extend (list p "deleted" "") events))
+                           ((setf p (marker "*** Update File: "))
+                            (setf update (length events))
+                            (vector-push-extend (list p "edited" "") events))
+                           ((and (setf p (marker "*** Move to: ")) (>= moved 0))
+                            (let ((from (first (aref events moved))))
+                              (setf (aref events moved) (list from "moved to" p))
+                              (vector-push-extend (list p "moved from" from) events))))))))))
+    (coerce events 'list)))
 (defstruct tresult (index 0) (text "") failed present details)
-(defstruct fevent state other display sources)
+(defstruct fevent state other display sources reported)
 
 (defun skipped-tool-p (x name)
   (and (string/= name "") (or (string= name +memory-tool+) (member-str name (x-skip-tools x)))))
@@ -633,13 +855,18 @@ subject and scope."
                               (if (null calls) (push-end text before) (push-end text after))))
                            ((equal type "toolCall")
                             (push-end (make-tcall :id (str (jget b "id")) :name (str (jget b "name"))
-                                                  :args (let ((a (jget b "arguments"))) (and (hash-table-p a) a)))
+                                                  :args (let ((a (jget b "arguments"))) (and (hash-table-p a) a))
+                                                  :raw (jget b "arguments"))
                                       calls)))))))
       (let ((words (one-line (join before (string #\Newline))))
             (first (position-if-not (lambda (c) (skipped-tool-p x (tcall-name c))) calls)))
         (if (null first)
             (x-reply x i (join (append before after) (string #\Newline)))
-            (x-reply x i (join after (string #\Newline))))
+            (progn
+              ;; The words before a call disagreeing with the user's claim are its pushback too.
+              (let ((day (anchor-day (entry-at x i))))
+                (dolist (s (sentences words)) (x-pushback-at x i s day)))
+              (x-reply x i (join after (string #\Newline)))))
         (loop for call in calls for n from 0
               do (let ((result (result-of x i (tcall-id call))))
                    (cond ((string= (tcall-name call) +memory-tool+)
@@ -688,15 +915,32 @@ subject and scope."
 
 (defun arg-string (args name) (let ((v (jget args name))) (and (stringp v) v)))
 
+(defun shell-command (args)
+  "shellCommand: the \"command\" argument, else \"cmd\" (Codex's exec_command)."
+  (or (arg-string args "command") (arg-string args "cmd")))
+
 (defun call-target (x call)
-  "callTarget: (values key display)."
-  (let ((command (arg-string (tcall-args call) "command")))
+  "callTarget: (values key display), any secret in them redacted."
+  (multiple-value-bind (key display) (raw-call-target x call)
+    (values (redact-secrets key) (redact-secrets display))))
+
+(defun raw-call-target (x call)
+  "rawCallTarget: (values key display)."
+  (let ((command (shell-command (tcall-args call))))
     (when (and command (string/= (trim-space command) ""))
-      (return-from call-target (values (trim-space command) (trim-space command)))))
+      (return-from raw-call-target (values (trim-space command) (trim-space command)))))
   (dolist (arg +path-args+)
     (let ((p (arg-string (tcall-args call) arg)))
       (when (and p (string/= (trim-space p) ""))
-        (return-from call-target (values (path-key x p) (path-display x p))))))
+        (return-from raw-call-target (values (path-key x p) (path-display x p))))))
+  (multiple-value-bind (patch patch-p) (patch-of call)
+    (when patch-p
+      (let ((keys '()) (shown '()))
+        (dolist (ev (patch-path-events patch))
+          (unless (string= (second ev) "moved from")
+            (push-end (path-key x (first ev)) keys)
+            (push-end (path-display x (first ev)) shown)))
+        (when keys (return-from raw-call-target (values (join keys " ") (join shown " ")))))))
   ;; JSONStringify of the call's arguments map: a nil map is boxed, so it encodes as null.
   (let ((args (if (tcall-args call) (json-string (tcall-args call) :escape-html nil) "null")))
     (values args args)))
@@ -714,16 +958,48 @@ subject and scope."
         (when (string/= reason "") (setf line (cat line ": " (clip reason +brief-key-arg-runes+))))))
     line))
 
+(defun call-keys (x call outcome result-text)
+  "extraction.callKeys: the call's shell command, else its paths, and a failure's first line."
+  (let ((keys '()) (command (shell-command (tcall-args call))))
+    (cond ((and command (string/= (trim-space command) ""))
+           (setf keys (keys-add keys "commands" (trim-space command))))
+          ((call-path call) (setf keys (keys-add keys "paths" (path-key x (call-path call)))))
+          (t (multiple-value-bind (patch patch-p) (patch-of call)
+               (when patch-p
+                 (dolist (ev (patch-path-events patch))
+                   (unless (string= (second ev) "moved from")
+                     (setf keys (keys-add keys "paths" (path-key x (first ev))))))))))
+    (when (string= outcome "failed")
+      (setf keys (keys-add keys "errors" (clip (failure-line result-text) +brief-key-arg-runes+))))
+    keys))
+
+(defun call-path (call)
+  "callPath: the first non-blank path argument, nil for none."
+  (dolist (arg +path-args+ nil)
+    (let ((p (arg-string (tcall-args call) arg)))
+      (when (and p (string/= (trim-space p) "")) (return p)))))
+
 (defun x-call (x i call result words)
   (let ((sources (if (and (tresult-present result) (/= (tresult-index result) i)) (list i (tresult-index result)) (list i))))
     (multiple-value-bind (key display) (call-target x call)
-      (let* ((outcome (cond ((not (tresult-present result)) "open") ((tresult-failed result) "failed") (t "worked")))
+      (let* ((patch-p (nth-value 1 (patch-of call)))
+             (patch (and patch-p (patch-of call)))
+             (outcome (cond ((not (tresult-present result)) "open")
+                            ((tresult-failed result) "failed")
+                            ;; A patch applied only when apply_patch says so; any other result is its error.
+                            ((and patch-p (not (contains (tresult-text result) +apply-patch-success+))) "failed")
+                            (t "worked")))
              (akey (attempt-key (tcall-name call) key))
-             (earlier (gethash akey (x-unresolved x))))
-        (when (or (string/= outcome "worked") (string/= words "") earlier)
+             (earlier (gethash akey (x-unresolved x)))
+             ;; A worked call is a receipt (working.lisp); one that would close a plan is recorded
+             ;; even with no words of the model's.
+             (rc (and (string= outcome "worked") (call-receipt call key (tresult-text result)))))
+        (when (tresult-present result) (push-end (cons key (tresult-text result)) (x-outputs x)))
+        (when (or (string/= outcome "worked") (string/= words "") earlier (would-close-p x rc i))
           (let ((line (attempt-line (tcall-name call) display outcome (tresult-text result)))
                 (o (make-obs :kind "attempt" :outcome outcome :tool (tcall-name call) :target key))
                 (said '()))
+            (setf (obs-keys o) (call-keys x call outcome (tresult-text result)))
             (when (string= outcome "worked")
               (setf (obs-supersedes o) (append (obs-supersedes o) earlier))
               (dolist (id earlier)
@@ -733,26 +1009,32 @@ subject and scope."
             (setf (obs-content o) (if said (cat (join said " ") " [" line "]") line))
             (let ((r (apply #'x-add x o sources)))
               (setf (obs-id (rec-obs r)) (record-id (rec-obs r)))
+              (setf (rec-receipt r) rc)
               (setf (gethash (obs-id (rec-obs r)) (x-words x)) (join said " "))
               (if (string= outcome "worked")
                   (progn (dolist (id earlier) (setf (gethash id (x-superseded x)) t))
                          (remhash akey (x-unresolved x)))
                   (push-end (obs-id (rec-obs r)) (gethash akey (x-unresolved x)))))))
+        (x-output-records x call result key display sources)
         (unless (string= outcome "worked") (return-from x-call))
-        (let ((state (cdr (assoc (tcall-name call) +file-tools+ :test #'string=))))
+        (when patch-p
+          (dolist (ev (patch-path-events patch))
+            (x-file-event x (first ev) (second ev) (third ev) sources)))
+        (let ((state (file-tool-state call)))
           (when state
             (dolist (arg +path-args+)
               (let ((p (arg-string (tcall-args call) arg)))
                 (when (and p (string/= (trim-space p) ""))
                   (x-file-event x p state "" sources)
                   (return))))))
-        (let ((command (arg-string (tcall-args call) "command")))
+        (let ((command (shell-command (tcall-args call))))
           (when command
             (dolist (ev (shell-path-events command))
               (x-file-event x (first ev) (second ev) (third ev) sources))
             (multiple-value-bind (hash subject ok) (commit-from command (tresult-text result))
               (when ok
-                (apply #'x-add x (make-obs :content (cat "commit " hash " " subject) :kind "commit" :target hash) sources)))))))))
+                (let ((r (apply #'x-add x (make-obs :content (cat "commit " hash " " subject) :kind "commit" :target hash) sources)))
+                  (setf (rec-receipt r) (make-receipt :kind "commit" :keys (cons hash (record-keys subject)))))))))))))
 
 (defun x-file-event (x p state other sources)
   (let* ((key (path-key x p)) (previous (gethash key (x-file-events x))))
@@ -780,17 +1062,20 @@ subject and scope."
                     do (when (mentions-p (entry-message (entry-at x i)) path) (setf source i) (return)))
               (push-end key (x-file-order x))
               (setf (gethash key (x-file-events x))
-                    (make-fevent :state state :other "" :display (path-display x path) :sources (list source))))))))))
+                    (make-fevent :state state :other "" :display (path-display x path) :sources (list source) :reported t)))))))))
 
 (defun x-emit-files (x)
   (dolist (key (x-file-order x))
     (let* ((ev (gethash key (x-file-events x)))
            (content (cat (fevent-display ev) " " (fevent-state ev)
                          (if (string/= (fevent-other ev) "") (cat " " (fevent-other ev)) "")))
-           (o (make-obs :content content :kind "file" :target key)))
+           (o (make-obs :content content :kind "file" :target key :keys (keys-add '() "paths" key))))
       (dolist (id (gethash key (x-files x)))
         (unless (member-str id (obs-supersedes o)) (push-end id (obs-supersedes o))))
-      (apply #'x-add x o (fevent-sources ev))))
+      (let ((r (apply #'x-add x o (fevent-sources ev))))
+        ;; A file written or edited by a tool call is a write receipt on its path.
+        (when (and (not (fevent-reported ev)) (member-str (fevent-state ev) '("written" "edited")))
+          (setf (rec-receipt r) (make-receipt :kind "write" :keys (list key)))))))
   (setf (x-records x) (stable-sort (x-records x) #'< :key #'rec-anchor)))
 
 ;;; shell.go
@@ -939,10 +1224,11 @@ subject and scope."
           (let* ((prev (first merged)) (po (rec-obs prev)) (ro (rec-obs r))
                  (prev-undated (or (rec-undated prev) (names-no-one-date-p po)))
                  (part-undated (or (rec-undated r) (names-no-one-date-p ro))))
-            (setf (obs-content po) (truncate-record-content (cat (obs-content po) " " (obs-content ro))))
+            (setf (obs-content po) (truncate-record-content (redact-secrets (cat (obs-content po) " " (obs-content ro)))))
             (dolist (id (obs-source-ids ro))
               (unless (member-str id (obs-source-ids po)) (push-end id (obs-source-ids po))))
             (setf (rec-anchor prev) (max (rec-anchor prev) (rec-anchor r)))
+            (setf (obs-keys po) (keys-union (obs-keys po) (obs-keys ro)))
             (cond ((or prev-undated part-undated) (setf (obs-event-date po) "" (rec-undated prev) t))
                   ((or (string= (obs-event-date ro) "") (string= (obs-event-date ro) (obs-event-date po))))
                   ((string= (obs-event-date po) "") (setf (obs-event-date po) (obs-event-date ro)))
@@ -956,7 +1242,8 @@ subject and scope."
       (let ((o (rec-obs r)))
         (when (obs-source-ids o)
           (when (string= (obs-id o) "") (setf (obs-id o) (record-id o)))
-          (unless (or (gethash (obs-id o) (folded-by-id (x-ledger x))) (gethash (obs-id o) seen))
+          (unless (or (gethash (obs-id o) (folded-by-id (x-ledger x))) (gethash (obs-id o) seen)
+                      (folded-tombstoned-p (x-ledger x) o))
             (setf (gethash (obs-id o) seen) t)
             (setf (obs-token-count o) (observation-line-tokens (obs-id o) (obs-timestamp o) (obs-relevance o) (obs-content o)))
             (push r kept)))))
@@ -998,20 +1285,27 @@ subject and scope."
                    (let ((role (jget (entry-message e) "role")))
                      (cond ((equal role "user") (x-user x i))
                            ((equal role "assistant") (x-assistant x i))
-                           ((equal role "bashExecution") (x-bash-execution x i))))))))
+                           ((equal role "bashExecution") (x-bash-execution x i))
+                           ((equal role "toolResult") (x-tool-result x i))))))))
     (let ((cite last))
       (when (and (< cite 0) file-ops)
         (loop for i from (1- end) downto (max file-ops-from 0)
               do (when (source-entry-p (aref entries i)) (setf cite i) (return))))
       (when (< cite 0) (return-from extract (values '() "")))
       (x-add-file-ops x cite)
+      (x-emit-values x)
       (x-emit-files x)
       (x-merge x)
       (x-assign-ids x)
       (resolve-corrections x (lambda (r) (rec-correction r)))
       (resolve-retractions x)
+      (resolve-forgets x)
       (resolve-corrections x (lambda (r) (and (rec-correction r) (eq (rec-correction r) (rec-fallback r)))))
+      (x-resolve-rule-replacements x)
       (link-records x)
+      (x-resolve-pushbacks x)
+      (x-resolve-closures x)
+      (x-encode x)
       (values (x-batches x cite) (if (>= last 0) (entry-id (aref entries last)) "")))))
 
 ;;; drop.go
@@ -1044,3 +1338,80 @@ transitively, that are not rendered themselves."
       (loop for o in active
             when (and (gethash (obs-id o) replaced) (not (gethash (obs-id o) shown)))
               collect (obs-id o)))))
+
+;;; encode.go: the encoding fields (contracts/encoding.md)
+
+(defvar *encoding* nil
+  "extract.Input's Writer, Frame and RepoRoot as a plist (:writer alist :frame alist :root string),
+bound by the caller that knows the session and its repository; nil writes neither.")
+
+(defun redact-keys (keys)
+  (let ((out '()))
+    (dolist (pair keys out)
+      (dolist (v (cdr pair)) (setf out (keys-add out (car pair) (redact-secrets v)))))))
+
+(defun encode-hedge (o)
+  "hedgeOf."
+  (cond ((member-str (obs-kind o) '("file" "commit")) "stated")
+        ((string= (obs-kind o) "attempt") (hedge-of (attempt-words o)))
+        (t (hedge-of (obs-content o)))))
+
+(defun repo-path (path root)
+  "repoPath: path relative to root when inside it."
+  (if (or (string= root "") (not (path-abs-p path)))
+      path
+      (let ((rel (path-rel root path)))
+        (if (or (null rel) (string= rel "..") (has-prefix rel "../")) path rel))))
+
+(defun encode-record (o source &optional (encoding *encoding*))
+  "Encode: o's empty encoding fields filled."
+  (when (string= (obs-source o) "") (setf (obs-source o) source))
+  (when (string= (obs-authority o) "") (setf (obs-authority o) (authority-of (obs-source o))))
+  (when (string= (obs-hedge o) "") (setf (obs-hedge o) (encode-hedge o)))
+  (when (string= (obs-time-hint o) "") (setf (obs-time-hint o) (time-hint-of o)))
+  (dolist (v (versions-in (obs-content o))) (setf (obs-keys o) (keys-add (obs-keys o) "versions" v)))
+  (when (null (obs-writer o)) (setf (obs-writer o) (getf encoding :writer)))
+  (let ((frame (getf encoding :frame)))
+    (when (and (null (obs-frame o)) (string/= (alist-member frame "repoId") ""))
+      (let ((paths (keys-get (obs-keys o) "paths")))
+        (setf (obs-frame o)
+              (make-record-frame :repo-id (alist-member frame "repoId") :branch (alist-member frame "branch")
+                                 :head (alist-member frame "head")
+                                 :path (if (= (length paths) 1) (repo-path (first paths) (or (getf encoding :root) "")) "")))
+        ;; A project record names its one symbol (project.lisp, decision 20).
+        (let ((sym (project-symbol o)))
+          (when (string/= sym "") (set-frame-member o "symbol" sym))))))
+  o)
+
+(defun entry-source (e)
+  "EntrySource."
+  (cond ((string= (entry-type e) "custom_message")
+         (let ((s (source-of-custom-type (entry-custom-type e)))) (if (string/= s "") s "external-untrusted")))
+        ((or (string/= (entry-type e) "message") (null (entry-message e))) "")
+        (t (let ((role (jget (entry-message e) "role")))
+             (cond ((equal role "user") "user-said")
+                   ((equal role "assistant") "assistant-claim")
+                   ((member role '("toolResult" "bashExecution") :test #'equal) "tool-observed")
+                   (t ""))))))
+
+(defun x-source-of (x r)
+  (let ((kind (obs-kind (rec-obs r))))
+    (cond ((member-str kind '("attempt" "file" "commit")) "tool-observed")
+          ((string= kind "note") "assistant-claim")
+          ((or (< (rec-first r) 0) (>= (rec-first r) (length (x-entries x)))) "")
+          (t (entry-source (entry-at x (rec-first r)))))))
+
+(defun x-encode (x)
+  (setf (x-episodes x) (episodes-of (x-entries x) (x-end x) (alist-member (getf *encoding* :writer) "session"))
+        (x-requests x) (requests-of (x-entries x) (x-end x)))
+  (dolist (r (x-records x))
+    (let ((o (rec-obs r)) (at (rec-anchor r)))
+      (when (and (string= (obs-episode o) "") (>= at 0) (< at (length (x-episodes x))))
+        (setf (obs-episode o) (aref (x-episodes x) at)))
+      ;; A plan's requirement is the request it was made under (Observation.DerivedFrom).
+      (when (and (string= (obs-status o) "proposed") (string= (obs-derived-from o) "") (>= at 0)
+                 (< at (length (x-requests x))) (>= (aref (x-requests x) at) 0))
+        (setf (obs-derived-from o) (entry-id (entry-at x (aref (x-requests x) at)))))
+      ;; A plan's type says how it closes (intent-of; contracts/truth.md, "Intentions").
+      (when (string= (obs-intent o) "") (setf (obs-intent o) (intent-of o))))
+    (encode-record (rec-obs r) (x-source-of x r))))

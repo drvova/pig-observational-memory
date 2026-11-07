@@ -15,8 +15,6 @@
 
 (defparameter +kind-adaptable+ "adaptable")
 
-(defparameter +level1-losses+ '("level1-failed" "level1-specifics-refused" "level1-union-kept"))
-
 (defun adaptable-failed-key (name) (concatenate 'string "adaptable-failed:" name))
 
 (defun defined-count-key (name) (concatenate 'string "defined:" name))
@@ -59,16 +57,22 @@
                          (handler-case (om::json-parse line) (error () nil)))
             when (hash-table-p v) collect v))))
 
-(defun settle-v2 (events &key kind name held-id time (detector :other))
+(defun settle-v2 (events &key kind name held-id time (detector :other) (text ""))
   "rules.SettleV2 over events for the held definition of kind named name, held at time (an
-RFC 3339 time as parse-rfc3339 reads it) with held id held-id: (values decided clean reason).
-detector says what a held detector parses as: :code (a Go detector, judged by its runs), :retired
-(a query detector, never judged) or :other."
+RFC 3339 time as parse-rfc3339 reads it) with held id held-id: (values decided clean reason
+scope), scope nil or (repos families) for a clean one. detector says what a held detector parses
+as: :code (a Go detector, judged by its runs), :retired (a query detector, never judged) or
+:other. text is the definition as declared, whose tokens an instructions definition is charged.
+Every kind but the image's adaptable is settled by decision 24's null arm (settle-null-arm,
+src/rules/evidence.lisp); an adaptable keeps the rule below."
   (when (string= kind "detector")
     (case detector
-      (:retired (return-from settle-v2 (values nil nil "")))
-      (:code (return-from settle-v2 (settle-code-detector events name held-id time)))))
-  (let ((tokens 0) (answered 0) (compactions 0) (counts (make-hash-table :test 'equal)))
+      (:retired (return-from settle-v2 (values nil nil "" nil)))
+      (:code (return-from settle-v2 (multiple-value-bind (d c r) (settle-code-detector events name held-id time)
+                                      (values d c r nil))))))
+  (unless (string= kind +kind-adaptable+)
+    (return-from settle-v2 (settle-null-arm events kind name held-id time text)))
+  (let ((tokens 0) (compactions 0) (counts (make-hash-table :test 'equal)))
     (dolist (e events)
       (when (and (v2-compaction-p e) (string/= (ev-string e "outcome") "empty")
                  (member held-id (ev-list e "ranHeld") :test #'equal))
@@ -76,30 +80,18 @@ detector says what a held detector parses as: :code (a Go detector, judged by it
           (when (and at (time-after-p at time))
             (incf compactions)
             (incf tokens (ev-int e "tokens"))
-            (when (om::jtrue-p (ev e "level1")) (incf answered))
             (loop for (k . n) in (ev-counts e "counts")
                   when (plusp n) do (incf (gethash k counts 0) n))))))
-    (flet ((losses (keys)
-             (om::join (loop for k in keys
-                             when (plusp (gethash k counts 0))
-                               collect (format nil "~A ~D" k (gethash k counts)))
-                       ", ")))
-      (cond
-        ((string= kind "instructions")
-         (when (zerop answered) (return-from settle-v2 (values nil nil "")))
-         (let ((lost (losses +level1-losses+)))
-           (if (string/= lost "")
-               (values t nil (format nil "level 1 ran under it at ~D later ~A and its code checks counted ~A"
-                                     answered (plural-word answered "compaction") lost))
-               (values t t (format nil "level 1 ran under it at ~D later ~A with no loss counted"
-                                   answered (plural-word answered "compaction"))))))
-        ((zerop tokens) (values nil nil ""))
-        ((and (string= kind +kind-adaptable+) (plusp (gethash (adaptable-failed-key name) counts 0)))
-         (let ((n (gethash (adaptable-failed-key name) counts)))
-           (values t nil (format nil "it failed its kernel check, errored or timed out ~D ~A over ~D later ~A"
-                                 n (if (= n 1) "time" "times") compactions (plural-word compactions "compaction")))))
-        (t (values t t (format nil "the turns under it (~D source tokens over ~D later ~A) counted no failure it could cause"
-                               tokens compactions (plural-word compactions "compaction"))))))))
+    (cond
+      ((zerop tokens) (values nil nil "" nil))
+      ((plusp (gethash (adaptable-failed-key name) counts 0))
+       (let ((n (gethash (adaptable-failed-key name) counts)))
+         (values t nil (format nil "it failed its kernel check, errored or timed out ~D ~A over ~D later ~A"
+                               n (if (= n 1) "time" "times") compactions (plural-word compactions "compaction"))
+                 nil)))
+      (t (values t t (format nil "the turns under it (~D source tokens over ~D later ~A) counted no failure it could cause"
+                             tokens compactions (plural-word compactions "compaction"))
+                 nil)))))
 
 (defun settle-code-detector (events name held-id time)
   "rules.settleCodeDetector."

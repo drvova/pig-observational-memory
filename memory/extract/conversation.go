@@ -165,9 +165,12 @@ type correctionTarget struct {
 	phrase string
 }
 
-// isPreference reports an explicit preference construction that is not a question.
+// isPreference reports an explicit preference construction that is neither a question, posed
+// hypothetically (ruleHypothetical) nor reported from someone else (isReported), the exclusions
+// isRule applies: "my manager said never deploy on Fridays" is not the user's preference.
 func isPreference(sentence string) bool {
-	if isQuestion(sentence) {
+	sentence = strings.ReplaceAll(sentence, "’", "'")
+	if isQuestion(sentence) || ruleHypothetical.MatchString(sentence) || isReported(sentence) {
 		return false
 	}
 	for _, p := range preferencePatterns {
@@ -214,8 +217,10 @@ func correctionOf(sentence string) (target correctionTarget, ok bool) {
 	return correctionTarget{}, false
 }
 
-// user reads a user message: a correction, a preference, a statement carrying specifics, or a
-// first-person statement about the user (isSelfStatement, a fact), one record per sentence, with relative dates annotated and the subject named from the
+// user reads a user message: a correction, a preference or standing rule (isPreference,
+// isRule), a decision (isDecision), a statement carrying specifics, or a first-person statement
+// about the user (isSelfStatement, a fact), one record per sentence, with relative dates
+// annotated and the subject named from the
 // ledger. Harness markup, questions-as-preferences, bare acknowledgements and echoes of
 // records already held are not records. The message opens a new exchange.
 func (x *extraction) user(i int) {
@@ -230,6 +235,14 @@ func (x *extraction) user(i int) {
 	anchor, hasAnchor := anchorTime(entry)
 	for _, sentence := range sentences(text) {
 		if isBareAck(sentence) || isMarkupOnly(sentence) || x.known[normalized(sentence)] {
+			continue
+		}
+		if named, scope, ok := forgetOf(sentence); ok {
+			if scope == ledger.ForgetScopeProject && x.in.Frame.RepoID != "" {
+				scope += ":" + x.in.Frame.RepoID
+			}
+			r := x.add(ledger.Observation{Content: sentence, Kind: ledger.KindForget, Scope: scope}, i)
+			r.forgetting, r.forget = true, named
 			continue
 		}
 		var kind ledger.ObservationKind
@@ -252,16 +265,25 @@ func (x *extraction) user(i int) {
 		case retraction:
 			// A retraction stands only once it names what it withdraws (resolveRetractions).
 			kind, status = "correction", ledger.StatusRetracted
-		case isPreference(sentence):
+		case isPreference(sentence), isRule(sentence):
 			kind = "preference"
-		case ledger.HasSpecifics(sentence), isSelfStatement(sentence):
+		case isDecision(sentence):
+			kind, status = ledger.KindDecision, statusOf(sentence)
+		case ledger.HasSpecifics(sentence), isSelfStatement(sentence), x.restatesContested(sentence):
 			kind, status = "fact", statusOf(sentence)
 		default:
 			continue
 		}
-		r := x.add(x.conversationRecord(sentence, kind, status, anchor, hasAnchor), i)
+		obs := x.conversationRecord(sentence, kind, status, anchor, hasAnchor)
+		if kind == "preference" || kind == ledger.KindDecision {
+			userRule(&obs)
+		}
+		r := x.add(obs, i)
 		if correction {
 			r.correction = &target
+		}
+		if kind == "preference" {
+			r.replacesRule = replacedRulePhrase(sentence)
 		}
 		r.retraction = retraction
 		if retraction {
@@ -270,6 +292,58 @@ func (x *extraction) user(i int) {
 				r.fallback, r.fallbackStatus = fallback, statusOf(sentence)
 			}
 		}
+	}
+}
+
+// replacedRulePhrase is the phrase a rule names as what it replaces, by the correction forms
+// ("not X but Y", "instead of X", "Y, not X") with X holding a key (ledger.RecordKeys): "always
+// use `make ci`, not `make test`". "" for none.
+func replacedRulePhrase(sentence string) string {
+	sentence = strings.ReplaceAll(sentence, "’", "'")
+	for _, pattern := range []*regexp.Regexp{correctionNotBut, correctionInsteadX, correctionNotTail} {
+		for _, m := range pattern.FindAllStringSubmatch(sentence, -1) {
+			if phrase := strings.TrimSpace(m[1]); len(ledger.RecordKeys(phrase)) > 0 {
+				return phrase
+			}
+		}
+	}
+	return ""
+}
+
+// resolveRuleReplacements makes a user rule naming what it replaces (replacedRulePhrase)
+// supersede every earlier standing rule of the user's whose keys hold every key of that phrase,
+// so the constraints show the rules in force, never the one the user replaced (docs/memory-v2.md,
+// "Working memory"). Both are preferences stated as fact (ledger.MaySupersede holds).
+func (x *extraction) resolveRuleReplacements() {
+	type rule struct{ id, content string }
+	earlier := []rule{}
+	for _, o := range x.in.Ledger.ActiveObservations {
+		if o.Kind == "preference" && ledger.UserPriority(o) && o.Status == "" && !x.superseded[o.ID] {
+			earlier = append(earlier, rule{o.ID, o.Content})
+		}
+	}
+	for _, r := range x.records {
+		if r.obs.Kind != "preference" || r.obs.Status != "" {
+			continue
+		}
+		if r.replacesRule != "" {
+			keys := ledger.RecordKeys(r.replacesRule)
+			for _, c := range earlier {
+				if x.superseded[c.id] || c.id == r.obs.ID {
+					continue
+				}
+				held := ledger.RecordKeys(c.content)
+				all := true
+				for _, k := range keys {
+					all = all && slices.Contains(held, k)
+				}
+				if all {
+					r.obs.Supersedes = append(r.obs.Supersedes, c.id)
+					x.superseded[c.id] = true
+				}
+			}
+		}
+		earlier = append(earlier, rule{r.obs.ID, r.obs.Content})
 	}
 }
 
@@ -304,7 +378,14 @@ func (x *extraction) reply(i int, text string) {
 				given = append(given, ledger.NewGiven([]string{r.obs.Content}))
 			}
 		}
-		if len(ledger.Added(statement, given...)) == 0 {
+		// A statement disagreeing with a claim the user made in the exchange is that claim's
+		// pushback, kept whatever specifics it gives (contracts/encoding.md, "Pushback").
+		if x.pushbackAt(i, statement, anchor, hasAnchor) {
+			return
+		}
+		// A decision stated with its reason is kept though it gives no new specific, unless the
+		// exchange already holds one (the user's, which the reply restates).
+		if len(ledger.Added(statement, given...)) == 0 && !(isAssistantDecision(statement) && !x.exchangeHasDecision()) {
 			return
 		}
 		x.add(x.conversationRecord(statement, "assistant", statusOf(statement), anchor, hasAnchor), i)
@@ -326,6 +407,16 @@ func (x *extraction) reply(i int, text string) {
 			keep(sentence)
 		}
 	}
+}
+
+// exchangeHasDecision reports a decision record of the current exchange.
+func (x *extraction) exchangeHasDecision() bool {
+	for _, r := range x.records {
+		if r.exchange == x.exchange && r.obs.Kind == ledger.KindDecision {
+			return true
+		}
+	}
+	return false
 }
 
 // listRuns are a list's items cut into runs of consecutive items with one status (statusOf)
@@ -356,7 +447,7 @@ func listRuns(items []string, anchor time.Time, hasAnchor bool) [][]string {
 // code record's.
 func conversational(kind ledger.ObservationKind) bool {
 	switch kind {
-	case "fact", "preference", "correction", "assistant", "event", "plan", "":
+	case "fact", "preference", "correction", "assistant", "event", "plan", "", ledger.KindDecision:
 		return true
 	}
 	return false
@@ -461,6 +552,29 @@ func (x *extraction) resolveRetractions() {
 		}
 		earlier = append(earlier, candidate{o.ID, o.Content, o.Status, anchor})
 	}
+	// withdraw supersedes what c names: c itself, or, when c is a level-1 merge some but not all
+	// of whose sources match (narrowed by match), those sources, so the fold takes the merge out
+	// and its other sources reappear (ledger.Truth, decision 1).
+	withdraw := func(r *record, c candidate, match func(content string) bool) {
+		ids := []string{c.id}
+		if m, ok := x.in.Ledger.ObservationsByID[c.id]; ok && len(m.Replaces) > 1 && match != nil {
+			var hit []string
+			for _, id := range m.Replaces {
+				if src, ok := x.in.Ledger.ObservationsByID[id]; ok && pending(src) && match(src.Content) {
+					hit = append(hit, id)
+				}
+			}
+			if len(hit) > 0 && len(hit) < len(m.Replaces) {
+				ids = hit
+			}
+		}
+		for _, id := range ids {
+			if !slices.Contains(r.obs.Supersedes, id) {
+				r.obs.Supersedes = append(r.obs.Supersedes, id)
+			}
+		}
+		x.superseded[c.id] = true
+	}
 	kept := x.records[:0]
 	for _, r := range x.records {
 		if r.retraction {
@@ -469,34 +583,37 @@ func (x *extraction) resolveRetractions() {
 			// content words; only a retraction naming no phrase reads the sentence's specifics.
 			switch named := r.named; {
 			case named.words != "" && len(ledger.PhraseSpecifics(named.phrase)) > 0:
+				match := func(content string) bool { return ledger.CarriesPhrase(content, named.phrase) }
 				for _, c := range earlier {
-					if !x.superseded[c.id] && ledger.CarriesPhrase(c.content, named.phrase) {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+					if !x.superseded[c.id] && match(c.content) {
+						withdraw(r, c, match)
+						withdrawn = true
 					}
 				}
 			case named.words != "":
+				match := func(content string) bool { return ledger.ContainsWords(content, named.words) }
 				for i := len(earlier) - 1; i >= 0; i-- {
 					c := earlier[i]
-					if !x.superseded[c.id] && ledger.MaySupersede(r.obs, ledger.Observation{Status: c.status}) && ledger.ContainsWords(c.content, named.words) {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+					if !x.superseded[c.id] && ledger.MaySupersede(r.obs, ledger.Observation{Status: c.status}) && match(c.content) {
+						withdraw(r, c, match)
+						withdrawn = true
 						break
 					}
 				}
 			case ledger.HasSpecifics(r.obs.Content):
+				match := func(content string) bool { return len(ledger.AddedSpecifics(r.obs.Content, []string{content})) == 0 }
 				for _, c := range earlier {
-					if !x.superseded[c.id] && len(ledger.AddedSpecifics(r.obs.Content, []string{c.content})) == 0 {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+					if !x.superseded[c.id] && match(c.content) {
+						withdraw(r, c, match)
+						withdrawn = true
 					}
 				}
 			default:
 				from := x.previousExchange(r.exchange)
 				for i := len(earlier) - 1; i >= 0; i-- {
 					if c := earlier[i]; !x.superseded[c.id] && c.anchor >= from {
-						r.obs.Supersedes = append(r.obs.Supersedes, c.id)
-						x.superseded[c.id], withdrawn = true, true
+						withdraw(r, c, nil)
+						withdrawn = true
 						break
 					}
 				}

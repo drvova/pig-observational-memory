@@ -133,6 +133,9 @@ type Definition struct {
 	Engine string
 	Time   time.Time
 	State  string
+	// Scope is, for a written definition a settlement wrote, where its evidence certified it
+	// (Generation.Scope); nil applies everywhere.
+	Scope *Scope
 }
 
 // HeldID names d's held text: its key and the digest of its text as declared (its mode line
@@ -896,7 +899,12 @@ func (s Store) Load(model string) (Harness, []Report, error) {
 			return Harness{}, nil, err
 		}
 		reports = append(reports, rs...)
+		scopes, err := s.scopes(m)
+		if err != nil {
+			return Harness{}, nil, err
+		}
 		for _, d := range defs {
+			d.Scope = scopes[d.Key()]
 			h.defs[d.Key()] = d
 		}
 		held, rs, err := s.held(m)
@@ -936,7 +944,10 @@ func (s Store) PutLocked(d Definition) (Definition, error) {
 }
 
 // putStamped writes d, already stamped; the caller holds the store's lock.
-func (s Store) putStamped(d Definition) (Definition, error) {
+func (s Store) putStamped(d Definition) (Definition, error) { return s.putStampedScoped(d, nil) }
+
+// putStampedScoped is putStamped recording scope on its put generation (a settlement's).
+func (s Store) putStampedScoped(d Definition, scope *Scope) (Definition, error) {
 	path := s.Path(d.Model, d.Kind, d.Name)
 	recorded, err := s.current(d.Model)
 	if err != nil {
@@ -957,10 +968,10 @@ func (s Store) putStamped(d Definition) (Definition, error) {
 	if err := s.write(d.Model, path, content); err != nil {
 		return Definition{}, err
 	}
-	if _, err := s.appendGeneration(d.Model, Generation{Op: OpPut, Kind: d.Kind, Name: d.Name, Digest: Digest(content), Session: d.Session}); err != nil {
+	if _, err := s.appendGeneration(d.Model, Generation{Op: OpPut, Kind: d.Kind, Name: d.Name, Digest: Digest(content), Session: d.Session, Scope: scope}); err != nil {
 		return Definition{}, err
 	}
-	d.State = StateWritten
+	d.State, d.Scope = StateWritten, scope
 	return d, nil
 }
 
@@ -1021,6 +1032,21 @@ func (s Store) ForgetLocked(model, kind, name, session string) (Definition, bool
 func contains(values []string, value string) bool {
 	for _, v := range values {
 		if v == value {
+			return true
+		}
+	}
+	return false
+}
+
+// Holds reports whether model's layer holds a definition of kind named name, written or held:
+// what Forget would remove. It changes nothing, so a forget that has no user's words can be
+// checked before it is staged (docs/brain-memory.md, decision 2).
+func (s Store) Holds(model, kind, name string) bool {
+	if !ValidKind(kind) || !validName.MatchString(name) {
+		return false
+	}
+	for _, path := range []string{s.heldPath(model, kind, name), s.Path(model, kind, name)} {
+		if _, err := os.Stat(path); err == nil {
 			return true
 		}
 	}

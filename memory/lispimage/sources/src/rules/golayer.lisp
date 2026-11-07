@@ -194,7 +194,7 @@ then held, a later one replacing an earlier of its name. An alist name -> gdef, 
 
 ;;; Writing (layer.go PutLocked, putStamped, write; manifest.go appendGeneration)
 
-(defun go-append-generation (store model op &key kind name digest session reason from held)
+(defun go-append-generation (store model op &key kind name digest session reason from held target keep scope)
   (let* ((gen (1+ (length (go-generations store model))))
          (line (with-output-to-string (out)
                  (format out "{\"gen\":~D,\"time\":" gen)
@@ -205,12 +205,54 @@ then held, a later one replacing an earlier of its name. An alist name -> gdef, 
                  (when digest (write-string ",\"digest\":" out) (om::write-json-string digest out))
                  ;; Generation's later fields, in its order (the layer migration's lines carry them).
                  (when (and session (string/= session "")) (write-string ",\"session\":" out) (om::write-json-string session out))
+                 (when (and target (plusp target)) (format out ",\"target\":~D" target))
+                 (when keep (write-string ",\"keep\":" out) (om::write-json (coerce keep 'simple-vector) out))
                  (when (and reason (string/= reason "")) (write-string ",\"reason\":" out) (om::write-json-string reason out))
                  (when (and from (string/= from "")) (write-string ",\"from\":" out) (om::write-json-string from out))
                  (when held (write-string ",\"held\":true" out))
+                 ;; A settlement's scope (layer.Scope: repos then families, each omitted when empty).
+                 (when scope
+                   (write-string ",\"scope\":{" out)
+                   (let ((first t))
+                     (loop for (key . values) in (list (cons "repos" (first scope)) (cons "families" (second scope)))
+                           when values
+                             do (unless first (write-char #\, out))
+                                (setf first nil)
+                                (om::write-json-string key out) (write-char #\: out)
+                                (om::write-json (coerce values 'simple-vector) out)))
+                   (write-char #\} out))
                  (write-char #\} out))))
     (append-line (join-path (go-model-path store model) "manifest.jsonl") line)
     gen))
+
+;;; Decision 24's read-time scope (layer.Store.scopes, Scope.Covers)
+
+(defun go-put-generation-index (gens key d)
+  "putGeneration: the index in gens of the latest put of key whose content is d, -1 for none."
+  (let ((at -1))
+    (loop for g in gens for i from 0
+          when (and (equal (om::jget g "op") "put") (string= (concatenate 'string (om::str (om::jget g "kind")) "/" (om::str (om::jget g "name"))) key)
+                    (equal (om::jget g "digest") d))
+            do (setf at i))
+    at))
+
+(defun go-written-scope (store model kind name)
+  "Store.scopes for one name: the scope (repos families) of the put that wrote its current
+content, nil when that put recorded none."
+  (let* ((gens (go-generations store model)) (key (concatenate 'string kind "/" name))
+         (current (gethash key (go-current store model)))
+         (at (if current (go-put-generation-index gens key current) -1)))
+    (when (>= at 0)
+      (let ((scope (om::jget (nth at gens) "scope")))
+        (when (hash-table-p scope)
+          (flet ((strings (v) (if (and (vectorp v) (not (stringp v))) (remove-if-not #'stringp (coerce v 'list)) '())))
+            (list (strings (om::jget scope "repos")) (strings (om::jget scope "families")))))))))
+
+(defun scope-covers-p (scope repo family)
+  "layer.Scope.Covers: nil covers everything; an empty list does not restrict."
+  (or (null scope)
+      (and (or (null (first scope)) (member repo (first scope) :test #'string=))
+           (or (null (second scope)) (member family (second scope) :test #'string=)))))
 
 (defun go-put-remedy (store model name text)
   "layer.Store.PutLocked of a remedy definition (the caller holds the store's lock): written

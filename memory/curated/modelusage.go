@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 )
 
@@ -75,6 +76,27 @@ type ModelEvent struct {
 	// Pending are, for a detector pass, the detectors level 1 proposed at the compaction whose
 	// smoke run the pass made first: held when it returned a count, refused otherwise.
 	Pending []string `json:"pending,omitempty"`
+	// The settlement fields of a memory v2 compaction pass (docs/memory-v2.md, "Settling a
+	// definition"; rules.SettleV2), each set by code from the records citing the cut range:
+	//
+	// Roots are the evidence roots of its records that are not tool output (rules.UnitOf: the
+	// digest of a record's kind and content, never of its session or entry), sorted, so passes
+	// over the same text count once.
+	Roots []string `json:"roots,omitempty"`
+	// Harm is the pass's harm signal (rules.HarmCounts summed: a record dropped then asked for,
+	// a level-1 proposal that would have lost a specific, a fact the union rule kept back). A
+	// pass without it was recorded before the settlement rules and is no evidence for them.
+	Harm *int `json:"harm,omitempty"`
+	// Turns are the assistant messages the cut range removed: the turns a definition is charged
+	// for.
+	Turns int `json:"turns,omitempty"`
+	// Repo and Family are the pass's scope: the repository its records were framed in
+	// (frame.repoId) and its task family (the commonest path extension its records name).
+	Repo   string `json:"repo,omitempty"`
+	Family string `json:"family,omitempty"`
+	// RanWritten are the model's own written definitions the compaction ran with, by held id
+	// (layer.Definition.HeldID), so a pass where a name ran written is no control for it.
+	RanWritten []string `json:"ranWritten,omitempty"`
 }
 
 // EngineV2 is ModelEvent.Engine for an event counted under memory v2 (config.EngineV2).
@@ -165,12 +187,8 @@ func (s Store) RecordModelLocked(e ModelEvent) error {
 	if err := os.MkdirAll(s.modelsDir(), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.modelUsagePath(e.Model), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(line, '\n'))
+	// A torn tail is ended first and the line is synced (jsonl.Append).
+	_, err = jsonl.Append(s.modelUsagePath(e.Model), line)
 	return err
 }
 
@@ -234,6 +252,12 @@ type UsageEvent struct {
 	// record a corrected, cited or promoted event names.
 	User   bool
 	Record string
+	// Session and Source are a staging's session and source digest, and a staged forget's
+	// session.
+	Session, Source string
+	// Model and Revision are a layer change's model and a staged edit's content.
+	Model    string
+	Revision *Revision
 }
 
 // UsageEventsByName reads the whole usage ledger once and groups its events by
@@ -267,5 +291,5 @@ func (s Store) UsageEvents(name string) ([]UsageEvent, error) {
 
 func (line usageLine) event() UsageEvent {
 	t, _ := time.Parse(time.RFC3339, line.Time)
-	return UsageEvent{Time: t, Name: line.Name, Event: line.Event, Quote: line.Quote, User: line.User, Record: line.Record}
+	return UsageEvent{Time: t, Name: line.Name, Event: line.Event, Quote: line.Quote, User: line.User, Record: line.Record, Session: line.Session, Source: line.Source, Model: line.Model, Revision: line.Revision}
 }

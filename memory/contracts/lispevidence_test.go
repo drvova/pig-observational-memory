@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -54,7 +55,15 @@ type evidenceStep struct {
 	Name     string         `json:"name,omitempty"`
 	HeldID   string         `json:"heldId,omitempty"`
 	HeldTime string         `json:"heldTime,omitempty"`
-	def      layer.Definition
+	// The settlement fields of a pass step (rules.Pass.Unit, Turns, RanWritten).
+	Roots      []string `json:"roots,omitempty"`
+	Repo       string   `json:"repo,omitempty"`
+	Family     string   `json:"family,omitempty"`
+	Turns      int      `json:"turns,omitempty"`
+	RanWritten []string `json:"ranWritten,omitempty"`
+	// Text is a settle step's definition as declared (its cost).
+	Text string `json:"text,omitempty"`
+	def  layer.Definition
 }
 
 var evidenceModels = []string{"p/a", "p/b", "p/c", "q/d", "q/e"}
@@ -154,6 +163,17 @@ func evidenceSteps(rng *rand.Rand, start time.Time) []evidenceStep {
 				}
 			}
 			sort.Strings(pass.RanHeld)
+			for k := rng.IntN(3); k > 0; k-- {
+				pass.Roots = append(pass.Roots, fmt.Sprintf("%016x", rng.IntN(24)))
+			}
+			sort.Strings(pass.Roots)
+			pass.Roots = slices.Compact(pass.Roots)
+			pass.Repo = []string{"", "r1", "r2"}[rng.IntN(3)]
+			pass.Family = []string{"", ".go", ".lisp"}[rng.IntN(3)]
+			pass.Turns = rng.IntN(8)
+			if rng.IntN(5) == 0 {
+				pass.RanWritten = []string{held[rng.IntN(len(held))].Key() + "@00000000000000ff"}
+			}
 			steps = append(steps, pass)
 		}
 	}
@@ -161,7 +181,7 @@ func evidenceSteps(rng *rand.Rand, start time.Time) []evidenceStep {
 		steps = append(steps, evidenceStep{Op: "rules", Model: model, Time: tick()})
 		for _, d := range held {
 			steps = append(steps, evidenceStep{Op: "settle", Model: model, Time: tick(), Kind: d.Kind, Name: d.Name, HeldID: d.HeldID(),
-				HeldTime: d.Time.UTC().Format(time.RFC3339Nano), def: d})
+				HeldTime: d.Time.UTC().Format(time.RFC3339Nano), Text: d.Declared(), def: d})
 		}
 	}
 	return steps
@@ -195,7 +215,8 @@ func goEvidence(t *testing.T, dir string, steps []evidenceStep) []string {
 			}
 			out = append(out, fmt.Sprintf("%d raw", n+1))
 		case "pass":
-			ts, err := rules.AfterPass(store, s.Model, rules.Pass{Counts: s.Counts, Level1: s.Level1, Empty: s.Empty, RanHeld: s.RanHeld})
+			ts, err := rules.AfterPass(store, s.Model, rules.Pass{Counts: s.Counts, Level1: s.Level1, Empty: s.Empty, RanHeld: s.RanHeld,
+				RanWritten: s.RanWritten, Turns: s.Turns, Unit: rules.Unit{Roots: s.Roots, Repo: s.Repo, Family: s.Family}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,15 +244,8 @@ func goEvidence(t *testing.T, dir string, steps []evidenceStep) []string {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decided, clean, reason := rules.SettleV2(events, s.def)
-			state, word := "held", "unclean"
-			if decided {
-				state = "decided"
-			}
-			if clean {
-				word = "clean"
-			}
-			out = append(out, fmt.Sprintf("%d settle %s %s %s", n+1, state, word, quoted(reason)))
+			st := rules.SettleV2(events, s.def)
+			out = append(out, fmt.Sprintf("%d settle %s", n+1, settleWords(st)))
 		}
 	}
 	return out
@@ -398,4 +412,17 @@ func TestLispEvidenceFilesValidate(t *testing.T) {
 	if seen["rule"] == 0 {
 		t.Errorf("no rule written: %v", seen)
 	}
+}
+
+// settleWords is a settlement as both sides print it: decided or held, clean or unclean, the
+// reason quoted and the scope.
+func settleWords(st rules.Settlement) string {
+	state, word := "held", "unclean"
+	if st.Decided {
+		state = "decided"
+	}
+	if st.Clean {
+		word = "clean"
+	}
+	return fmt.Sprintf("%s %s %s %s", state, word, quoted(st.Reason), quoted(st.Scope.String()))
 }

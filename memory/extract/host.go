@@ -5,6 +5,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/ids"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
 )
@@ -33,7 +34,7 @@ func HostSummary(entries []ledger.Entry, folded ledger.FoldedLedger) (record led
 	summary, _ := compaction.Summary.(string)
 	// On one line, as every record is: a native summary is multi-line markdown whose headings
 	// would read as sections of the v2 summary and whose lines would carry no anchor.
-	summary = oneLine(summary)
+	summary = secrets.Redact(oneLine(summary))
 	if summary == "" {
 		return ledger.Observation{}, "", false
 	}
@@ -58,6 +59,9 @@ func HostSummary(entries []ledger.Entry, folded ledger.FoldedLedger) (record led
 		SourceEntryIDs: []string{compaction.ID},
 		TokenCount:     tokens.EstimateStringTokens(summary),
 		Origin:         ledger.OriginHost,
+		Source:         ledger.SourceHostSummary,
+		Authority:      ledger.AuthorityModel,
+		Hedge:          ledger.HedgeOf(summary),
 	}
 	record.ID = ids.HashID(ledger.OriginHost + "\x00" + compaction.ID)
 	return record, entries[boundary-1].ID, true

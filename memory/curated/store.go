@@ -23,8 +23,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 	"github.com/drvova/pig-observational-memory/memory/layer"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 )
 
 // The memory types: the operator's own word (user, feedback) ranks first.
@@ -201,8 +203,9 @@ func (s Store) GetIn(name, project string) (Memory, error) {
 	return m, nil
 }
 
-// GetAs reads one memory as session sees it from project: GetIn, and a staged memory only in
-// the sessions that staged it.
+// GetAs reads one memory as session sees it from project: GetIn, a staged memory only in the
+// sessions that staged it, never one whose forget this session staged (HiddenIn), and as this
+// session's staged edit left it (PendingRevision).
 func (s Store) GetAs(name, project, session string) (Memory, error) {
 	m, err := s.GetIn(name, project)
 	if err != nil {
@@ -211,7 +214,50 @@ func (s Store) GetAs(name, project, session string) (Memory, error) {
 	if !SeenBy(m, session) {
 		return Memory{}, ErrNotFound
 	}
-	return m, nil
+	events, err := s.UsageEvents(name)
+	if err != nil {
+		return Memory{}, err
+	}
+	if HiddenIn(m, events, session) {
+		return Memory{}, ErrNotFound
+	}
+	return withRevision(m, events, session), nil
+}
+
+// ListAs is List as session sees it: a staged memory only in the sessions that staged it
+// (SeenBy), no memory whose forget this session staged (HiddenIn), and each memory as this
+// session's staged edit left it (PendingRevision).
+func (s Store) ListAs(project, session string) ([]Memory, error) {
+	listed, err := s.List(project)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.UsageEventsByName()
+	if err != nil {
+		return nil, err
+	}
+	out := []Memory{}
+	for _, m := range listed {
+		if SeenBy(m, session) && !HiddenIn(m, events[m.Name], session) {
+			out = append(out, withRevision(m, events[m.Name], session))
+		}
+	}
+	return out, nil
+}
+
+// HiddenIn reports whether session staged a forget of m (EventForgetStaged) since m was saved:
+// the memory is hidden in that session at once and stays shared until a forget with a user's
+// words retires it (docs/memory-v2.md, "Curated memory"). events are m's usage events.
+func HiddenIn(m Memory, events []UsageEvent, session string) bool {
+	if session == "" {
+		return false
+	}
+	for _, e := range events {
+		if e.Event == EventForgetStaged && e.Session == session && !e.Time.Before(m.Created) {
+			return true
+		}
+	}
+	return false
 }
 
 // readIn is GetIn without the load check (read): what Update and Forget start from.
@@ -277,6 +323,14 @@ func (s Store) fileNames() ([]string, error) {
 // Save writes a new memory. A name already in use is refused: a name has one
 // home, so a changed fact is an edit of the existing memory, not a second one.
 func (s Store) Save(m Memory, source string) (Memory, error) {
+	return s.SaveCiting(m, source, "")
+}
+
+// SaveCiting is Save of a memory a session stages citing the source content it rests on:
+// digest is SourceDigest of that content ("" when the staging cites none). The staging's usage
+// line records the session and the digest, the evidence Settle reads for independence: two
+// sessions staging the same save count only when they cite distinct source content.
+func (s Store) SaveCiting(m Memory, source, digest string) (Memory, error) {
 	if err := ValidateName(m.Name); err != nil {
 		return Memory{}, err
 	}
@@ -287,6 +341,8 @@ func (s Store) Save(m Memory, source string) (Memory, error) {
 		return Memory{}, errors.New("a memory needs a one-sentence description")
 	}
 	m.Pinned, m.Retired = false, time.Time{}
+	// Redacted before anything compares it, so a staging of the same save matches the stored one.
+	m = redactMemory(m)
 	if !m.Staged {
 		m.StagedBy = nil
 	}
@@ -339,10 +395,14 @@ func (s Store) Save(m Memory, source string) (Memory, error) {
 	if err != nil {
 		return Memory{}, err
 	}
+	line := usageLine{Name: m.Name, Event: EventSave}
 	if joined {
-		return saved, s.Record(m.Name, EventStaged)
+		line.Event = EventStaged
 	}
-	return saved, s.Record(m.Name, EventSave)
+	if saved.Staged {
+		line.Session, line.Source = source, digest
+	}
+	return saved, s.appendUsage(line)
 }
 
 // Edit is a change to a memory; nil fields are left as they are.
@@ -356,6 +416,16 @@ type Edit struct {
 // memory v2's load check, so an edit can bring a memory the validator refuses within it (a
 // rewrite keeps only the fields a memory takes); the edited memory is checked as every write is.
 func (s Store) Update(name, project string, edit Edit, source string) (Memory, error) {
+	return s.update(name, project, edit, source, usageLine{Name: name, Event: EventEdit})
+}
+
+// UpdateQuoted is Update on a user's words: the edit's usage line keeps the quote (normalized)
+// that asks for it, which bounds how many changes one quote confirms (MaxForgetsPerQuote).
+func (s Store) UpdateQuoted(name, project string, edit Edit, source, quote string) (Memory, error) {
+	return s.update(name, project, edit, source, usageLine{Name: name, Event: EventEdit, Quote: quote, User: true})
+}
+
+func (s Store) update(name, project string, edit Edit, source string, line usageLine) (Memory, error) {
 	var updated Memory
 	err := s.locked(func() error {
 		m, err := s.readIn(name, project)
@@ -365,40 +435,91 @@ func (s Store) Update(name, project string, edit Edit, source string) (Memory, e
 		if !SeenBy(m, source) {
 			return ErrNotFound
 		}
-		if edit.Type != nil {
-			if !ValidType(*edit.Type) {
-				return fmt.Errorf("memory type %q must be one of %s", *edit.Type, strings.Join(Types, ", "))
-			}
-			m.Type = *edit.Type
-		}
-		if edit.Description != nil {
-			if strings.TrimSpace(*edit.Description) == "" {
-				return errors.New("a memory needs a one-sentence description")
-			}
-			if m.Staged && !sameDescription(m.Description, *edit.Description) {
-				// Another session's staging named the old description.
-				m.StagedBy = addSource(nil, source)
-			}
-			m.Description = oneLine(*edit.Description)
-		}
-		if edit.Body != nil {
-			m.Body = strings.TrimSpace(*edit.Body)
+		if m, err = applyEdit(m, edit, source); err != nil {
+			return err
 		}
 		m.Updated = s.Now().UTC()
 		m.Sources = addSource(m.Sources, source)
+		m = redactMemory(m)
 		updated = m
 		return s.writeChecked(m)
 	})
 	if err != nil {
 		return Memory{}, err
 	}
-	return updated, s.Record(name, EventEdit)
+	return updated, s.appendUsage(line)
+}
+
+// applyEdit is m with edit applied, as session makes it: a staged memory whose description
+// changes is staged by session alone, since another session's staging named the old one.
+func applyEdit(m Memory, edit Edit, session string) (Memory, error) {
+	if edit.Type != nil {
+		if !ValidType(*edit.Type) {
+			return Memory{}, fmt.Errorf("memory type %q must be one of %s", *edit.Type, strings.Join(Types, ", "))
+		}
+		m.Type = *edit.Type
+	}
+	if edit.Description != nil {
+		if strings.TrimSpace(*edit.Description) == "" {
+			return Memory{}, errors.New("a memory needs a one-sentence description")
+		}
+		if m.Staged && !sameDescription(m.Description, *edit.Description) {
+			// Another session's staging named the old description.
+			m.StagedBy = addSource(nil, session)
+		}
+		m.Description = oneLine(*edit.Description)
+	}
+	if edit.Body != nil {
+		m.Body = strings.TrimSpace(*edit.Body)
+	}
+	return m, nil
 }
 
 // Forget retires the memory name, as seen from project (Memory.Retired), keeping the file.
 // Its usage history stays in the ledger. It reads the memory without the load check, so a
-// memory the validator refuses can still be retired.
+// memory the validator refuses can still be retired. It is the forget code evidence makes (a
+// scanner rule, a path gone); the memory tool's forget goes through Call.Run, which retires a
+// memory other sessions may see only on a user's words (ForgetQuoted) and otherwise stages the
+// forget (StageForget).
 func (s Store) Forget(name, project string) error {
+	return s.forget(name, project, usageLine{Name: name, Event: EventForget})
+}
+
+// ForgetQuoted is Forget on a user's words: the forget's usage line keeps the quote
+// (normalized) that asks for it, which bounds how many forgets one quote confirms
+// (MaxForgetsPerQuote).
+func (s Store) ForgetQuoted(name, project, quote string) error {
+	return s.forget(name, project, usageLine{Name: name, Event: EventForget, Quote: quote, User: true})
+}
+
+// StageForget records a forget of the memory name, as seen from project, that has no user's
+// words: the memory is hidden in session at once (HiddenIn) and stays shared, and a later
+// forget with a user's words retires it.
+func (s Store) StageForget(name, project, session string) error {
+	if _, err := s.readIn(name, project); err != nil {
+		return err
+	}
+	return s.appendUsage(usageLine{Name: name, Event: EventForgetStaged, Session: session})
+}
+
+// QuotedChanges counts the changes to shared memory the user's words quote (normalized)
+// confirmed: forgets and edits of curated memories and the layer's forgets and rollbacks
+// (quotedChangeEvents), compared as the ledger keeps quotes (redacted).
+func (s Store) QuotedChanges(quote string) (int, error) {
+	lines, err := s.readUsageLines()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, line := range lines {
+		if quotedChangeEvents[line.Event] && line.User && line.Quote == secrets.Redact(quote) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s Store) forget(name, project string, line usageLine) error {
 	err := s.locked(func() error {
 		m, err := s.readIn(name, project)
 		if err != nil {
@@ -410,7 +531,7 @@ func (s Store) Forget(name, project string) error {
 	if err != nil {
 		return err
 	}
-	return s.Record(name, EventForget)
+	return s.appendUsage(line)
 }
 
 // The usage ledger's events.
@@ -432,6 +553,9 @@ const (
 	EventCorrected = "corrected"
 	// EventPromoted is a staged memory made live on evidence (memory v2).
 	EventPromoted = "promoted"
+	// EventForgetStaged is a forget with no user's words (memory v2): it hides the memory in
+	// the session that made it (HiddenIn) and leaves it shared.
+	EventForgetStaged = "forget-staged"
 )
 
 type usageLine struct {
@@ -445,6 +569,16 @@ type usageLine struct {
 	// Record is the record id a corrected event names, or what a cited or promoted event
 	// rests on.
 	Record string `json:"record,omitempty"`
+	// Session is the session of a staging (the save or staged event of a staged memory) or of
+	// a staged forget.
+	Session string `json:"session,omitempty"`
+	// Source is a staging's SourceDigest: the source content it cites, "" for none.
+	Source string `json:"source,omitempty"`
+	// Model is the model whose layer a layer change (the layer events) acts on.
+	Model string `json:"model,omitempty"`
+	// Revision is a staged edit's content (EventEditStaged): the memory as the edit made it in
+	// its session.
+	Revision *Revision `json:"revision,omitempty"`
 }
 
 func (s Store) usagePath() string { return filepath.Join(s.Dir, "usage.jsonl") }
@@ -468,13 +602,15 @@ func (s Store) appendUsage(entry usageLine) error {
 		return err
 	}
 	entry.Time = s.Now().UTC().Format(time.RFC3339)
-	line, _ := json.Marshal(entry)
-	f, err := os.OpenFile(s.usagePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
+	// A quote is the user's or the model's words, which may hold a value: the ledger keeps it
+	// redacted, as every stored text is (contracts/secrets.md).
+	entry.Quote = secrets.Redact(entry.Quote)
+	if entry.Revision != nil {
+		r := Revision{Type: entry.Revision.Type, Description: secrets.Redact(entry.Revision.Description), Body: secrets.Redact(entry.Revision.Body)}
+		entry.Revision = &r
 	}
-	defer f.Close()
-	_, err = f.Write(append(line, '\n'))
+	line, _ := json.Marshal(entry)
+	_, err := jsonl.Append(s.usagePath(), line)
 	return err
 }
 
@@ -528,15 +664,25 @@ func (s Store) Locked(fn func() error) error { return s.locked(fn) }
 
 // --- files ---------------------------------------------------------------------
 
-// writeChecked writes m after the store's validator (Check).
+// writeChecked writes m after the store's validator (Check), its secrets redacted first.
 func (s Store) writeChecked(m Memory) error {
+	m = redactMemory(m)
 	if err := Check(m); err != nil {
 		return err
 	}
 	return s.write(m)
 }
 
+// redactMemory is m with every secret in its description and body redacted (secrets.Redact):
+// no stored memory holds one, whichever write stores it.
+func redactMemory(m Memory) Memory {
+	m.Description = secrets.Redact(m.Description)
+	m.Body = secrets.Redact(m.Body)
+	return m
+}
+
 func (s Store) write(m Memory) error {
+	m = redactMemory(m)
 	tmp := s.path(m.Name) + ".tmp"
 	if err := os.WriteFile(tmp, []byte(format(m)), 0o600); err != nil {
 		return err

@@ -13,18 +13,43 @@
                              (:file "regex")
                              (:file "sha256")
                              (:file "timefmt")
+                             ;; The secret scanner and role-label escaping (contracts/secrets.md).
+                             (:file "secrets")
+                             (:file "roles")
+                             ;; Preferences that weaken security (contracts/insecure.md).
+                             (:file "insecure")
                              (:file "end-base")
                              (:file "entry")
                              (:file "ledger")
+                             ;; Phase 2: the encoding fields (contracts/encoding.md).
+                             (:file "ledger-encoding")
                              (:file "ledger-subjects")
                              (:file "ledger-reflections")
                              (:file "ledger-replace")
+                             ;; Phase 5: truth maintenance (forget tombstones, the cascade).
+                             (:file "ledger-truth")
                              (:file "ledger-fold")
                              (:file "ledger-render")
+                             ;; The records a preference that weakens security holds.
+                             (:file "ledger-held")
                              (:file "end-kernel")
                              (:file "transcript")
                              (:file "end-readers")
                              (:file "extract")
+                             ;; Phase 4: per-repository project records and freshness verdicts.
+                             (:file "project")
+                             ;; Level 0's reading of tool output (memory/extract/output.go).
+                             (:file "output")
+                             ;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0.
+                             (:file "conversation")
+                             ;; Phase 2: episodes and assistant pushback beside user claims.
+                             (:file "contest")
+                             ;; Phase 3: working memory (receipts, staleness, rule replacements).
+                             (:file "working")
+                             ;; Phase 5: the labels and the three-way supersession decision.
+                             (:file "labels")
+                             ;; Phase 4: the search behind the reads (memory/retrieve).
+                             (:file "retrieve")
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")
@@ -34,7 +59,9 @@
                              (:file "readers/formats")
                              (:file "readers/sqlite")
                              (:file "readers/paths")
-                             (:file "store/neutral")))
+                             (:file "store/neutral")
+                             ;; Durable appends to the append-only files (docs/lisp-port-tool-layer.md).
+                             (:file "store/append")))
                ;; om.server: the image's socket, sessions and events (docs/lisp-port-image-client.md).
                (:module "server"
                 :pathname "src/server/"
@@ -71,6 +98,8 @@
                              (:file "layer/lock")
                              ;; 1b, the curated ranked index (docs/lisp-port-tool-layer.md)
                              (:file "tool/curated-index")
+                             ;; Curated memories that weaken security are held.
+                             (:file "tool/curated-held")
                              ;; W3t: the fixed texts the image hands with the Lisp forms
                              (:file "tool/lisp-texts")))
                ;; W4 next steps, evidence and retirement (docs/lisp-port-evidence.md)

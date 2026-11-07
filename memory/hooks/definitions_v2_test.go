@@ -41,6 +41,43 @@ func seedV2Evidence(t *testing.T, store curated.Store, model string) {
 	}
 }
 
+// seedControls records 2·MinEvidence memory v2 compaction passes that ran no definition, each
+// level-1 answer with two refused proposals and its own evidence root: the control windows a
+// held definition's null arm is measured against (rules.SettleV2), and evidence that differs
+// from none.
+func seedControls(t *testing.T, store curated.Store, model string) {
+	t.Helper()
+	for i := range 2 * rules.MinEvidence {
+		harm := 0
+		if err := store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2, Tokens: 400, Level1: true,
+			Counts: map[string]int{rules.CountLevel1Refused: 2}, Harm: &harm, Roots: []string{fmt.Sprintf("c0ffee%010x", i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// underHeld records MinEvidence memory v2 compaction passes of other sessions that ran with the
+// model's held definitions, over their own evidence roots, each counting failures refused
+// proposals and harm: the later compactions SettleV2 reads.
+func underHeld(t *testing.T, store curated.Store, model string, failures, harm int) {
+	t.Helper()
+	held, err := store.Layer().Held(model)
+	if err != nil || len(held) == 0 {
+		t.Fatalf("nothing held: %v", err)
+	}
+	ids := []string{}
+	for _, d := range held {
+		ids = append(ids, d.HeldID())
+	}
+	for i := range rules.MinEvidence {
+		h := harm
+		if err := store.RecordModel(curated.ModelEvent{Model: model, Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2, Tokens: 400, Level1: true,
+			Counts: map[string]int{rules.CountLevel1Refused: failures}, Harm: &h, RanHeld: ids, Roots: []string{fmt.Sprintf("beef%012x", i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // compactLevel1 runs one level-1 compaction of a fresh copy of the level-1 fixture branch, with
 // reply as the one response, and returns the request it made.
 func compactLevel1(t *testing.T, rt *runtime.Runtime, h *testfix.FakeHost, reply map[string]any) map[string]any {
@@ -147,7 +184,7 @@ func TestV2DefinitionsOfferedOnlyWhenEvidenceChanged(t *testing.T) {
 func TestV2HeldDefinitionWrittenOnLaterEvidence(t *testing.T) {
 	counter := testfix.CountRequests(t)
 	rt, h, store, model := level1StoreSetup(t)
-	seedV2Evidence(t, store, model)
+	seedControls(t, store, model)
 
 	first := compactLevel1(t, rt, h, level1Reply(consolidationDefinition()))
 	if !offered(first) {
@@ -156,6 +193,9 @@ func TestV2HeldDefinitionWrittenOnLaterEvidence(t *testing.T) {
 	if state := consolidationState(t, store, model); state != layer.StateHeld {
 		t.Fatalf("after the proposing compaction: %s, want held (its own output never proves it)", state)
 	}
+	// Later compactions under it, of other sessions over other text, refused fewer proposals than
+	// the ones without it: its null arm (rules.SettleV2), settled at the next compaction.
+	underHeld(t, store, model, 0, 0)
 
 	second := compactLevel1(t, rt, h, level1Reply())
 	system, _ := second["systemPrompt"].(string)
@@ -178,8 +218,10 @@ func TestV2HeldDefinitionWrittenOnLaterEvidence(t *testing.T) {
 // that would drop a specific, nothing valid recorded) is reverted, and the seed stands again.
 func TestV2HeldDefinitionRevertedOnLoss(t *testing.T) {
 	rt, h, store, model := level1StoreSetup(t)
-	seedV2Evidence(t, store, model)
+	seedControls(t, store, model)
 	compactLevel1(t, rt, h, level1Reply(consolidationDefinition()))
+	// The compactions under it lost specifics (harm), whatever they refused.
+	underHeld(t, store, model, 0, 1)
 	compactLevel1(t, rt, h, mergeReply("Staging deploys run from the Makefile"))
 	if state := consolidationState(t, store, model); state != "none" {
 		t.Fatalf("after a lossy later compaction: %s, want reverted", state)
@@ -194,7 +236,7 @@ func TestV2HeldDefinitionRevertedOnLoss(t *testing.T) {
 func TestV2EmptyPassIsNoEvidence(t *testing.T) {
 	counter := testfix.CountRequests(t)
 	rt, h, store, model := level1StoreSetup(t)
-	seedV2Evidence(t, store, model)
+	seedControls(t, store, model)
 	compactLevel1(t, rt, h, level1Reply(consolidationDefinition()))
 
 	compactEmpty(t, rt, h)
@@ -206,6 +248,7 @@ func TestV2EmptyPassIsNoEvidence(t *testing.T) {
 		t.Fatalf("after an empty compaction: %s, want held", state)
 	}
 
+	underHeld(t, store, model, 0, 0)
 	compactLevel1(t, rt, h, level1Reply())
 	if state := consolidationState(t, store, model); state != layer.StateWritten {
 		t.Fatalf("after a clean compaction: %s, want written", state)
@@ -241,8 +284,13 @@ func TestV2Level1DefinitionsAreChecked(t *testing.T) {
 			t.Fatalf("a level-1 rule was not held for v2: %+v", d)
 		}
 	}
-	if len(held) != 2 || consolidationState(t, store, model) != layer.StateHeld {
-		t.Fatalf("held %v, want the consolidation instructions and one rule", kinds)
+	// One proposal holds one rule, never a bundle (decision 24): the rule after the instructions
+	// waits for a later offer.
+	if len(held) != 1 || consolidationState(t, store, model) != layer.StateHeld {
+		t.Fatalf("held %v, want the consolidation instructions alone", kinds)
+	}
+	if !strings.Contains(strings.Join(h.Messages(), "\n"), "one proposal holds one rule, never a bundle") {
+		t.Fatalf("the bundled rule was not refused: %v", h.Messages())
 	}
 }
 
@@ -268,11 +316,12 @@ func TestV1HoldsNeverRun(t *testing.T) {
 		t.Fatalf("v2 sees v1's holds: %+v", held)
 	}
 
-	seedV2Evidence(t, store, model)
+	seedControls(t, store, model)
 	first := compactLevel1(t, rt, h, level1Reply(consolidationDefinition()))
 	if !offered(first) {
 		t.Fatal("v1's holds blocked the v2 offer")
 	}
+	underHeld(t, store, model, 0, 0)
 	if system, _ := first["systemPrompt"].(string); strings.Contains(system, v1Text) {
 		t.Fatalf("v1's held addition reached the level-1 prompt:\n%s", system)
 	}

@@ -28,12 +28,18 @@ type Input struct {
 	// Curated are the curated memories the prompt listed (Prompt.Curated): the only ones a
 	// citation may name.
 	Curated []CuratedMemory
+	// Stale are the possibly stale records the prompt listed (Prompt.Stale): the only ones a
+	// stale verdict may name.
+	Stale []StaleRecord
 	// Branch is the current branch, which tells a record of the user's own words (a citation's
 	// support) by its first source entry.
 	Branch []ledger.Entry
 	// Offer is what the prompt offered to define (Prompt.HarnessShown with the request's
 	// DefinitionOffer); nil refuses every definition and rule.
 	Offer *DefinitionOffer
+	// Writer is who writes the new records (the session's harness, session, model and engine);
+	// zero leaves them without one.
+	Writer ledger.Writer
 }
 
 // Link is a possible update (ledger.Observation.PossiblyUpdates) the level-1 input lists: Later
@@ -74,13 +80,16 @@ const (
 	ReasonSelf           = "supersedes itself"
 	ReasonNoSupport      = "cites no record whose specifics it carries"
 	ReasonMalformed      = "is not an object"
-	ReasonCodeKind       = "merges an attempt, file, commit or note record, whose fields code keeps"
+	ReasonCodeKind       = "merges an attempt, file, commit, note, decision or convention record, whose fields code keeps"
 	ReasonMergeStatuses  = "merges records with different statuses (proposed, hypothetical, retracted or stated as fact)"
+	ReasonNotBelieved    = "merges a record the memory labels retracted or held"
 	ReasonNotLink        = "names a pair the input did not list as a possible update"
 	ReasonVerdict        = "has no verdict: confirm or reject"
 	ReasonLinkSettled    = "settles a possible update another verdict already settled"
 	ReasonLinkMerged     = "settles a possible update between records its merge joins"
 	ReasonStatusReplace  = "replaces a record of another status (a plan or condition never replaces a fact, a retraction only a plan or condition)"
+	ReasonNotStale       = "names a record the input did not list as possibly stale"
+	ReasonStaleVerdict   = "has no stale verdict: confirm"
 )
 
 // The failure reasons of an output nothing is recorded from.
@@ -111,6 +120,9 @@ type Result struct {
 	// supersede, a rejected one was removed. LinkRecords are the records of Records that only
 	// settle links (the later record with its links settled, replacing it).
 	Confirmed, Rejected, LinkRecords int
+	// Rechecked counts the possibly stale records confirmed: each is replaced by itself framed
+	// at HEAD with the path's blob there, so it is no longer marked.
+	Rechecked int
 	// Cited are the accepted curated citations (Citation).
 	Cited []Citation
 	// Definitions and Rules are the structurally valid harness proposals; the hook holds each
@@ -140,9 +152,11 @@ type validator struct {
 	standingSuperseded map[string]bool
 	// standingCited are the ids a reflection of the ledger or the input cites.
 	standingCited map[string]bool
-	edges         map[string][]string // supersede links, by record id, new records included
-	verdicts      []verdict           // the links verdicts, in input order
-	result        Result
+	// labels are the fold's labels of the records the input shows (ledger.LabelsOf).
+	labels   map[string]string
+	edges    map[string][]string // supersede links, by record id, new records included
+	verdicts []verdict           // the links verdicts, in input order
+	result   Result
 }
 
 // verdict is one valid links item, waiting for the record that stands for its later record.
@@ -200,6 +214,22 @@ func Validate(args map[string]any, in Input) Result {
 			}
 		}
 	}
+	// The fold's labels (ledger.LabelsOf; contracts/truth.md) over every record the input shows:
+	// level 1 merges only records the memory believes.
+	labelled := slices.Clone(in.Ledger.ActiveObservations)
+	seen := map[string]bool{}
+	for _, o := range labelled {
+		seen[o.ID] = true
+	}
+	for _, list := range [][]ledger.Observation{in.Active, in.Candidates} {
+		for _, o := range list {
+			if !seen[o.ID] {
+				seen[o.ID] = true
+				labelled = append(labelled, o)
+			}
+		}
+	}
+	v.labels = ledger.LabelsOf(labelled)
 	v.standingCited = map[string]bool{}
 	for _, list := range [][]ledger.Reflection{in.Ledger.Reflections, in.Reflections} {
 		for _, r := range list {
@@ -220,6 +250,7 @@ func Validate(args map[string]any, in Input) Result {
 		v.label(i, item)
 	}
 	v.settleRemaining()
+	v.stale(list(args["stale"]))
 	for i, item := range reflections {
 		v.reflection(i, item)
 	}
@@ -300,13 +331,22 @@ func (v *validator) merge(index int, item any) {
 			return
 		}
 	}
+	// A merge stands for its sources as current: one the fold labels retracted or held would
+	// come back as current in the merge's text. (A superseded one is refused above; the two ends
+	// of an unsettled possible update are what level 1 settles, so their labels do not refuse.)
+	for _, o := range sources {
+		if l := v.labels[o.ID]; l == ledger.LabelRetracted || l == ledger.LabelHeld {
+			v.refuse("merge", index, ReasonNotBelieved)
+			return
+		}
+	}
 	content := oneLine(m["content"])
 	if content == "" {
 		v.refuse("merge", index, ReasonEmpty)
 		return
 	}
 	for _, o := range sources {
-		if dropsSpecifics(o.Content, content) {
+		if dropsRecord(o, content) {
 			v.refuse("merge", index, ReasonDropsSpecifics)
 			return
 		}
@@ -342,6 +382,18 @@ func (v *validator) merge(index int, item any) {
 			}
 		}
 	}
+	// The text is the model's, so its source is level 1's; its authority starts at the top and
+	// is lowered to the least source's (leastProvenance), its hedge is never below the text's or
+	// any source's, and its keys are the sources' together.
+	record.Source = ledger.SourceModelInferred
+	record.Authority = ledger.AuthorityUser
+	record.Hedge = ledger.HedgeOf(content)
+	for _, o := range sources {
+		record.Keys.Union(o.Keys)
+	}
+	record.Frame = commonFrame(sources)
+	record.TimeHint = commonField(sources, func(o ledger.Observation) string { return o.TimeHint })
+	record.Episode = commonField(sources, func(o ledger.Observation) string { return o.Episode })
 	v.applyLabels(&record, m, false)
 	// The text is the model's, so the record is; but when every source stood for the user's own
 	// correction or preference, so does the merge, and it keeps the user's class in selection.
@@ -423,12 +475,14 @@ func (v *validator) label(index int, item any) {
 	if record.Kind != candidate.Kind {
 		record.Origin = ledger.OriginModel
 		record.FromUser = false
+		record.Source = ledger.SourceModelInferred
+		record.Authority = ledger.LeastAuthority(record.Authority, ledger.AuthorityModel)
 	}
 	v.accept(record, []string{id})
 }
 
 // applyLabels sets the fields a label may set on record. A kind is set only from the kinds a
-// model may write, and never on a record whose kind code set (attempt, file, commit, note) or
+// model may write, and never on a record whose kind code set (attempt, file, commit, note, decision, convention) or
 // on a user correction or preference (which selection ranks by that kind); an outcome only on
 // an attempt; a subject as the kernel stores it (ledger.RecordableSubject).
 func (v *validator) applyLabels(record *ledger.Observation, m map[string]any, label bool) {
@@ -474,7 +528,7 @@ func (v *validator) supersedes(raw any, sources []string, record ledger.Observat
 			return nil, ReasonCrossScope
 		case !ledger.MaySupersede(record, target):
 			return nil, ReasonStatusReplace
-		case dropsSpecifics(target.Content, record.Content):
+		case dropsRecord(target, record.Content):
 			return nil, ReasonDropsSpecifics
 		case v.reaches(t, sources):
 			return nil, ReasonCycle
@@ -520,8 +574,18 @@ func (v *validator) resolve(id string) string {
 // accept records a new record replacing sources. The record says which records it replaces
 // (Observation.Replaces), so every link to them is read as a link to it (ledger.Standing).
 func (v *validator) accept(record ledger.Observation, sources []string) {
+	v.acceptAs(record, sources, "")
+}
+
+// acceptAs is accept with the id salted by salt when it is not empty (a stale confirmation's
+// HEAD, so confirming one record again at a later HEAD is a new record).
+func (v *validator) acceptAs(record ledger.Observation, sources []string, salt string) {
+	v.leastProvenance(&record, sources)
 	record.Replaces = slices.Clone(sources)
 	record.ID = recordID(record)
+	if salt != "" {
+		record.ID = ids.HashID(strings.Join([]string{"level1-recheck", record.ID, salt}, "\x00"))
+	}
 	record.TokenCount = tokens.ObservationLineTokenCount(tokens.ObservationLine{ID: record.ID, Timestamp: record.Timestamp, Relevance: string(record.Relevance), Content: record.Content})
 	for _, id := range sources {
 		v.used[id] = true
@@ -541,6 +605,67 @@ func (v *validator) accept(record ledger.Observation, sources []string) {
 	edges := append([]string(nil), record.Supersedes...)
 	v.edges[record.ID] = edges
 	v.result.Records = append(v.result.Records, record)
+}
+
+// leastProvenance holds a record replacing sources to the least provenance among them
+// (docs/brain-memory.md, "Provenance, not detection"): its origin is never above the lowest
+// source's (model, then host, then code), its authority never above the lowest source's
+// (ledger.AuthorityRank; a source with none leaves it none), its hedge never below the most
+// hedged source's, and it stands for the user (FromUser) only when every
+// source does, so a merge of a tool-derived record and the user's words is not the user's. The
+// rules a merge and a label are built by already give this; it is checked here, after every
+// proposal's validation, so no later rule can raise what a summary inherits.
+func (v *validator) leastProvenance(record *ledger.Observation, sources []string) {
+	for _, id := range sources {
+		o, ok := v.shown[id]
+		if !ok {
+			continue
+		}
+		if originRank(o.Origin) < originRank(record.Origin) {
+			record.Origin = o.Origin
+		}
+		if !o.FromUser && !ledger.UserPriority(o) {
+			record.FromUser = false
+		}
+		record.Authority = ledger.LeastAuthority(record.Authority, o.Authority)
+		record.Hedge = ledger.StrongestHedge(record.Hedge, o.Hedge)
+	}
+	if v.in.Writer != (ledger.Writer{}) {
+		record.Writer = v.in.Writer
+	}
+}
+
+// commonFrame is the sources' frame when they all share one, else none.
+func commonFrame(sources []ledger.Observation) ledger.Frame {
+	for _, o := range sources[1:] {
+		if o.Frame != sources[0].Frame {
+			return ledger.Frame{}
+		}
+	}
+	return sources[0].Frame
+}
+
+// commonField is the sources' value of field when they all share one, else "".
+func commonField(sources []ledger.Observation, field func(ledger.Observation) string) string {
+	for _, o := range sources[1:] {
+		if field(o) != field(sources[0]) {
+			return ""
+		}
+	}
+	return field(sources[0])
+}
+
+// originRank orders origins by the authority of their text: what a model wrote (and any origin
+// this release does not know) lowest, then a host summary, then what code took verbatim from
+// the transcript.
+func originRank(origin string) int {
+	switch origin {
+	case ledger.OriginCode:
+		return 2
+	case ledger.OriginHost:
+		return 1
+	}
+	return 0
 }
 
 // reflection validates one reflection.
@@ -563,7 +688,7 @@ func (v *validator) reflection(index int, item any) {
 	support := func(id string, known bool) {
 		resolved := v.resolve(id)
 		cited, found := v.record(resolved)
-		if (!found && known) || (found && dropsSpecifics(cited.Content, content)) || slices.Contains(supporting, resolved) {
+		if (!found && known) || (found && dropsRecord(cited, content)) || slices.Contains(supporting, resolved) {
 			return
 		}
 		supporting = append(supporting, resolved)
@@ -708,6 +833,49 @@ func (v *validator) confirmable(record ledger.Observation, sources []string, ear
 	return ""
 }
 
+// stale validates the stale verdicts: each names a possibly stale record the input listed, once,
+// that no other proposal took or superseded, and confirms it: the record as it stands, framed at
+// HEAD with its path's blob there, replaces it (its text, kind and origin unchanged), so it is
+// no longer marked. A record that no longer holds is superseded by a record or merge instead.
+func (v *validator) stale(items []any) {
+	for i, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			v.refuse("stale", i, ReasonMalformed)
+			continue
+		}
+		id, _ := m["id"].(string)
+		id = strings.TrimSpace(id)
+		word, _ := m["verdict"].(string)
+		at := slices.IndexFunc(v.in.Stale, func(r StaleRecord) bool { return r.ID == id })
+		_, shown := v.shown[id]
+		switch {
+		case at < 0 || !shown:
+			v.refuse("stale", i, ReasonNotStale)
+			continue
+		case strings.TrimSpace(word) != VerdictRecheck:
+			v.refuse("stale", i, ReasonStaleVerdict)
+			continue
+		case v.used[id]:
+			v.refuse("stale", i, ReasonUsed)
+			continue
+		case v.superseded[id]:
+			v.refuse("stale", i, ReasonSuperseded)
+			continue
+		}
+		r := v.in.Stale[at]
+		record := v.shown[id]
+		record.ID, record.TokenCount = "", 0
+		record.Supersedes = slices.Clone(record.Supersedes)
+		record.Frame.Head, record.Frame.BodyHash = r.Head, r.Blob
+		before := len(v.result.Records)
+		v.acceptAs(record, []string{id}, r.Head)
+		if len(v.result.Records) > before {
+			v.result.Rechecked++
+		}
+	}
+}
+
 // settleRemaining gives each later record whose verdicts no merge or label took a record of its
 // own: the later record as it stands, with its links settled, replacing it. Its text, kind and
 // origin are the later record's. A later record another proposal supersedes takes no verdict.
@@ -805,7 +973,7 @@ func Union(result Result, records []ledger.Observation) (drop []string, reflecti
 			continue
 		}
 		r, ok := byID[replacement]
-		if !ok || replacement == o.ID || dropsSpecifics(o.Content, r.Content) {
+		if !ok || replacement == o.ID || dropsRecord(o, r.Content) {
 			keptBack++
 			continue
 		}
@@ -817,7 +985,7 @@ func Union(result Result, records []ledger.Observation) (drop []string, reflecti
 		supporting := make([]string, 0, len(r.SupportingObservationIDs))
 		for _, id := range r.SupportingObservationIDs {
 			// A support that is not an active record drops nothing when the reflection renders.
-			if o, active := byID[id]; active && dropsSpecifics(o.Content, r.Content) {
+			if o, active := byID[id]; active && dropsRecord(o, r.Content) {
 				keptBack++
 				continue
 			}
@@ -842,6 +1010,14 @@ func dropsSpecificsBesidesUpdate(earlier, later string) bool {
 		}
 	}
 	return false
+}
+
+// dropsRecord is dropsSpecifics for record o, which replacement also drops when o is a rule, a
+// correction or a decision (ledger.KeepsKeys) and replacement misses one of its keys, the path,
+// tool or command it quotes (ledger.MissingKeys): such a record often carries no specific, and
+// it must never be merged or summarized into words that no longer name what it is about.
+func dropsRecord(o ledger.Observation, replacement string) bool {
+	return dropsSpecifics(o.Content, replacement) || ledger.KeepsKeys(o) && len(ledger.MissingKeys(o.Content, replacement)) > 0
 }
 
 // dropsSpecifics reports whether replacement drops a specific of source (ledger.Specifics):

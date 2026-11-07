@@ -137,6 +137,7 @@ func foldProjection(entries []Entry, options foldOptions) Projection {
 			aliases = append(aliases, data.Aliases...)
 		}
 	}
+	observations, reflections, _ = maintainTruth(observations, dropped, replacements.by, reflections)
 	// Every link is read through level 1's replacements, as FoldLedger reads it.
 	active := []Observation{}
 	for _, observation := range observations {

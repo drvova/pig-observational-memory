@@ -60,6 +60,35 @@
 ;; Level 1 on the image (docs/lisp-port-level1.md).
 (load (merge-pathnames "tests/level1.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
 
+;; Level 0's file tools across harnesses and the JavaScript project slug.
+(load (merge-pathnames "tests/filetools.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; The layer store across processes and crashes (docs/lisp-port-tool-layer.md).
+(load (merge-pathnames "tests/layer-store.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; Phase 1's safety gates: the forget gate, staging independence, level-1 provenance.
+(load (merge-pathnames "tests/safety.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; The secret scanner and role-label escaping (contracts/secrets.md).
+(load (merge-pathnames "tests/secrets.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; Phase 2: level 0's reading of tool output (memory/extract/output.go).
+(load (merge-pathnames "tests/output.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 2: the encoding fields (contracts/encoding.md).
+(load (merge-pathnames "tests/encoding.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; Phase 2: rules, scope exclusions, decisions and repo conventions at level 0 (contracts/conversation.jsonl).
+(load (merge-pathnames "tests/conversation.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
+;; Preferences that weaken security and the unverified framing (contracts/insecure.md).
+(load (merge-pathnames "tests/insecure.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 4: the search behind the reads (docs/protocol.md, "Retrieval").
+(load (merge-pathnames "tests/retrieval.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 5: truth maintenance (contracts/truth.md).
+(load (merge-pathnames "tests/truth.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+;; Phase 4: project records and freshness verdicts (contracts/project.jsonl).
+(load (merge-pathnames "tests/project.lisp" (make-pathname :name nil :type nil :defaults *load-truename*)))
+
 (let ((errors 0))
   (dolist (test *tests*)
     (let ((*current* (car test)))

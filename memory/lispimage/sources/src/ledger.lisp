@@ -27,14 +27,34 @@
   (status "" :type string)
   (possibly-updates '() :type list)
   (conflicts '() :type list)
-  (replaces '() :type list))
+  (replaces '() :type list)
+  ;; responds-to: the claims a pushback record answers (Observation.RespondsTo).
+  (responds-to '() :type list)
+  ;; closes: the closing links a receipt record carries (Observation.Closes), each a list
+  ;; (plan-id closed-by receipt).
+  (closes '() :type list)
+  ;; The encoding fields (ledger-encoding.lisp): keys, frame and writer are alists in write order.
+  (source "" :type string)
+  (authority "" :type string)
+  (hedge "" :type string)
+  (time-hint "" :type string)
+  (episode "" :type string)
+  ;; derived-from: the entry id of the request a plan was made under (Observation.DerivedFrom).
+  (derived-from "" :type string)
+  ;; intent: a plan's type (Observation.Intent, truth.lisp); forgets: a forget record's
+  ;; tombstones (Observation.Forgets), each a list (id kind sources).
+  (intent "" :type string)
+  (forgets '() :type list)
+  (keys '() :type list)
+  (frame '() :type list)
+  (writer '() :type list))
 
 (defparameter +status-proposed+ "proposed")
 (defparameter +status-hypothetical+ "hypothetical")
 (defparameter +status-retracted+ "retracted")
 (defparameter +status-values+ '("proposed" "hypothetical" "retracted"))
 (defparameter +observation-kinds+ '("fact" "event" "preference" "plan" "correction" "assistant"))
-(defparameter +code-kinds+ '("attempt" "file" "commit" "note"))
+(defparameter +code-kinds+ '("attempt" "file" "commit" "note" "decision" "convention" "evidence" "value" "pushback" "forget"))
 (defparameter +relevance-values+ '("low" "medium" "high" "critical"))
 
 (defun write-obs-json (o out)
@@ -70,6 +90,41 @@
     (when (obs-possibly-updates o) (field "possiblyUpdates" (strings (obs-possibly-updates o))))
     (when (obs-conflicts o) (field "conflicts" (strings (obs-conflicts o))))
     (when (obs-replaces o) (field "replaces" (strings (obs-replaces o))))
+    (when (obs-responds-to o) (field "respondsTo" (strings (obs-responds-to o))))
+    (when (obs-closes o)
+      (write-string ",\"closes\":[" out)
+      (loop for (c . rest) on (obs-closes o)
+            do (destructuring-bind (id by receipt) c
+                 (write-string "{\"id\":" out) (write-json-string id out)
+                 (write-string ",\"closedBy\":" out) (write-json-string by out)
+                 (write-string ",\"receipt\":" out) (write-json-string receipt out)
+                 (write-char #\} out))
+               (when rest (write-char #\, out)))
+      (write-char #\] out))
+    (unless (string= (obs-source o) "") (field "source" (obs-source o)))
+    (unless (string= (obs-authority o) "") (field "authority" (obs-authority o)))
+    (unless (string= (obs-hedge o) "") (field "hedge" (obs-hedge o)))
+    (unless (string= (obs-time-hint o) "") (field "timeHint" (obs-time-hint o)))
+    (unless (string= (obs-episode o) "") (field "episode" (obs-episode o)))
+    (unless (string= (obs-derived-from o) "") (field "derivedFrom" (obs-derived-from o)))
+    (unless (string= (obs-intent o) "") (field "intent" (obs-intent o)))
+    (when (obs-forgets o)
+      (write-string ",\"forgets\":[" out)
+      (loop for (f . rest) on (obs-forgets o)
+            do (destructuring-bind (id kind sources) f
+                 (write-string "{\"id\":" out) (write-json-string id out)
+                 (unless (string= kind "") (write-string ",\"kind\":" out) (write-json-string kind out))
+                 (when sources (write-string ",\"sources\":" out) (write-json (strings sources) out))
+                 (write-char #\} out))
+               (when rest (write-char #\, out)))
+      (write-char #\] out))
+    (flet ((object (name alist writer)
+             (when alist
+               (write-char #\, out) (write-json-string name out) (write-char #\: out)
+               (funcall writer alist out))))
+      (object "keys" (obs-keys o) #'write-keys-object)
+      (object "frame" (obs-frame o) #'write-alist-object)
+      (object "writer" (obs-writer o) #'write-alist-object))
     (write-char #\} out)))
 
 (defun obs-json (o) (with-output-to-string (out) (write-obs-json o out)))
@@ -102,6 +157,38 @@
                  (push-end x out))))
     out))
 
+(defparameter +receipt-values+ '("exit 0" "write" "commit" "read")
+  "ledger.ReceiptValues: the receipts a closing link names.")
+
+(defun closures-from (v own)
+  "Observation.closuresFrom: a decoded closes list read leniently, each element a closing link to
+another record, as (plan-id closed-by receipt), the first per plan."
+  (let ((out '()))
+    (when (and (vectorp v) (not (stringp v)))
+      (loop for m across v
+            do (when (hash-table-p m)
+                 (let ((id (jget m "id")) (by (jget m "closedBy")) (receipt (jget m "receipt")))
+                   (when (and (memory-id-p id) (memory-id-p by) (string/= id own)
+                              (member receipt +receipt-values+ :test #'equal)
+                              (not (find id out :key #'first :test #'string=)))
+                     (push-end (list id by receipt) out))))))
+    out))
+
+(defparameter +intent-values+ '("todo" "promise" "condition-wait" "deferred")
+  "ledger.IntentValues: the intention types (contracts/truth.md, \"Intentions\").")
+
+(defun tombstones-from (v)
+  "tombstonesFrom: a decoded forgets list read leniently, each a list (id kind sources), the first
+per id."
+  (let ((out '()))
+    (when (and (vectorp v) (not (stringp v)))
+      (loop for m across v
+            do (when (hash-table-p m)
+                 (let ((id (jget m "id")))
+                   (when (and (memory-id-p id) (not (find id out :key #'first :test #'string=)))
+                     (push-end (list id (str (jget m "kind")) (non-empty-strings (jget m "sources"))) out))))))
+    out))
+
 (defregex +schema-field-name+ #r§^[a-z][a-z0-9_]{0,31}$§)
 
 (defun observation-from (m)
@@ -131,7 +218,21 @@
           (setf (obs-possibly-updates o) (link-ids (jget m "possiblyUpdates") (obs-id o))
                 (obs-conflicts o) (link-ids (jget m "conflicts") (obs-id o))
                 (obs-replaces o) (link-ids (jget m "replaces") (obs-id o))
+                (obs-responds-to o) (link-ids (jget m "respondsTo") (obs-id o))
+                (obs-closes o) (closures-from (jget m "closes") (obs-id o))
                 (obs-supersedes o) (link-ids (jget m "supersedes") (obs-id o)))
+          ;; Observation.readEncoding.
+          (let ((s (jget m "source"))) (when (member s +source-values+ :test #'equal) (setf (obs-source o) s)))
+          (let ((s (jget m "authority"))) (when (member s +authority-values+ :test #'equal) (setf (obs-authority o) s)))
+          (let ((s (jget m "hedge"))) (when (member s +hedge-values+ :test #'equal) (setf (obs-hedge o) s)))
+          (let ((s (jget m "timeHint"))) (when (time-hint-p s) (setf (obs-time-hint o) s)))
+          (when (stringp (jget m "episode")) (setf (obs-episode o) (jget m "episode")))
+          (when (stringp (jget m "derivedFrom")) (setf (obs-derived-from o) (jget m "derivedFrom")))
+          (let ((s (jget m "intent"))) (when (member s +intent-values+ :test #'equal) (setf (obs-intent o) s)))
+          (setf (obs-forgets o) (tombstones-from (jget m "forgets")))
+          (setf (obs-keys o) (read-keys (jget m "keys"))
+                (obs-frame o) (read-members (jget m "frame") +frame-members+)
+                (obs-writer o) (read-members (jget m "writer") +writer-members+))
           (when (hash-table-p (jget m "fields"))
             (let ((fields '()))
               (maphash (lambda (name value)

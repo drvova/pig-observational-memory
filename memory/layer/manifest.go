@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/jsonl"
 	"github.com/drvova/pig-observational-memory/memory/kernel"
 )
 
@@ -78,13 +79,22 @@ type Generation struct {
 	// passes were counted after it and the evidence changed.
 	Evidence string `json:"evidence,omitempty"`
 	Events   int    `json:"events,omitempty"`
+	// Scope is, for a put that settled a held definition, the repositories and task families its
+	// evidence covered: it applies only there (Harness.InScope). A put without one applies
+	// everywhere.
+	Scope *Scope `json:"scope,omitempty"`
 }
 
 // Describe is the generation as /om:status and notifications show it.
 func (g Generation) Describe() string {
 	switch g.Op {
 	case OpRollback:
+		if g.Reason != "" {
+			return fmt.Sprintf("%d: rollback to %d (%s)", g.N, g.Target, g.Reason)
+		}
 		return fmt.Sprintf("%d: rollback to %d", g.N, g.Target)
+	case OpHoldInsecure:
+		return fmt.Sprintf("%d: held %s/%s, never applied (%s)", g.N, g.Kind, g.Name, g.Reason)
 	case OpRevert:
 		return fmt.Sprintf("%d: revert %s/%s (%s)", g.N, g.Kind, g.Name, g.Reason)
 	case OpBuild:
@@ -151,12 +161,9 @@ func (s Store) appendGeneration(model string, g Generation) (Generation, error) 
 	if err := os.MkdirAll(s.modelPath(model), 0o700); err != nil {
 		return Generation{}, err
 	}
-	f, err := os.OpenFile(s.manifestPath(model), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return Generation{}, err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
+	// A torn tail is ended first and the line is synced (jsonl.Append): a crash never glues
+	// two lines, and a generation once returned is never lost and numbered again.
+	if _, err := jsonl.Append(s.manifestPath(model), line); err != nil {
 		return Generation{}, err
 	}
 	return g, nil
@@ -456,6 +463,11 @@ func (s Store) Rollback(model string, n int, session string) (Generation, []Chan
 // what it was before (Generation.Keep). The memory tool's rollback keeps the rules, which the
 // harness writes and decides, not the model.
 func (s Store) RollbackKeeping(model string, n int, session string, keep func(kind, name string) bool) (Generation, []Change, error) {
+	return s.rollbackKeeping(model, n, session, keep, "")
+}
+
+// rollbackKeeping is RollbackKeeping with the reason its generation records.
+func (s Store) rollbackKeeping(model string, n int, session string, keep func(kind, name string) bool, reason string) (Generation, []Change, error) {
 	kept := func(key string) bool {
 		if keep == nil {
 			return false
@@ -546,7 +558,7 @@ func (s Store) RollbackKeeping(model string, n int, session string, keep func(ki
 		if err := s.dropHeld(model, kept); err != nil {
 			return err
 		}
-		gen, err = s.appendGeneration(model, Generation{Op: OpRollback, Target: n, Session: session, Keep: keepKeys})
+		gen, err = s.appendGeneration(model, Generation{Op: OpRollback, Target: n, Session: session, Keep: keepKeys, Reason: reason})
 		return err
 	})
 	return gen, changes, err
@@ -601,15 +613,8 @@ func (s Store) RecordFloor(l kernel.Lowering) error {
 		if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(s.floorPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := f.Write(append(line, '\n')); err != nil {
-			return err
-		}
-		return f.Sync()
+		_, err := jsonl.Append(s.floorPath(), line)
+		return err
 	})
 }
 

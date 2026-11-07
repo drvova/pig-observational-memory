@@ -24,6 +24,11 @@ lowering with who and why, and the project trust they were read under (:trusted,
   (worker-model nil)
   (removed '())
   (floor-lowered nil)
+  ;; The working-memory limits (config.Config.Limits, ModelLimits) and the raw floor and quality
+  ;; trigger switches (RawFloor, QualityTrigger), both off by default.
+  (limits (list 0 0 0 0 0)) (model-limits nil) (raw-floor nil) (quality-trigger nil)
+  ;; decay's clock ("" off) and horizon (config.Config.Decay, DecayHorizon), off by default.
+  (decay "") (decay-horizon 0)
   (trust :unknown))
 
 (defstruct (conn (:constructor %make-conn))
@@ -52,6 +57,8 @@ lowering with who and why, and the project trust they were read under (:trusted,
   ;; keeps one Manager per process and PiG one connection per process, so the set lives as long
   ;; as the connection and only grows.
   (retired-names '())
+  ;; runtime.CachedRepo's key and the encoding plist it read (session-encoding).
+  (repo-key nil) (repo-encoding nil)
   (ended nil))
 
 (defun make-conn (params)
@@ -177,11 +184,20 @@ curatedMemoryIndexTokens), memoryFormat, and whether the removed `model` setting
                  (when (and present (member v '(:true :false))) (funcall setter (eq v :true))))))
         (bool "passive" (lambda (b) (setf (rcfg-passive cfg) b)))
         (bool "curatedMemory" (lambda (b) (setf (rcfg-curated-memory cfg) b)))
-        (bool "consolidate" (lambda (b) (setf (rcfg-consolidate-off cfg) (not b)))))
+        (bool "consolidate" (lambda (b) (setf (rcfg-consolidate-off cfg) (not b))))
+        (bool "rawFloor" (lambda (b) (setf (rcfg-raw-floor cfg) b)))
+        (bool "qualityTrigger" (lambda (b) (setf (rcfg-quality-trigger cfg) b))))
+      (setf (rcfg-limits cfg) (om::limits-over (rcfg-limits cfg) (om::read-limits nested))
+            (rcfg-model-limits cfg) (om::read-model-limits (gethash "modelLimits" nested) (rcfg-model-limits cfg)))
       (let ((n (positive-integer (gethash "compactionSummaryMaxTokens" nested))))
         (when n (setf (rcfg-summary-max cfg) n)))
       (let ((n (positive-integer (gethash "curatedMemoryIndexTokens" nested))))
         (when n (setf (rcfg-index-tokens cfg) n)))
+      (let ((n (positive-integer (gethash "decayHorizon" nested))))
+        (when n (setf (rcfg-decay-horizon cfg) n)))
+      (let ((d (gethash "decay" nested)))
+        (when (member d '("off" "compactions" "turns") :test #'equal)
+          (setf (rcfg-decay cfg) (if (string= d "off") "" d))))
       (let ((f (gethash "memoryFormat" nested)))
         (when (member f '("tables" "lines") :test #'equal) (setf (rcfg-memory-format cfg) f)))
       ;; config.normalizeSettings: the removed settings set to a valid value (ignored; /om:status
@@ -272,3 +288,44 @@ lock; a reload during the check makes it ask again, and an unknown trust is not 
 then the retired names NoteRetired added, in name order."
   (cons om::+memory-tool+
         (sort (copy-list (sb-thread:with-mutex ((conn-mutex c)) (conn-retired-names c))) #'string<)))
+
+;;; The encoding fields' writer and frame (hooks.encodingOf, writerOf; contracts/encoding.md)
+
+(defun session-writer ()
+  "hooks.writerOf over the host: its harness, the session id, the session model's key, this engine."
+  (om::make-record-writer :harness (host-string "host/harness") :session (host-string "host/sessionId")
+                          :model (session-model-key) :engine "lisp"))
+
+(defun repo-encoding (repo)
+  "The frame and root of a decoded host.Repo, nil for none."
+  (when (and (hash-table-p repo) (string/= (om::str (om::jget repo "repoId")) ""))
+    (list :frame (om::make-record-frame :repo-id (om::str (om::jget repo "repoId"))
+                                        :branch (om::str (om::jget repo "branch"))
+                                        :head (om::str (om::jget repo "head")))
+          :root (om::str (om::jget repo "root")))))
+
+(defun session-encoding (c branch)
+  "hooks.encodingOf: the writer, and the host's repository (host/repo) read once per compaction
+(runtime.CachedRepo: keyed by the working directory and the branch's latest compaction; a failed
+read is not cached)."
+  (let* ((i (om::find-last-compaction-index branch))
+         (key (format nil "~A~C~A" (scope-cwd) #\Nul (if (>= i 0) (om::entry-id (aref branch i)) "")))
+         (cached (sb-thread:with-mutex ((conn-mutex c))
+                   (if (equal key (conn-repo-key c)) (list (conn-repo-encoding c)) nil))))
+    (list* :writer (session-writer)
+           (if cached
+               (first cached)
+               (handler-case
+                   (let ((encoding (repo-encoding (om::jget (host-call "host/repo") "repo"))))
+                     (sb-thread:with-mutex ((conn-mutex c))
+                       (setf (conn-repo-key c) key (conn-repo-encoding c) encoding))
+                     encoding)
+                 (request-cancelled (e) (error e))
+                 (error () nil))))))
+
+(defun neutral-encoding (params)
+  "encodingOf on a neutral host: the harness and session the client names, no model, and the
+repository the client read (cli.viaLisp's repo param)."
+  (list* :writer (om::make-record-writer :harness (param-string params "harness")
+                                         :session (param-string params "session_id") :engine "lisp")
+         (repo-encoding (om::jget params "repo"))))

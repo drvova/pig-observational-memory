@@ -72,10 +72,8 @@ A project's settings are never read (neutral.Host.ProjectTrusted is false)."
   (ensure-parent path)
   (with-file-lock ((concatenate 'string path ".lock"))
     (let ((new (not (probe-file path))))
-      (with-open-file (out path :direction :output :if-exists :append :if-does-not-exist :create
-                                :external-format :utf-8)
-        (write-string line out)
-        (write-char #\Newline out))
+      ;; A torn tail ended first, one write, fsync (src/store/append.lisp, as jsonl.Append).
+      (om::append-jsonl path line)
       (when new (sb-posix:chmod path #o600)))))
 
 (defun custom-entry-line (after custom-type data-json id parent stamp)
@@ -126,9 +124,11 @@ grain and a rewrite of the same size within it would read stale."
 ;;; Level 0 at a turn end
 
 (defun append-entry (session tip custom-type data-json)
-  "neutral.Host.AppendEntry after tip: returns the new entry's id."
+  "neutral.Host.AppendEntry after tip, its string values' secrets redacted (hooks' appendEntry):
+returns the new entry's id."
   (let ((id (new-entry-id)))
-    (append-line (session-store-path session) (custom-entry-line tip custom-type data-json id tip (utc-stamp)))
+    (append-line (session-store-path session)
+                 (custom-entry-line tip custom-type (om::redact-json-text data-json) id tip (utc-stamp)))
     id))
 
 (defun recorded-data-json (observations covers)
@@ -163,7 +163,10 @@ inside the extraction is recovered (extraction never fails a turn) and named in 
     (handler-case
         (let ((start (om::extraction-start-index branch)))
           (multiple-value-bind (batches covers)
-              (om::extract branch start (length branch) (om::fold-ledger branch) :cwd (param-string params "cwd"))
+              (let ((om::*encoding* (neutral-encoding params)))
+                (om::extract branch start (length branch) (om::fold-ledger branch) :cwd (param-string params "cwd")))
+            ;; stampV2: the new project records' body hashes, from the client's HEAD view.
+            (om::stamp-batches (client-structure params) batches)
             (om::jobject "appended" (append-extraction session branch batches covers))))
       (error (e)
         (format *error-output* "om engine: turn-end level 0 recovered: ~A~%" e)

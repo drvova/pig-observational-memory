@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Repository id cache file",
+  "description": "<store>/repos/<first 16 hex of SHA-256 of the common git dir>.json: one repository's id, computed once from its root commit and kept by its canonical common git directory in the engine's own store (the PiG adapter's <config>/observational-memory, the om command's root), never in the repository (docs/brain-memory.md, scenario 37). Source: memory/gitrepo/idcache.go (CachedID).",
+  "type": "object",
+  "required": ["commonDir", "repoId", "remote", "rootCommit", "computedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "commonDir": { "type": "string", "minLength": 1 },
+    "repoId": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+    "remote": { "type": "string" },
+    "rootCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "computedAt": { "type": "string" }
+  }
+}

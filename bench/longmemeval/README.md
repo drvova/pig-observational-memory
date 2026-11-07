@@ -165,6 +165,43 @@ the strict verdict, accuracy by evidence location, attempts and judge retries, f
 requested/applied, failed runs, answer tool calls, requests per question, mean times, and an
 extrapolation to the dataset's 500 questions at the run's `--workers`.
 
+## Judging with a pinned judge (decision 21)
+
+A run judges each answer with the answering model itself (step 5). `lme.py judge` re-judges a
+finished run with a judge from a different model family, and `lme.py compare` compares two judged
+runs (`judging.py`; `docs/bench-results.md`, "Judge harness"):
+
+```sh
+python3 bench/longmemeval/lme.py judge --out RUN --judge-model M --judge-family F --answer-family G \
+  [--judge-command CMD] [--label L] [--runs 3] [--workers N] [--matchers FILE] [--seed S]
+python3 bench/longmemeval/lme.py compare --base RUN_A --cand RUN_B --judge L \
+  [--control-ids FILE] [--write-control-ids FILE] [--report FILE]
+python3 -m unittest discover -s bench/longmemeval -p 'test_*.py'   # scripted judges, no model
+```
+
+- The judge is chosen by configuration only: `--judge-model` (asked through `pig -p` with the run's
+  agent directory and `judge-home`, as step 5 does) or `--judge-command`, a command that reads the
+  prompt on stdin and prints the reply, with keys only in its environment. `LME_JUDGE_MODEL`,
+  `LME_JUDGE_COMMAND`, `LME_JUDGE_FAMILY` and `LME_ANSWER_FAMILY` give the defaults. The family
+  labels are yours; the pass refuses equal families and the run's own answering model.
+- Answers equal to the gold answer after normalization, or whose only number is a one-number gold
+  answer (no negation or hedge; never for abstention, preference or temporal questions), are
+  scored by code. `--matchers` is a JSON object of `{question_id: {"accept": regex, "reject":
+  regex}}`. Everything else is asked `--runs` times (3) and decided by majority, with LongMemEval's
+  prompts and verdict rule (a reply containing "yes").
+- Each pass also judges 12 known-correct and 12 known-wrong controls and 12 decoys in each of four
+  classes (stale value as current, one detail changed, fluent non-answer, old and new values
+  unordered), shuffled among the real prompts. The pass is void, and `judge` exits with status 3,
+  when any run accepts more than 1 of 12 decoys in a class or labels fewer than 11 of 12 controls
+  in a group correctly.
+- A pass writes `RUN/judges/<label>/`: `judge.json` (its settings; a changed setting needs
+  `--force-settings` or another label), `cache.jsonl` (every reply by prompt digest and run, so a
+  rerun asks nothing again), `verdicts.jsonl`, `controls.json`, `summary.json` and `report.md`.
+- `compare` refuses two passes with different judges, templates or controls, and reports gained
+  and lost questions, McNemar's exact p-value, a paired-bootstrap 95% interval, the questions both
+  passed, the candidate's losses on a both-passed control set, and the ship rule's verdict (ship,
+  do not ship, or void).
+
 ## Parallel runs and auth
 
 Each worker runs one question at a time, with its own home, session file and processes. Each

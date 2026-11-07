@@ -126,12 +126,10 @@
     path))
 
 (defun append-line (path line)
-  "Appends line and a newline to path, creating it (0600)."
+  "Appends line and a newline to path, creating it (0600), the caller holding its lock: a torn
+tail ended first, one write, fsync (om::append-jsonl, src/store/append.lisp)."
   (ensure-dir (directory-namestring path))
-  (with-open-file (out path :direction :output :if-exists :append :if-does-not-exist :create
-                            :external-format :utf-8)
-    (write-string line out)
-    (write-char #\Newline out))
+  (om::append-jsonl path line)
   (sb-posix:chmod path #o600))
 
 (defun file-exists-p (path) (and (probe-file path) t))

@@ -23,7 +23,11 @@ func (o Opt) with(set func(*omwire.Options)) Opt {
 
 // Search keeps rows matching every literal word, case-insensitive, over every column; when no
 // row matches every word, Notes, Reflections and History rank the rows by how many of the words
-// each contains instead, and mark the list Partial.
+// each contains instead, and mark the list Partial. Notes and its kinds also find a record by an
+// exact key (a path, symbol, test, error line, version or SHA, byte for byte) or by identifier
+// parts (parse_config finds parseConfig), and rank: current before superseded or retracted,
+// exact key hits first, then by relevance, newest first; each row carries its Tag and the
+// records merged With it.
 func Search(words string) Opt { return Opt{}.Search(words) }
 
 // From keeps rows at or after this entry id (an anchor or a record id).
@@ -56,7 +60,8 @@ func Kind(k string) Opt { return Opt{}.Kind(k) }
 // Subject keeps records whose canonical or raw subject equals s.
 func Subject(s string) Opt { return Opt{}.Subject(s) }
 
-// WithStatus keeps records with this status: proposed, hypothetical or retracted.
+// WithStatus keeps records with this status: proposed, hypothetical or retracted, or with this
+// tag: believed, superseded, contested or held.
 func WithStatus(s string) Opt { return Opt{}.WithStatus(s) }
 
 // SortBy orders rows by field, descending when desc is true.
@@ -177,7 +182,7 @@ func mergeOpts(opts []Opt) omwire.Options {
 	return m
 }
 
-// SaveOpt is an option of Save.
+// SaveOpt is an option of Save; the forgets and LayerRollback take only Quoting.
 type SaveOpt struct{ w omwire.SaveOptions }
 
 // Body sets the memory's body.
@@ -186,7 +191,7 @@ func Body(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Body: &text}}
 // Scope sets where the memory applies: "global" or "project".
 func Scope(scope string) SaveOpt { return SaveOpt{omwire.SaveOptions{Scope: &scope}} }
 
-// Quoting gives the user's words that confirm the memory, which saves it live.
+// Quoting gives the user's words confirming the save, or asking for the forget or rollback.
 func Quoting(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Quoting: &text}} }
 
 func mergeSave(opts []SaveOpt) omwire.SaveOptions {
@@ -217,6 +222,9 @@ func SetDescription(text string) EditOpt { return EditOpt{omwire.EditOptions{Des
 // SetBody changes the memory's body.
 func SetBody(text string) EditOpt { return EditOpt{omwire.EditOptions{Body: &text}} }
 
+// EditQuoting gives the user's words asking for the edit.
+func EditQuoting(text string) EditOpt { return EditOpt{omwire.EditOptions{Quoting: &text}} }
+
 func mergeEdit(opts []EditOpt) omwire.EditOptions {
 	var m omwire.EditOptions
 	for _, o := range opts {
@@ -228,6 +236,9 @@ func mergeEdit(opts []EditOpt) omwire.EditOptions {
 		}
 		if o.w.Body != nil {
 			m.Body = o.w.Body
+		}
+		if o.w.Quoting != nil {
+			m.Quoting = o.w.Quoting
 		}
 	}
 	return m

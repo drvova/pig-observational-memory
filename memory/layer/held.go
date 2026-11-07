@@ -297,7 +297,7 @@ func (s Store) Claim(model string, clean bool, reason string) ([]Notice, error) 
 				if !s.ownsHeldFile(model, kind, name) {
 					continue
 				}
-				n, err := s.claimOne(model, kind, name, clean, reason)
+				n, err := s.claimOne(model, kind, name, clean, reason, nil)
 				if err != nil {
 					return err
 				}
@@ -315,6 +315,12 @@ func (s Store) Claim(model string, clean bool, reason string) ([]Notice, error) 
 // the layer waits for a pass of its own. Definitions not held, or held by another engine
 // (Store.Engine), are ignored.
 func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice, error) {
+	return s.ClaimHeldScoped(held, clean, reason, nil)
+}
+
+// ClaimHeldScoped is ClaimHeld recording scope on the put that writes a clean one: where its
+// evidence certified it (Harness.InScope); nil applies everywhere.
+func (s Store) ClaimHeldScoped(held []Definition, clean bool, reason string, scope *Scope) ([]Notice, error) {
 	if strings.TrimSpace(reason) == "" {
 		reason = "the pass was not clean"
 	}
@@ -334,7 +340,7 @@ func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice
 			if now, _, err := decodeFile(string(data)); err == nil && (now.Text != strings.TrimRight(d.Text, "\n") || now.Mode != d.Mode || now.Engine != s.Engine) {
 				continue
 			}
-			n, err := s.claimOne(d.Model, d.Kind, d.Name, clean, reason)
+			n, err := s.claimOne(d.Model, d.Kind, d.Name, clean, reason, scope)
 			if err != nil {
 				return err
 			}
@@ -346,7 +352,7 @@ func (s Store) ClaimHeld(held []Definition, clean bool, reason string) ([]Notice
 }
 
 // claimOne settles one held file; the caller holds the store's lock.
-func (s Store) claimOne(model, kind, name string, clean bool, reason string) (Notice, error) {
+func (s Store) claimOne(model, kind, name string, clean bool, reason string, scope *Scope) (Notice, error) {
 	notice := Notice{Model: model, Kind: kind, Name: name}
 	heldPath := s.heldPath(model, kind, name)
 	index, err := s.heldIndex(model)
@@ -379,7 +385,7 @@ func (s Store) claimOne(model, kind, name string, clean bool, reason string) (No
 		if err != nil {
 			return Notice{}, err
 		}
-		if _, err := s.putStamped(stamped); err != nil {
+		if _, err := s.putStampedScoped(stamped, scope); err != nil {
 			return Notice{}, err
 		}
 		if err := os.Remove(heldPath); err != nil && !errors.Is(err, os.ErrNotExist) {

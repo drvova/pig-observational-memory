@@ -64,7 +64,10 @@ refused as not offered. What level 1 defines is checked as Go checks it and held
 (`<store>/harness/<model>/held/instructions/consolidation.rows`, its held index and a `propose`
 generation, all in Go's formats), so the next compaction's system prompt carries it, the pass
 credits its held id in `ranHeld` (decision 8), and `SettleV2` settles it at a later compaction:
-written when clean, reverted otherwise. The Go engine reads, applies and settles the same files.
+written when clean, reverted otherwise (decision 24's rules: one definition per proposal, a
+security-weakening one held out of the layer as `hold-insecure`, the null arm, and the scope its put
+records, read back by `consolidation-instructions`). The Go engine reads, applies and settles the
+same files.
 
 ## Parity
 

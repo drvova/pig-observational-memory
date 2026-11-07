@@ -19,6 +19,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/rules"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/session"
 	"github.com/drvova/pig-observational-memory/memory/tokens"
 )
@@ -29,6 +30,7 @@ const (
 	level1Passive      = "passive mode"
 	level1OwnTrigger   = "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only"
 	level1Overflow     = "an overflow compaction runs level 0 only, so recovery is not delayed"
+	level1BelowFloor   = "the context is below the session model's raw floor: nothing is consolidated"
 	level1NoCut        = "the cut range is not on the branch"
 	level1Cancelled    = "the compaction was cancelled before the request"
 	level1NoWindow     = "the session model's context window is unknown"
@@ -68,7 +70,7 @@ type level1Result struct {
 // part of its harness, which is held (holdDefinitionsV2) and never adds a request. spent, when
 // not nil, receives out as it stands when consolidateV2 returns or panics, so a panic after the
 // request still reports the request and its usage.
-func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, entries, cut []ledger.Entry, budget int, modelLayer declare.Active, spent *level1Result) (out level1Result) {
+func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, entries, cut []ledger.Entry, budget int, modelLayer declare.Active, fresh freshness, spent *level1Result) (out level1Result) {
 	if spent != nil {
 		defer func() { *spent = out }()
 	}
@@ -88,6 +90,8 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		return skip(level1OwnTrigger)
 	case event.Reason == "overflow":
 		return skip(level1Overflow)
+	case cfg.RawFloor && BelowRawFloor(cfg, h.SessionModel(), event.TokensBefore):
+		return skip(level1BelowFloor)
 	case len(cut) == 0 || ledger.EntryIndexForID(entries, event.FirstKeptEntryID) < 0:
 		return skip(level1NoCut)
 	case request.Err() != nil:
@@ -122,8 +126,16 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	if last := ledger.FindLastCompactionIndex(entries); last >= 0 && last < ledger.EntryIndexForID(entries, event.FirstKeptEntryID) {
 		cutIDs[entries[last].ID] = true
 	}
-	candidates, active := []ledger.Observation{}, []ledger.Observation{}
+	// A held record (ledger.HeldRule) never reaches level 1: a merge the model labelled anything
+	// but a preference would otherwise carry a security-weakening preference out of the hold
+	// (docs/brain-memory.md, decision 19). It stays in the ledger and in /om:status.
+	byID := make(map[string]ledger.Observation, len(projection.Observations))
 	for _, o := range projection.Observations {
+		byID[o.ID] = o
+	}
+	observations, reflections := ledger.WithoutHeld(projection.Observations, ledger.ActiveReflections(projection.Reflections), byID)
+	candidates, active := []ledger.Observation{}, []ledger.Observation{}
+	for _, o := range observations {
 		if (o.Origin == ledger.OriginCode || o.Origin == ledger.OriginHost) && citesAny(o.SourceEntryIDs, cutIDs) {
 			candidates = append(candidates, o)
 		} else {
@@ -139,7 +151,10 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	project := harness.ProjectRoot(h.Cwd())
 	model := harness.ModelKey(h.SessionModel())
 	offer, evidence := definitionOfferV2(ctx, store, storeOn, model, modelLayer)
-	tool := consolidate.ToolFor(offer)
+	// The project records whose file changed at HEAD, with their diffs (decision 20): level 1
+	// re-checks each claim inside this one request.
+	stale := staleRecordsV2(fresh)
+	tool := consolidate.ToolWith(offer, len(stale) > 0)
 	system := consolidate.SystemPromptFor(modelLayer.Instructions(agents.InstructionsConsolidation))
 	fixedTokens := requestOverheadTokens(system, tool)
 	prompt, ok := consolidate.BuildPrompt(consolidate.PromptInput{
@@ -147,7 +162,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		SkipTools:    harness.MemoryToolNames(rt),
 		Candidates:   candidates,
 		Active:       active,
-		Reflections:  ledger.ActiveReflections(projection.Reflections),
+		Reflections:  reflections,
 		Instructions: event.CustomInstructions,
 		Available:    window - config.PiGContextSafetyTokens - outputCap - fixedTokens,
 		MemoryBudget: max(0, budget),
@@ -155,6 +170,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Folded:       folded,
 		Curated:      curatedInput(store, storeOn, project, h.SessionID()),
 		Harness:      offer,
+		Stale:        stale,
 	})
 	estimated := fixedTokens + prompt.Tokens
 	if !ok || estimated+outputCap+config.PiGContextSafetyTokens > window {
@@ -192,6 +208,8 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		"cutEntries":         prompt.CutTotal,
 		"harnessOffered":     offer != nil,
 		"harnessShown":       prompt.HarnessShown,
+		"stale":              len(prompt.Stale),
+		"omittedStale":       prompt.OmittedStale,
 		"inputTokens":        estimated,
 		"outputCap":          outputCap,
 		"window":             window,
@@ -224,7 +242,9 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Subjects:    ledger.SubjectsOf(projection.Observations),
 		Links:       prompt.Links,
 		Curated:     prompt.Curated,
+		Stale:       prompt.Stale,
 		Branch:      entries,
+		Writer:      writerOf(h),
 	}
 	if offer != nil && prompt.HarnessShown {
 		in.Offer = offer
@@ -254,15 +274,15 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	result.Reflections = reflections
 	out.entries = appendLevel1(ctx, h, result, drop, cut[len(cut)-1].ID)
 	out.report.Applied = true
-	out.report.Records = len(result.Records) - result.Merges - result.LinkRecords
-	out.report.Confirmed, out.report.Rejected = result.Confirmed, result.Rejected
+	out.report.Records = len(result.Records) - result.Merges - result.LinkRecords - result.Rechecked
+	out.report.Confirmed, out.report.Rejected, out.report.Rechecked = result.Confirmed, result.Rejected, result.Rechecked
 	out.report.Merges = result.Merges
 	out.report.Reflections = len(result.Reflections)
 	out.report.Aliases = len(result.Aliases)
 	out.report.Dropped = len(drop)
 	logData["records"], logData["merges"], logData["newReflections"] = out.report.Records, out.report.Merges, out.report.Reflections
 	logData["aliases"], logData["dropped"], logData["unchanged"], logData["keptByUnion"] = out.report.Aliases, len(drop), result.Unchanged, keptBack
-	logData["confirmed"], logData["rejected"] = result.Confirmed, result.Rejected
+	logData["confirmed"], logData["rejected"], logData["rechecked"] = result.Confirmed, result.Rejected, result.Rechecked
 	if storeOn && len(result.Cited) > 0 {
 		out.report.Cited, out.report.Promoted = recordCitations(ctx, h, store, project, entries, result.Cited)
 		logData["cited"], logData["promoted"] = out.report.Cited, out.report.Promoted
@@ -274,20 +294,19 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 // curatedInput are the curated memories the level-1 input lists: those that apply in project,
 // ranked as the index ranks them, with the memories this session staged (a citation is their
 // evidence); a memory another session staged is visible only there (curated.SeenBy), so it is
-// left out, and the same save staged here is its cross-session evidence. None without a store.
+// left out, as is one whose forget this session staged (curated.Store.ListAs) and a held one
+// this session did not release (curated.Store.Shown). None without a store.
 func curatedInput(store curated.Store, on bool, project, session string) []consolidate.CuratedMemory {
 	if !on {
 		return nil
 	}
-	memories, err := store.List(project)
+	memories, err := store.ListAs(project, session)
 	if err != nil {
 		return nil
 	}
+	memories = store.Shown(memories, session)
 	out := make([]consolidate.CuratedMemory, 0, len(memories))
 	for _, m := range curated.Rank(memories, store.RankUsage()) {
-		if !curated.SeenBy(m, session) {
-			continue
-		}
 		out = append(out, consolidate.CuratedMemory{Name: m.Name, Type: m.Type, Description: m.Description, Staged: m.Staged})
 	}
 	return out
@@ -359,10 +378,12 @@ func appendLevel1(ctx context.Context, h host.Host, result consolidate.Result, d
 	}
 	out := make([]ledger.Entry, 0, len(queue))
 	for n, p := range queue {
-		if err := h.AppendEntry(p.customType, p.data); err != nil {
+		if err := appendEntry(h, p.customType, p.data); err != nil {
 			debuglog.Log(ctx, "compaction.v2.level1.append_failed", map[string]any{"customType": p.customType, "errorMessage": err.Error()})
 		}
-		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-level1-%d", n), CustomType: p.customType, Data: jsonValue(p.data)})
+		// The entry the compaction folds is the one appended, redacted: the projection in its
+		// details holds no value the model's output repeated (contracts/secrets.md).
+		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-level1-%d", n), CustomType: p.customType, Data: jsonValue(secrets.RedactData(p.data))})
 	}
 	return out
 }

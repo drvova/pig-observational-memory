@@ -25,11 +25,67 @@ first that fails. Returns how many landed."
     (when (and (string/= covers "") (or (null batches) (string/= (om::batch-covers (car (last batches))) covers)))
       (push (cons "om.extracted" (format nil "{\"coversUpToId\":~A}" (om::json-string covers))) queue))
     (dolist (p (nreverse queue) landed)
-      (handler-case (progn (host-call "host/appendEntry" "customType" (car p) "data" (om::raw-json (cdr p)))
+      (handler-case (progn (host-call "host/appendEntry" "customType" (car p) "data" (om::raw-json (om::redact-json-text (cdr p))))
                            (incf landed))
         (error (e)
           (log-line "turn end: append ~A: ~A" (car p) e)
           (return landed))))))
+
+(defun host-structure (query)
+  "host.StructureReader over the host (host/structure): the decoded answer to query, nil when the
+host reads none or the call fails."
+  (handler-case (let ((answer (om::jget (host-call "host/structure" "query" query) "answer")))
+                  (and (hash-table-p answer) answer))
+    (request-cancelled (e) (error e))
+    (error () nil)))
+
+(defun scoped (f)
+  "f called under this request's peer, scope and request, from whichever thread calls it."
+  (let ((peer *peer*) (scope *scope*) (request *request*))
+    (lambda (&rest args)
+      (let ((*peer* peer) (*scope* scope) (*request* request))
+        (apply f args)))))
+
+(defun branch-freshness (branch repo structure)
+  "omhost's Call.freshness: the active project records of branch judged against the HEAD
+structure view structure answers for repo (a decoded host.Repo), by record id; nil without a
+repository, a view or a record to ask about."
+  (when (and structure (hash-table-p repo) (string/= (om::str (om::jget repo "repoId")) ""))
+    (let* ((records (om::folded-active (om::fold-ledger branch)))
+           (q (om::project-query records repo)))
+      (unless (om::project-query-empty-p q)
+        (let ((answer (funcall structure q)))
+          (when answer (om::project-texts (om::project-verdicts records repo answer))))))))
+
+(defun tool-freshness (branch)
+  "The memory tool's freshness verdicts over the adapter (host/repo, host/structure)."
+  (handler-case (branch-freshness branch (om::jget (host-call "host/repo") "repo") #'host-structure)
+    (request-cancelled (e) (error e))
+    (error () nil)))
+
+;;; The om client's view (cli.viaLisp): a client that passes "structure": true with the repo it
+;;; read answers host/structure on the connection, as the PiG adapter does (memory/gitrepo run
+;;; on its side); the image never runs git.
+
+(defun client-repo (params)
+  "The repository the om client read (its repo param), nil outside one."
+  (let ((repo (om::jget params "repo")))
+    (and (hash-table-p repo) (string/= (om::str (om::jget repo "repoId")) "") repo)))
+
+(defun client-structure (params)
+  "host.StructureReader over the om client, nil when it answers none (no structure param, or no
+repository)."
+  (and (eq (om::jget params "structure") :true) (client-repo params) (scoped #'host-structure)))
+
+(defun client-freshness (params branch)
+  "The memory tool's freshness verdicts over the om client, read at the first notes read that
+shows rows."
+  (let ((structure (client-structure params)) (repo (client-repo params)))
+    (and structure
+         (lambda ()
+           (handler-case (branch-freshness branch repo structure)
+             (request-cancelled (e) (error e))
+             (error () nil))))))
 
 (defun store-dir (c)
   "harness.StoreOf's store: <config home>/observational-memory/memories, nil without one."
@@ -56,8 +112,9 @@ removed query language, is refused (not ported), so the Go engine reads the turn
       (multiple-value-bind (batches covers)
           (handler-case (let* ((start (om::extraction-start-index branch)) (folded (om::fold-ledger branch)))
                           (multiple-value-bind (batches covers)
-                              (om::extract branch start (length branch) folded :skip-tools (conn-skip-tools c)
-                                                                                :cwd (scope-cwd))
+                              (let ((om::*encoding* (session-encoding c branch)))
+                                (om::extract branch start (length branch) folded :skip-tools (conn-skip-tools c)
+                                                                                  :cwd (scope-cwd)))
                             (multiple-value-bind (batches thunk)
                                 (om.layer::harness-detect store model branch start (length branch) folded batches covers
                                                           :defined (and store (string/= covers "") (defined-queries c store)))
@@ -66,6 +123,8 @@ removed query language, is refused (not ported), so the Go engine reads the turn
             (om.layer::legacy-memory-call (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e)))
             (error (e) (not-ported (format nil "event/turnEnd over this branch (~A)" e))))
         (check-cancelled)
+        ;; stampV2: the new project records' body hashes from HEAD.
+        (om::stamp-batches #'host-structure batches)
         (let ((landed (host-append-extraction batches covers)))
           (when (and (plusp landed) record)
             (handler-case (funcall record)

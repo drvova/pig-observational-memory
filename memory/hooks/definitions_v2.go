@@ -15,6 +15,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/declare"
 	"github.com/drvova/pig-observational-memory/memory/harness"
 	"github.com/drvova/pig-observational-memory/memory/host"
+	"github.com/drvova/pig-observational-memory/memory/insecure"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/rules"
@@ -111,6 +112,19 @@ func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.
 		debuglog.Log(ctx, "harness.v2.definition_refused", map[string]any{"model": model, "definition": what, "errorMessage": err.Error()})
 		notifyUI(h, fmt.Sprintf("Observational memory: level-1 definition %s for %s refused: %v", what, model, err), "warning")
 	}
+	// One proposal holds one rule, never a bundle (decision 24, the active set): the first
+	// definition or rule that passes its checks takes the proposal, and the rest wait for a later
+	// offer.
+	taken := ""
+	take := func(what string) bool {
+		if taken != "" {
+			refuse(what, fmt.Errorf("%s: %s already takes this proposal", errBundle, taken))
+			return false
+		}
+		taken = what
+		return true
+	}
+	insecureHeld := 0
 	for _, p := range result.Definitions {
 		d := layer.Definition{Kind: p.Kind, Name: p.Name, Model: model, Text: p.Text, Session: h.SessionID()}
 		what := p.Kind + "/" + p.Name
@@ -124,6 +138,24 @@ func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.
 		}
 		if err := harness.CheckModelDefinition(store, entries, d); err != nil {
 			refuse(what, err)
+			continue
+		}
+		if !take(what) {
+			continue
+		}
+		if rule, ok := insecure.Match(d.Text); ok {
+			// Decision 19 over definitions: one that weakens security is kept out of the layer,
+			// listed in /om:status, and never run, settled or proposed over.
+			if request.Err() != nil {
+				continue
+			}
+			if _, err := store.Layer().HoldInsecure(d, rule); err != nil {
+				debuglog.Log(ctx, "harness.v2.hold_insecure_failed", map[string]any{"model": model, "definition": what, "errorMessage": err.Error()})
+				continue
+			}
+			insecureHeld++
+			debuglog.Log(ctx, "harness.v2.hold_insecure", map[string]any{"model": model, "definition": what, "rule": rule})
+			notifyUI(h, fmt.Sprintf("Observational memory: level-1 definition %s for %s weakens security (%s); held, never applied, and listed in /om:status", what, model, rule), "warning")
 			continue
 		}
 		if isCodeDetector(d) {
@@ -150,15 +182,22 @@ func holdDefinitionsV2(ctx, request context.Context, h host.Host, store curated.
 		held++
 		notifyUI(h, fmt.Sprintf("Observational memory: %s defined %s/%s in level 1 (%s); held until a later compaction proves it", model, d.Kind, d.Name, d.Relation()), "info")
 	}
+	held += insecureHeld
 	for _, p := range result.Rules {
 		if request.Err() != nil {
 			break
 		}
-		r, err := rules.Propose(store, model, entries, rules.Proposal{Detector: p.Detector, Remedy: p.Remedy})
-		if err != nil {
-			refuse("rule "+p.Detector+"/"+p.Remedy, err)
+		what := "rule " + p.Detector + "/" + p.Remedy
+		if taken != "" {
+			refuse(what, fmt.Errorf("%s: %s already takes this proposal", errBundle, taken))
 			continue
 		}
+		r, err := rules.Propose(store, model, entries, rules.Proposal{Detector: p.Detector, Remedy: p.Remedy})
+		if err != nil {
+			refuse(what, err)
+			continue
+		}
+		taken = what
 		held++
 		notifyUI(h, fmt.Sprintf("Observational memory: %s proposed rule %s in level 1; held until a later compaction proves it, then judged by %s", model, r.Describe(), r.Detector), "info")
 	}
@@ -214,20 +253,96 @@ func settleDefinitionsV2(ctx context.Context, h host.Host, l harness.Ledger, sna
 			}
 			loaded = true
 		}
-		decided, clean, reason := rules.SettleV2(events, d)
-		if !decided {
+		s := rules.SettleV2(events, d)
+		if !s.Decided {
 			continue
 		}
 		if ctx.Err() != nil {
 			return
 		}
-		notices, err := l.Store.Layer().ClaimHeld([]layer.Definition{d}, clean, reason)
+		notices, err := l.Store.Layer().ClaimHeldScoped([]layer.Definition{d}, s.Clean, s.Reason, s.Scope)
 		if err != nil {
 			debuglog.Log(ctx, "layer.claim_failed", map[string]any{"stage": rules.StageCompaction, "errorMessage": err.Error()})
 		}
 		for _, n := range notices {
-			debuglog.Log(ctx, "layer.claim", map[string]any{"model": n.Model, "kind": n.Kind, "name": n.Name, "written": n.Written, "reason": reason})
+			debuglog.Log(ctx, "layer.claim", map[string]any{"model": n.Model, "kind": n.Kind, "name": n.Name, "written": n.Written, "reason": s.Reason})
 			notifyUI(h, n.Message(), "info")
+			if n.Written {
+				recheckActiveSetV2(ctx, h, l, d)
+			}
 		}
+	}
+}
+
+// errBundle is the refusal of a definition after the first in one level-1 proposal.
+var errBundle = errors.New("one proposal holds one rule, never a bundle; propose it at a later offer")
+
+// recheckActiveSetV2 returns the model's other written definitions that share a target with d,
+// which just settled (rules.ShareTarget: the same instruction slot, detector or remedy), to a
+// hold window (layer.Store.Recheck): the next compactions run them held beside d, so their
+// settle check reads the evidence of the set as it now stands (decision 24, the active set).
+func recheckActiveSetV2(ctx context.Context, h host.Host, l harness.Ledger, d layer.Definition) {
+	ls := l.Store.Layer()
+	written, _, err := ls.List(l.Model, "")
+	if err != nil {
+		debuglog.Log(ctx, "harness.v2.recheck_failed", map[string]any{"model": l.Model, "errorMessage": err.Error()})
+		return
+	}
+	for _, w := range written {
+		if w.Key() == d.Key() || !settlesWritten(w) || !rules.ShareTarget(d, w) {
+			continue
+		}
+		held, ok, err := ls.Recheck(l.Model, w.Kind, w.Name)
+		if err != nil {
+			debuglog.Log(ctx, "harness.v2.recheck_failed", map[string]any{"model": l.Model, "definition": w.Key(), "errorMessage": err.Error()})
+			continue
+		}
+		if ok {
+			debuglog.Log(ctx, "harness.v2.recheck", map[string]any{"model": l.Model, "definition": held.Key(), "settled": d.Key()})
+			notifyUI(h, fmt.Sprintf("Observational memory: %s shares a target with %s, which settled; held again for %s so the set is judged together", held.Key(), d.Key(), l.Model), "info")
+		}
+	}
+}
+
+// settlesWritten reports whether written definition w is one memory v2 would settle held: of a
+// kind it judges, or a rule it decides.
+func settlesWritten(w layer.Definition) bool {
+	w.Engine = curated.EngineV2
+	return rules.SettlesUnderV2(w)
+}
+
+// rollbackInsecureV2 rolls the model's layer back to the generation before any written
+// definition of its own that matches the security-weakening patterns (contracts/insecure.md;
+// decision 24, rollback), the rules kept as they are: a definition that entered before the
+// patterns held it, or by another path. It is code acting on code evidence, never a model's or a
+// tool's request, so the quote gate (decision 2) does not apply; the generation records why, and
+// /om:status lists it.
+func rollbackInsecureV2(ctx context.Context, h host.Host, l harness.Ledger) {
+	ls := l.Store.Layer()
+	for range 8 {
+		written, _, err := ls.List(l.Model, "")
+		if err != nil {
+			return
+		}
+		hit := -1
+		rule := ""
+		for i, w := range written {
+			if r, ok := insecure.Match(w.Text); ok && ctx.Err() == nil {
+				hit, rule = i, r
+				break
+			}
+		}
+		if hit < 0 {
+			return
+		}
+		w := written[hit]
+		reason := fmt.Sprintf("security: %s weakens security (%s); rolled back to the generation before it entered, on code evidence (no model or tool request, so no quote gate applies)", w.Key(), rule)
+		g, ok, err := ls.RollbackBefore(l.Model, w.Kind, w.Name, reason, rules.IsRule)
+		if err != nil || !ok {
+			debuglog.Log(ctx, "harness.v2.security_rollback_failed", map[string]any{"model": l.Model, "definition": w.Key(), "errorMessage": fmt.Sprint(err)})
+			return
+		}
+		debuglog.Log(ctx, "harness.v2.security_rollback", map[string]any{"model": l.Model, "definition": w.Key(), "rule": rule, "generation": g.N})
+		notifyUI(h, fmt.Sprintf("Observational memory: %s's layer: %s", l.Model, g.Describe()), "warning")
 	}
 }

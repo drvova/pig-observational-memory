@@ -377,8 +377,10 @@ func transcriptFrom(cands []pathCandidate) (func(cwd, sessionID string) string, 
 var errNoValue = fmt.Errorf("no value")
 
 // transcriptTemplate expands a transcript path template: ${cwd} and ${session} are the
-// payload's, ${md5(cwd)} the hex MD5 of the cwd, ${slug(cwd)} the cwd with every byte that is
-// not an ASCII letter or digit as -, ${VAR} and ${VAR:-default} the environment's, and a
+// payload's, ${md5(cwd)} the hex MD5 of the cwd, ${slug(cwd)} the cwd with every character that
+// is not an ASCII letter or digit as - (transcript.JSSlug: one - per UTF-16 code unit, as
+// JavaScript's replace(/[^a-zA-Z0-9]/g, "-") writes it), ${VAR} and ${VAR:-default} the
+// environment's, and a
 // leading ~ the home directory. A payload value or an environment variable without a default
 // that is empty leaves the template without a path (errNoValue); the result is cleaned. A
 // payload value is inserted as it is, never expanded again.
@@ -411,13 +413,7 @@ func transcriptTemplate(t, cwd, sessionID string) (string, error) {
 				v = hex.EncodeToString(sum[:])
 			}
 		case "slug(cwd)":
-			slug := []byte(cwd)
-			for j, c := range slug {
-				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
-					slug[j] = '-'
-				}
-			}
-			v = string(slug)
+			v = transcript.JSSlug(cwd)
 		default:
 			name, def, hasDef := strings.Cut(inner, ":-")
 			if name == "" || strings.ContainsAny(name, "(){}$ ") {

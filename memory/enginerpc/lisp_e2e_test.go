@@ -129,7 +129,7 @@ func TestLispEngineMatchesInProcess(t *testing.T) {
 	agentDir := settingsDir(t)
 	want := scenario(t, newInProcess())
 	log := &lockedLog{}
-	got := scenario(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log)})
+	got := scenario(t, overRPC{t: t, c: startLispEngine(t, image, agentDir, log), lisp: true})
 	checkLispTool(t, got)
 	got.Tool, got.ToolText = want.Tool, want.ToolText
 	compareTranscripts(t, "lisp", want, got)
@@ -212,7 +212,7 @@ func TestLispBeforeCompactCancellation(t *testing.T) {
 	client := startLispEngine(t, image, agentDir, log)
 	want := cancelledCompaction(t, "in-process", newInProcess())
 	got := cancelledCompaction(t, "lisp", overRPC{t: t, c: client})
-	if !reflect.DeepEqual(want, got) {
+	if !reflect.DeepEqual(asGo(want), asGo(got)) {
 		t.Fatalf("in-process %v, lisp %v", want, got)
 	}
 	if lines := log.lines(); len(lines) != 0 {
@@ -260,7 +260,7 @@ func TestLispCommandsAndRendering(t *testing.T) {
 	rt := runtime.New()
 	want := view(func(h *testfix.FakeHost, args string) { must(t, commands.RunView(rt, h, args, nil)) })
 	got := view(func(h *testfix.FakeHost, args string) { must(t, client.Command(h, enginerpc.CommandView, args)) })
-	if len(want) != 4 || !reflect.DeepEqual(want, got) {
+	if len(want) != 4 || !reflect.DeepEqual(asGo(want), asGo(got)) {
 		t.Fatalf("view: in-process %q, lisp %q", want, got)
 	}
 	if len(log.lines()) != 0 {
@@ -310,9 +310,12 @@ func TestLispTriggerMatchesInProcess(t *testing.T) {
 	overLisp := func(h *testfix.FakeHost) {
 		before := len(h.Messages())
 		must(t, client.AgentSettled(h))
-		// The deferred step answers later: wait for its notification when the trigger fired.
+		// The deferred step answers later: wait for its notification when the trigger fired. It
+		// takes up to IdleRecheckAttempts × IdleRecheckDelay plus a host round trip; the deadline
+		// is generous so a loaded machine (parallel race runs) does not fail it, and the loop
+		// returns as soon as the step finishes.
 		if n := len(h.Messages()); n > before {
-			for range 500 {
+			for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 				if len(h.Messages()) > n {
 					return
 				}
@@ -323,7 +326,7 @@ func TestLispTriggerMatchesInProcess(t *testing.T) {
 	}
 	wantCalls, want := run(inProcess)
 	gotCalls, got := run(overLisp)
-	if wantCalls != 2 || gotCalls != wantCalls || !reflect.DeepEqual(want, got) {
+	if wantCalls != 2 || gotCalls != wantCalls || !reflect.DeepEqual(asGo(want), asGo(got)) {
 		t.Fatalf("in-process %d %q, lisp %d %q", wantCalls, want, gotCalls, got)
 	}
 	if len(log.lines()) != 0 {

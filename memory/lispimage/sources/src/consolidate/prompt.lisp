@@ -17,8 +17,8 @@
 (defparameter +kernel-consolidate-rules+ "You consolidate the memory of a coding session at a compaction. The conversation shown is about to leave the context; code has already extracted its records (the CANDIDATES), and the summary that replaces the conversation is rendered by code from the records, never from your prose. You make one call to the consolidate_memory tool; nothing follows it.
 
 What you may do, all optional, in that one call:
-- records: label one candidate each, by its id: kind (not for attempt, file, commit or note records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
-- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit or note records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
+- records: label one candidate each, by its id: kind (not for attempt, file, commit, note, decision or convention records, nor user corrections and preferences), relevance, subject, scope, supersedes, and outcome (attempt records only). The candidate's text is kept verbatim.
+- merges: replace two or more records (candidates or current records) that say one thing with one line, by their ids; never attempt, file, commit, note, decision or convention records, and never records with different scopes. Code sets the merged record's sources to the union of theirs.
 - reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
 - aliases: declare that one existing subject is about the same topic as another (from, to).
 - links: settle a listed POSSIBLE UPDATE by its two ids (id, updates): confirm when the later value replaces the earlier one (the later record then supersedes it), reject when both hold. Leave it when unsure; it stays a link and both records stay shown.
@@ -76,7 +76,7 @@ Rules code enforces (a proposal that breaks one is refused and the records it na
 
 (defun label-properties ()
   (jobject
-   "kind" (schema-enum +observation-kinds+ "What the record is. Ignored for attempt, file, commit and note records, whose kind code set, and for user corrections and preferences.")
+   "kind" (schema-enum +observation-kinds+ "What the record is. Ignored for attempt, file, commit, note, decision and convention records, whose kind code set, and for user corrections and preferences.")
    "relevance" (schema-enum +relevance-values+ "How long the record matters.")
    "subject" (jobject "type" "string" "description" "Short lowercase noun phrase; a path a/b/c nests it under a broader subject. Reuse listed subjects.")
    "scope" (jobject "type" "string" "description" "The qualifier that tells two figures apart; records with different scopes never replace each other.")
@@ -91,13 +91,13 @@ no detectors or remedies; evidence is the harness evidence text."
   "The declarative text, in your own words: instructions (added after the seed, which they extend and never replace)."
   "Go's description names a detector and a remedy catalogue too; the image offers instructions only.")
 
-(defun consolidate-tool (&optional offer)
-  "consolidate.ToolFor: (values name description parameters)."
+(defun consolidate-tool (&optional offer stale)
+  "consolidate.ToolWith: (values name description parameters); stale adds the stale verdicts."
   (let* ((record (label-properties)) (merge (label-properties))
          (description "Labels, merges, reflections, subject aliases, verdicts on possible updates and citations of curated memories for the memory of the compacted conversation. Every field is optional; cite only ids and names printed in the input."))
     (setf (gethash "id" record) (jobject "type" "string" "description" "The candidate's id.")
           (gethash "outcome" record) (schema-enum '("failed" "worked" "open") "An attempt record's outcome.")
-          (gethash "ids" merge) (schema-string-array "The ids of the two or more records the merged line replaces: never attempt, file, commit or note records, nor records with different scopes.")
+          (gethash "ids" merge) (schema-string-array "The ids of the two or more records the merged line replaces: never attempt, file, commit, note, decision or convention records, nor records with different scopes.")
           (gethash "content" merge) (jobject "type" "string" "description" "One line carrying every specific of the merged records."))
     (let ((properties
             (jobject
@@ -124,6 +124,14 @@ no detectors or remedies; evidence is the harness evidence text."
                                                              "updates" (jobject "type" "string" "description" "The earlier record it may update.")
                                                              "verdict" (schema-enum '("confirm" "reject") "confirm: the later value replaces the earlier one, and the later record supersedes it; reject: both values hold."))
                                        "required" (jarray "id" "updates" "verdict"))))))
+      (when stale
+        (setf (gethash "stale" properties)
+              (jobject "type" "array" "items"
+                       (jobject "type" "object"
+                                "properties" (jobject "id" (jobject "type" "string" "description" "A listed POSSIBLY STALE record.")
+                                                      "verdict" (schema-enum '("confirm") "confirm: its claim still holds at HEAD, read against its diff; it stays, checked at HEAD."))
+                                "required" (jarray "id" "verdict"))))
+        (setf description (cat description " With POSSIBLY STALE records shown, also verdicts on them.")))
       (when offer
         (setf (gethash "definitions" properties)
               (jobject "type" "array" "items"
@@ -160,6 +168,7 @@ no detectors or remedies; evidence is the harness evidence text."
 (defparameter +heading-subjects+ "CURRENT SUBJECTS:")
 (defparameter +heading-links+ "POSSIBLE UPDATES (code found a later record giving a different value of the same type on the same subject and scope; it cannot tell an update from a second value. Settle one with links: confirm when the later value replaces the earlier, reject when both hold. Unsettled ones stay, and both records stay shown):")
 (defparameter +heading-instructions+ "INSTRUCTIONS FOR THIS COMPACTION (from the user):")
+(defparameter +heading-stale+ "POSSIBLY STALE (project records whose file changed at HEAD since they were written; a change is a trigger, not a verdict. Check each claim against its diff: confirm it in stale when it still holds, or supersede it with a record or merge stating what holds now; one left alone keeps its mark):")
 (defparameter +heading-curated+ "CURATED MEMORY (memories saved with the memory tool for later sessions; staged ones are not yet in the memory index. Cite one with curated when shown records of the user's own words bear it out):")
 (defparameter +heading-harness+ "HARNESS EVIDENCE (what code counted against this memory since your last proposal, and the definitions that stand; you may define in definitions and propose in rules, each held until a later compaction proves it):")
 (defparameter +harness-not-shown+ "(not shown: no room; define nothing this time)")
@@ -167,8 +176,9 @@ no detectors or remedies; evidence is the harness evidence text."
 (defparameter +subjects-not-shown+ "(not shown: no room; reuse the subjects on the records above)")
 
 (defun record-line (o)
-  "consolidate.RecordLine."
-  (let ((line (observation-observer-line o)))
+  "consolidate.RecordLine: the record's text with its role labels escaped."
+  (let ((line (observation-observer-line
+               (let ((c (copy-obs o))) (setf (obs-content c) (escape-role-labels (obs-content c))) c))))
     (when (string/= (obs-outcome o) "") (setf line (cat line " (outcome: " (obs-outcome o) ")")))
     (when (string/= (obs-status o) "") (setf line (cat line " (status: " (obs-status o) ")")))
     line))
@@ -192,6 +202,24 @@ no detectors or remedies; evidence is the harness evidence text."
 
 (defun omitted-links-line (n)
   (format nil "omitted: ~D more possible updates are not shown; they stay unsettled and cannot be settled here." n))
+
+(defstruct stale-rec "consolidate.StaleRecord."
+  (id "") (path "") (since "") (head "") (blob "") (diff "") (diff-known nil) (truncated nil))
+
+(defun stale-line (r)
+  "consolidate.StaleLine: the id, the commit it was written at, its path, then its diff indented,
+role labels escaped and secrets redacted."
+  (let ((line (cat "[" (stale-rec-id r) "] changed since " (project-short (stale-rec-since r)) " in " (stale-rec-path r) ":")))
+    (if (or (not (stale-rec-diff-known r)) (string= (trim-space (stale-rec-diff r)) ""))
+        (cat line (newline-str) "  (no diff could be read)")
+        (progn
+          (dolist (l (split (redact-secrets (escape-role-labels (stale-rec-diff r))) (newline-str)))
+            (setf line (cat line (newline-str) "  " l)))
+          (when (stale-rec-truncated r) (setf line (cat line (newline-str) "  (diff truncated)")))
+          line))))
+
+(defun omitted-stale-line (n)
+  (format nil "omitted: ~D more possibly stale records are not shown; they keep their mark and cannot be confirmed here." n))
 
 (defstruct cmem "consolidate.CuratedMemory." (name "") (type "") (description "") (staged nil))
 
@@ -224,12 +252,12 @@ no detectors or remedies; evidence is the harness evidence text."
 
 (defstruct pin* "PromptInput."
   cut skip-tools candidates active reflections (instructions "") (available 0) (memory-budget 0)
-  branch folded curated harness)
+  branch folded curated harness (stale '()))
 
 (defstruct prompt "consolidate.Prompt."
   (text "") (tokens 0) candidates active reflections (omitted-candidates 0) (omitted-active 0)
   (omitted-reflections 0) memory-snippets subjects-shown links (omitted-links 0) curated
-  (omitted-curated 0) (cut-shown 0) (cut-total 0) harness-shown)
+  (omitted-curated 0) (cut-shown 0) (cut-total 0) harness-shown (stale '()) (omitted-stale 0))
 
 (defstruct mchoice active reflections reflection-lines record-lines (omitted-records 0) (omitted-reflections 0) (cost 0))
 
@@ -278,13 +306,16 @@ no detectors or remedies; evidence is the harness evidence text."
                               0))
          (links-notice (let ((all (possible-updates (pin*-candidates in) (pin*-active in))))
                          (if all (estimate-tokens (cat nn +heading-links+ (newline-str) (omitted-links-line (length all)))) 0)))
+         (stale-notice (if (pin*-stale in)
+                           (estimate-tokens (cat nn +heading-stale+ (newline-str) (omitted-stale-line (length (pin*-stale in)))))
+                           0))
          (curated-notice (if (pin*-curated in)
                              (estimate-tokens (cat nn +heading-curated+ (newline-str) (omitted-curated-line (length (pin*-curated in)))))
                              0))
          (harness-notice (if (pin*-harness in) (estimate-tokens (cat nn +heading-harness+ (newline-str) +harness-not-shown+)) 0))
          (cut-notice (max (estimate-tokens +cut-not-shown+) (estimate-tokens (later-entries-note (length (pin*-cut in))))))
          (candidate-lines '()))
-    (decf remaining (+ candidate-notice memory-notice subjects-notice links-notice curated-notice harness-notice cut-notice))
+    (decf remaining (+ candidate-notice memory-notice subjects-notice links-notice stale-notice curated-notice harness-notice cut-notice))
     (when (<= remaining 0) (return-from build-prompt (values out nil)))
     (dolist (o (pin*-candidates in))
       (let* ((line (record-line o)) (cost (estimate-tokens (cat line (newline-str)))))
@@ -295,7 +326,7 @@ no detectors or remedies; evidence is the harness evidence text."
     (when (plusp (prompt-omitted-candidates out))
       (push-end (omitted-candidates-line (prompt-omitted-candidates out)) candidate-lines))
     (let ((memory nil) (spans nil) (spans-fit nil) (memory-section "")
-          (links-section "") (subjects-section "") (curated-section "") (harness-section "")
+          (links-section "") (stale-section "") (subjects-section "") (curated-section "") (harness-section "")
           (cut-text +cut-not-shown+))
       ;; The current memory under the summary budget, and its omitted spans.
       (when (plusp (+ n-active n-refl))
@@ -344,6 +375,22 @@ no detectors or remedies; evidence is the harness evidence text."
               (when (plusp (prompt-omitted-links out)) (push-end (omitted-links-line (prompt-omitted-links out)) lines))
               (setf links-section (join lines (newline-str)))
               (decf remaining (estimate-tokens (cat nn links-section)))))))
+      ;; The possibly stale project records among those shown, each with its diff.
+      (when (plusp stale-notice)
+        (incf remaining stale-notice)
+        (let ((shown (make-set)) (lines (list +heading-stale+))
+              (cost (estimate-tokens (cat nn +heading-stale+ (newline-str) (omitted-stale-line (length (pin*-stale in)))))))
+          (dolist (o (append (prompt-candidates out) (prompt-active out))) (setf (gethash (obs-id o) shown) t))
+          (dolist (r (pin*-stale in))
+            (when (gethash (stale-rec-id r) shown)
+              (let* ((text (stale-line r)) (c (estimate-tokens (cat text (newline-str)))))
+                (if (> (+ cost c) remaining)
+                    (incf (prompt-omitted-stale out))
+                    (progn (incf cost c) (push-end text lines) (push-end r (prompt-stale out)))))))
+          (when (plusp (prompt-omitted-stale out)) (push-end (omitted-stale-line (prompt-omitted-stale out)) lines))
+          (when (rest lines)
+            (setf stale-section (join lines (newline-str)))
+            (decf remaining (estimate-tokens (cat nn stale-section))))))
       ;; The subjects of the records shown.
       (let ((subjects (shown-subjects (prompt-candidates out) (prompt-active out))))
         (when subjects
@@ -382,7 +429,7 @@ no detectors or remedies; evidence is the harness evidence text."
             (let ((rest (count-after (pin*-cut in) covers)))
               (when (plusp rest) (setf cut-text (cat cut-text (later-entries-note rest))))))))
       (let ((sections (list (cat +heading-cut+ (newline-str) cut-text) (cat +heading-candidates+ (newline-str) (join candidate-lines (newline-str))))))
-        (dolist (s (list memory-section links-section subjects-section curated-section harness-section instructions))
+        (dolist (s (list memory-section links-section stale-section subjects-section curated-section harness-section instructions))
           (when (string/= s "") (push-end s sections)))
         (setf (prompt-text out) (join sections nn)
               (prompt-tokens out) (estimate-tokens (prompt-text out)))

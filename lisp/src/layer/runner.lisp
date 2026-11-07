@@ -18,7 +18,14 @@
   (curated-dir nil)
   (project "")
   (session "")
-  (model ""))
+  (model "")
+  ;; freshness: the active project records' freshness verdict texts by record id (project.lisp),
+  ;; nil for none, or a function of no arguments that reads them from the host's HEAD structure
+  ;; view, called at the first notes read that shows rows (omhost's Call.freshness).
+  (freshness nil)
+  ;; structure: host.StructureReader for om.tool:head (omhost's Call.Structure), a function of a
+  ;; decoded host.StructureQuery returning the decoded answer, nil when the host reads none.
+  (structure nil))
 
 (defvar *call* nil "The call model code runs in.")
 
@@ -178,6 +185,7 @@ compile runs in the run's thread, so the run's timeout covers it; the budget is 
         ((and (consp v) (every (lambda (x) (or (note-p x) (turn-p x) (memory-p x))) v))
          (format nil "~{~A~^~%~}" (mapcar #'show-string v)))
         ((note-p v) (om.tool:note-line v))
+        ((head-view-p v) (head-view-string v))
         ((turn-p v) (format nil "~A ~A ~A: ~A" (turn-id v) (turn-when v) (turn-role v) (turn-text v)))
         ((memory-p v) (format nil "~A [~A]: ~A" (mem-name v) (mem-type v) (mem-description v)))
         (t (prin1-to-string v))))

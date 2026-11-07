@@ -165,7 +165,7 @@ func TestWrites(t *testing.T) {
 	if got := run(OpEdit, map[string]string{"name": "uses-pnpm"}); !strings.Contains(got, "nothing to change") {
 		t.Fatalf("empty edit: %s", got)
 	}
-	if got := run(OpEdit, map[string]string{"name": "uses-pnpm", "body": "Never run npm install."}); !strings.Contains(got, "Updated memory uses-pnpm") {
+	if got := run(OpEdit, map[string]string{"name": "uses-pnpm", "body": "Never run npm install.", "quote": "never run npm install here"}); !strings.Contains(got, "Updated memory uses-pnpm") {
 		t.Fatalf("edit: %s", got)
 	}
 	if m, _ := c.Store.GetIn("uses-pnpm", "/repo"); !strings.Contains(Describe(m), "Never run npm install.") || !strings.Contains(Describe(m), "sessions: s1") {
@@ -183,7 +183,7 @@ func TestWrites(t *testing.T) {
 	if usage, _ := c.Store.Usage(); usage["uses-pnpm"].Helped != 1 {
 		t.Fatalf("usage = %+v", usage["uses-pnpm"])
 	}
-	if got := run(OpForget, map[string]string{"name": "uses-pnpm"}); got != "Forgot memory uses-pnpm." {
+	if got := run(OpForget, map[string]string{"name": "uses-pnpm", "quote": "forget the pnpm memory"}); got != "Forgot memory uses-pnpm." {
 		t.Fatalf("forget: %s", got)
 	}
 	if _, err := c.Store.GetIn("uses-pnpm", "/repo"); err == nil {
@@ -317,7 +317,7 @@ func TestProjectScopedMemoriesStayInTheirProject(t *testing.T) {
 	if _, err := there.Run(OpSave, map[string]string{"name": "local", "type": "user", "description": "x", "quote": "remember this one"}); err == nil || !strings.Contains(err.Error(), "another project") {
 		t.Fatalf("a save colliding with another project's memory should say so, got %v", err)
 	}
-	if _, err := here.Run(OpEdit, map[string]string{"name": "local", "type": "", "description": "", "body": "Never run npm."}); err != nil {
+	if _, err := here.Run(OpEdit, map[string]string{"name": "local", "type": "", "description": "", "body": "Never run npm.", "quote": "never run npm in this repo"}); err != nil {
 		t.Fatalf("blank optional fields must be ignored, not rejected: %v", err)
 	}
 	if m, _ := s.Get("local"); m.Body != "Never run npm." || m.Type != TypeProject || m.Description != "Uses pnpm." {

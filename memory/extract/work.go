@@ -11,6 +11,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/legacyquery"
 	"github.com/drvova/pig-observational-memory/memory/omtool"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
@@ -26,24 +27,56 @@ const (
 )
 
 // fileTools are the tools whose path argument names a file, with the state a successful call
-// leaves it in. A delete tool is the one unambiguous tombstone a tool gives.
+// leaves it in, keyed by toolKey so one entry covers every harness's spelling of a name (Claude
+// Code's Read and MultiEdit, Kimi's ReadFile, Gemini's read_file). Each name is one a transcript
+// reader's fixture or its harness's source shows with a path argument (docs/memory-v2.md, "Work
+// facts"). A delete tool is the one unambiguous tombstone a tool gives.
 var fileTools = map[string]string{
-	"read": stateRead, "read_file": stateRead, "view": stateRead,
-	"write": stateWritten, "write_file": stateWritten, "create_file": stateWritten,
-	"edit": stateEdited, "edit_file": stateEdited, "multiedit": stateEdited,
-	"delete": stateDeleted, "delete_file": stateDeleted, "remove": stateDeleted, "remove_file": stateDeleted,
+	"read": stateRead, "readfile": stateRead, "readfiles": stateRead, "view": stateRead,
+	"write": stateWritten, "writefile": stateWritten, "createfile": stateWritten, "create": stateWritten,
+	"edit": stateEdited, "editfile": stateEdited, "multiedit": stateEdited, "notebookedit": stateEdited, "replace": stateEdited,
+	"delete": stateDeleted, "deletefile": stateDeleted, "remove": stateDeleted, "removefile": stateDeleted,
 }
 
-// pathArgs are the arguments that hold a call's path, most common first.
-var pathArgs = []string{"path", "file_path", "filePath"}
+// toolKey is the name a tool is looked up by: ASCII lower case, without underscores or hyphens.
+func toolKey(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case c == '_' || c == '-':
+		case c >= 'A' && c <= 'Z':
+			b.WriteByte(c + 'a' - 'A')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
 
-// exitCode reads "Command exited with code N" from a shell result.
-var exitCode = regexp.MustCompile(`Command exited with code (\d+)`)
+// fileToolState is the state a successful call leaves its path in, "" when its tool names no
+// file. Kiro's write replacing a string (its command strReplace) edits the file.
+func fileToolState(call toolCall) string {
+	key := toolKey(call.name)
+	if key == "write" && call.args["command"] == "strReplace" {
+		return stateEdited
+	}
+	return fileTools[key]
+}
+
+// pathArgs are the arguments that hold a call's path, most common first (notebook_path is Claude
+// Code's NotebookEdit's).
+var pathArgs = []string{"path", "file_path", "filePath", "notebook_path"}
+
+// exitCode reads a shell result's exit code: "Command exited with code N" (PiG) or "Process
+// exited with code N" (Codex's exec_command).
+var exitCode = regexp.MustCompile(`(?:Command|Process) exited with code (\d+)`)
 
 // toolCall is one tool call of an assistant message.
 type toolCall struct {
 	id, name string
 	args     map[string]any
+	// raw is the call's arguments as the entry holds them: Codex's apply_patch gives a string.
+	raw any
 }
 
 // toolResult is the result answering a call, found on the branch after it.
@@ -61,6 +94,9 @@ type fileEvent struct {
 	state, other string
 	display      string
 	sources      []int
+	// reported marks a path PiG reported touched (fileOps), which no tool call ordered: never a
+	// receipt.
+	reported bool
 }
 
 // assistant reads an assistant message from its ordered content blocks: the text before its
@@ -91,7 +127,7 @@ func (x *extraction) assistant(i int) {
 			id, _ := block["id"].(string)
 			name, _ := block["name"].(string)
 			args, _ := block["arguments"].(map[string]any)
-			calls = append(calls, toolCall{id: id, name: name, args: args})
+			calls = append(calls, toolCall{id: id, name: name, args: args, raw: block["arguments"]})
 		}
 	}
 	words := oneLine(strings.Join(before, "\n"))
@@ -106,6 +142,12 @@ func (x *extraction) assistant(i int) {
 	if first < 0 {
 		x.reply(i, strings.Join(append(before, after...), "\n"))
 	} else {
+		// The words before a call disagreeing with the user's claim are its pushback, as a reply's
+		// would be; they still go on the call.
+		anchor, hasAnchor := anchorTime(x.in.Entries[i])
+		for _, sentence := range sentences(words) {
+			x.pushbackAt(i, sentence, anchor, hasAnchor)
+		}
 		x.reply(i, strings.Join(after, "\n"))
 	}
 	for n, call := range calls {
@@ -176,15 +218,42 @@ func (x *extraction) bashExecution(i int) {
 	x.call(i, toolCall{name: "bash", args: map[string]any{"command": command}}, toolResult{index: i, text: output, failed: failed, present: true}, "")
 }
 
+// shellCommand is a call's shell command: its "command" argument, else "cmd" (Codex's
+// exec_command).
+func shellCommand(args map[string]any) (string, bool) {
+	if command, ok := args["command"].(string); ok {
+		return command, true
+	}
+	command, ok := args["cmd"].(string)
+	return command, ok
+}
+
 // callTarget is what a call acted on: its command, else its path (resolved, for matching, and
-// as shown), else its arguments.
+// as shown), else its arguments, with any secret in them redacted (secrets.Redact), so a
+// record's target never holds one and a later call on the same command still matches it.
 func (x *extraction) callTarget(call toolCall) (key, display string) {
-	if command, ok := call.args["command"].(string); ok && strings.TrimSpace(command) != "" {
+	key, display = x.rawCallTarget(call)
+	return secrets.Redact(key), secrets.Redact(display)
+}
+
+func (x *extraction) rawCallTarget(call toolCall) (key, display string) {
+	if command, ok := shellCommand(call.args); ok && strings.TrimSpace(command) != "" {
 		return strings.TrimSpace(command), strings.TrimSpace(command)
 	}
 	for _, arg := range pathArgs {
 		if p, ok := call.args[arg].(string); ok && strings.TrimSpace(p) != "" {
 			return x.pathKey(p), x.pathDisplay(p)
+		}
+	}
+	if patch, ok := patchOf(call); ok {
+		keys, shown := []string{}, []string{}
+		for _, e := range patchPathEvents(patch) {
+			if e.state != stateMovedFrom {
+				keys, shown = append(keys, x.pathKey(e.path)), append(shown, x.pathDisplay(e.path))
+			}
+		}
+		if len(keys) > 0 {
+			return strings.Join(keys, " "), strings.Join(shown, " ")
 		}
 	}
 	args := serialize.JSONStringify(call.args)
@@ -211,11 +280,26 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 	case result.failed:
 		outcome = ledger.OutcomeFailed
 	}
+	// A patch applied only when apply_patch says so; any other result is its error.
+	patch, isPatch := patchOf(call)
+	if isPatch && outcome == ledger.OutcomeWorked && !strings.Contains(result.text, applyPatchSuccess) {
+		outcome = ledger.OutcomeFailed
+	}
 	akey := attemptKey(call.name, key)
 	earlier := x.unresolved[akey]
-	if outcome != ledger.OutcomeWorked || words != "" || len(earlier) > 0 {
+	// A worked call is a receipt (receipts.go); one that would close a plan is recorded even
+	// with no words of the model's, so its closing link has a record to sit on.
+	var rc *receipt
+	if outcome == ledger.OutcomeWorked {
+		rc = x.callReceipt(call, key, result.text)
+	}
+	if result.present {
+		x.outputs = append(x.outputs, callOutput{target: key, text: result.text})
+	}
+	if outcome != ledger.OutcomeWorked || words != "" || len(earlier) > 0 || x.wouldClose(rc, i) {
 		line := attemptLine(call.name, display, outcome, result.text)
 		obs := ledger.Observation{Kind: ledger.KindAttempt, Outcome: outcome, Tool: call.name, Target: key}
+		x.callKeys(&obs.Keys, call, outcome, result.text)
 		// Only a success resolves the attempts it continues; each failure keeps its own record,
 		// since its reason is a specific of what was tried. The success carries the model's
 		// words from the attempts it resolves, so dropping them loses none.
@@ -237,6 +321,7 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 		}
 		r := x.add(obs, sources...)
 		r.obs.ID = recordID(r.obs)
+		r.receipt = rc
 		x.words[r.obs.ID] = strings.Join(said, " ")
 		if outcome == ledger.OutcomeWorked {
 			for _, id := range earlier {
@@ -247,10 +332,16 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 			x.unresolved[akey] = append(x.unresolved[akey], r.obs.ID)
 		}
 	}
+	x.outputRecords(call, result, key, display, sources)
 	if outcome != ledger.OutcomeWorked {
 		return
 	}
-	if state, ok := fileTools[call.name]; ok {
+	if isPatch {
+		for _, event := range patchPathEvents(patch) {
+			x.fileEvent(event.path, event.state, event.other, sources)
+		}
+	}
+	if state := fileToolState(call); state != "" {
 		for _, arg := range pathArgs {
 			if p, ok := call.args[arg].(string); ok && strings.TrimSpace(p) != "" {
 				x.fileEvent(p, state, "", sources)
@@ -258,14 +349,44 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 			}
 		}
 	}
-	if command, ok := call.args["command"].(string); ok {
+	if command, ok := shellCommand(call.args); ok {
 		for _, event := range shellPathEvents(command) {
 			x.fileEvent(event.path, event.state, event.other, sources)
 		}
 		if hash, subject, ok := commitFrom(command, result.text); ok {
-			x.add(ledger.Observation{Content: "commit " + hash + " " + subject, Kind: ledger.KindCommit, Target: hash}, sources...)
+			r := x.add(ledger.Observation{Content: "commit " + hash + " " + subject, Kind: ledger.KindCommit, Target: hash}, sources...)
+			r.receipt = &receipt{kind: ledger.ReceiptCommit, keys: append([]string{hash}, ledger.RecordKeys(subject)...)}
 		}
 	}
+}
+
+// callKeys adds the keys level 0 knows of a call (contracts/encoding.md): its shell command, else
+// the paths it names (resolved, as Target holds them), and a failure's first line.
+func (x *extraction) callKeys(keys *ledger.Keys, call toolCall, outcome, resultText string) {
+	if command, ok := shellCommand(call.args); ok && strings.TrimSpace(command) != "" {
+		keys.Add(ledger.KeyCommands, strings.TrimSpace(command))
+	} else if p, ok := callPath(call); ok {
+		keys.Add(ledger.KeyPaths, x.pathKey(p))
+	} else if patch, ok := patchOf(call); ok {
+		for _, e := range patchPathEvents(patch) {
+			if e.state != stateMovedFrom {
+				keys.Add(ledger.KeyPaths, x.pathKey(e.path))
+			}
+		}
+	}
+	if outcome == ledger.OutcomeFailed {
+		keys.Add(ledger.KeyErrors, clip(failureLine(resultText), serialize.BriefKeyArgRunes))
+	}
+}
+
+// callPath is a call's path argument (pathArgs), the first non-blank one.
+func callPath(call toolCall) (string, bool) {
+	for _, arg := range pathArgs {
+		if p, ok := call.args[arg].(string); ok && strings.TrimSpace(p) != "" {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // attemptLine is an attempt record's line: the tool, what it acted on and the outcome, with
@@ -424,7 +545,7 @@ func (x *extraction) fileOps(last int) {
 			}
 		}
 		x.fileOrder = append(x.fileOrder, key)
-		x.fileEvents[key] = fileEvent{state: op.State, display: x.pathDisplay(op.Path), sources: []int{source}}
+		x.fileEvents[key] = fileEvent{state: op.State, display: x.pathDisplay(op.Path), sources: []int{source}, reported: true}
 	}
 }
 
@@ -456,12 +577,17 @@ func (x *extraction) emitFiles() {
 			content += " " + event.other
 		}
 		obs := ledger.Observation{Content: content, Kind: ledger.KindFile, Target: key}
+		obs.Keys.Add(ledger.KeyPaths, key)
 		for _, id := range x.files[key] {
 			if !slices.Contains(obs.Supersedes, id) {
 				obs.Supersedes = append(obs.Supersedes, id)
 			}
 		}
-		x.add(obs, event.sources...)
+		r := x.add(obs, event.sources...)
+		// A file written or edited by a tool call is a write receipt on its path.
+		if !event.reported && (event.state == stateWritten || event.state == stateEdited) {
+			r.receipt = &receipt{kind: ledger.ReceiptWrite, keys: []string{key}}
+		}
 	}
 	// Records are in branch order: file records sit at their newest evidence.
 	sort.SliceStable(x.records, func(a, b int) bool { return x.records[a].anchor < x.records[b].anchor })

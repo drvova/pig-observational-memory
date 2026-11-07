@@ -17,7 +17,10 @@ client's PI_OBSERVATIONAL_MEMORY_PASSIVE."
         (when (and (realp n) (> n 0) (= n (ftruncate n))) (setf (om::hconfig-summary-max cfg) (truncate n))))
       (when (member (om::jget nested "memoryFormat") '("tables" "lines") :test #'equal)
         (setf (om::hconfig-memory-format cfg) (om::jget nested "memoryFormat")))
-      (when (eq (om::jget nested "consolidate") :false) (setf (om::hconfig-consolidate-off cfg) t)))
+      (when (eq (om::jget nested "consolidate") :false) (setf (om::hconfig-consolidate-off cfg) t))
+      (when (eq (om::jget nested "rawFloor") :true) (setf (om::hconfig-raw-floor cfg) t))
+      (setf (om::hconfig-limits cfg) (om::read-limits nested)
+            (om::hconfig-model-limits cfg) (om::read-model-limits (om::jget nested "modelLimits") nil)))
     (setf (om::hconfig-passive cfg) (passive-p params))
     cfg))
 
@@ -41,7 +44,8 @@ a positive integer, else 2,000."
              (let ((branch (read-branch session params format)))
                (append-entry session (if (plusp (length branch)) (om::entry-id (aref branch (1- (length branch)))) "")
                              type data-json)))
-   :cwd (param-string params "cwd")))
+   :cwd (param-string params "cwd")
+   :structure (client-structure params)))
 
 (defun compaction-entry-line (after c id parent stamp)
   "The store line neutral.Host writes for a compaction entry: the entry map's keys sorted."
@@ -80,7 +84,7 @@ evidence unit (record-compaction-evidence), on the layer's snapshot taken before
          (store (and (string/= model "") (curated-on-p) (curated-dir)))
          (snapshot (and store (om.layer::take-snapshot store model)))
          (marker (funcall (om::hhost-append h) "om.cut" (om::json-string (om::jobject "reason" reason))))
-         (c (om::compact-on h cfg reason marker 0)))
+         (c (let ((om::*encoding* (neutral-encoding params))) (om::compact-on h cfg reason marker 0))))
     (store-compaction session params format c)
     (when snapshot
       (let ((branch (read-branch session params format)))
@@ -91,7 +95,8 @@ evidence unit (record-compaction-evidence), on the layer's snapshot taken before
 
 (defun neutral-compaction-at (session params format reason first-kept tokens-before)
   "neutral.Host.CompactionAt: on the harness's own cut, returned and not stored."
-  (om::compact-on (session-host session params format) (hook-config params) reason first-kept tokens-before))
+  (let ((om::*encoding* (neutral-encoding params)))
+    (om::compact-on (session-host session params format) (hook-config params) reason first-kept tokens-before)))
 
 (defun param-int (params key)
   (let ((v (om::jget params key))) (if (realp v) (truncate v) 0)))
@@ -143,7 +148,7 @@ An unreadable branch settles nothing, as GetBranch's error does."
   (if (curated-on-p)
       (values (om.layer::pin-get (session-pin session)
                                  (lambda ()
-                                   (om.layer::index-for (curated-dir) (om.layer::project-root (param-string params "cwd"))
+                                   (om.layer::index-as (curated-dir) (om.layer::project-root (param-string params "cwd")) (session-id session)
                                                         (curated-index-tokens)))))
       ""))
 

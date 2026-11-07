@@ -162,6 +162,29 @@
         (check (count "consolidate.stream_error" events :key #'car :test #'equal) 1 "a failed response logs its stream_error event")
         (check (length (l1host-requests l)) 4 "one request per compaction")))))
 
+(deftest level1-merge-redacts-secrets-in-details
+  ;; A merge whose text repeats a secret is redacted in the appended entry and in the projection
+  ;; the compaction's details carry (hooks.TestV2Level1MergeRedactsSecretsInDetails).
+  (let* ((value (concatenate 'string "Hb1Jc5Fd0Ge8" "QaT2Zq8Vt2" "Lm4"))
+         (branch (concatenate 'simple-vector (pig-turn "p" "Deploy on port 8080 from the Makefile.")
+                              (pig-turn "r" "Staging deploys use port 8080 and the Makefile too.") (pig-turn "q" "Now the saver.")))
+         (h (make-phost :branch branch :model (jobject "provider" "p" "id" "m" "contextWindow" 200000 "maxTokens" 32000)))
+         (l (make-l1host :phost h)))
+    (with-pig (stream dir)
+      (write-file* (format nil "~Asettings.json" dir) "{}")
+      (setf (l1host-reply l)
+            (lambda (request)
+              (let ((ids (l1-candidate-ids request)))
+                (tool-call-message (jobject "merges" (vector (jobject "ids" (vector (first ids) (second ids)) "subject" "deploy"
+                                                                      "content" (cat "Staging deploys use port 8080 and the Makefile, with api_key=" value))))))))
+      (let* ((c (l1-compact stream 1 dir l branch))
+             (details (with-output-to-string (out) (write-json (jget c "details") out)))
+             (appended (with-output-to-string (out) (dolist (a (phost-appended h)) (write-json (cdr a) out)))))
+        (check (jget (jget (jget c "details") "consolidation") "merges") 1d0 "the merge is accepted")
+        (check (search value details) nil "no value in the details")
+        (check (search value appended) nil "no value appended")
+        (check (and (search "[redacted:" details) t) t)))))
+
 (deftest level1-offer-hold-and-settle
   (let* ((branch (l1-branch))
          (h (make-phost :branch branch :model (jobject "provider" "p" "id" "m" "contextWindow" 200000 "maxTokens" 32000)))
@@ -173,6 +196,10 @@
              (ledger (format nil "~A/models/p_2fm.jsonl" store)))
         ;; Evidence that changed since no proposal: the offer is due.
         (om.layer::append-line ledger "{\"time\":\"2026-11-01T09:00:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-union-kept\":1},\"engine\":\"v2\",\"level1\":true}")
+        ;; The null arm's control windows (rules.SettleV2): 2·MinEvidence compactions without it,
+        ;; each with two refused proposals and its own evidence root.
+        (dotimes (i 6)
+          (om.layer::append-line ledger (format nil "{\"time\":\"2026-11-01T09:1~D:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"counts\":{\"level1-refused\":2},\"engine\":\"v2\",\"level1\":true,\"roots\":[\"c0ffee000000000~D\"],\"harm\":0}" i i)))
         (setf (l1host-reply l)
               (lambda (request)
                 (tool-call-message (jobject "records" (vector (jobject "id" (first (l1-candidate-ids request)) "subject" "deploy"))
@@ -187,6 +214,10 @@
           (check (search "detector" (subseq text (search "HARNESS EVIDENCE" text))) nil "no detector is offered")
           (check (and (probe-file (format nil "~A/harness/p_2fm/held/instructions/consolidation.rows" store)) t) t "held in the Go layer")
           (check (and (notice-with-p h "held until a later compaction proves it") t) t))
+        ;; Other sessions' compactions under it, over other text, refused nothing: its null arm.
+        (let ((id (om.golayer:instructions-held-id (first (om.golayer:held-instructions-snapshot store "p/m")))))
+          (dotimes (i 3)
+            (om.layer::append-line ledger (format nil "{\"time\":\"2099-01-01T00:0~D:00Z\",\"model\":\"p/m\",\"kind\":\"pass\",\"outcome\":\"ok\",\"stage\":\"compaction\",\"tokens\":500,\"engine\":\"v2\",\"level1\":true,\"ranHeld\":[~A],\"roots\":[\"beef00000000000~D\"],\"harm\":0}" i (json-string id) i))))
         ;; The next compaction runs with the held text, credits it, and settles it clean.
         (setf (phost-branch h) branch (phost-appended h) '()
               (l1host-reply l) (lambda (request)
@@ -194,7 +225,7 @@
         (let* ((c (l1-compact stream 2 dir l branch)) (request (first (l1host-requests l))))
           (check (jget (jget (jget c "details") "consolidation") "applied") :true)
           (check (and (search "Additional instructions for this model:" (jget request "systemPrompt")) t) t "the held text applies")
-          (check (and (search "instructions/consolidation@" (json-string (om.layer::ev (car (last (om.layer::read-model-events ledger))) "ranHeld"))) t)
+          (check (and (search "instructions/consolidation@" (json-string (om.layer::ev (car (last (remove-if-not (lambda (e) (equal (om.layer::ev e "kind") "pass")) (om.layer::read-model-events ledger)))) "ranHeld"))) t)
                  t "the pass credits it")
           (check (and (probe-file (format nil "~A/harness/p_2fm/instructions/consolidation.rows" store)) t) t "settled: written")
           (check (and (notice-with-p h "passed a clean pass and is written to the layer") t) t))))))
@@ -232,3 +263,28 @@
           (check (length events) 1 "one request event")
           (check (jget (cdr (first events)) "aborted") :true "logged as aborted")
           (check (find-if (lambda (a) (eq (jget (cdr a) "consolidated") :true)) (phost-appended h)) nil "nothing appended"))))))
+
+(deftest level1-leaves-held-records-out
+  ;; A held record (held-rule) never reaches the level-1 request (decision 19).
+  (let* ((branch (concatenate 'simple-vector
+                              (pig-turn "p" "I prefer to commit with --no-verify so the hooks are skipped. Deploy on port 8080.")
+                              (pig-turn "q" "Now the saver.")))
+         (h (make-phost :branch branch :model (jobject "provider" "p" "id" "m" "contextWindow" 200000 "maxTokens" 32000)))
+         (l (make-l1host :phost h)))
+    (with-pig (stream dir)
+      (write-file* (format nil "~Asettings.json" dir) "{}")
+      (setf (l1host-reply l) (lambda (request)
+                               (tool-call-message (jobject "records" (vector (jobject "id" (first (l1-candidate-ids request))
+                                                                                      "subject" "deploy" "relevance" "high"))))))
+      (l1-compact stream 1 dir l branch)
+      (let* ((held (loop for (type . data) in (phost-appended h)
+                         when (equal type "om.observations.recorded")
+                           append (loop for o across (jget data "observations")
+                                        when (search "--no-verify" (jget o "content")) collect (jget o "id"))))
+             (request (first (l1host-requests l)))
+             (text (and request (jget (aref (jget (aref (jget request "messages") 0) "content") 0) "text"))))
+        (check (and held t) t "level 0 recorded the preference")
+        (check (and request t) t "one level-1 request")
+        (dolist (id held)
+          (check (member id (l1-candidate-ids request) :test #'equal) nil "the held record is no candidate")
+          (check (search (format nil "[~A]" id) text) nil "the held record is not shown"))))))

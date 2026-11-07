@@ -59,10 +59,27 @@
         (when (plusp n) (setf line (format nil "~A, ~D host ~A" line n (if (= n 1) "summary" "summaries")))))
       (let ((n (gethash "" by 0)))
         (when (plusp n) (setf line (format nil "~A, ~D by memory v1's workers" line n))))
-      (list (format nil "~A) / ~D dropped / ~D active" line (hash-table-count (om::folded-dropped folded))
+      (append
+       (list (format nil "~A) / ~D dropped / ~D active" line (hash-table-count (om::folded-dropped folded))
                     (length (om::folded-active folded)))
             (format nil "Reflections: ~D recorded / ~D standing" (length (om::folded-reflections folded))
-                    (length (om::active-reflections (om::folded-reflections folded))))))))
+                    (length (om::active-reflections (om::folded-reflections folded)))))
+       (held-lines folded entries)))))
+
+(defun held-lines (folded entries)
+  "commands.heldLines: the active records and standing reflections held because they weaken
+security, each with its rule, its content (redacted, on one line) and its anchor."
+  (let ((positions (om::entry-index-by-id entries)) (by-id (om::folded-by-id folded)) (lines '()))
+    (flet ((held (rule content anchor)
+             (push (cat* om::+insecure-held-notice+ " (" rule "): " (om::one-line (om::redact-secrets content)) " (" (or anchor "") ")")
+                   lines)))
+      (dolist (o (om::folded-active folded))
+        (let ((rule (om::held-rule o)))
+          (when rule (held rule (om::obs-content o) (om::observation-anchor o positions)))))
+      (dolist (r (om::active-reflections (om::folded-reflections folded)))
+        (let ((rule (om::held-reflection r by-id)))
+          (when rule (held rule (om::refl-content r) (om::reflection-anchor r by-id positions))))))
+    (nreverse lines)))
 
 (defun jint (h key) (let ((v (and (hash-table-p h) (gethash key h)))) (if (realp v) (truncate v) 0)))
 (defun jbool (h key) (and (hash-table-p h) (eq (gethash key h) :true)))
@@ -119,6 +136,12 @@
                   (format nil "Memories: ~D live (~D pinned), ~D staged (out of the index until evidence confirms them)" live pinned staged))
             (when flagged
               (list (cat* "Flagged by a user correction since their last edit (ranked last): " (om::join (nreverse flagged) ", "))))
+            (loop for (name type description rule) in (handler-case (om.layer::held-memories store project) (error () '()))
+                  collect (cat* om::+insecure-held-notice+ " (" rule "): " name " [" type "]: " (om::redact-secrets description)))
+            (let ((staged (handler-case (om.layer::staged-changes store project) (error () '()))))
+              (when staged
+                (list (format nil "Staged changes to shared memory, waiting for a user's words (~D; a staged forget or edit applies in its own session only, a staged layer change nowhere): ~A"
+                              (length staged) (om::join (mapcar #'om.layer::staged-change-string staged) "; ")))))
             (let ((refused (refused-memories store project)))
               (when refused
                 (list (format nil "Refused by the validator, so not loaded (~D; edit within it or forget): ~A" (length refused)
@@ -323,7 +346,7 @@ compiled into a running child, never reverted here), the reverted ones and the r
                         #'string<))))
     (when (or manifest held)
       (remove nil
-              (list (format nil "Lisp layer (~A): generation ~D, settled: ~A; held: ~A" model (length manifest)
+              (list (format nil "Lisp layer (~A): generation ~D, settled: ~A; held: ~A" model (om.layer::manifest-generation manifest)
                             (if state (om::join (sort (mapcar #'car (copy-list state)) #'string<) ", ") "none")
                             (if held (om::join held ", ") "none"))
                     (and reverted (cat* "  reverted: " (om::join reverted "; ")))

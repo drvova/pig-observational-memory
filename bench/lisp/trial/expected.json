@@ -1,13 +1,13 @@
 {
- "t01": "22",
+ "t01": "28",
  "t02": "2",
  "t03": "3",
  "t04": "5f498e17400f",
  "t05": "Correction: search uses Elasticsearch 7, not 8.",
- "t06": "10",
+ "t06": "13",
  "t07": "34c822fabc46\n16f5c3b22460",
  "t08": "4f2a9c1",
- "t09": "attempt=9\ncommit=1\ncorrection=3\nfact=5\nfile=2\npreference=2",
+ "t09": "attempt=9\ncommit=1\ncorrection=3\ndecision=1\nevidence=3\nfact=4\nfile=2\npreference=2\nvalue=3",
  "t10": "3",
  "t11": "f7b0abae1649\n4e9d55c02be6\n2ab76f149da6\n001928040a68",
  "t12": "980bdeaaa2e2",
@@ -18,5 +18,5 @@
  "t17": "Running search tests. [bash \"go test ./services/search/...\" failed: --- FAIL: TestHealthz (0.00s)]",
  "t18": "3",
  "t19": "m17",
- "t20": "8"
+ "t20": "10"
 }

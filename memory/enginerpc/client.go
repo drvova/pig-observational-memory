@@ -569,6 +569,35 @@ func (c *Client) handle(ctx context.Context, method string, params json.RawMessa
 			return StringResult{Value: homer.ConfigHome()}, nil
 		}
 		return StringResult{}, nil
+	case MethodRepo:
+		reader, ok := h.(host.RepoReader)
+		if !ok {
+			return RepoResult{}, nil
+		}
+		repo, ok, err := reader.Repo()
+		if err != nil || !ok {
+			return RepoResult{}, err
+		}
+		return RepoResult{Repo: &repo}, nil
+	case MethodStructure:
+		p, err := decode[StructureParams](params)
+		if err != nil {
+			return nil, err
+		}
+		reader, ok := h.(host.StructureReader)
+		if !ok {
+			return StructureResult{}, nil
+		}
+		answer, ok, err := reader.Structure(p.Query)
+		if err != nil || !ok {
+			return StructureResult{}, err
+		}
+		return StructureResult{Answer: &answer}, nil
+	case MethodHarness:
+		if namer, ok := h.(host.HarnessNamer); ok {
+			return StringResult{Value: namer.Harness()}, nil
+		}
+		return StringResult{}, nil
 	case MethodNotify:
 		p, err := decode[NotifyParams](params)
 		if err != nil {

@@ -85,6 +85,8 @@ func (d *inProcess) tool(h *testfix.FakeHost, params map[string]any) host.ToolRe
 type overRPC struct {
 	t *testing.T
 	c *enginerpc.Client
+	// lisp marks the image, whose memory tool runs Lisp (readsCode).
+	lisp bool
 }
 
 func (d overRPC) sessionStart(h *testfix.FakeHost) { must(d.t, d.c.SessionStart(h)) }
@@ -178,6 +180,33 @@ func newHost(entries []session.Entry) *testfix.FakeHost {
 	h := testfix.NewFakeHost(slices.Clone(entries)...)
 	h.Model = testfix.Model("test-provider", "session", map[string]any{"contextWindow": 200_000, "maxTokens": 32_000})
 	h.ModelsFake.Add(h.Model, testfix.KeyAuth("test-key"))
+	// The writer and frame cross the boundary (host/harness, host/repo) and are written alike.
+	h.HarnessName = "pig"
+	h.RepoInfo = &host.Repo{ID: "0123456789ab", Root: h.Cwd(), CommonDir: h.Cwd() + "/.git", Remote: "example.org/team/project",
+		RootCommit: "1111111111111111111111111111111111111111", Branch: "main", Head: "2222222222222222222222222222222222222222"}
+	// The HEAD structure view crosses the boundary too (host/structure): HEAD has moved on, every
+	// path it is asked about exists with another blob than the one at the commit asked, so a
+	// project record's freshness verdict is judged alike on both paths.
+	h.StructureFunc = func(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+		a := host.StructureAnswer{RepoID: "0123456789ab", Head: "3333333333333333333333333333333333333333"}
+		for _, p := range q.Paths {
+			a.Paths = append(a.Paths, host.PathAnswer{Path: p, Known: true, Exists: true, Blob: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
+		}
+		for _, s := range q.Symbols {
+			a.Symbols = append(a.Symbols, host.SymbolAnswer{Path: s.Path, Symbol: s.Symbol, Known: true, Found: true})
+		}
+		for _, b := range q.Blobs {
+			a.Blobs = append(a.Blobs, host.BlobAnswer{Path: b.Path, At: b.At, Known: true, Blob: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+		}
+		if q.List != nil {
+			files := []string{"loader.go", "printer.go", "saver.go"}
+			a.Total = len(files)
+			if q.List.Offset < len(files) {
+				a.Files = files[q.List.Offset:min(len(files), q.List.Offset+q.List.Limit)]
+			}
+		}
+		return a, true, nil
+	}
 	return h
 }
 
@@ -210,13 +239,26 @@ type transcript struct {
 	Context       any
 	Tool          any
 	ToolText      string
+	// Reads is what the memory tool printed reading the notes with their freshness verdicts and
+	// a page of HEAD's files (readsCode).
+	Reads string
+}
+
+// readsCode is a memory tool call that prints every note's line (om.Note.Line, its freshness
+// verdict after its content) and the first page of two of HEAD's files: Go code on the Go
+// engine, the same reads in Lisp on the image, printing the same bytes.
+func readsCode(d driver) string {
+	if r, ok := d.(overRPC); ok && r.lisp {
+		return `(dolist (n (notes)) (show n)) (show (head "" :limit 2))`
+	}
+	return "for _, n := range om.Notes().Rows {\n\tfmt.Println(n.Line())\n}\nv, _ := om.Head(\"\", om.Limit(2))\nfmt.Print(v)\n"
 }
 
 // scenario drives turn_end over two turns, a compaction with a cut inside the branch, the
 // context event of the next request and a memory tool call.
 func scenario(t *testing.T, d driver) transcript {
 	t.Helper()
-	entries := append(codingTurn("p", "fix the loader"), codingTurn("q", "and the saver")...)
+	entries := append(codingTurn("p", "fix the loader"), codingTurn("q", "We decided to keep the saver in `saver.go` because it must stay pure.")...)
 	h := newHost(entries[:8])
 	d.sessionStart(h)
 	d.turnEnd(h)
@@ -238,6 +280,9 @@ func scenario(t *testing.T, d driver) transcript {
 	if compaction == nil || compaction["firstKeptEntryId"] != "qu" {
 		t.Fatalf("compaction %v", result)
 	}
+	if summary, _ := compaction["summary"].(string); !strings.Contains(summary, "(changed since 2222222, unverified)") {
+		t.Fatalf("no freshness verdict in the summary:\n%s", summary)
+	}
 	// PiG writes the compaction entry on its cut.
 	encoded := testfix.ToJSONValue(compaction).(map[string]any)
 	summary, _ := encoded["summary"].(string)
@@ -251,6 +296,11 @@ func scenario(t *testing.T, d driver) transcript {
 	if tool.IsError {
 		t.Fatalf("tool call: %s", tool.Text)
 	}
+	reads := d.tool(h, map[string]any{"code": readsCode(d)})
+	if reads.IsError || !strings.Contains(reads.Text, "(changed since 2222222, unverified)") ||
+		!strings.Contains(reads.Text, "HEAD 3333333: 3 files, showing 2 from 0\nloader.go\nprinter.go\nnext: om.Head(\"\", om.Offset(2), om.Limit(2))\n") {
+		t.Fatalf("the tool's reads:\n%s", reads.Text)
+	}
 	return transcript{
 		Appended:      testfix.ToJSONValue(h.Appended),
 		Notifications: h.Notifications,
@@ -258,6 +308,7 @@ func scenario(t *testing.T, d driver) transcript {
 		Context:       testfix.ToJSONValue(messages),
 		Tool:          testfix.ToJSONValue(tool.Details),
 		ToolText:      tool.Text,
+		Reads:         reads.Text,
 	}
 }
 
@@ -278,6 +329,9 @@ func compareTranscripts(t *testing.T, name string, want, got transcript) {
 	if len(want.Appended.([]any)) == 0 {
 		t.Fatal("level 0 appended nothing: the scenario tests nothing")
 	}
+	if appended, _ := json.Marshal(want.Appended); !strings.Contains(string(appended), `"path":"loader.go","repoId":"0123456789ab"`) || !strings.Contains(string(appended), `"harness":"pig","model":"test-provider/session"`) {
+		t.Fatalf("level 0 wrote no frame or writer: the encoding fields are untested\n%s", clip(appended))
+	}
 	if !strings.Contains(fmt.Sprint(want.Context), "[thinned]") {
 		t.Fatal("the context event thinned nothing: the scenario tests nothing")
 	}
@@ -291,8 +345,9 @@ func compareTranscripts(t *testing.T, name string, want, got transcript) {
 		{"context", want.Context, got.Context},
 		{"tool details", want.Tool, got.Tool},
 		{"tool text", want.ToolText, got.ToolText},
+		{"tool reads", want.Reads, got.Reads},
 	} {
-		if !reflect.DeepEqual(field.want, field.got) {
+		if !reflect.DeepEqual(asGo(field.want), asGo(field.got)) {
 			a, _ := json.MarshalIndent(field.want, "", " ")
 			b, _ := json.MarshalIndent(field.got, "", " ")
 			t.Errorf("%s differ:\nin-process %s\n%-10s %s", field.name, clip(a), name, clip(b))

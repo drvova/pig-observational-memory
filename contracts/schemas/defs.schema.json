@@ -22,7 +22,15 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
     },
     "observation": {
-      "description": "One record (ledger.Observation). The six kernel members are required (ObservationFrom refuses the record without them); the rest are optional and read leniently: a malformed optional member is cleared, not fatal. Writers emit no other member.",
+      "description": "One record (ledger.Observation): a value or evidence record level 0 reads from tool output (record-tool-output.schema.json), or a record of any other kind.",
+      "anyOf": [
+        { "$ref": "#/$defs/observationRecord" },
+        { "$ref": "record-tool-output.schema.json#/$defs/valueRecord" },
+        { "$ref": "record-tool-output.schema.json#/$defs/evidenceRecord" }
+      ]
+    },
+    "observationRecord": {
+      "description": "One record (ledger.Observation) of any kind but value and evidence. The six kernel members are required (ObservationFrom refuses the record without them); the rest are optional and read leniently: a malformed optional member is cleared, not fatal. Writers emit no other member.",
       "type": "object",
       "required": ["id", "content", "timestamp", "relevance", "sourceEntryIds", "tokenCount"],
       "additionalProperties": false,
@@ -42,11 +50,14 @@
         },
         "tokenCount": { "type": "integer", "minimum": 0 },
         "kind": {
-          "description": "ObservationKindValues and CodeKindValues.",
-          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note"]
+          "description": "ObservationKindValues and CodeKindValues but value and evidence (record-tool-output.schema.json).",
+          "enum": ["fact", "event", "preference", "plan", "correction", "assistant", "attempt", "file", "commit", "note", "decision", "convention", "pushback", "forget"]
         },
         "subject": { "type": "string" },
-        "scope": { "type": "string" },
+        "scope": {
+          "description": "The qualifier that tells two figures apart; besides free text it may name where the record holds: session, project:<repoId>, user or global (ledger.Scope*). Old values keep loading and keep their meaning.",
+          "type": "string"
+        },
         "supersedes": { "$ref": "#/$defs/recordIds" },
         "fields": {
           "description": "Values of the fields a model's note schema adds, by field name.",
@@ -65,7 +76,104 @@
         "status": { "enum": ["proposed", "hypothetical", "retracted"] },
         "possiblyUpdates": { "$ref": "#/$defs/recordIds" },
         "conflicts": { "$ref": "#/$defs/recordIds" },
-        "replaces": { "$ref": "#/$defs/recordIds" }
+        "replaces": { "$ref": "#/$defs/recordIds" },
+        "respondsTo": { "description": "The user's claims a pushback record (kind pushback) answers (contracts/encoding.md, \"Pushback\").", "$ref": "#/$defs/recordIds" },
+        "closes": {
+          "description": "The closing links a receipt record carries (contracts/encoding.md, \"Receipts\"): each plan its tool receipt closed, the receipt record's id and the receipt's kind; the first link naming a plan closes it (ledger.ClosedBy).",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "closedBy", "receipt"],
+            "properties": {
+              "id": { "description": "The plan the receipt closed.", "type": "string", "pattern": "^[a-f0-9]{12}$" },
+              "closedBy": { "description": "The receipt record's id.", "type": "string", "pattern": "^[a-f0-9]{12}$" },
+              "receipt": { "description": "The receipt (ledger.ReceiptValues).", "enum": ["exit 0", "write", "commit", "read"] }
+            }
+          }
+        },
+        "source": {
+          "description": "Where the record's text came from, set by code from the transcript role and tool of its first source entry (ledger.SourceValues; contracts/encoding.md). Absent on records written before phase 2.",
+          "enum": ["user-said", "tool-observed", "assistant-claim", "model-inferred", "host-summary", "harness-memory", "other-session", "external-untrusted"]
+        },
+        "authority": {
+          "description": "How far the record is trusted, from its source; level 1 only lowers it (ledger.AuthorityValues, highest first).",
+          "enum": ["user", "repo-file", "tool", "model"]
+        },
+        "hedge": {
+          "description": "How the record's own sentence states it, by the code lexicon (ledger.HedgeOf; contracts/encoding.md, contracts/encoding.jsonl); contested for a user claim the assistant pushed back on (\"Pushback\").",
+          "enum": ["stated", "hedged", "unverified", "contested"]
+        },
+        "timeHint": {
+          "description": "after:<date> for a plan, before:<date> for a reported past event with no event date (ledger.TimeHintOf).",
+          "type": "string",
+          "pattern": "^(after|before):[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "episode": { "description": "The id of the record's episode: ledger.EpisodeID of the session and the request that opened it (contracts/encoding.md, \"Episode\").", "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "derivedFrom": { "description": "The entry id of the request a plan (status proposed) was made under: the newest request the person typed at or before its newest source entry (contracts/encoding.md, \"Derived from\").", "type": "string", "minLength": 1 },
+        "intent": { "description": "A plan's type, which says how it closes (contracts/truth.md, \"Intentions\").", "enum": ["todo", "promise", "condition-wait", "deferred"] },
+        "forgets": {
+          "description": "A forget record's tombstones: what the user asked to forget, by id, kind and source entries, never by text (contracts/truth.md, \"Forget records\").",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+              "kind": { "type": "string" },
+              "sources": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+            }
+          }
+        },
+        "keys": { "$ref": "#/$defs/recordKeys" },
+        "frame": { "$ref": "#/$defs/recordFrame" },
+        "writer": { "$ref": "#/$defs/recordWriter" }
+      }
+    },
+    "recordKeys": {
+      "description": "The exact strings a record can be looked up by (ledger.Keys), each list in found order without repeats; empty lists are omitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": { "$ref": "#/$defs/keyList" },
+        "symbols": { "$ref": "#/$defs/keyList" },
+        "commands": { "$ref": "#/$defs/keyList" },
+        "tests": { "$ref": "#/$defs/keyList" },
+        "errors": { "$ref": "#/$defs/keyList" },
+        "config": { "$ref": "#/$defs/keyList" },
+        "versions": { "$ref": "#/$defs/keyList" }
+      }
+    },
+    "keyList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "recordFrame": {
+      "description": "Where in a repository the record was made (ledger.Frame): the adapter's repository id, branch and HEAD (host.Repo), and the repository-relative path, symbol and body hash it is about. Empty members are omitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repoId": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string", "minLength": 1 },
+        "head": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "symbol": { "type": "string", "minLength": 1 },
+        "bodyHash": { "type": "string", "minLength": 1 }
+      }
+    },
+    "recordWriter": {
+      "description": "Who wrote the record (ledger.Writer): the harness, its session id, the session model's key, and the engine. Empty members are omitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "harness": { "type": "string", "minLength": 1 },
+        "session": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "engine": { "enum": ["go", "lisp"] }
       }
     },
     "reflection": {
@@ -113,6 +221,7 @@
         "refused": { "type": "integer", "minimum": 0 },
         "confirmed": { "type": "integer", "minimum": 0 },
         "rejected": { "type": "integer", "minimum": 0 },
+        "rechecked": { "type": "integer", "minimum": 0 },
         "cited": { "type": "integer", "minimum": 0 },
         "promoted": { "type": "integer", "minimum": 0 },
         "harnessOffered": { "type": "boolean" },

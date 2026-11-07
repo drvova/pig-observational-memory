@@ -8,12 +8,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
 	"github.com/drvova/pig-observational-memory/memory/recall"
+	"github.com/drvova/pig-observational-memory/memory/retrieve"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
@@ -166,7 +168,7 @@ func (t *table) apply(ctx context.Context, o omwire.Options) error {
 			return err
 		}
 	}
-	if o.Status != "" {
+	if o.Status != "" && !(retrieve.IsTag(o.Status) && o.Status != ledger.StatusRetracted) {
 		value := o.Status
 		if err := t.match(ctx, om.FieldStatus, func(v string) bool { return strings.EqualFold(v, value) }); err != nil {
 			return err
@@ -374,7 +376,20 @@ func (c *Call) reader() Reader {
 	if c.detector != nil {
 		return c.detector.reader()
 	}
-	return Reader{Entries: c.Entries, SessionEntries: c.SessionEntries, ToolCall: true, Skip: c.Skip}
+	return Reader{Entries: c.Entries, SessionEntries: c.SessionEntries, ToolCall: true, Skip: c.Skip, checkpoints: c.foldCheckpoints()}
+}
+
+// checkpointsInit guards the lazy creation of a call's fold checkpoints.
+var checkpointsInit sync.Mutex
+
+// foldCheckpoints are the call's fold checkpoints, made on first use.
+func (c *Call) foldCheckpoints() *foldCheckpoints {
+	checkpointsInit.Lock()
+	defer checkpointsInit.Unlock()
+	if c.checkpoints == nil {
+		c.checkpoints = &foldCheckpoints{}
+	}
+	return c.checkpoints
 }
 
 // list answers a list read.
@@ -416,17 +431,20 @@ func view(r Reader, o omwire.Options) (*PointInTime, error) {
 	return PointInTimeUntil(r.Entries, o.Until), nil
 }
 
-// noteSet is one note read's rows and the records they stand for, in row order.
+// noteSet is one note read's rows and the records they stand for, in row order, with each
+// record's status tag (retrieve.TagOf).
 type noteSet struct {
 	t     *table
 	notes []om.Note
+	obs   []ledger.Observation
+	tags  []string
 }
 
 // noteRows reads the notes of r (records, when set, instead of r's ledger) as om values and
 // their rows. Only the kinds fn reads are listed, files as each path's newest state, attempts
 // by outcome.
 func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
-	folded := ledger.FoldLedger(r.Entries, "")
+	folded := r.folded()
 	if fn == omwire.MDropped {
 		var dropped []ledger.Observation
 		for _, obs := range folded.Observations {
@@ -470,6 +488,11 @@ func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
 	kept.Fields, kept.Also, kept.Clip = rows.Fields, rows.Also, rows.Clip
 	kept.Rows, kept.From, kept.To = [][]string{}, []string{}, []string{}
 	var notes []om.Note
+	var kepts []ledger.Observation
+	var tags []string
+	contested := ledger.Contested(folded.ActiveObservations)
+	labels := folded.Labels()
+	byTag := retrieve.IsTag(o.Status) && o.Status != ledger.StatusRetracted
 	for i, row := range rows.Rows {
 		id := strings.TrimSuffix(row[0], OffPathLabel)
 		obs, ok := byID[id]
@@ -486,12 +509,33 @@ func noteRows(r Reader, fn string, o omwire.Options, v *PointInTime) noteSet {
 		if fn == omwire.MFiles && obs.Target != "" && newest[obs.Target] != i {
 			continue
 		}
-		kept.add(row, rows.From[i], rows.To[i])
 		n := noteOf(rows.Fields, row, obs, positions, r.Off != nil)
 		n.Dropped = fn == omwire.MDropped
-		notes = append(notes, n)
+		_, isContested := contested[obs.ID]
+		// The fold's label (ledger.FoldedLedger.Labels), except in a point-in-time view, which
+		// reads the links that held at its bound.
+		tag, labelled := labels[obs.ID]
+		if !labelled || v != nil {
+			tag = retrieve.TagOf(obs, supersededNow(n.SupersededBy), n.Status == ledger.StatusRetracted, isContested)
+		}
+		if byTag && tag != o.Status {
+			continue
+		}
+		kept.add(row, rows.From[i], rows.To[i])
+		notes, kepts, tags = append(notes, n), append(kepts, obs), append(tags, tag)
 	}
-	return noteSet{t: newTable("notes", kept, nil), notes: notes}
+	return noteSet{t: newTable("notes", kept, nil), notes: notes, obs: kepts, tags: tags}
+}
+
+// supersededNow reports a superseded_by list naming a record that holds now: one not marked as
+// recorded after a point-in-time bound (LaterMark).
+func supersededNow(by []string) bool {
+	for _, id := range by {
+		if !strings.HasSuffix(id, LaterMark) {
+			return true
+		}
+	}
+	return false
 }
 
 func recordsOf(r Reader) []ledger.Observation {
@@ -543,6 +587,9 @@ func splitIDs(s string) []string {
 // notes answers Notes, Files, Commits, Attempts and Dropped: on the branch, else (for every
 // read but Dropped) the off-path fallback when the branch has none.
 func (c *Call) notes(ctx context.Context, fn string, o omwire.Options, n int) (any, error) {
+	if c.retrieves(o) {
+		return c.searchNotes(ctx, fn, o, n)
+	}
 	read := func(r Reader, ranked bool) (noteSet, error) {
 		v, err := view(r, o)
 		if err != nil {
@@ -585,9 +632,96 @@ func (c *Call) notes(ctx context.Context, fn string, o omwire.Options, n int) (a
 	shown, nextSnippet := bound(n, matched, next, fn, o)
 	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: set.t.ranked}
 	var hits []string
+	fresh := map[string]string(nil)
+	if shown > 0 && set.t.anchors != nil {
+		fresh = c.freshness()
+	}
 	for _, i := range set.t.idx[:shown] {
+		set.notes[i].Fresh = fresh[set.notes[i].ID]
 		out.Rows = append(out.Rows, set.notes[i])
 		hits = append(hits, set.notes[i].ID)
+	}
+	c.Record.read(hits, shown > 0, o.Search)
+	return out, nil
+}
+
+// retrieves reports a notes read the search ranks (retrieve.Search): the memory tool's, with a
+// search and no sort. A detector's read filters as the query language always did, so its counts
+// mean what its search says.
+func (c *Call) retrieves(o omwire.Options) bool {
+	return c.detector == nil && len(o.Search) > 0 && o.SortField == ""
+}
+
+// searchNotes answers a ranked notes search (docs/protocol.md, "Retrieval"): every other
+// filter first, over the branch and else the off-path fallback, so a status or point-in-time
+// filter applies before the bound; then retrieve.Search over what is left, in ledger order. A
+// result is one row whatever it merged (Note.With). The next page of a ranked list is a bigger
+// one (bound).
+func (c *Call) searchNotes(ctx context.Context, fn string, o omwire.Options, n int) (any, error) {
+	type ranked struct {
+		set     noteSet
+		pool    []int
+		results []retrieve.Result
+		partial bool
+	}
+	pooled := o
+	pooled.Search = nil
+	read := func(r Reader) (ranked, error) {
+		v, err := view(r, o)
+		if err != nil {
+			return ranked{}, err
+		}
+		set := noteRows(r, fn, o, v)
+		if r.Off == nil {
+			set.t.anchors = NewAnchors(r.Entries, nil, AnchorNotes)
+		}
+		if err := filterSet(ctx, set.t, pooled); err != nil {
+			return ranked{}, err
+		}
+		docs := make([]retrieve.Doc, len(set.t.idx))
+		for k, i := range set.t.idx {
+			d := retrieve.DocOf(set.obs[i], set.notes[i].Content, set.tags[i])
+			d.Hay = strings.ToLower(strings.Join(set.t.rows[k], "\n"))
+			docs[k] = d
+		}
+		if err := ctx.Err(); err != nil {
+			return ranked{}, err
+		}
+		results, partial := retrieve.Search(docs, o.Search)
+		return ranked{set: set, pool: set.t.idx, results: results, partial: partial}, nil
+	}
+	r := c.reader()
+	got, err := read(r)
+	if err != nil {
+		return nil, err
+	}
+	if (len(got.results) == 0 || got.partial) && fn != omwire.MDropped && len(c.SessionEntries) > 0 {
+		if off, err := read(r.Fallback()); err == nil && len(off.results) > 0 && (!off.partial || len(got.results) == 0) {
+			got = off
+		}
+	}
+	matched := len(got.results)
+	shown, nextSnippet := bound(n, matched, nil, fn, o)
+	out := om.NoteList{Rows: []om.Note{}, Matched: matched, Showing: shown, Next: nextSnippet, Partial: got.partial}
+	var hits []string
+	fresh := map[string]string(nil)
+	if shown > 0 && got.set.t.anchors != nil {
+		fresh = c.freshness()
+	}
+	note := func(k int) om.Note {
+		i := got.pool[k]
+		nt := got.set.notes[i]
+		nt.Tag = got.set.tags[i]
+		nt.Fresh = fresh[nt.ID]
+		hits = append(hits, nt.ID)
+		return nt
+	}
+	for _, res := range got.results[:shown] {
+		row := note(res.Hit)
+		for _, w := range res.With {
+			row.With = append(row.With, note(w))
+		}
+		out.Rows = append(out.Rows, row)
 	}
 	c.Record.read(hits, shown > 0, o.Search)
 	return out, nil
@@ -624,7 +758,7 @@ func (c *Call) reflections(ctx context.Context, o omwire.Options, n int) (any, e
 		return nil, err
 	}
 	rows := r.Reflections(v)
-	folded := ledger.FoldLedger(r.Entries, "")
+	folded := r.folded()
 	positions := ledger.EntryIndexByID(r.Entries)
 	values := make([]om.Reflection, len(rows.Rows))
 	for i, row := range rows.Rows {
@@ -733,24 +867,23 @@ func (c *Call) history(ctx context.Context, o omwire.Options, n int) (any, error
 }
 
 // saved answers Saved: the curated memories visible from this project ranked as the index ranks
-// them, a staged one only in the sessions that staged it, then the files the validator refused
+// them, a staged one only in the sessions that staged it and none whose forget this session
+// staged (curated.Store.ListAs) and no held one this session did not release
+// (curated.Store.Shown), then the files the validator refused
 // with their reason.
 func (c *Call) saved(ctx context.Context, o omwire.Options, n int) (any, error) {
 	if c.Curated == nil {
 		return nil, errCuratedOff
 	}
 	store := c.Curated.Store
-	listed, err := store.List(c.Curated.Project)
+	memories, err := store.ListAs(c.Curated.Project, c.Curated.Source)
 	if err != nil {
 		return nil, err
 	}
+	// A memory that weakens security is held (curated.HeldRule): listed only in a session whose
+	// user's words released it.
+	memories = store.Shown(memories, c.Curated.Source)
 	usage := store.RankUsage()
-	var memories []curated.Memory
-	for _, m := range listed {
-		if curated.SeenBy(m, c.Curated.Source) {
-			memories = append(memories, m)
-		}
-	}
 	rows := Rows{Fields: []string{"name", "type", "scope", "updated", "description", "body", "state", "reason"}, Rows: [][]string{}, From: []string{}, To: []string{}}
 	var values []om.Memory
 	for _, m := range curated.Rank(memories, usage) {

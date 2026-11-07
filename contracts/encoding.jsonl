@@ -1,0 +1,121 @@
+{"name":"plain statement","kind":"hedge","input":"The build uses make.","want":"stated"}
+{"name":"empty","kind":"hedge","input":"","want":"stated"}
+{"name":"i think","kind":"hedge","input":"I think the port is 8080.","want":"hedged"}
+{"name":"curly apostrophe","kind":"hedge","input":"I don’t think it works.","want":"hedged"}
+{"name":"not sure","kind":"hedge","input":"Not sure the cache is warm.","want":"hedged"}
+{"name":"maybe at start","kind":"hedge","input":"Maybe use the staging DB.","want":"hedged"}
+{"name":"might","kind":"hedge","input":"This might break the tests.","want":"hedged"}
+{"name":"probably","kind":"hedge","input":"It's probably the lockfile.","want":"hedged"}
+{"name":"i guess","kind":"hedge","input":"I guess we keep it.","want":"hedged"}
+{"name":"seems","kind":"hedge","input":"It seems flaky on CI.","want":"hedged"}
+{"name":"may be","kind":"hedge","input":"The token may be expired.","want":"hedged"}
+{"name":"may alone is not a hedge","kind":"hedge","input":"Ship it in May.","want":"stated"}
+{"name":"apparently is hearsay","kind":"hedge","input":"Apparently the API rate-limits at 100 rps.","want":"unverified"}
+{"name":"i heard","kind":"hedge","input":"I heard the release moved.","want":"unverified"}
+{"name":"someone told me","kind":"hedge","input":"Someone told me the cert expires Friday.","want":"unverified"}
+{"name":"hearsay outranks a hedge","kind":"hedge","input":"I think, apparently, it is fixed.","want":"unverified"}
+{"name":"whole words only: mighty","kind":"hedge","input":"A mighty refactor landed.","want":"stated"}
+{"name":"whole words only: seemsless","kind":"hedge","input":"The seemsless parser ran.","want":"stated"}
+{"name":"whole words only: unsurely","kind":"hedge","input":"The unsurely named field.","want":"stated"}
+{"name":"an apostrophe before is no boundary","kind":"hedge","input":"He'maybe","want":"stated"}
+{"name":"punctuation is a boundary","kind":"hedge","input":"(maybe) later","want":"hedged"}
+{"name":"upper case","kind":"hedge","input":"PROBABLY NOT.","want":"hedged"}
+{"name":"whitespace runs fold","kind":"hedge","input":"I\n\tthink so","want":"hedged"}
+{"name":"likely","kind":"hedge","input":"Most likely a race.","want":"hedged"}
+{"name":"unlikely","kind":"hedge","input":"Unlikely to matter.","want":"hedged"}
+{"name":"iirc","kind":"hedge","input":"IIRC the flag is -race.","want":"hedged"}
+{"name":"non-ASCII neighbours are boundaries","kind":"hedge","input":"émaybeé","want":"hedged"}
+{"name":"digits are word characters","kind":"hedge","input":"maybe2","want":"stated"}
+{"name":"npm package","kind":"versions","input":"Run npm install react@18.3.1 first.","want":["react@18.3.1"]}
+{"name":"scoped package","kind":"versions","input":"Pin @types/node@20.11.5, then build.","want":["@types/node@20.11.5"]}
+{"name":"go module with v","kind":"versions","input":"go get golang.org/x/net@v0.24.0","want":["golang.org/x/net@v0.24.0"]}
+{"name":"quotes and brackets","kind":"versions","input":"use `left-pad@1.3.0`, and (lodash@4.17.21).","want":["left-pad@1.3.0","lodash@4.17.21"]}
+{"name":"an email is no version","kind":"versions","input":"mail me at dev@example.com","want":[]}
+{"name":"latest is no version","kind":"versions","input":"go install x@latest","want":[]}
+{"name":"repeats once","kind":"versions","input":"a@1 a@1 b@2","want":["a@1","b@2"]}
+{"name":"the name needs a letter","kind":"versions","input":"1.2@3.4","want":[]}
+{"name":"no name","kind":"versions","input":"@1.2.3","want":[]}
+{"name":"a bad version character","kind":"versions","input":"pkg@1.2/3","want":[]}
+{"name":"none","kind":"versions","input":"nothing here","want":[]}
+{"name":"plan","kind":"timeHint","input":"{\"content\":\"I'll migrate the DB tomorrow.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\",\"status\":\"proposed\"}","want":"after:2026-11-02"}
+{"name":"past event","kind":"timeHint","input":"{\"content\":\"We already moved CI to GitHub Actions.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\"}","want":"before:2026-11-02"}
+{"name":"the assistant's past event","kind":"timeHint","input":"{\"content\":\"I fixed this earlier.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"assistant\"}","want":"before:2026-11-02"}
+{"name":"a past event with a date has none","kind":"timeHint","input":"{\"content\":\"We already shipped it on 2026-10-30.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\",\"eventDate\":\"2026-10-30\"}","want":""}
+{"name":"a preference has none","kind":"timeHint","input":"{\"content\":\"I previously preferred tabs.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"preference\"}","want":""}
+{"name":"a hypothetical has none","kind":"timeHint","input":"{\"content\":\"If we already have it, skip.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\",\"status\":\"hypothetical\"}","want":""}
+{"name":"a plain fact has none","kind":"timeHint","input":"{\"content\":\"The port is 8080.\",\"timestamp\":\"2026-11-02 10:00\",\"kind\":\"fact\"}","want":""}
+{"name":"no date, no hint","kind":"timeHint","input":"{\"content\":\"I'll do it.\",\"timestamp\":\"later\",\"kind\":\"fact\",\"status\":\"proposed\"}","want":""}
+{"name":"authority of user-said","kind":"authority","input":"user-said","want":"user"}
+{"name":"authority of harness-memory","kind":"authority","input":"harness-memory","want":"repo-file"}
+{"name":"authority of tool-observed","kind":"authority","input":"tool-observed","want":"tool"}
+{"name":"authority of assistant-claim","kind":"authority","input":"assistant-claim","want":"model"}
+{"name":"authority of model-inferred","kind":"authority","input":"model-inferred","want":"model"}
+{"name":"authority of host-summary","kind":"authority","input":"host-summary","want":"model"}
+{"name":"authority of other-session","kind":"authority","input":"other-session","want":"model"}
+{"name":"authority of external-untrusted","kind":"authority","input":"external-untrusted","want":"model"}
+{"name":"authority of none","kind":"authority","input":"","want":""}
+{"name":"source of origin:peer","kind":"customSource","input":"origin:peer","want":"other-session"}
+{"name":"source of origin:task-notification","kind":"customSource","input":"origin:task-notification","want":"tool-observed"}
+{"name":"source of origin:other","kind":"customSource","input":"origin:other","want":"external-untrusted"}
+{"name":"source of note","kind":"customSource","input":"note","want":""}
+{"kind":"pushback","name":"i'd push back","input":"I'd push back: global state makes the tests flaky.","want":"true"}
+{"kind":"pushback","name":"i disagree","input":"I disagree, the cache is needed.","want":"true"}
+{"kind":"pushback","name":"not quite right","input":"That's not quite right; the port is 9090.","want":"true"}
+{"kind":"pushback","name":"curly apostrophe","input":"That’s not correct.","want":"true"}
+{"kind":"pushback","name":"however this would","input":"However, this would break the parallel tests.","want":"true"}
+{"kind":"pushback","name":"could break","input":"That could break the release build.","want":"true"}
+{"kind":"pushback","name":"advise against","input":"I would advise against vendoring it.","want":"true"}
+{"kind":"pushback","name":"actually, a disagreement","input":"Actually, the flag was removed in v2.","want":"true"}
+{"kind":"pushback","name":"actually, a self-correction","input":"Actually, let me check the config first.","want":"false"}
+{"kind":"pushback","name":"actually inside a word list","input":"It actually works.","want":"false"}
+{"kind":"pushback","name":"agreement","input":"Sounds good, I will use the make target.","want":"false"}
+{"kind":"pushback","name":"whole words: pushbacks","input":"The pushbacks were logged.","want":"false"}
+{"kind":"pushback","name":"upper case","input":"I DISAGREE.","want":"true"}
+{"kind":"pushback","name":"not a good idea","input":"It is not a good idea to skip the tests.","want":"true"}
+{"kind":"concedes","name":"you're right","input":"You're right, inject it.","want":"true"}
+{"kind":"concedes","name":"fair enough","input":"Fair enough.","want":"true"}
+{"kind":"concedes","name":"restating","input":"No, keep the globals.","want":"false"}
+{"kind":"restates","name":"same keys","input":"{\"claim\":\"Always use globals in `internal/cfg`.\",\"restatement\":\"No, keep the globals in `internal/cfg`.\"}","want":"true"}
+{"kind":"restates","name":"missing key","input":"{\"claim\":\"Always use globals in `internal/cfg` and `cmd/`.\",\"restatement\":\"Keep the globals in `internal/cfg`.\"}","want":"false"}
+{"kind":"restates","name":"negated","input":"{\"claim\":\"Use port 8080 for the proxy.\",\"restatement\":\"Do not use port 8080 for the proxy.\"}","want":"false"}
+{"kind":"restates","name":"specifics without keys","input":"{\"claim\":\"Use port 8080 for the proxy.\",\"restatement\":\"No, port 8080 is what I want.\"}","want":"true"}
+{"kind":"restates","name":"no keys and no specifics","input":"{\"claim\":\"Always use tabs.\",\"restatement\":\"Always use tabs, really.\"}","want":"false"}
+{"kind":"episode","name":"with session","input":"{\"session\":\"s1\",\"entry\":\"u1\"}","want":"4959a3a20621"}
+{"kind":"episode","name":"empty session","input":"{\"session\":\"\",\"entry\":\"u1\"}","want":"cd5ade7c9262"}
+{"name":"same path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"api/limit.go\"}","want":"true"}
+{"name":"absolute receipt path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"/srv/app/api/limit.go\"}","want":"true"}
+{"name":"relative receipt path","kind":"keyMatches","input":"{\"key\":\"/srv/app/api/limit.go\",\"receipt\":\"api/limit.go\"}","want":"true"}
+{"name":"leading dot slash","kind":"keyMatches","input":"{\"key\":\"./api/limit.go\",\"receipt\":\"api/limit.go\"}","want":"true"}
+{"name":"a bare word never matches a path's last element","kind":"keyMatches","input":"{\"key\":\"limit\",\"receipt\":\"/srv/app/api/limit\"}","want":"false"}
+{"name":"a different path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"api/limits.go\"}","want":"false"}
+{"name":"a suffix without a slash is no match","kind":"keyMatches","input":"{\"key\":\"limit.go\",\"receipt\":\"/srv/app/api/ratelimit.go\"}","want":"false"}
+{"name":"command equal","kind":"keyMatches","input":"{\"key\":\"make migrate-up\",\"receipt\":\"make migrate-up\"}","want":"true"}
+{"name":"command holding the key as words","kind":"keyMatches","input":"{\"key\":\"make migrate-up\",\"receipt\":\"make migrate-up ENV=staging\"}","want":"true"}
+{"name":"command holding part of a word","kind":"keyMatches","input":"{\"key\":\"make test\",\"receipt\":\"make test-unit\"}","want":"false"}
+{"name":"command naming the path","kind":"keyMatches","input":"{\"key\":\"api/limit.go\",\"receipt\":\"go test ./api/limit.go\"}","want":"true"}
+{"name":"empty key","kind":"keyMatches","input":"{\"key\":\"\",\"receipt\":\"make test\"}","want":"false"}
+{"name":"path and its stem","kind":"staleTerms","input":"Next we will add rate limiting to `api/limit.go` with a burst of 20.","want":"api/limit.go | limit"}
+{"name":"short stem left out","kind":"staleTerms","input":"Next we will fix `db/x.go` by 3 PM.","want":"db/x.go"}
+{"name":"command key alone","kind":"staleTerms","input":"Next we will run the 3 pending migrations with `make migrate-up`.","want":"make migrate-up"}
+{"name":"no keys","kind":"staleTerms","input":"Next we will ship build 42 on Friday.","want":""}
+{"name":"dot file stem","kind":"staleTerms","input":"Next we will read `docs/limits.md` for the 3 tiers.","want":"docs/limits.md | limits"}
+{"name":"stem as a whole word","kind":"bearsOn","input":"{\"text\":\"New requirement: the rate limit must be per tenant, keyed by `X-Tenant-ID`.\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"true"}
+{"name":"stem inside a longer word","kind":"bearsOn","input":"{\"text\":\"How is the limiter going?\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"false"}
+{"name":"the same path as a key","kind":"bearsOn","input":"{\"text\":\"Make `api/limit.go` read the tenant header.\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"true"}
+{"name":"case folded","kind":"bearsOn","input":"{\"text\":\"The LIMIT is per tenant now.\",\"terms\":[\"limit\"]}","want":"true"}
+{"name":"unrelated","kind":"bearsOn","input":"{\"text\":\"The export must be gzip compressed.\",\"terms\":[\"api/limit.go\",\"limit\"]}","want":"false"}
+{"name":"a path term never matches a word","kind":"bearsOn","input":"{\"text\":\"the api limit go file\",\"terms\":[\"api/limit.go\"]}","want":"false"}
+{"name":"read","kind":"readPlan","input":"Next we will read `docs/limits.md` for the 3 tiers.","want":"true"}
+{"name":"look at","kind":"readPlan","input":"Next I will look at `internal/api/handler.go` for the 2 bugs.","want":"true"}
+{"name":"reread","kind":"readPlan","input":"We will reread `NOTES.md` before the 3 PM review.","want":"true"}
+{"name":"not a read","kind":"readPlan","input":"Next we will add rate limiting to `api/limit.go` with a burst of 20.","want":"false"}
+{"name":"ready is not read","kind":"readPlan","input":"Next we will get the 2 builds ready.","want":"false"}
+{"name":"don't touch","kind":"scopeExclusion","input":"Don't touch `db/migrations/` while you work on this.","want":"true"}
+{"name":"curly apostrophe","kind":"scopeExclusion","input":"Don’t touch `vendor/`.","want":"true"}
+{"name":"leave alone","kind":"scopeExclusion","input":"Leave the vendor directory alone.","want":"true"}
+{"name":"a rule that is not a scope exclusion","kind":"scopeExclusion","input":"Never run `pytest` directly here; always use `make ci-local` instead.","want":"false"}
+{"name":"not tail with a key","kind":"replacedRule","input":"Actually, always use `make ci` for the tests, not `make test`.","want":"`make test`"}
+{"name":"instead of a key","kind":"replacedRule","input":"Use `pnpm` instead of `npm`.","want":"`npm`"}
+{"name":"not but","kind":"replacedRule","input":"Run not `make test` but `make ci` before you push.","want":"`make test`"}
+{"name":"no key in the phrase","kind":"replacedRule","input":"Use tabs, not spaces.","want":""}
+{"name":"no replaced phrase","kind":"replacedRule","input":"Always use `make ci`.","want":""}

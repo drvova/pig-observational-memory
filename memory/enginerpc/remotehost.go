@@ -25,6 +25,9 @@ var (
 	_ host.ToolHost          = (*remoteHost)(nil)
 	_ host.ConfigHomer       = (*remoteHost)(nil)
 	_ host.SessionFileReader = (*remoteHost)(nil)
+	_ host.RepoReader        = (*remoteHost)(nil)
+	_ host.StructureReader   = (*remoteHost)(nil)
+	_ host.HarnessNamer      = (*remoteHost)(nil)
 )
 
 // call makes one host call. Host calls are not cancelled by the event's cancellation: the
@@ -71,8 +74,34 @@ func (h *remoteHost) stringCall(method string) string {
 func (h *remoteHost) SessionID() string   { return h.stringCall(MethodSessionID) }
 func (h *remoteHost) SessionFile() string { return h.stringCall(MethodSessionFile) }
 func (h *remoteHost) ConfigHome() string  { return h.stringCall(MethodConfigHome) }
-func (h *remoteHost) HasUI() bool         { return h.scope.HasUI }
-func (h *remoteHost) Cwd() string         { return h.scope.Cwd }
+func (h *remoteHost) Harness() string     { return h.stringCall(MethodHarness) }
+
+// Repo is the adapter's host.RepoReader answer; an adapter whose host reads none answers null.
+func (h *remoteHost) Repo() (host.Repo, bool, error) {
+	var out RepoResult
+	if err := h.call(MethodRepo, h.scoped(), &out); err != nil {
+		return host.Repo{}, false, err
+	}
+	if out.Repo == nil {
+		return host.Repo{}, false, nil
+	}
+	return *out.Repo, true, nil
+}
+
+// Structure is the adapter's host.StructureReader answer; an adapter whose host reads none
+// answers null.
+func (h *remoteHost) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	var out StructureResult
+	if err := h.call(MethodStructure, StructureParams{Scope: h.scope.ID, Query: q}, &out); err != nil {
+		return host.StructureAnswer{}, false, err
+	}
+	if out.Answer == nil {
+		return host.StructureAnswer{}, false, nil
+	}
+	return *out.Answer, true, nil
+}
+func (h *remoteHost) HasUI() bool { return h.scope.HasUI }
+func (h *remoteHost) Cwd() string { return h.scope.Cwd }
 
 func (h *remoteHost) Notify(message, level string) {
 	_ = h.call(MethodNotify, NotifyParams{Scope: h.scope.ID, Message: message, Level: level}, nil)

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
@@ -16,7 +18,9 @@ import (
 // message.id) are one assistant entry, under the first line's uuid; a user line's tool_result
 // blocks are toolResult entries. Subagent (isSidechain), meta and transcript-only lines, the
 // harness's own compaction summary (isCompactSummary), attachments and API errors are not the
-// conversation and are left out. A compaction that keeps recent messages (a compact_boundary's
+// conversation and are left out. A user line whose origin.kind is set and is not "human" (a
+// background subagent's result, a message from another session) is not the person's words: it
+// is a custom_message (originMessage), never a user entry. A compaction that keeps recent messages (a compact_boundary's
 // compactMetadata.preservedSegment, head to tail) leaves them on a side chain that Claude Code
 // relinks after the anchor; they are read there.
 func ClaudeCode(lines []map[string]any) []session.Entry {
@@ -113,7 +117,11 @@ func ClaudeCode(lines []map[string]any) []session.Entry {
 				}
 			}
 			if len(content) > 0 && n == 0 {
-				out = append(out, message(id, ts, map[string]any{"role": "user", "content": content}, nil))
+				if kind := originKind(l); kind != "" {
+					out = append(out, originMessage(id, ts, kind, content))
+				} else {
+					out = append(out, message(id, ts, map[string]any{"role": "user", "content": content}, nil))
+				}
 			}
 		}
 	}
@@ -135,6 +143,29 @@ func skipClaudeLine(l map[string]any) bool {
 	}
 	t := str(l["type"])
 	return t != "user" && t != "assistant"
+}
+
+// OriginCustomPrefix starts the customType of the custom_message the reader makes of a user
+// line that is not the person's words (originKind).
+const OriginCustomPrefix = "origin:"
+
+// originKind is the origin.kind of a user line Claude Code wrote for someone other than the
+// person ("task-notification" for a background subagent's result, "peer" for a message from
+// another session); "" for the person's own turn (origin.kind "human") and for a line with no
+// origin.kind (older versions, and the Claude Code-shaped readers that write none).
+func originKind(l map[string]any) string {
+	origin, _ := l["origin"].(map[string]any)
+	if kind := str(origin["kind"]); kind != "human" {
+		return kind
+	}
+	return ""
+}
+
+// originMessage is such a line as a custom_message ("origin:<kind>"): a source entry, so it is
+// kept, recalled and shown to level 1 as a custom message, but never a user entry, so level 0
+// gives it no user authority (no request, quote, save, forget or rule).
+func originMessage(id, timestamp, kind string, content []any) session.Entry {
+	return session.FromMap(map[string]any{"type": "custom_message", "id": id, "timestamp": timestamp, "customType": OriginCustomPrefix + kind, "content": content, "display": true})
 }
 
 // blocks is a content value as a block list: a string is one text block.
@@ -170,13 +201,48 @@ func KodeSessionPath(cwd, sessionID string) string {
 		}
 		root = filepath.Join(home, ".kode")
 	}
-	slug := []byte(cwd)
-	for i, c := range slug {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
-			slug[i] = '-'
+	return filepath.Join(root, "projects", JSSlug(cwd), sessionID+".jsonl")
+}
+
+// JSSlug is s with every character that is not an ASCII letter or digit as -, the way
+// JavaScript's s.replace(/[^a-zA-Z0-9]/g, "-") does it: one - per UTF-16 code unit, so a
+// character outside the Basic Multilingual Plane (an emoji) becomes two and any other non-ASCII
+// character one. Claude Code and Kode name a project's folder so.
+func JSSlug(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			b.WriteString("--")
+		default:
+			b.WriteByte('-')
 		}
 	}
-	return filepath.Join(root, "projects", string(slug), sessionID+".jsonl")
+	return b.String()
+}
+
+// claudeProjectMax is the longest folder name Claude Code keeps whole.
+const claudeProjectMax = 200
+
+// ClaudeProjectDir is the name of Claude Code's projects folder for cwd (its sanitizePath): the
+// cwd as JSSlug, and when that is longer than 200 characters its first 200, a -, and the base-36
+// absolute value of the cwd's 32-bit string hash (h = h*31 + unit over its UTF-16 code units).
+func ClaudeProjectDir(cwd string) string {
+	slug := JSSlug(cwd)
+	if len(slug) <= claudeProjectMax {
+		return slug
+	}
+	var h int32
+	for _, u := range utf16.Encode([]rune(cwd)) {
+		h = h*31 + int32(u)
+	}
+	n := int64(h)
+	if n < 0 {
+		n = -n
+	}
+	return slug[:claudeProjectMax] + "-" + strconv.FormatInt(n, 36)
 }
 
 // splicePreserved puts each compaction's preserved segment (compactMetadata.preservedSegment

@@ -13,8 +13,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
@@ -75,6 +77,42 @@ type Reader struct {
 	// Off marks the off-path fallback's read over the session file: rows on the branch are left
 	// out and the others labelled OffPathLabel. Nil on the branch.
 	Off *OffPath
+	// checkpoints, when set, are the call's fold checkpoints (foldCheckpoints).
+	checkpoints *foldCheckpoints
+}
+
+// foldCheckpoints are a memory tool call's folded ledgers, one per snapshot it reads (the branch,
+// the session file): a fold checkpoint (docs/brain-memory.md, decision 12), engine-private,
+// rebuilt by every call and never compared between engines, so each of the call's reads folds a
+// snapshot once. A snapshot is the call's own slice, unchanged while the call runs, so its first
+// element and length name it. A checkpoint is read only: no read changes a folded ledger.
+type foldCheckpoints struct {
+	mu   sync.Mutex
+	fold map[foldKey]ledger.FoldedLedger
+}
+
+type foldKey struct {
+	first *session.Entry
+	n     int
+}
+
+// folded is ledger.FoldLedger(r.Entries, ""), from the call's checkpoint when it has one.
+func (r Reader) folded() ledger.FoldedLedger {
+	if r.checkpoints == nil || len(r.Entries) == 0 {
+		return ledger.FoldLedger(r.Entries, "")
+	}
+	key := foldKey{&r.Entries[0], len(r.Entries)}
+	r.checkpoints.mu.Lock()
+	defer r.checkpoints.mu.Unlock()
+	if f, ok := r.checkpoints.fold[key]; ok {
+		return f
+	}
+	f := ledger.FoldLedger(r.Entries, "")
+	if r.checkpoints.fold == nil {
+		r.checkpoints.fold = map[foldKey]ledger.FoldedLedger{}
+	}
+	r.checkpoints.fold[key] = f
+	return f
 }
 
 // OffPath is the off-path fallback's filter: the ids of the entries and records on the branch.
@@ -178,7 +216,7 @@ func (r Reader) Notes(view *PointInTime) Rows {
 	if r.Records != nil {
 		all, active, aliases, contextSubjects = r.Records.Observations, r.Records.Observations, r.Records.Aliases, r.Records.SubjectContext
 	} else {
-		folded := ledger.FoldLedger(r.Entries, "")
+		folded := r.folded()
 		if view != nil {
 			// A link is read through level 1's replacements only as far as they held at the
 			// bound: a correction made before a later relabel supersedes the record it named.
@@ -336,7 +374,7 @@ func (r Reader) Reflections(view *PointInTime) Rows {
 	if r.Records != nil {
 		reflections, dates = r.Records.Reflections, r.Records.ReflectionDates
 	} else {
-		folded := ledger.FoldLedger(r.Entries, "")
+		folded := r.folded()
 		reflections, dates = folded.Reflections, ledger.ReflectionDateRanges(folded)
 		if view != nil {
 			reflections = view.reflections(r.Entries)
@@ -440,9 +478,26 @@ func QuotedByUser(entries []session.Entry, quote string, skip []string) bool {
 	return quotedIn(entries, quote, skip, true, serialize.HistoryUser)
 }
 
+// QuotedSource is the source content a staged save quoting tool output cites
+// (curated.Call.SourceOf): the curated.SourceDigest of the first tool result on the branch
+// holding quote, whitespace collapsed and case ignored; "" when none does. The calls of the
+// memory tools in skip are left out, so text the model printed through them is no source.
+func QuotedSource(entries []session.Entry, quote string, skip []string) string {
+	if text, ok := quotedText(entries, quote, skip, false, serialize.HistoryTool); ok {
+		return curated.SourceDigest(text)
+	}
+	return ""
+}
+
 // quotedIn reports whether quote is in a message on the branch whose role is one of roles; v2
 // reads it as memory v2's history does.
 func quotedIn(entries []session.Entry, quote string, skip []string, v2 bool, roles ...string) bool {
+	_, ok := quotedText(entries, quote, skip, v2, roles...)
+	return ok
+}
+
+// quotedText is the text of the first message quotedIn finds quote in.
+func quotedText(entries []session.Entry, quote string, skip []string, v2 bool, roles ...string) (string, bool) {
 	needle := strings.ToLower(strings.Join(strings.Fields(quote), " "))
 	for _, entry := range entries {
 		role, text, ok := HistoryText(entry, v2, skip)
@@ -450,8 +505,8 @@ func quotedIn(entries []session.Entry, quote string, skip []string, v2 bool, rol
 			continue
 		}
 		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), needle) {
-			return true
+			return text, true
 		}
 	}
-	return false
+	return "", false
 }

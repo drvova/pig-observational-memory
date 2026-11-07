@@ -92,16 +92,18 @@ the held index records, whose header names engine v2."
                      (string= (recorded index (seed-key kind name)) (digest-octets data)))
             (return-from held-v2-p t)))))))
 
-(defun consolidation-instructions (store model)
-  "declare.Active.Instructions(consolidation) over the effective layer: the text of the model's
-written, then held (v2) consolidation instructions, for all models then the model; \"\" while the
-seed stands."
+(defun consolidation-instructions (store model &key (repo "") (family ""))
+  "declare.Active.Instructions(consolidation) over the effective layer, scoped to repo and family
+(layer.Harness.InScope): the text of the model's written, then held (v2) consolidation
+instructions, for all models then the model; a written one whose settled scope does not cover
+repo and family is left out; \"\" while the seed stands."
   (let ((text ""))
     (when (and store (string/= store "") (string/= model ""))
       (dolist (m (if (string= model +all-models+) (list +all-models+) (list +all-models+ model)))
         (let ((written (find +instructions-consolidation+ (list-defs store m +kind-instructions+)
                              :key #'om.layer::gdef-name :test #'string=)))
-          (when written (setf text (s0 (om.layer::gdef-text written)))))
+          (when (and written (scope-covers-p (written-scope store m +kind-instructions+ +instructions-consolidation+) repo family))
+            (setf text (s0 (om.layer::gdef-text written)))))
         (let ((held (held-file store m +kind-instructions+ +instructions-consolidation+)))
           (when held (setf text (s0 (om.layer::gdef-text held)))))))
     text))
@@ -350,7 +352,7 @@ digest written, :removed, or nil when it already did."
                (write-atomic path (octets-text blob))
                target)))))
 
-(defun claim-held (store d clean reason)
+(defun claim-held (store d clean reason &optional scope)
   "ClaimHeld for one held definition the compaction ran with: settled only while its held file
 still holds that text and mode under v2. Returns the notice text, or nil."
   (with-locked (store)
@@ -371,7 +373,7 @@ still holds that text and mode under v2. Returns the notice text, or nil."
           (clean
            (multiple-value-bind (stamped refusal) (stamp-lifted loaded)
              (when refusal (error "settle ~A/~A: ~A" kind name refusal))
-             (put-stamped store stamped))
+             (put-stamped store stamped scope))
            (ignore-errors (delete-file path))
            (record-held store model (seed-key kind name) "")
            (format nil "Observational memory: held ~A definition ~A for ~A passed a clean pass and is written to the layer (generation ~D)"
@@ -394,12 +396,151 @@ the notices."
   (when snapshot
     (let ((events (om.layer::model-events store model)) (notices '()))
       (dolist (d snapshot (nreverse notices))
-        (multiple-value-bind (decided clean reason)
+        (multiple-value-bind (decided clean reason scope)
             (om.layer::settle-v2 events :kind +kind-instructions+ :name (om.layer::gdef-name d)
-                                        :held-id (instructions-held-id d) :time (om.layer::gdef-time d))
+                                        :held-id (instructions-held-id d) :time (om.layer::gdef-time d)
+                                        :text (declared d))
           (when decided
-            (let ((n (claim-held store d clean reason))) (when n (push n notices)))))))))
+            (let ((n (claim-held store d clean reason scope))) (when n (push n notices)))))))))
 
-(export '(consolidation-instructions held-instructions-snapshot instructions-held-id proposal-due
+;;; Decision 24 (memory/layer/settle_v2.go, memory/hooks/definitions_v2.go): the read-time scope
+;;; a settlement records on its put, the hold that keeps a security-weakening definition out of
+;;; the layer, and the rollback a security hit makes.
+
+(defun go-states (store model)
+  "manifest.go states: a vector, element n the kind/name -> digest map after generation n."
+  (let ((gens (generations store model)) (out (list (make-hash-table :test 'equal))))
+    (dolist (g gens)
+      (let ((next (make-hash-table :test 'equal)) (op (om::jget g "op")) (target (om::jget g "target"))
+            (prev (first out)))
+        (if (and (string= op "rollback") (realp target) (>= target 0) (< target (length out)))
+            (let ((keep (om::jget g "keep")))
+              (maphash (lambda (k v) (setf (gethash k next) v)) (nth (- (length out) 1 (truncate target)) out))
+              (when (and (vectorp keep) (not (stringp keep)))
+                (loop for k across keep when (stringp k)
+                      do (multiple-value-bind (v ok) (gethash k prev)
+                           (if ok (setf (gethash k next) v) (remhash k next))))))
+            (let ((key (seed-key (om::str (om::jget g "kind")) (om::str (om::jget g "name"))))
+                  (d (om::str (om::jget g "digest"))))
+              (maphash (lambda (k v) (setf (gethash k next) v)) prev)
+              (cond ((or (string= op "forget") (and (string= op "revert") (string= d ""))) (remhash key next))
+                    ((or (string= op "put") (string= op "revert")
+                         (and (string= op "migrate") (not (eq (om::jget g "held") :true))))
+                     (setf (gethash key next) d)))))
+        (push next out)))
+    (coerce (nreverse out) 'simple-vector)))
+
+(defun put-generation-index (gens key d) (om.layer::go-put-generation-index gens key d))
+
+(defun written-scope (store model kind name) (om.layer::go-written-scope store model kind name))
+
+(defun scope-covers-p (scope repo family) (om.layer::scope-covers-p scope repo family))
+
+(defun written-ids (store model)
+  "The held ids of model's own written definitions the image reads (its consolidation
+instructions and remedies): recordCompactionV2's ranWritten."
+  (when (and store (string/= store "") (string/= model ""))
+    (append (loop for d in (list-defs store model +kind-instructions+) collect (instructions-held-id d))
+            (loop for d in (om.layer::go-list-remedies store model)
+                  when (string= (om.layer::gdef-model d) model) collect (om.layer::gdef-held-id d)))))
+
+(defun hold-insecure (store d rule)
+  "layer.Store.HoldInsecure: d's content kept in the model's blobs and an OpHoldInsecure
+generation, no held file; returns the generation's number."
+  (with-locked (store)
+    (let* ((model (om.layer::gdef-model d)) (d (om.layer::copy-gdef d)))
+      (setf (om.layer::gdef-engine d) +engine-v2+ (om.layer::gdef-time d) (now))
+      (let* ((content (encode-file d "")) (dg (digest content)))
+        (write-atomic (blob-path store model dg) content)
+        (append-generation store model "hold-insecure" :kind (om.layer::gdef-kind d) :name (om.layer::gdef-name d)
+                                                       :digest dg :session (om.layer::gdef-session d)
+                                                       :reason (cat "it weakens security (" rule "): held, never applied, settled or proposed over without a user's fresh quoted words"))))))
+
+(defun rule-key-p (key)
+  "rules.IsRule over a kind/name key: a remedy not named after a catalogue remedy."
+  (let ((slash (position #\/ key)))
+    (and slash (string= (subseq key 0 slash) "remedy")
+         (not (member (subseq key (1+ slash)) om.layer::+remedies+ :test #'string=)))))
+
+(defun rollback-locked (store model n keep reason)
+  "rollbackKeeping with no session, the caller holding the lock: (values generation t), or
+(values nil nil) when it would restore content a revert took away."
+  (let* ((gens (generations store model)) (all (go-states store model))
+         (target (aref all n)) (current (aref all (1- (length all))))
+         (migrated (make-hash-table :test 'equal)))
+    (loop for g in gens for i from 0
+          when (and (equal (om::jget g "op") "migrate") (not (eq (om::jget g "held") :true))
+                    (string/= (om::str (om::jget g "digest")) ""))
+            do (let ((key (seed-key (om::str (om::jget g "kind")) (om::str (om::jget g "name")))))
+                 (setf (gethash (cons key (om::str (om::jget g "digest"))) migrated)
+                       (or (gethash key (aref all i)) ""))))
+    (flet ((covers (key reverted d)
+             (loop for x = reverted then (or (gethash (cons key x) migrated) "")
+                   for steps from 0 to (length gens)
+                   while (string/= x "")
+                   when (string= x d) return t)))
+      (loop for g in gens for i from 0
+            when (equal (om::jget g "op") "revert")
+              do (let* ((key (seed-key (om::str (om::jget g "kind")) (om::str (om::jget g "name"))))
+                        (reverted (or (gethash key (aref all i)) ""))
+                        (want (or (gethash key target) "")) (have (or (gethash key current) "")))
+                   (unless (funcall keep key)
+                     (when (and (string/= reverted "") (string/= want "") (covers key reverted want)
+                                (not (covers key reverted have)))
+                       (return-from rollback-locked (values nil nil)))))))
+    (let ((keys '()) (keep-keys '()))
+      (loop for state across all do (maphash (lambda (k v) (declare (ignore v)) (pushnew k keys :test #'string=)) state))
+      (dolist (key (sort keys #'string<))
+        (let ((slash (position #\/ key)))
+          (if (funcall keep key)
+              (unless (equal (gethash key target) (gethash key current)) (push-end* key keep-keys))
+              (restore store model (subseq key 0 slash) (subseq key (1+ slash)) (or (gethash key target) "")))))
+      (dolist (kind +kinds+)
+        (dolist (name (rows-names (om.layer::join-path (model-path store model) "held" kind)))
+          (unless (funcall keep (seed-key kind name))
+            (ignore-errors (delete-file (held-path store model kind name)))
+            (record-held store model (seed-key kind name) ""))))
+      (values (append-generation store model "rollback" :target n :keep keep-keys :reason reason) t))))
+
+(defun rollback-before (store model kind name reason)
+  "layer.Store.RollbackBefore keeping the rules (rules.IsRule) but the name itself: (values
+generation target), target nil when the name alone was reverted; nil when nothing is written
+for the name."
+  (with-locked (store)
+    (let ((data (read-octets (def-path store model kind name))) (key (seed-key kind name)))
+      (when data
+        (let ((at (put-generation-index (generations store model) key (digest-octets data))))
+          (multiple-value-bind (gen ok)
+              (if (>= at 0)
+                  (rollback-locked store model at (lambda (k) (and (string/= k key) (rule-key-p k))) reason)
+                  (values nil nil))
+            (if ok
+                (values gen at)
+                (progn (ignore-errors (delete-file (def-path store model kind name)))
+                       (values (append-generation store model +op-revert+ :kind kind :name name :reason reason) nil)))))))))
+
+(defun rollback-insecure (store model)
+  "rollbackInsecureV2 for the definitions the image reads (the model's written consolidation
+instructions): the layer rolled back to the generation before one that weakens security, on code
+evidence (no model or tool request, so no quote gate applies). Returns the notices."
+  (let ((notices '()))
+    (loop repeat 8
+          do (let* ((d (find +instructions-consolidation+ (list-defs store model +kind-instructions+)
+                             :key #'om.layer::gdef-name :test #'string=))
+                    (rule (and d (om::insecure-match (s0 (om.layer::gdef-text d))))))
+               (unless rule (return))
+               (let* ((key (def-key d))
+                      (reason (format nil "security: ~A weakens security (~A); rolled back to the generation before it entered, on code evidence (no model or tool request, so no quote gate applies)" key rule))
+                      )
+                 (multiple-value-bind (gen target)
+                     (rollback-before store model +kind-instructions+ +instructions-consolidation+ reason)
+                   (unless gen (return))
+                   (push (if target
+                             (format nil "Observational memory: ~A's layer: ~D: rollback to ~D (~A)" model gen target reason)
+                             (format nil "Observational memory: ~A's layer: ~D: revert ~A (~A)" model gen key reason))
+                         notices)))))
+    (nreverse notices)))
+
+(export '(consolidation-instructions held-instructions-snapshot written-ids hold-insecure rollback-insecure instructions-held-id proposal-due
           harness-evidence-text check-level1-definition hold-pass relation settle-held-instructions
           evidence-digest def-key))

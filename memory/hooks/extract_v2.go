@@ -12,6 +12,7 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/runtime"
+	"github.com/drvova/pig-observational-memory/memory/secrets"
 	"github.com/drvova/pig-observational-memory/memory/session"
 )
 
@@ -45,6 +46,7 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 	}
 	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
+	writer, frame, root := encodingOf(rt, h, entries)
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
 		Start:     start,
@@ -52,8 +54,12 @@ func extractTurnV2(rt *runtime.Runtime, h host.Host) {
 		SkipTools: harness.MemoryToolNames(rt),
 		Ledger:    folded,
 		Cwd:       h.Cwd(),
+		Writer:    writer,
+		Frame:     frame,
+		RepoRoot:  root,
 	})
 	result, record := detectV2(ctx, rt, h, "turn_end", entries, start, len(entries), folded, result)
+	stampV2(h, &result)
 	appended, err := appendExtraction(h, result, true)
 	logExtraction(ctx, "turn_end", result, appended, err)
 	if err == nil && len(appended) > 0 {
@@ -106,6 +112,7 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 	}
 	start := ledger.ExtractionStartIndex(entries)
 	folded := ledger.FoldLedger(entries, "")
+	writer, frame, root := encodingOf(rt, h, entries)
 	result := extract.Extract(extract.Input{
 		Entries:   entries,
 		Start:     start,
@@ -114,8 +121,12 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 		Ledger:    folded,
 		Cwd:       h.Cwd(),
 		FileOps:   extract.FileOps{Ops: ops, From: rangeStart},
+		Writer:    writer,
+		Frame:     frame,
+		RepoRoot:  root,
 	})
 	result, record := detectV2(ctx, rt, h, "compaction", entries, start, cut, folded, result)
+	stampV2(h, &result)
 	appended, err := appendExtraction(h, result, true)
 	logExtraction(ctx, "compaction", result, appended, err)
 	if err == nil && len(appended) > 0 && fresh {
@@ -132,6 +143,32 @@ func extractCutV2(ctx context.Context, rt *runtime.Runtime, h host.Host, event B
 	return append(append(make([]ledger.Entry, 0, len(entries)+len(appended)), entries...), appended...)
 }
 
+// encodingOf is who writes this session's records and the repository it runs in (extract.Input's
+// Writer, Frame and RepoRoot): the host's harness (host.HarnessNamer), the session id, the
+// session model's key and this engine, and the host's repository read once per compaction
+// (Runtime.CachedRepo).
+func encodingOf(rt *runtime.Runtime, h host.Host, entries []ledger.Entry) (ledger.Writer, ledger.Frame, string) {
+	writer := writerOf(h)
+	repo, ok := repoOfV2(rt, h, entries)
+	if !ok {
+		return writer, ledger.Frame{}, ""
+	}
+	return writer, ledger.Frame{RepoID: repo.ID, Branch: repo.Branch, Head: repo.Head}, repo.Root
+}
+
+// writerOf is who writes this session's records (ledger.Writer): the host's harness
+// (host.HarnessNamer), the session id, the session model's key (harness.ModelKey) and this engine.
+func writerOf(h host.Host) ledger.Writer {
+	writer := ledger.Writer{Session: h.SessionID(), Engine: ledger.EngineGo}
+	if namer, ok := h.(host.HarnessNamer); ok {
+		writer.Harness = namer.Harness()
+	}
+	if model := h.SessionModel(); model != nil {
+		writer.Model = harness.ModelKey(model)
+	}
+	return writer
+}
+
 // appendHostSummaryV2 stores the latest compaction's summary as one record when the ledger does
 // not back that compaction (extract.HostSummary: a native PiG summary, or one from before
 // install), once, and returns it as a branch entry so this compaction folds it: rendered whole
@@ -143,7 +180,7 @@ func appendHostSummaryV2(ctx context.Context, h host.Host, entries []ledger.Entr
 		return ledger.Entry{}, false
 	}
 	data := ledger.BuildObservationsRecordedData([]ledger.Observation{record}, coversUpToID)
-	err := h.AppendEntry(ledger.OMObservationsRecorded, data)
+	err := appendEntry(h, ledger.OMObservationsRecorded, data)
 	logData := map[string]any{"record": record.ID, "compaction": record.SourceEntryIDs[0], "coversUpToId": coversUpToID, "tokens": record.TokenCount}
 	if err != nil {
 		logData["errorMessage"] = err.Error()
@@ -174,11 +211,19 @@ func appendExtraction(h host.Host, result extract.Result, write bool) ([]ledger.
 	var appendErr error
 	for n, p := range queue {
 		if write && appendErr == nil {
-			appendErr = h.AppendEntry(p.customType, p.data)
+			appendErr = appendEntry(h, p.customType, p.data)
 		}
 		out = append(out, session.Entry{Type: "custom", ID: fmt.Sprintf("om-v2-extracted-%d", n), CustomType: p.customType, Data: jsonValue(p.data)})
 	}
 	return out, appendErr
+}
+
+// appendEntry appends one om.* entry with every secret in its string values redacted
+// (secrets.RedactData, contracts/secrets.md): level 0 redacts its records as it builds them, and
+// this is the last stop for everything else the engine writes. Data with nothing to redact is
+// appended as it is.
+func appendEntry(h host.Host, customType string, data any) error {
+	return h.AppendEntry(customType, secrets.RedactData(data))
 }
 
 // jsonValue is v as decoded JSON, the shape entries read back from the session carry.
@@ -217,7 +262,7 @@ func dropByRule(ctx context.Context, h host.Host, ids []string, coversUpToID str
 	if data == nil {
 		return
 	}
-	err := h.AppendEntry(ledger.OMObservationsDropped, data)
+	err := appendEntry(h, ledger.OMObservationsDropped, data)
 	logData := map[string]any{"count": len(ids), "coversUpToId": coversUpToID}
 	if err != nil {
 		logData["errorMessage"] = err.Error()

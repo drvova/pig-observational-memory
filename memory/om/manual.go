@@ -23,16 +23,16 @@ type ManualGroup struct {
 // The value and list types, which the manual names on one line each: describe(x) shows a
 // value's fields and methods.
 var (
-	valueTypes = []string{"Note", "Reflection", "Entry", "Memory", "Text", "LayerRow", "StatusInfo", "ModelStatus", "RetiredQuery"}
+	valueTypes = []string{"Note", "Reflection", "Entry", "Memory", "Text", "LayerRow", "StatusInfo", "ModelStatus", "RetiredQuery", "HeadView"}
 	listTypes  = []string{"NoteList", "ReflectionList", "EntryList", "MemoryList", "LayerList", "RetiredList"}
 )
 
 // ManualGroups are the API's entry points as the manual lists them: every name of the
 // interpreter's om table (the sandbox's symgen.OMNames, which its test compares).
 var ManualGroups = []ManualGroup{
-	{"Reads", []string{"Notes", "Reflections", "History", "Recall", "NoteByID", "ReflectionByID", "Files", "Commits", "Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Str", "ErrNoCall"}},
+	{"Reads", []string{"Notes", "Reflections", "History", "Recall", "NoteByID", "ReflectionByID", "Files", "Commits", "Attempts", "Dropped", "Subjects", "Saved", "Info", "Layer", "Retired", "Head", "Str", "ErrNoCall"}},
 	{"Options (each is also an Opt method, so they chain: " + SnippetOptionChain + ")", []string{"Opt", "Search", "From", "Through", "Since", "Until", "ByEvent", "AsOf", "Where", "Contains", "Kind", "Subject", "WithStatus", "SortBy", "Limit", "Offset", "Failed", "Worked", "Open"}},
-	{"Writes", []string{"Save", "SaveOpt", "Body", "Scope", "Quoting", "Edit", "EditOpt", "SetType", "SetDescription", "SetBody", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define"}},
+	{"Writes", []string{"Save", "SaveOpt", "Body", "Scope", "Quoting", "Edit", "EditOpt", "SetType", "SetDescription", "SetBody", "EditQuoting", "ForgetMemory", "Feedback", "LayerForget", "LayerRollback", "Propose", "Define"}},
 	{"Values (describe(x) lists a value's fields and methods with their docs)", append(append([]string{}, valueTypes...), listTypes...)},
 }
 
@@ -88,15 +88,14 @@ strings argument, read with om.Str(` + "`" + PlaceholderString + "`" + `). Empty
 	return append(out,
 		manualSection{"Snippets", `Summaries, the index and paged results print snippets that run as code here, such as
 ` + SnippetRecall + ` and ` + SnippetNotesSpan + `. Plain Until and Through filter the current memory;
-AsOf() reads the memory as it stood. The old query language is removed and never runs: a query
-gets this notice and, for a read, its snippet.`},
+AsOf() reads the memory as it stood. The old query language never runs; a read in it gets its
+snippet.`},
 		manualSection{"Bounds", fmt.Sprintf(`One result (output, last value and kept lines): %d characters, then "[cut: N more
 characters]"; the call's input (code and strings): %d. Rows per list: %d, at most %d (Limit). A
 history row: %d characters around the first searched word; Recall pages %d. One kept
 definition: %d characters; %d per project (forget one first). One om call's arguments: %d.`, RecallPageChars, RecallPageChars, DefaultLimit, MaxLimit, HistoryClipChars, RecallPageChars, RecallPageChars, MaxLimit, RecallPageChars)},
 		manualSection{"Persistence", `Top-level functions, methods, types and constants are kept once they compile: stored per
-project, re-checked on every load, replayed into every new namespace (also beside a statement
-that panics). A failed compile keeps nothing and restores the earlier definition. Never kept:
+project, re-checked on every load, replayed into every new namespace. A failed compile keeps nothing and restores the earlier definition. Never kept:
 statements, variables, a definition referring to a variable (pass it as a parameter or make it
 a constant), one quoting six words of tool output. Variables last this conversation; a new
 session, a cancel or a crash restarts the namespace from the kept definitions. A forgotten
@@ -114,8 +113,7 @@ its sleeping, timer and zone-loading functions). Loops run about 200 times slowe
 each om call is a round trip: let om reads filter and count.`},
 		manualSection{"Limits not set, and reach", `No time limit: an endless loop or a blocking receive runs until the call is cancelled (the
 user's abort, the session's end), and a headless run can hang, as with bash. A deep recursion
-briefly needs about 1.5 GB. On Linux the child is the out-of-memory killer's first pick; on macOS
-and Windows it is not. A crash kills only the child. The symbol table is the wall: the child has
+briefly needs about 1.5 GB. On Linux the child is the out-of-memory killer's first pick. A crash kills only the child. The symbol table is the wall: the child has
 no environment, inherited descriptor or path, but is no OS sandbox and runs as your user. Other
 extensions' inits run in it. The tool never makes a model request.`},
 	)

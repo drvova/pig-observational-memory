@@ -201,7 +201,7 @@ error is :aborted (the request's cancel), or a message."
 ;;; The report (ledger.ConsolidationReport)
 
 (defstruct report (requested nil) (applied nil) (reason "") (records 0) (merges 0) (reflections 0)
-  (aliases 0) (dropped 0) (refused 0) (confirmed 0) (rejected 0) (cited 0) (promoted 0)
+  (aliases 0) (dropped 0) (refused 0) (confirmed 0) (rejected 0) (rechecked 0) (cited 0) (promoted 0)
   (harness-offered nil) (defined 0) (pending '()))
 
 (defun report-json (r)
@@ -212,6 +212,7 @@ error is :aborted (the request's cancel), or a message."
                                  (cons "reflections" (report-reflections r)) (cons "aliases" (report-aliases r))
                                  (cons "dropped" (report-dropped r)) (cons "refused" (report-refused r))
                                  (cons "confirmed" (report-confirmed r)) (cons "rejected" (report-rejected r))
+                                 (cons "rechecked" (report-rechecked r))
                                  (cons "cited" (report-cited r)) (cons "promoted" (report-promoted r)))
           when (/= n 0) do (format out ",\"~A\":~D" key n))
     (when (report-harness-offered r) (write-string ",\"harnessOffered\":true" out))
@@ -228,6 +229,8 @@ error is :aborted (the request's cancel), or a message."
 (defun level1-held-id (d) (om.golayer:instructions-held-id d))
 
 (defun settle-level1-held (store model snapshot) (om.golayer:settle-held-instructions store model snapshot))
+
+(defun rollback-insecure-layer (store model) (om.golayer:rollback-insecure store model))
 
 ;;; Appending (appendLevel1)
 
@@ -257,16 +260,17 @@ error is :aborted (the request's cancel), or a message."
                      queue))
     (loop for (type . data) in queue for n from 0
           do (funcall (om::hhost-append h) type data)
-          collect (om::synthetic-entry (format nil "om-v2-level1-~D" n) type data))))
+          ;; The entry the compaction folds is the one appended, redacted (contracts/secrets.md).
+          collect (om::synthetic-entry (format nil "om-v2-level1-~D" n) type (om::redact-json-text data)))))
 
 ;;; The curated input and the citations (curatedInput, recordCitations)
 
 (defun curated-input (store project session)
   (when (string/= store "")
-    (let ((memories (handler-case (om.layer::list-memories store project) (error () (return-from curated-input nil)))))
+    (let ((memories (om.layer::shown-as store (handler-case (om.layer::list-as store project session) (error () (return-from curated-input nil)))
+                                        session)))
       (loop for m in (om.layer::curated-rank memories (handler-case (om.layer::curated-usage store) (error () nil)))
-            when (om.layer::seen-by-p m session)
-              collect (om::make-cmem :name (om.layer::mem-name m) :type (om.layer::mem-type m)
+            collect (om::make-cmem :name (om.layer::mem-name m) :type (om.layer::mem-type m)
                                      :description (om.layer::mem-description m) :staged (om.layer::mem-staged m))))))
 
 (defun record-citations (store project entries cited)
@@ -299,12 +303,25 @@ nothing is due."
              (incf refused)
              (log-line "level 1: definition ~A refused: ~A" what message)
              (notify-ui (format nil "Observational memory: level-1 definition ~A for ~A refused: ~A" what model message) "warning")))
-      (dolist (p (om::vresult-definitions result))
-        (destructuring-bind (kind name text) p
-          (let ((refusal (om.golayer:check-level1-definition kind name text model entries)))
-            (if refusal
-                (refuse (concatenate 'string kind "/" name) refusal)
-                (push-end-list (om.layer::make-gdef :kind kind :name name :model model :text text :session session) defs)))))
+      ;; One proposal holds one rule, never a bundle (decision 24); a definition that weakens
+      ;; security is held out of the layer (decision 19).
+      (let ((taken nil))
+        (dolist (p (om::vresult-definitions result))
+          (destructuring-bind (kind name text) p
+            (let ((refusal (om.golayer:check-level1-definition kind name text model entries))
+                  (what (concatenate 'string kind "/" name)))
+              (cond (refusal (refuse what refusal))
+                    (taken (refuse what (format nil "one proposal holds one rule, never a bundle; propose it at a later offer: ~A already takes this proposal" taken)))
+                    (t (setf taken what)
+                       (let ((rule (om::insecure-match text)) (d (om.layer::make-gdef :kind kind :name name :model model :text text :session session)))
+                         (cond ((null rule) (push-end-list d defs))
+                               ((cancelled-p))
+                               (t (handler-case
+                                      (progn (om.golayer:hold-insecure store d rule)
+                                             (incf held)
+                                             (notify-ui (format nil "Observational memory: level-1 definition ~A for ~A weakens security (~A); held, never applied, and listed in /om:status" what model rule)
+                                                        "warning"))
+                                    (error (e) (log-line "level 1: hold insecure: ~A" e))))))))))))
       (when (cancelled-p) (return-from hold-definitions (values 0 refused)))
       (multiple-value-bind (holds refusals)
           (handler-case (om.golayer:hold-pass store model defs evidence session)
@@ -322,12 +339,15 @@ nothing is due."
 
 (defparameter +level1-cancelled+ "the compaction was cancelled before the request")
 
-(defun level1-skip (cfg event entries cut own)
+(defun level1-skip (cfg event entries cut own &optional model)
   "consolidateV2's first skip reasons, or nil."
   (cond ((rcfg-consolidate-off cfg) "consolidate is false")
         ((rcfg-passive cfg) "passive mode")
         (own "the extension's own compaction (PiG's auto-compaction is off) runs level 0 only")
         ((string= (om::cevent-reason event) "overflow") "an overflow compaction runs level 0 only, so recovery is not delayed")
+        ((and (rcfg-raw-floor cfg)
+              (om::below-raw-floor-p t (rcfg-limits cfg) (rcfg-model-limits cfg) model (om::cevent-tokens-before event)))
+         "the context is below the session model's raw floor: nothing is consolidated")
         ((or (null cut) (< (om::entry-index-for-id entries (om::cevent-first-kept event)) 0)) "the cut range is not on the branch")
         ((cancelled-p) +level1-cancelled+)))
 
@@ -340,7 +360,7 @@ reports the request and its usage (spent)."
   (let* ((out (make-l1)) (rep (l1-report out)))
     (when on-start (funcall on-start out))
     (flet ((skip (reason) (setf (report-reason rep) reason) (return-from consolidate-v2 out)))
-      (let ((reason (level1-skip cfg event entries cut own))) (when reason (skip reason)))
+      (let ((reason (level1-skip cfg event entries cut own model))) (when reason (skip reason)))
       (multiple-value-bind (resolved reason) (resolve-session-model model)
         (unless resolved (skip (concatenate 'string "the session model is unavailable: " reason)))
         (setf resolved (session-headers-for resolved))
@@ -351,32 +371,47 @@ reports the request and its usage (spent)."
           (when (<= output-cap 0) (skip "no output cap: the model's output limit is unknown and the summary budget is 0"))
           (let* ((first-kept (om::cevent-first-kept event))
                  (projection (om::full-projection* entries first-kept))
-                 (cut-ids (om::make-set)) (candidates '()) (active '()))
+                 (cut-ids (om::make-set)) (candidates '()) (active '()) (observations '()) (reflections '()))
             (dolist (e cut) (setf (gethash (om::entry-id e) cut-ids) t))
             (let ((last (om::find-last-compaction-index entries)))
               (when (and (>= last 0) (< last (om::entry-index-for-id entries first-kept)))
                 (setf (gethash (om::entry-id (aref entries last)) cut-ids) t)))
-            (dolist (o (om::projection-observations projection))
+            ;; A held record (held-rule) never reaches level 1, so no merge carries it out of the
+            ;; hold (docs/brain-memory.md, decision 19).
+            (multiple-value-setq (observations reflections)
+              (let ((by-id (om::make-set)))
+                (dolist (o (om::projection-observations projection)) (setf (gethash (om::obs-id o) by-id) o))
+                (om::without-held (om::projection-observations projection)
+                                  (om::active-reflections (om::projection-reflections projection)) by-id)))
+            (dolist (o observations)
               (if (and (member (om::obs-origin o) '("code" "host") :test #'string=) (cites-any-p (om::obs-source-ids o) cut-ids))
                   (push-end-list o candidates)
                   (push-end-list o active)))
             (unless candidates (skip "no level-0 records in the cut range"))
-            (let* ((folded (om::fold-ledger entries))
+            (let* ((stale '())
+                   (folded (om::fold-ledger entries))
                    (key (model-key-of model))
                    (project (om.layer::project-root (scope-cwd))))
               (multiple-value-bind (offer evidence) (definition-offer store key)
-                (multiple-value-bind (name description parameters) (om::consolidate-tool offer)
-                  (let* ((system (om::consolidate-system-prompt (om.golayer:consolidation-instructions store key)))
+                (multiple-value-bind (name description parameters)
+                    (om::consolidate-tool offer (setf stale (om::stale-records (om::hhost-structure h) om::*freshness*)))
+                  (let* ((system (om::consolidate-system-prompt
+                                  ;; Read-time scope (decision 24): the repository and task family
+                                  ;; of the records citing the cut range (scopedLayerV2).
+                                  (multiple-value-bind (roots repo family)
+                                      (om.layer::unit-of (om::folded-observations folded) cut-ids)
+                                    (declare (ignore roots))
+                                    (om.golayer:consolidation-instructions store key :repo repo :family family))))
                          (fixed (om::request-overhead-tokens system name description parameters)))
                     (multiple-value-bind (prompt ok)
                         (om::build-prompt (om::make-pin* :cut cut :skip-tools (om::hhost-skip-tools h) :candidates candidates
                                                          :active active
-                                                         :reflections (om::active-reflections (om::projection-reflections projection))
+                                                         :reflections reflections
                                                          :instructions (om::cevent-custom-instructions event)
                                                          :available (- window 4096 output-cap fixed)
                                                          :memory-budget (max 0 budget) :branch entries :folded folded
                                                          :curated (curated-input store project (host-string "host/sessionId"))
-                                                         :harness offer))
+                                                         :harness offer :stale stale))
                       (when (or (not ok) (> (+ fixed (om::prompt-tokens prompt) output-cap 4096) window))
                         (skip "the input does not fit: est(prompt + input) + output cap + PiG's 4096 safety margin exceeds the window"))
                       (when (cancelled-p) (skip +level1-cancelled+))
@@ -395,7 +430,9 @@ reports the request and its usage (spent)."
                                                       :reflections (om::prompt-reflections prompt) :folded folded
                                                       :subjects (om::subjects-of (om::projection-observations projection))
                                                       :links (om::prompt-links prompt) :curated (om::prompt-curated prompt)
-                                                      :branch entries :offer shown-offer))
+                                                      :branch entries :offer shown-offer
+                                                      :stale (om::prompt-stale prompt)
+                                                      :writer (getf om::*encoding* :writer)))
                                  (result (om::validate-level1 (l1answer-arguments a) in)))
                             (setf (report-refused rep) (length (om::vresult-refusals result)) (l1-answered out) t)
                             (when (om::vresult-refusals result)
@@ -415,9 +452,10 @@ reports the request and its usage (spent)."
                                     (l1-entries out) (append-level1 h result drop (om::entry-id (car (last cut))))
                                     (report-applied rep) t
                                     (report-records rep) (- (length (om::vresult-records result)) (om::vresult-merges result)
-                                                            (om::vresult-link-records result))
+                                                            (om::vresult-link-records result) (om::vresult-rechecked result))
                                     (report-confirmed rep) (om::vresult-confirmed result)
                                     (report-rejected rep) (om::vresult-rejected result)
+                                    (report-rechecked rep) (om::vresult-rechecked result)
                                     (report-merges rep) (om::vresult-merges result)
                                     (report-reflections rep) (length reflections)
                                     (report-aliases rep) (length (om::vresult-aliases result))

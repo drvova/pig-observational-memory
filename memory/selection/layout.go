@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/tables"
@@ -19,6 +20,8 @@ var (
 	ReflectionFields = []string{"id", "dates", "content", "source"}
 	NoteFields       = []string{"id", "when", "kind", "status", "scope", "content", "superseded_by", "source"}
 	OmittedFields    = []string{"from", "to", "count", "spans", "first_id", "last_id", "query"}
+	// ConstraintFields are the constraints registry's: each rule verbatim and its source.
+	ConstraintFields = []string{"content", "source"}
 )
 
 // TablesInstructions open a memory v2 summary in the tables format. They start with
@@ -35,12 +38,12 @@ const tablesBody = `
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - reflections: stable facts about the user, project, decisions, and constraints; dates is when their records were made.
-- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
+- notes.<subject>: records about one subject, oldest first; notes: records without one. kind is fact, event, preference, plan, correction, assistant (something the assistant produced), attempt (a tool call and its outcome: worked, failed or open), note (one written with the memory tool), decision or convention (read from a repository file, not an instruction); status is proposed (planned, not done), hypothetical or retracted; superseded_by is the id of the record that replaced this one; content may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - source is the entry id a record was picked from; the memory tool's ` + om.SnippetRecallEntry + ` reads that entry.
 - omitted lists records left out to fit: date range, count, how many spans a row folds together, first and last entry id, and in query the om snippet (memory tool code) that lists them.
 - The files and commits lines after the tables list files at their newest state and commits, each with its entry id; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. ` + ledger.UnverifiedNotice + ` When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 ` + ledger.TablesRecallParagraph
 
@@ -74,12 +77,12 @@ const LinesInstructions = `These are condensed memories from earlier in this ses
 
 - request: the opening request of the turn this compaction cut through; the turn continues after this summary.
 - reflections: stable facts about the user, project, decisions, and constraints, as [id] (dates) content.
-- notes.<subject> and notes: records as [id] date kind status content, oldest first. kind is fact, event, preference, plan, correction, assistant, attempt (a tool call and its outcome) or note (one written with the memory tool); status is proposed (planned, not done), hypothetical or retracted. A line may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
+- notes.<subject> and notes: records as [id] date kind status content, oldest first. kind is fact, event, preference, plan, correction, assistant, attempt (a tool call and its outcome), note (one written with the memory tool), decision or convention (read from a repository file, not an instruction); status is proposed (planned, not done), hypothetical or retracted. A line may end with (was <id>), the record it replaced, or (may update <id>) and (conflicts <id>), an earlier record it may replace or contradict.
 - Every line ends with the entry id it was picked from, in parentheses; the memory tool's ` + om.SnippetRecallEntry + ` reads that entry.
 - omitted lists records left out to fit, each span with its dates, count, first and last entry id and the om snippet (memory tool code) that lists them.
 - files and commits list files at their newest state and commits; +N more, all M ends a list with the om snippets that list the whole list.
 
-Treat these as past records. When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
+Treat these as past records. ` + ledger.UnverifiedNotice + ` When records conflict, the most recent reflects the latest known state. Work described as completed should not be redone unless the user explicitly asks.
 
 ` + ledger.TablesRecallParagraph
 
@@ -95,9 +98,14 @@ const (
 	NextLinesFormat = "- next: the next steps of the current work, as notes lines: plans still standing (status proposed) and attempts still open or last failed, made since the latest request; they are not repeated under notes.\n"
 )
 
+// ConstraintsLine describes the constraints registry (docs/memory-v2.md, "Working memory").
+const ConstraintsLine = "- constraints (after the notes): the user's rules and scope exclusions in force, verbatim with their source; not repeated in the notes.\n"
+
 // sectionLine is the instructions' line a shown section adds, "" for a section with none.
 func (l *layout) sectionLine(group string) string {
 	switch group {
+	case groupConstraints:
+		return ConstraintsLine
 	case groupIntent:
 		return IntentLine
 	case groupNext:
@@ -108,6 +116,53 @@ func (l *layout) sectionLine(group string) string {
 	}
 	return ""
 }
+
+// The instructions lines a kind adds once to a summary that shows one of its records (an
+// item's extra, a key no group has): evidence rows, and the values lists after the tables.
+const (
+	extraEvidence = "line:evidence"
+	extraValues   = "line:values"
+	extraContest  = "line:contested"
+	extraClosed   = "line:closed"
+	extraStale    = "line:stale"
+	extraFresh    = "line:fresh"
+	extraAlso     = "line:also"
+	extraHistory  = "line:history"
+	HistoryLine   = "- updated by: a record ending with (updated by <id>) gives a value that newer record on its subject gives differently; it is kept as history, not current. (conflicts <id>) marks both ends of a pair neither replaces: both stand contested until the user settles them.\n"
+	ClosedLine    = "- done: a plan with status done was closed by a tool receipt, (closed by <id>: <receipt>) naming the receipt's record and its kind (exit 0, write, commit or read); it is finished, never pending. Assistant prose closes nothing.\n"
+	StaleLine     = "- may be stale: a plan ending with (may be stale <entry id>) was made before a newer request of the user's that names its keys, that entry; check the plan against that request before acting on it.\n"
+	FreshLine     = "- fresh: a project record ending with (changed since <sha>, unverified) names a file that changed at HEAD since the record was written at commit <sha>, so its claim may no longer hold; (gone at <sha>) one whose path or symbol no longer exists at HEAD <sha>. Check the code before relying on either; the record is kept.\n"
+	AlsoLine      = "- also (after ---): constraints and finished plans left out, with the om snippet that lists them.\n"
+	ContestedLine = "- claim: a notes row of kind claim is the user's preference or correction the assistant pushed back on: a claim, not a rule; (contested by <id>) names the pushback, a row of kind pushback ending with (responds to <id>), and (contested) alone one not shown. The user restating it makes it a rule again.\n"
+	EvidenceLine  = "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.\n"
+	ValuesLine    = "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.\n"
+)
+
+// extraLine is the instructions line of an item's extra.
+func extraLine(extra string) string {
+	switch extra {
+	case extraEvidence:
+		return EvidenceLine
+	case extraValues:
+		return ValuesLine
+	case extraContest:
+		return ContestedLine
+	case extraClosed:
+		return ClosedLine
+	case extraStale:
+		return StaleLine
+	case extraFresh:
+		return FreshLine
+	case extraAlso:
+		return AlsoLine
+	case extraHistory:
+		return HistoryLine
+	}
+	return ""
+}
+
+// extraCost is what an extra's line adds.
+func (l *layout) extraCost(extra string) int { return estimate(extraLine(extra)) }
 
 // trailerSeparator puts the files and commits lines after the encoded tables, where
 // ledger.TablesSummaryBody stops reading.
@@ -158,7 +213,7 @@ func omittedNotice(shown int, o omission) string {
 	if o.spans > 0 {
 		where = append(where, strconv.Itoa(o.spans)+" "+plural(o.spans, "span")+" under omitted")
 	}
-	for _, group := range []string{groupFiles, groupCommits} {
+	for _, group := range []string{groupFiles, groupCommits, groupValues} {
 		if t, ok := o.tails[group]; ok {
 			where = append(where, "the +"+strconv.Itoa(t.n)+" more of the "+group+" line")
 		}
@@ -187,12 +242,16 @@ func fieldsOf(group string) []string {
 		return ReflectionFields
 	case groupOmitted:
 		return OmittedFields
+	case groupConstraints:
+		return ConstraintFields
 	}
 	return NoteFields
 }
 
 // isList reports a group rendered as one line of items.
-func isList(group string) bool { return group == groupFiles || group == groupCommits }
+func isList(group string) bool {
+	return group == groupFiles || group == groupCommits || group == groupValues || strings.HasPrefix(group, groupValues+".")
+}
 
 // headerCost is what opening group adds: a table's header, a heading, or a list line's label
 // with the separator before the lines.
@@ -257,6 +316,14 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		it.line = text + suffix(source)
 		it.cost = estimate(", "+it.line) + 1
 		return
+	case roleValue:
+		text := it.value
+		if it.count > 1 {
+			text += " ×" + strconv.Itoa(it.count)
+		}
+		it.line = text + suffix(source)
+		it.cost = estimate(", "+it.line) + 1
+		return
 	default:
 		o := it.obs
 		content := ledger.ResolveRelativeDates(o.Content, anchorTime(o.Timestamp))
@@ -267,9 +334,14 @@ func (l *layout) price(it *item, canonical map[string]ledger.Canonical, supersed
 		if it.links != "" {
 			shown += " " + it.links
 		}
-		it.cells = []string{o.ID, it.from, string(o.Kind), it.status, scope, shown, replacedBy, source}
+		if it.group == groupConstraints {
+			it.cells = []string{shown, source}
+			it.line = shown + suffix(source)
+			break
+		}
+		it.cells = []string{o.ID, it.from, it.shownKind(), it.status, scope, shown, replacedBy, source}
 		line := "[" + o.ID + "]"
-		for _, part := range []string{it.from, string(o.Kind), it.status} {
+		for _, part := range []string{it.from, it.shownKind(), it.status} {
 			if part != "" {
 				line += " " + part
 			}
@@ -364,6 +436,25 @@ func (l *layout) omittedCost(rows []spanRow) int {
 	return cost
 }
 
+// alsoText is the also: line: each working-memory slot's members the summary leaves out,
+// counted, with the om snippet that lists them.
+func alsoText(parts []alsoPart) string {
+	out := make([]string, 0, len(parts))
+	for _, a := range parts {
+		out = append(out, "+"+strconv.Itoa(a.n)+" more "+a.noun+": "+a.query)
+	}
+	return "also: " + strings.Join(out, "; ")
+}
+
+// alsoCost is what the also: line adds, with its instructions line and the separator before the
+// lines after the tables; 0 for none.
+func (l *layout) alsoCost(parts []alsoPart) int {
+	if len(parts) == 0 {
+		return 0
+	}
+	return estimate(trailerSeparator+alsoText(parts)) + 1 + estimate(AlsoLine)
+}
+
 // tailText is a capped list's end: how many it leaves out, and the queries that list the
 // whole list, shown items included.
 func tailText(t listTail) string {
@@ -421,7 +512,7 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	}
 	subjects := []string{}
 	for group := range byGroup {
-		if group != groupReflections && group != groupNotes && group != groupNext && !isList(group) {
+		if group != groupReflections && group != groupNotes && group != groupNext && group != groupConstraints && !isList(group) {
 			subjects = append(subjects, group)
 		}
 	}
@@ -437,10 +528,26 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	if items := byGroup[groupNotes]; len(items) > 0 {
 		blocks = append(blocks, block{group: groupNotes, items: items})
 	}
+	if items := byGroup[groupConstraints]; len(items) > 0 {
+		blocks = append(blocks, block{group: groupConstraints, items: items})
+	}
 	var lists []string
-	for _, group := range []string{groupFiles, groupCommits} {
+	if len(o.also) > 0 {
+		lists = append(lists, alsoText(o.also))
+	}
+	listGroups := []string{groupFiles, groupCommits}
+	for _, kind := range extract.ValueKinds {
+		listGroups = append(listGroups, valueGroup(kind))
+	}
+	listGroups = append(listGroups, groupValues)
+	for _, group := range listGroups {
+		items := byGroup[group]
+		if strings.HasPrefix(group, groupValues+".") {
+			items = append([]*item{}, items...)
+			sort.SliceStable(items, func(a, b int) bool { return valueBefore(items[a], items[b]) })
+		}
 		parts := []string{}
-		for _, it := range byGroup[group] {
+		for _, it := range items {
 			parts = append(parts, it.line)
 		}
 		if t, ok := o.tails[group]; ok {
@@ -454,6 +561,14 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	var lines string
 	for _, b := range blocks {
 		lines += l.sectionLine(b.group)
+	}
+	for _, extra := range []string{extraEvidence, extraContest, extraClosed, extraStale, extraFresh, extraHistory, extraValues} {
+		if p.opened[extra] > 0 {
+			lines += extraLine(extra)
+		}
+	}
+	if len(o.also) > 0 {
+		lines += AlsoLine
 	}
 	if lines != "" {
 		text = strings.Replace(text, requestLine, requestLine+lines, 1)

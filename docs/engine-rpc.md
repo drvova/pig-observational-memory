@@ -14,6 +14,12 @@ an adapter in any language can drive it.
 * The Lisp image speaks the same protocol over its unix socket (`enginerpc.SocketDialer`,
   `"engine": "lisp"`), with the Go engine answering every event it refuses before acting
   ([lisp-port-peer.md](lisp-port-peer.md)).
+* The om command's methods on the image ([protocol.md](protocol.md): `turn-end`, `prompt`,
+  `compact`, `before-compact`, `call`, `mcp` with `tools/call`) carry the repository om read (the
+  `repo` param, a `host/repo` answer) and `"structure": true`; while it runs one, the image calls
+  `host/structure` (below, with `scope` "") on the same connection and om answers it with
+  `memory/gitrepo` in the session's directory (`cli.withView`), as the PiG adapter does. Every
+  other host method om answers with `-32601`. The image never runs git.
 
 ## Transport
 
@@ -133,6 +139,9 @@ failing host method answers `-32000` with its error text.
 | `host/sessionId` | `Session.SessionID` | | `{"value": string}` |
 | `host/sessionFile` | `Session.SessionFile` | | `{"value": string}` ("" in memory) |
 | `host/configHome` | `ConfigHomer.ConfigHome` | | `{"value": string}` ("" when unknown: no curated store) |
+| `host/repo` | `RepoReader.Repo` | | `{"repo": {"repoId", "root", "commonDir", "remote", "rootCommit", "branch", "head"} or null}`: the git repository of the session's working directory, read by the adapter (`memory/gitrepo`; [contracts/encoding.md](../contracts/encoding.md)); `null` outside one or for a host that reads none. The engine reads it once per compaction (`runtime.CachedRepo`). The adapter computes the `repoId` once per repository and caches it by the common git directory in its own store (`gitrepo.Reader`); while a first root-commit lookup is still running, the answer has `repoId` "" (no frame), never another id. |
+| `host/structure` | `StructureReader.Structure` | `query`: `{"paths"?: [string], "symbols"?: [{"path", "symbol"}], "blobs"?: [{"path", "at"}], "diffs"?: [{"path", "from"}], "list"?: {"prefix"?, "offset"?, "limit"?}}` | `{"answer": {"repoId", "head", "paths"?: [{"path", "known", "exists", "blob"?}], "symbols"?: [{"path", "symbol", "known", "found"}], "blobs"?: [{"path", "at", "known", "blob"?}], "diffs"?: [{"path", "from", "known", "diff"?, "truncated"?}], "files"?: [string], "total"?, "truncated"?} or null}`: the HEAD structure view (docs/brain-memory.md, decision 20), read by the adapter from HEAD's tree (`gitrepo.Structure`: `git ls-tree` at most 100,000 files, a bounded `git grep -w -F` per symbol, `git rev-parse <at>:<path>`, `git diff` of at most 40 lines) and cached per repository and HEAD; `known: false` where it cannot tell (a truncated tree, a path outside the work tree, a failed search). `null` outside a repository, before the first commit or for a host that reads none. The engine writes nothing of it: it judges project records' freshness at a compaction and answers the memory tool's HEAD reads. |
+| `host/harness` | `HarnessNamer.Harness` | | `{"value": string}` (`"pig"` for the PiG adapter, "" for a host that names none): the harness records name as their writer. |
 | `host/notify` | `UI.Notify` | `message`, `level` | `{}` |
 | `host/isIdle` | `Agent.IsIdle` | | `{"value": bool}` |
 | `host/compact` | `Agent.Compact` | | `{}` once the compaction completed, an error with its message when it failed. The engine's `Compact` returns at once and runs the callback on the reply. |

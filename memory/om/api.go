@@ -53,6 +53,17 @@ func History(opts ...Opt) EntryList {
 	return l
 }
 
+// Head pages HEAD's files.
+//
+// The repository's tree at HEAD is read on demand and never stored; the page is in path order,
+// om.Limit (50 by default, at most 500) files from om.Offset; outside a repository it is an
+// error.
+func Head(prefix string, opts ...Opt) (HeadView, error) {
+	var v HeadView
+	err := call(omwire.MHead, &v, prefix, mergeOpts(opts))
+	return v, err
+}
+
 // Recall reads a record's sources, else an entry (paged), else a saved memory by name.
 func Recall(id string, opts ...Opt) (Text, error) {
 	var t Text
@@ -151,17 +162,17 @@ func Save(name, typ, description string, opts ...SaveOpt) (string, error) {
 	return s, err
 }
 
-// Edit changes a curated memory; it never pins one.
+// Edit changes a curated memory for every session on EditQuoting's user words, else in this session only (staged); it never pins one.
 func Edit(name string, opts ...EditOpt) (string, error) {
 	var s string
 	err := call(omwire.MEdit, &s, name, mergeEdit(opts))
 	return s, err
 }
 
-// ForgetMemory retires a curated memory.
-func ForgetMemory(name string) (string, error) {
+// ForgetMemory forgets a curated memory for every session on Quoting's user words, else hides it in this session only (staged).
+func ForgetMemory(name string, opts ...SaveOpt) (string, error) {
 	var s string
-	err := call(omwire.MForgetMemory, &s, name)
+	err := call(omwire.MForgetMemory, &s, name, mergeSave(opts))
 	return s, err
 }
 
@@ -172,17 +183,17 @@ func Feedback(name, outcome, quote string) (string, error) {
 	return s, err
 }
 
-// LayerForget forgets one definition from the session model's layer; never a rule.
-func LayerForget(kind, name string) (string, error) {
+// LayerForget forgets a definition from the session model's layer on Quoting's user words, else only stages it; never a rule.
+func LayerForget(kind, name string, opts ...SaveOpt) (string, error) {
 	var s string
-	err := call(omwire.MLayerForget, &s, kind, name)
+	err := call(omwire.MLayerForget, &s, kind, name, mergeSave(opts))
 	return s, err
 }
 
-// LayerRollback makes the session model's layer what it was at generation gen (0 is before its first change, every seed standing); never a rule.
-func LayerRollback(gen int) (string, error) {
+// LayerRollback makes the session model's layer what it was at generation gen (0: before its first change) on Quoting's user words, else only stages it; never a rule.
+func LayerRollback(gen int, opts ...SaveOpt) (string, error) {
 	var s string
-	err := call(omwire.MLayerRollback, &s, gen)
+	err := call(omwire.MLayerRollback, &s, gen, mergeSave(opts))
 	return s, err
 }
 
