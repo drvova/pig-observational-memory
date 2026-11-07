@@ -306,7 +306,7 @@ func TestLispLevel1OfferMatchesInProcess(t *testing.T) {
 	sameRun(t, "offer", want, got)
 	report := consolidationOf(got)
 	t.Logf("offer: %v", report)
-	if report["harnessOffered"] != true || report["defined"] != float64(1) || report["cited"] != float64(1) || report["promoted"] != float64(0) {
+	if report["harnessOffered"] != true || report["defined"] != float64(1) || report["cited"] != float64(1) || report["promoted"] != nil {
 		t.Fatalf("offer: %v", report)
 	}
 	held := map[string]string{}
