@@ -94,7 +94,8 @@ func TestRenderStatusesAndPointers(t *testing.T) {
 	check(7, "", "the cache holds 64 keys (may update "+recordID(8)+")")
 	check(8, "", "plain line about the cache size")
 	check(9, "", "the cache does not run on Redis (conflicts "+recordID(6)+")")
-	check(6, "", "the cache runs on Redis")
+	// Both ends of a contested pair are marked (contracts/truth.md, "Supersession").
+	check(6, "", "the cache runs on Redis (conflicts "+recordID(9)+")")
 	if _, shown := rows[recordID(2)]; shown {
 		t.Fatal("the retracted plan is shown beside its retraction")
 	}
@@ -152,5 +153,41 @@ func TestRenderLinkedRecordsUnderEveryBudget(t *testing.T) {
 		if !sawPair || !sawOmitted {
 			t.Fatalf("%s: the sweep never showed the pair (%v) or omitted (%v)", format, sawPair, sawOmitted)
 		}
+	}
+}
+
+// A possible update decided keep-both marks the older value (updated by <id>) with its
+// instructions line; one on less authority is a contested pair, marked at both ends
+// (contracts/truth.md, "Supersession").
+func TestRenderSupersessionDecisions(t *testing.T) {
+	entries := branch(4, func(i int, o *ledger.Observation) bool {
+		o.Subject, o.Authority = "api", ledger.AuthorityUser
+		switch i {
+		case 0:
+			o.Content = "the api listens on port 8080"
+		case 1:
+			o.Content, o.PossiblyUpdates = "the api listens on port 9090", []string{recordID(0)}
+		case 2:
+			o.Content = "the api timeout is 30s"
+		case 3:
+			o.Content, o.Authority, o.PossiblyUpdates = "the api timeout is 45s", ledger.AuthorityTool, []string{recordID(2)}
+		}
+		return true
+	})
+	r := selection.Render(input(entries, 10_000))
+	rows := noteRows(t, r.Text)
+	want := map[int]string{
+		0: "the api listens on port 8080 (updated by " + recordID(1) + ")",
+		1: "the api listens on port 9090 (may update " + recordID(0) + ")",
+		2: "the api timeout is 30s (conflicts " + recordID(3) + ")",
+		3: "the api timeout is 45s (conflicts " + recordID(2) + ")",
+	}
+	for n, content := range want {
+		if got := rows[recordID(n)]["content"]; got != content {
+			t.Errorf("record %d: %q, want %q", n, got, content)
+		}
+	}
+	if !strings.Contains(r.Text, selection.HistoryLine) {
+		t.Errorf("no history line:\n%s", r.Text)
 	}
 }

@@ -383,7 +383,12 @@ func newState(in Input) *state {
 		s.items = append(s.items, it)
 		s.byID[o.ID] = it
 	}
-	retracted := ledger.RetractedIDs(all)
+	// The status a note shows reads the fold's labels (ledger.LabelsOf): retracted for a record
+	// a retraction withdrew.
+	retracted := map[string]bool{}
+	for id, l := range ledger.LabelsOf(all) {
+		retracted[id] = l == ledger.LabelRetracted
+	}
 	s.closed = ledger.ClosedBy(all)
 	for _, it := range s.items {
 		if it.role == roleNote {
@@ -599,6 +604,34 @@ func (s *state) link() {
 			s.partners[a.id()] = append(s.partners[a.id()], b)
 		}
 	}
+	// The supersession decisions of the possible updates and conflicts between shown records
+	// (ledger.Supersession; contracts/truth.md): an older value a keep-both update leaves is
+	// marked (updated by <id>), and both ends of a contested pair (conflicts <id>), so a value
+	// another replaced is never shown as current and a contest never settles by order.
+	updatedBy := map[string][]string{}
+	conflictsWith := map[string][]string{}
+	contestedUpdate := map[string][]string{}
+	for _, it := range s.items {
+		if it.role != roleNote {
+			continue
+		}
+		for _, id := range it.obs.PossiblyUpdates {
+			other := s.byID[id]
+			if other == nil || other == it || other.role != roleNote {
+				continue
+			}
+			switch ledger.Supersession(it.obs, other.obs) {
+			case ledger.DecisionKeepBoth:
+				updatedBy[id] = append(updatedBy[id], it.obs.ID)
+			case ledger.DecisionContested:
+				contestedUpdate[it.obs.ID] = append(contestedUpdate[it.obs.ID], id)
+				conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+			}
+		}
+		for _, id := range it.obs.Conflicts {
+			conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+		}
+	}
 	for _, it := range s.items {
 		if it.role != roleNote {
 			continue
@@ -628,8 +661,26 @@ func (s *state) link() {
 				parts = append(parts, "("+label+" "+strings.Join(shown, " ")+")")
 			}
 		}
-		pointer("may update", it.obs.PossiblyUpdates, func(other *item) bool { return !s.superseded[other.obs.ID] })
-		pointer("conflicts", it.obs.Conflicts, func(*item) bool { return true })
+		var mayUpdate, conflicts []string
+		for _, id := range it.obs.PossiblyUpdates {
+			if slices.Contains(contestedUpdate[it.obs.ID], id) {
+				conflicts = append(conflicts, id)
+			} else {
+				mayUpdate = append(mayUpdate, id)
+			}
+		}
+		for _, id := range append(slices.Clone(it.obs.Conflicts), conflictsWith[it.obs.ID]...) {
+			if !slices.Contains(conflicts, id) {
+				conflicts = append(conflicts, id)
+			}
+		}
+		pointer("may update", mayUpdate, func(other *item) bool { return !s.superseded[other.obs.ID] })
+		pointer("conflicts", conflicts, func(*item) bool { return true })
+		n := len(parts)
+		pointer("updated by", updatedBy[it.obs.ID], func(other *item) bool { return !s.superseded[other.obs.ID] })
+		if len(parts) > n && it.extra == "" {
+			it.extra = extraHistory
+		}
 		// A contested claim names the pushback answering it, and the pushback the claims it
 		// answers (ledger.Contested, Observation.RespondsTo).
 		if it.contested {

@@ -26,7 +26,7 @@ A forgotten record has no label: the fold does not hold it. The summary, the mem
 tags (`docs/protocol.md`, "Retrieval": the tags are these labels) and level 1 read this one
 labelling. The summary shows a keep-both earlier record with `(updated by <id>)` and the other
 end of a contested pair with `(conflicts <id>)`, so a superseded value is never shown as current.
-Level 1 never merges records whose labels differ, nor a record that is not believed.
+Level 1 never merges a record labelled retracted or held (one superseded it already refuses; the two ends of an unsettled possible update are what it settles).
 
 ## Supersession
 

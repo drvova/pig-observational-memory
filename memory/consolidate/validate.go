@@ -82,6 +82,7 @@ const (
 	ReasonMalformed      = "is not an object"
 	ReasonCodeKind       = "merges an attempt, file, commit, note, decision or convention record, whose fields code keeps"
 	ReasonMergeStatuses  = "merges records with different statuses (proposed, hypothetical, retracted or stated as fact)"
+	ReasonNotBelieved    = "merges a record the memory labels retracted or held"
 	ReasonNotLink        = "names a pair the input did not list as a possible update"
 	ReasonVerdict        = "has no verdict: confirm or reject"
 	ReasonLinkSettled    = "settles a possible update another verdict already settled"
@@ -151,9 +152,11 @@ type validator struct {
 	standingSuperseded map[string]bool
 	// standingCited are the ids a reflection of the ledger or the input cites.
 	standingCited map[string]bool
-	edges         map[string][]string // supersede links, by record id, new records included
-	verdicts      []verdict           // the links verdicts, in input order
-	result        Result
+	// labels are the fold's labels of the records the input shows (ledger.LabelsOf).
+	labels   map[string]string
+	edges    map[string][]string // supersede links, by record id, new records included
+	verdicts []verdict           // the links verdicts, in input order
+	result   Result
 }
 
 // verdict is one valid links item, waiting for the record that stands for its later record.
@@ -211,6 +214,22 @@ func Validate(args map[string]any, in Input) Result {
 			}
 		}
 	}
+	// The fold's labels (ledger.LabelsOf; contracts/truth.md) over every record the input shows:
+	// level 1 merges only records the memory believes.
+	labelled := slices.Clone(in.Ledger.ActiveObservations)
+	seen := map[string]bool{}
+	for _, o := range labelled {
+		seen[o.ID] = true
+	}
+	for _, list := range [][]ledger.Observation{in.Active, in.Candidates} {
+		for _, o := range list {
+			if !seen[o.ID] {
+				seen[o.ID] = true
+				labelled = append(labelled, o)
+			}
+		}
+	}
+	v.labels = ledger.LabelsOf(labelled)
 	v.standingCited = map[string]bool{}
 	for _, list := range [][]ledger.Reflection{in.Ledger.Reflections, in.Reflections} {
 		for _, r := range list {
@@ -309,6 +328,15 @@ func (v *validator) merge(index int, item any) {
 	for _, o := range sources[1:] {
 		if o.Status != sources[0].Status {
 			v.refuse("merge", index, ReasonMergeStatuses)
+			return
+		}
+	}
+	// A merge stands for its sources as current: one the fold labels retracted or held would
+	// come back as current in the merge's text. (A superseded one is refused above; the two ends
+	// of an unsettled possible update are what level 1 settles, so their labels do not refuse.)
+	for _, o := range sources {
+		if l := v.labels[o.ID]; l == ledger.LabelRetracted || l == ledger.LabelHeld {
+			v.refuse("merge", index, ReasonNotBelieved)
 			return
 		}
 	}
