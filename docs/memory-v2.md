@@ -1210,8 +1210,8 @@ Phase 7 adds, in both engines with the same text:
   level 0 turns it into a correction record that supersedes the record when the quote is a user's
   words in the conversation (source `user-said`, authority `user`), and otherwise into one that only
   possibly updates it with the model's authority, which the three-way rule (`ledger.Supersession`)
-  weighs: a model's word never replaces a user's fact. `om.Correct` is in `om.Doc` and the symbol
-  table but not in the manual, which is at its size bound.
+  weighs: a model's word never replaces a user's fact. `om.Correct` is in `om.Doc`, the symbol
+  table and the manual (which lists exactly the symbol table, `TestManualListsTheOMTable`).
 
 ## Measuring it
 

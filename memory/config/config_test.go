@@ -68,7 +68,8 @@ func (f fixture) loadAs(trust config.TrustState, e env) config.Config {
 
 func TestDefaults(t *testing.T) {
 	f := setup(t)
-	want := config.Config{PiAutoCompactionEnabled: true, CuratedMemory: true, CuratedMemoryIndexTokens: 2000, MemoryFormat: "tables"}
+	want := config.Config{PiAutoCompactionEnabled: true, CuratedMemory: true, CuratedMemoryIndexTokens: 2000, MemoryFormat: "tables",
+		SleepAfterCompactions: 4, SleepMaxRecords: 5000}
 	if !reflect.DeepEqual(config.Defaults, want) {
 		t.Fatalf("defaults %+v", config.Defaults)
 	}

@@ -580,8 +580,9 @@ code only, and `TestSleepFallbackInCompaction` and `TestOmSleep` count zero requ
   is checkpointed. The fold checkpoint is the per-store checkpoint (decision 12, engine-private).
 - **Not built:** the idle pass over PiG's own session files (the engine writes them only through the
   host, so PiG sleeps in the compaction fallback); repository verification in the store-only idle
-  pass (no repository is known there; `om sleep --dir` and the fallback verify); `om.Correct` in the
-  memory tool's manual (at its size bound).
+  pass (no repository is known there; `om sleep --dir` and the fallback verify). `om.Correct` is in
+  the memory tool's manual, which lists exactly the om table; it fits the manual's one-result bound
+  with the store part's room unchanged (tighter wording of six fixed lines).
 - **Gate:** the request count is unchanged (0 sleep requests); Tier 0 with sleep off is the phase-6
   table cell for cell, and with sleep on no cell loses (deltas in the baseline); Tier 0b and 0c rows
   as before. The Tier 1/2 A/B, with a natural-language rendering of the same records, is wired
