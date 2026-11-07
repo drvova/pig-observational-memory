@@ -72,6 +72,7 @@ func TestStubsCallListedMethods(t *testing.T) {
 	Layer()
 	Retired()
 	Str("s")
+	Head("src/", Limit(5))
 	Save("n", "lesson", "d", Body("b"), Quoting("q"))
 	Edit("n", SetBody("b"))
 	ForgetMemory("n", Quoting("q"))

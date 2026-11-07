@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/om/omwire"
 	"github.com/drvova/pig-observational-memory/memory/session"
@@ -78,6 +79,11 @@ type Call struct {
 	Units Units
 	// Record is what the call did, for its Details; nil records nothing.
 	Record *Record
+
+	// Structure answers the HEAD structure view of the session's repository (om.Head, and the
+	// freshness the notes reads print), and Repo reads that repository; nil reads none.
+	Structure host.StructureReader
+	Repo      func() (host.Repo, bool)
 
 	// detector is the pass a detector run reads (DetectorCall), nil for a memory tool call.
 	detector *DetectorPass
@@ -266,6 +272,13 @@ func (c *Call) answer(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, err
 		}
 		return c.recallText(ctx, id, o)
+	case omwire.MHead:
+		var prefix string
+		var o omwire.Options
+		if err := decode(method, raw, &prefix, &o); err != nil {
+			return nil, err
+		}
+		return c.head(ctx, prefix, o)
 	case omwire.MNoteByID:
 		var id string
 		if err := decode(method, raw, &id); err != nil {

@@ -383,6 +383,16 @@ func (m *Manager) RunMemory(h host.ToolHost, params map[string]any) CodeResult {
 	if m.Info != nil {
 		oc.Info = m.Info(h)
 	}
+	// The HEAD structure view the host answers (om.Head, and the notes' freshness verdicts).
+	if reader, ok := h.(host.StructureReader); ok {
+		oc.Structure = reader
+		if repos, ok := h.(host.RepoReader); ok {
+			oc.Repo = func() (host.Repo, bool) {
+				repo, ok, err := repos.Repo()
+				return repo, ok && err == nil
+			}
+		}
+	}
 	if on {
 		c := call
 		oc.Curated = &c

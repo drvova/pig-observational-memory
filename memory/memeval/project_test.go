@@ -18,7 +18,10 @@ import (
 	"github.com/drvova/pig-observational-memory/memory/gitrepo"
 	"github.com/drvova/pig-observational-memory/memory/host"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/omhost"
+	"github.com/drvova/pig-observational-memory/memory/omtool"
 	"github.com/drvova/pig-observational-memory/memory/session"
+	"github.com/drvova/pig-observational-memory/memory/snippettest"
 	"github.com/drvova/pig-observational-memory/memory/testfix"
 )
 
@@ -169,6 +172,16 @@ func TestScenario26ProjectRecordStaleAgainstHEAD(t *testing.T) {
 	if row, ok := rowWith(second.Summary, "docs/old.md"); !ok || !strings.Contains(row.Text, "(gone at "+repo2.Head[:7]+")") {
 		t.Fatalf("gone: %+v\n%s", row, second.Summary)
 	}
+	// On read: the memory tool's notes print the verdicts, and om.Head pages HEAD's files.
+	view := &omhost.Call{Entries: final, Skip: []string{omtool.ToolName}, Structure: structureOf(dir, repo2),
+		Repo: func() (host.Repo, bool) { return repo2, true }}
+	if notes := snippettest.RunWith(t, view, "om.Notes(om.Search(`retry`))"); !strings.Contains(notes.Text, "(changed since "+repo1.Head[:7]+", unverified)") {
+		t.Fatalf("notes on read:\n%s", notes.Text)
+	}
+	if out := snippettest.Try(t, view, "v, err := om.Head(`src/`, om.Limit(5))\nif err != nil { panic(err) }\nfmt.Print(v.String())"); !strings.Contains(out, "src/net/retry.go") || strings.Contains(out, "Makefile") || !strings.Contains(out, "HEAD "+repo2.Head[:7]+": 1 files under src/") {
+		t.Fatalf("om.Head:\n%s", out)
+	}
+
 	// Level 1 re-checks the changed claim against its diff inside its one request: confirmed,
 	// the record stands checked at HEAD and is no longer marked.
 	var retry string
@@ -290,4 +303,16 @@ func TestScenario37RepoIDNeverWaitsOnRootLookup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".git", "om")); err == nil {
 		t.Fatal("the cache was written inside the repository")
 	}
+}
+
+// structureOf is the view gitrepo answers for repo in dir, as a host.StructureReader.
+func structureOf(dir string, repo host.Repo) host.StructureReader { return gitView{dir, repo} }
+
+type gitView struct {
+	dir  string
+	repo host.Repo
+}
+
+func (g gitView) Structure(q host.StructureQuery) (host.StructureAnswer, bool, error) {
+	return gitrepo.Structure(g.dir, g.repo, q)
 }

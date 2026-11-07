@@ -65,6 +65,9 @@ type Note struct {
 	Dropped bool
 	// Standing is the record standing for this one when it was replaced.
 	Standing string
+	// Fresh is a project record's freshness against HEAD ("gone at <sha>", "changed since
+	// <sha>, unverified"), "" when unchanged or not checked; shown after its content.
+	Fresh string
 }
 
 // Line is the record as one summary line, ending with its anchor.
@@ -77,6 +80,9 @@ func (n Note) Line() string {
 		b.WriteString(n.Subject + ": ")
 	}
 	b.WriteString(n.Content)
+	if n.Fresh != "" {
+		b.WriteString(" (" + n.Fresh + ")")
+	}
 	if n.Anchor != "" {
 		b.WriteString(" " + n.Anchor)
 	}
@@ -101,6 +107,9 @@ const offPathLabel = " (off-path)"
 func (n Note) cell(name string) string {
 	if name == "id" && n.OffPath {
 		return n.ID + offPathLabel
+	}
+	if name == "content" && n.Fresh != "" {
+		return n.Content + " (" + n.Fresh + ")"
 	}
 	return n.field(name)
 }
@@ -389,6 +398,50 @@ func (t Text) String() string {
 	}
 	if len(t.CitedBy) > 0 {
 		b.WriteString("\ncited by: " + strings.Join(t.CitedBy, " "))
+	}
+	return b.String()
+}
+
+// HeadView is a page of the session repository's files at HEAD (om.Head): the HEAD structure
+// view, derived on demand by the host and never stored.
+type HeadView struct {
+	// RepoID and Head name the repository and the commit read.
+	RepoID, Head string
+	// Prefix is the path prefix asked; Files the page, in path order, from Offset.
+	Prefix string
+	Files  []string
+	Offset int
+	// Total counts HEAD's files under Prefix; Truncated is true when HEAD holds more files than
+	// the host lists, so a path missing here is unknown, never gone.
+	Total     int
+	Truncated bool
+	// Next is the snippet for the next page, "" when the page reaches the end.
+	Next string
+}
+
+// String is a header line, then one path per line, then the next page when there is one.
+func (v HeadView) String() string {
+	head := v.Head
+	if len(head) > 7 {
+		head = head[:7]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "HEAD %s: %d files", head, v.Total)
+	if v.Prefix != "" {
+		fmt.Fprintf(&b, " under %s", v.Prefix)
+	}
+	if v.Truncated {
+		b.WriteString(" (the tree is larger than the host lists: a path missing here is unknown)")
+	}
+	if len(v.Files) > 0 {
+		fmt.Fprintf(&b, ", showing %d from %d", len(v.Files), v.Offset)
+	}
+	b.WriteString("\n")
+	for _, f := range v.Files {
+		b.WriteString(f + "\n")
+	}
+	if v.Next != "" {
+		b.WriteString("next: " + v.Next + "\n")
 	}
 	return b.String()
 }
