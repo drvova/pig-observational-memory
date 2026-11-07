@@ -684,7 +684,7 @@ the start context, never a summary.
 | core log: one writer, generations, contested pairs | not built | 81 lines, 81 distinct generations, a contested pair in 40 of 40 rounds (**pass**) |
 | core log shared lines hold no secret | not built | 0 values (**pass**) |
 
-The one remaining Tier 0c finding is the layer's secret (phase 8).
+The layer's secret, the last Tier 0c finding, passes since phase 8.
 
 **Scenarios.** 9 (core: 50 pulls and re-offers leave its roots and block), 12, 14 (1,000 runs), 19
 and 29 pass; `TestCoreDeliveryAcrossSessions` checks decision 16's delivery (a constraint and an
@@ -850,6 +850,78 @@ of the same rows (`memeval.NaturalLanguage`), with the probes' questions and ref
 fixed judge of decision 21 needs models, so the items are **ready, not run**; so are the format
 A/B's A-versus-A rerun, filler and NullMemory arms.
 
+## Phase 8: delivery, dreams and erasure
+
+Cues, revisions, the dream section and erasure (docs/brain-memory.md, "Phase 8 status: delivery,
+dreams and erasure"). Measured on 2026-11-07 on branch `claude/phase8-delivery`, 20 seeds, 600
+compactions a run, sleep on (the default). **Every run made 0 model requests**; the suites' only
+requests are their scripted level-1 replies, as before (Tier 0b 140, Tier 0c 2).
+
+Commands, from `memory/`:
+
+```sh
+go build -o "$TMP/memeval" ./cmd/memeval
+"$TMP/memeval" -suite all -seeds 20              # dreams off (the default)
+"$TMP/memeval" -suite all -seeds 20 -dreams on
+"$TMP/memeval" -suite cues -seeds 20
+```
+
+### Tier 0, 0b, 0c and the settle replay with dreams off: no change
+
+Dreams off prints the phase-7 sleep-on tables cell for cell (1,615 snippets run, none failed; 140
+sleep records naming 1,282 duplicates; all four invariants on all 600 compactions), and the settle
+replay line for line. Revisions sit in their own entries and never reach the summary. In Tier 0b
+and 0c every row passes: the two layer findings pass (below) and the erasure rows are built.
+
+### Dreams on: 0 false promotions, no cell loses
+
+| run | dream sections | dream lines | false promotions | snippets run (failed) | model requests |
+|---|---|---|---|---|---|
+| `-suite all -dreams on` | 560 | 2,240 | **0** | 1,613 (0) | 0 |
+
+- A false promotion is a dream line or the section's header anywhere but the section: in the
+  summary's tables before it, in any om.* entry on the branch (level 1's quarantined
+  `om.hypotheses.recorded` excepted) or in the curated store (memories, core log, layer, index),
+  checked after every compaction of Tier 0 and every suite session (`memeval.checkDreams`).
+- The section is appended after the summary, so it shows no fewer records; its tokens enter the
+  next compaction's context, which moves some compactions by a turn. Shown is equal or higher in
+  every cell (identifier +1 at N = 4, error text +1 at N = 2 and +2 at N = 5, decision +2 at N = 2
+  and +5 at N = 5, intention +3 at N = 5 and +1 at N = 8), lost stays 0, and the probe counts move
+  by one at N = 2 and 8 (114 and 97). Tier 0b's protected classes lose nothing (cells 553 / 553 /
+  530 / 551, 0 lost); the settle replay's noise arm settles 41 of 560 (7.3%, against 42).
+- Scenario 20 (a hypothesis over-generalizing clean inputs into a rule) is the hook test
+  `TestV2DreamHypothesisNeverAFact`: kept only in its entry and the dream section.
+- **The DreamBench-SWE bar** (`-dreambench-out <file>`: each compaction's summary with dreams off and
+  on, with the probes' questions) is written and **ready, not run**: answering and judging need
+  models (decision 21's judge and controls).
+
+### Cues: the cue and false-cue rates
+
+`-suite cues` replays the generator's sessions with level 0 after every turn and a compaction every
+20 turns, deciding the post-tool cue after each call; beside each call a look-alike (a letter added to
+its path's first component, ` -v` added to its command, each output line's last digit changed) is
+decided over the same branch.
+
+Cues: 20 seeds, 600 turns each, 0 model requests:
+
+| measure | count | rate |
+|---|---|---|
+| tool calls replayed | 30960 | |
+| calls an exact key of a standing record matches | 109 | 0.4% of calls |
+| cues given (cap 3 per compaction, once per record) | 109 | 0.4% of calls (cue rate), 100.0% of matched calls |
+| look-alike calls (one character changed per key) | 30960 | |
+| cues a look-alike got | 0 | 0.0% (false-cue rate) |
+| calls repeating a standing cueable record's key at the session's end | 759 | |
+| cues they got | 759 | 100.0% |
+| cues their look-alikes got | 0 | 0.0% (false-cue rate) |
+
+- The generator's own calls rarely repeat a standing cueable key (its failing runs are resolved by
+  a later success, which stops cueing them), so the cue rate on its calls is 0.4%, and each of
+  those 109 matched calls got its cue. Exact repeats of standing cueable records' keys at each
+  session's end are cued 759 of 759.
+- **False-cue rate 0**: no look-alike got a cue, over 30,960 calls and 759 repeats (scenario 28;
+  `contracts/cue.jsonl` holds the case-level look-alikes both engines decide).
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
@@ -889,10 +961,18 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
 | b. residue | secret redaction: curated memory files | 0 values found (100 planted, 5 per seed) | **pass** |
 | b. residue | secret redaction: curated usage ledger (feedback and forget quotes) | 0 values found (100 planted, 5 per seed) | **pass** |
 | b. residue | secret redaction: curated index | 0 values found (100 planted, 5 per seed) | **pass** |
-| b. residue | secret redaction: layer files | 40 values found (100 planted, 5 per seed) | **fail** (phase 8: secret purge (a layer write is not scanned)) |
+| b. residue | secret redaction: layer files | 0 values found (100 planted, 5 per seed) | **pass** (phase 8; 40 values before) |
 | b. residue | secret redaction: level-1 merged records (scripted merge echoing a value) | 0 values left; 20 of 20 merges accepted | **pass** |
-| b. residue | erasure: purge a record's payload (decision 11) | not built | **not built** (phase 8) |
-| b. residue | erasure: purge a forgotten memory's file | a forget retires and keeps the file; 0 values left in retired files after redaction | **not built** (phase 8) |
+| b. residue | secret redaction: a forgotten memory's file | a forget retires and keeps the file; 0 values left in retired files after redaction | **pass** |
+| b. residue | erasure: core log holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: layer holds no erased payload (decision 11) | 80 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: curated memory holds no erased payload (decision 11) | 40 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: records and summaries holds no erased payload (decision 11) | 40 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: recorded turns holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: checkpoints holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: image layer holds no erased payload (decision 11) | 0 copies before the request, 0 after (20 seeds) | **pass** |
+| b. residue | erasure: the erase record and om.erased hold ids only | 20 of 20 records of ids, 20 of 20 purges marked | **pass** |
+| b. residue | erasure: the harness's transcript is outside the engine (not erased, as documented) | 20 of 20 transcripts still hold the value | **pass** |
 | c. protected | prohibition never lost after 1-20 compactions | 554 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | constraint (scope exclusion) never lost after 1-20 compactions | 554 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
 | c. protected | correction never lost after 1-20 compactions | 537 cells, 0 lost; rank-only movement: 0 reachable, not shown | **pass** |
@@ -936,12 +1016,13 @@ Tier 0b: forgetting: 20 seeds, 80 model requests, all 80 of them scripted level-
       verbatim (`curated.Store.appendUsage`, `append-usage`). They are redacted now, and
       `QuotedForgets` compares redacted quotes. Tests: `TestUsageLedgerRedactsQuotes`,
       `safety-usage-ledger-redacts-quotes`.
-  - One defect is left: **layer writes** are not scanned. A definition holding a value keeps it
-    in its file and its blob. Redacting a definition's text, a detector's Go code included, is
-    not a local change, so it is left for phase 8's secret purge
-    (`TestLayerWriteHoldsNoSecret`).
-  - Erasure (decision 11) is phase 8 and not built. A forget retires a memory and keeps its
-    file, which after redaction holds no value.
+  - **Layer writes** were not scanned: a definition holding a value kept it in its file and its
+    blob (40 values). Since phase 8 a prose definition is redacted as it is written and a code
+    one holding a secret is refused (`TestLayerWriteHoldsNoSecret`, 0 values).
+  - Erasure (decision 11) is built in phase 8: a user's typed erase request purges the erased
+    records' text from every surface the engine owns, 0 copies left on each (the erasure rows).
+    A forget alone still retires a memory and keeps its file, which after redaction holds no
+    value.
 - **c. Protected classes**, after 1 to 20 compactions. The cells are shown / reachable / lost,
   in percent.
   - The prohibition is "Never run X", the constraint a scope exclusion and the correction the
@@ -1000,7 +1081,7 @@ Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 rep
 | d. secrets across sessions | no value in another session's saved searches | 0 values | **pass** |
 | d. secrets across sessions | no value in another session's summaries or snippets | 0 in summaries, 0 in 600 snippet answers | **pass** |
 | d. secrets across sessions | no value in the shared usage ledgers | 0 values | **pass** |
-| d. secrets across sessions | no value in the shared layer | 40 values | **fail** (phase 8: secret purge (a layer write is not scanned)) |
+| d. secrets across sessions | no value in the shared layer | 0 values | **pass** (phase 8; 40 values before) |
 | d. secrets across sessions | no value in the core log's shared lines or another session's core block | 0 values | **pass** |
 
 - **a. Independence.** Two sessions stage one save quoting one line of a README. The second
@@ -1035,7 +1116,7 @@ Tier 0c: sharing: 20 seeds, 2 model requests, all 2 of them scripted level-1 rep
     and 16).
 - **d. Secrets across sessions** (scenario 13). Session A meets the values and saves and quotes
   them. Session B's index, its saved searches, its summaries and their snippets, the shared
-  usage ledgers, the core log's lines and B's core block hold none. The shared layer holds them: the same layer-write finding as Tier 0b.
+  usage ledgers, the core log's lines and B's core block hold none. The shared layer held them (the same layer-write finding as Tier 0b) until phase 8; it holds none now.
 
 The tests (`TestTier0bForgetting`, `TestTier0cSharing`, `TestSuitesDeterministic`) run the
 suites over the Tier 0 test runs. They fail when a row other than a listed finding fails, when a
