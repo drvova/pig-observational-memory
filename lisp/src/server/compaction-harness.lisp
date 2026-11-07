@@ -65,6 +65,12 @@ a session model with a store, and the layer's snapshot taken (before level 1)."
   "The hook point after a compaction PiG may persist (Go: recordCompactionV2 and
 settleDefinitionsV2, run only while the request is live). It runs after the answer is built and
 before it is sent; an error here is logged and never changes the answer."
+  ;; promoteCoreV2: the session's constraints and open intentions offered to the core.
+  (when (string/= (ch-store-dir ch) "")
+    (handler-case (om.layer::core-promote-ledger (ch-store-dir ch) (ch-entries ch) (session-identity) (scope-cwd)
+                                                 (host-repo-id) (ch-model-key ch))
+      (request-cancelled (e) (error e))
+      (error (e) (format *error-output* "om engine: core promote: ~A~%" e))))
   (when (ch-harness-p ch)
     (let ((notices (om.layer:record-compaction-evidence
                     :store (ch-store-dir ch) :model (ch-model-key ch) :session (session-identity)

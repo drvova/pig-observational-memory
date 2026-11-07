@@ -141,6 +141,12 @@ whatever the UI). An unreadable branch settles nothing."
 
 ;;; Before agent start: the system-prompt section
 
+(defun host-repo-id ()
+  "The session's repoId (host/repo), empty when the host reads none."
+  (handler-case (om::str (om::jget (om::jget (host-call "host/repo") "repo") "repoId"))
+    (request-cancelled (e) (error e))
+    (error () "")))
+
 (defparameter +memory-section+ "curated-memory" "enginerpc.MemorySection.")
 
 (defun section-text (index on)
@@ -156,7 +162,8 @@ whatever the UI). An unreadable branch settles nothing."
     (multiple-value-bind (dir project cfg) (curated-call c)
       (let ((text (if dir
                       (section-text (values (om.layer::pin-get (conn-pin* c)
-                                                               (lambda () (om.layer::index-as dir project (host-string "host/sessionId") (rcfg-index-tokens cfg)))))
+                                                               (lambda () (om.layer::index-with-core dir project (host-string "host/sessionId") (rcfg-index-tokens cfg)
+                                                                                                      (host-repo-id) (session-model-key)))))
                                     t)
                       (section-text "" nil))))
         (om::jobject "sections" (om::jobject +memory-section+ text))))))
