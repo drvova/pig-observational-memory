@@ -169,6 +169,37 @@ func TestScenario26ProjectRecordStaleAgainstHEAD(t *testing.T) {
 	if row, ok := rowWith(second.Summary, "docs/old.md"); !ok || !strings.Contains(row.Text, "(gone at "+repo2.Head[:7]+")") {
 		t.Fatalf("gone: %+v\n%s", row, second.Summary)
 	}
+	// Level 1 re-checks the changed claim against its diff inside its one request: confirmed,
+	// the record stands checked at HEAD and is no longer marked.
+	var retry string
+	for _, o := range ledger.FoldLedger(final, "").ActiveObservations {
+		if strings.Contains(o.Content, "src/net/retry.go") {
+			retry = o.ID
+		}
+	}
+	var requests *[]map[string]any
+	rechecked, checked := compactWithLevel(t, later, cut2, func(h *testfix.FakeHost) {
+		setup2(h)
+		h.ModelsFake.Streams.Replies = []map[string]any{testfix.AssistantToolCall("call-1", "consolidate_memory", map[string]any{
+			"stale": []any{map[string]any{"id": retry, "verdict": "confirm"}},
+		})}
+		requests = &h.ModelsFake.Streams.Requests
+	}, true)
+	if requests == nil || len(*requests) != 1 {
+		t.Fatalf("level 1 made %v requests", requests)
+	}
+	prompt, _ := json.Marshal((*requests)[0])
+	if !strings.Contains(string(prompt), "POSSIBLY STALE") || !strings.Contains(string(prompt), "+func retry(n int) {}") {
+		t.Fatalf("the request shows no possibly stale record with its diff: %.2000s", prompt)
+	}
+	if r := rechecked.Details.Consolidation; r == nil || !r.Applied || r.Rechecked != 1 {
+		t.Fatalf("report %+v", rechecked.Details.Consolidation)
+	}
+	if row, ok := rowWith(rechecked.Summary, "src/net/retry.go"); !ok || strings.Contains(row.Text, "changed since") {
+		t.Fatalf("still marked after the re-check: %+v\n%s", row, rechecked.Summary)
+	}
+	final = append(final, checked[len(later):]...)
+
 	// No structure line: no stored entry names the view's file list, a blob of HEAD, or a verdict.
 	blob := ""
 	if a, ok, _ := gitrepo.Structure(dir, repo2, host.StructureQuery{Paths: []string{"src/net/retry.go"}}); ok {
@@ -179,6 +210,8 @@ func TestScenario26ProjectRecordStaleAgainstHEAD(t *testing.T) {
 			continue
 		}
 		data, _ := json.Marshal(e.Data)
+		// A record's own frame names its path's blob (its body hash); nothing else may.
+		data = []byte(strings.ReplaceAll(string(data), `"bodyHash":"`+blob+`"`, ""))
 		for _, bad := range []string{"Makefile", "gone at", "changed since", blob} {
 			if bad != "" && strings.Contains(string(data), bad) {
 				t.Fatalf("a %s entry stores %q: %s", e.CustomType, bad, data)

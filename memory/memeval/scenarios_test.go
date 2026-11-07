@@ -93,8 +93,15 @@ func compactOnce(t *testing.T, entries []session.Entry, cut string) (hooks.Compa
 // compactOnceWith is compactOnce with the host set up by setup first (nil for none).
 func compactOnceWith(t *testing.T, entries []session.Entry, cut string, setup func(*testfix.FakeHost)) (hooks.CompactionResult, []session.Entry) {
 	t.Helper()
+	return compactWithLevel(t, entries, cut, setup, false)
+}
+
+// compactWithLevel is compactOnceWith, with level 1 on when level1 is set (setup scripts the
+// session model's replies).
+func compactWithLevel(t *testing.T, entries []session.Entry, cut string, setup func(*testfix.FakeHost), level1 bool) (hooks.CompactionResult, []session.Entry) {
+	t.Helper()
 	cfg := config.Defaults
-	cfg.ConsolidateOff = true
+	cfg.ConsolidateOff = !level1
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := testfix.NewFakeHost(entries...)
