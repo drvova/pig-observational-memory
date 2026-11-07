@@ -70,7 +70,7 @@ type level1Result struct {
 // part of its harness, which is held (holdDefinitionsV2) and never adds a request. spent, when
 // not nil, receives out as it stands when consolidateV2 returns or panics, so a panic after the
 // request still reports the request and its usage.
-func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, entries, cut []ledger.Entry, budget int, modelLayer declare.Active, spent *level1Result) (out level1Result) {
+func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Host, event BeforeCompactEvent, entries, cut []ledger.Entry, budget int, modelLayer declare.Active, fresh freshness, spent *level1Result) (out level1Result) {
 	if spent != nil {
 		defer func() { *spent = out }()
 	}
@@ -151,7 +151,10 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	project := harness.ProjectRoot(h.Cwd())
 	model := harness.ModelKey(h.SessionModel())
 	offer, evidence := definitionOfferV2(ctx, store, storeOn, model, modelLayer)
-	tool := consolidate.ToolFor(offer)
+	// The project records whose file changed at HEAD, with their diffs (decision 20): level 1
+	// re-checks each claim inside this one request.
+	stale := staleRecordsV2(fresh)
+	tool := consolidate.ToolWith(offer, len(stale) > 0)
 	system := consolidate.SystemPromptFor(modelLayer.Instructions(agents.InstructionsConsolidation))
 	fixedTokens := requestOverheadTokens(system, tool)
 	prompt, ok := consolidate.BuildPrompt(consolidate.PromptInput{
@@ -167,6 +170,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Folded:       folded,
 		Curated:      curatedInput(store, storeOn, project, h.SessionID()),
 		Harness:      offer,
+		Stale:        stale,
 	})
 	estimated := fixedTokens + prompt.Tokens
 	if !ok || estimated+outputCap+config.PiGContextSafetyTokens > window {
@@ -204,6 +208,8 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		"cutEntries":         prompt.CutTotal,
 		"harnessOffered":     offer != nil,
 		"harnessShown":       prompt.HarnessShown,
+		"stale":              len(prompt.Stale),
+		"omittedStale":       prompt.OmittedStale,
 		"inputTokens":        estimated,
 		"outputCap":          outputCap,
 		"window":             window,
@@ -236,6 +242,7 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 		Subjects:    ledger.SubjectsOf(projection.Observations),
 		Links:       prompt.Links,
 		Curated:     prompt.Curated,
+		Stale:       prompt.Stale,
 		Branch:      entries,
 		Writer:      writerOf(h),
 	}
@@ -267,15 +274,15 @@ func consolidateV2(ctx, request context.Context, rt *runtime.Runtime, h host.Hos
 	result.Reflections = reflections
 	out.entries = appendLevel1(ctx, h, result, drop, cut[len(cut)-1].ID)
 	out.report.Applied = true
-	out.report.Records = len(result.Records) - result.Merges - result.LinkRecords
-	out.report.Confirmed, out.report.Rejected = result.Confirmed, result.Rejected
+	out.report.Records = len(result.Records) - result.Merges - result.LinkRecords - result.Rechecked
+	out.report.Confirmed, out.report.Rejected, out.report.Rechecked = result.Confirmed, result.Rejected, result.Rechecked
 	out.report.Merges = result.Merges
 	out.report.Reflections = len(result.Reflections)
 	out.report.Aliases = len(result.Aliases)
 	out.report.Dropped = len(drop)
 	logData["records"], logData["merges"], logData["newReflections"] = out.report.Records, out.report.Merges, out.report.Reflections
 	logData["aliases"], logData["dropped"], logData["unchanged"], logData["keptByUnion"] = out.report.Aliases, len(drop), result.Unchanged, keptBack
-	logData["confirmed"], logData["rejected"] = result.Confirmed, result.Rejected
+	logData["confirmed"], logData["rejected"], logData["rechecked"] = result.Confirmed, result.Rejected, result.Rechecked
 	if storeOn && len(result.Cited) > 0 {
 		out.report.Cited, out.report.Promoted = recordCitations(ctx, h, store, project, entries, result.Cited)
 		logData["cited"], logData["promoted"] = out.report.Cited, out.report.Promoted

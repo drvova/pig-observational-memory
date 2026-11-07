@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 
+	"github.com/drvova/pig-observational-memory/memory/consolidate"
 	"github.com/drvova/pig-observational-memory/memory/debuglog"
 	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/host"
@@ -88,6 +89,32 @@ func freshnessV2(ctx context.Context, rt *runtime.Runtime, h host.Host, entries 
 	}
 	debuglog.Log(ctx, "compaction.v2.freshness", map[string]any{"asked": len(q.Paths) + len(q.Symbols) + len(q.Blobs),
 		"head": answer.Head, "gone": gone, "changed": len(out.verdicts) - gone})
+	return out
+}
+
+// staleRecordsV2 are the changed verdicts as level 1's possibly stale records, at most
+// project.MaxDiffs, each with its path's diff from the commit it was written at to HEAD, asked of
+// the view in one query; a diff it could not read is listed as none.
+func staleRecordsV2(f freshness) []consolidate.StaleRecord {
+	q := project.DiffQuery(f.verdicts)
+	if project.Empty(q) || f.reader == nil {
+		return nil
+	}
+	diffs := map[host.DiffQuery]host.DiffAnswer{}
+	if answer, ok, err := f.reader.Structure(q); err == nil && ok {
+		for _, d := range answer.Diffs {
+			diffs[host.DiffQuery{Path: d.Path, From: d.From}] = d
+		}
+	}
+	var out []consolidate.StaleRecord
+	for _, v := range f.verdicts {
+		if v.Kind != project.Changed || len(out) >= project.MaxDiffs {
+			continue
+		}
+		d := diffs[host.DiffQuery{Path: v.Path, From: v.Sha}]
+		out = append(out, consolidate.StaleRecord{ID: v.ID, Path: v.Path, Since: v.Sha, Head: v.Head, Blob: v.Blob,
+			Diff: d.Diff, DiffKnown: d.Known, Truncated: d.Truncated})
+	}
 	return out
 }
 

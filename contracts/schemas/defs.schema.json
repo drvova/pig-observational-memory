@@ -205,6 +205,7 @@
         "refused": { "type": "integer", "minimum": 0 },
         "confirmed": { "type": "integer", "minimum": 0 },
         "rejected": { "type": "integer", "minimum": 0 },
+        "rechecked": { "type": "integer", "minimum": 0 },
         "cited": { "type": "integer", "minimum": 0 },
         "promoted": { "type": "integer", "minimum": 0 },
         "harnessOffered": { "type": "boolean" },
