@@ -46,6 +46,8 @@
                              (:file "contest")
                              ;; Phase 3: working memory (receipts, staleness, rule replacements).
                              (:file "working")
+                             ;; Phase 8: cues after a tool call (memory/extract/cue.go).
+                             (:file "cue")
                              ;; Phase 5: the labels and the three-way supersession decision.
                              (:file "labels")
                              ;; Phase 4: the search behind the reads (memory/retrieve).

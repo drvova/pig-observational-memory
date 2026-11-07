@@ -8,6 +8,10 @@ import "strings"
 // is a forget record whose text opens with ErasurePrefix; its tombstones hold ids only, as every
 // forget's do, and memory/erase purges the erased records' text from the files the engine owns.
 
+// OMCue is the entry a cue's delivery appends (extract.CueFor, docs/memory-v2.md "Cues"): the
+// record it pointed at, the key that matched and the compaction it followed.
+const OMCue = "om.cue"
+
 // ErasurePrefix opens an erase request's forget record; a plain forget's opens with ForgetPrefix.
 const (
 	ErasurePrefix = "The user asked to erase "

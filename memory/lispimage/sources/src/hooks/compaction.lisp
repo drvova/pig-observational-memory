@@ -82,7 +82,9 @@ memoryFormat, the working-memory limits (global and per model) and rawFloor."
   ;; decay: its clock ("" off, "compactions" or "turns") and horizon (0 for the default).
   (decay "") (decay-horizon 0)
   ;; The sleep pass's compaction fallback (sleepAfterCompactions, 0 never; sleepMaxRecords).
-  (sleep-after 4) (sleep-max-records 5000))
+  (sleep-after 4) (sleep-max-records 5000)
+  ;; Phase 8: the cap on cues per compaction (cueCap, 0 off) and the dream section (dreams).
+  (cue-cap 3) (dreams nil))
 
 ;;; config/working.go: working memory's caps, the raw floor and the quality threshold
 

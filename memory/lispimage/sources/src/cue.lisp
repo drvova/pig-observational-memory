@@ -1,0 +1,80 @@
+;;;; Cues (memory/extract/cue.go; docs/brain-memory.md, decision 4; docs/memory-v2.md, "Cues"):
+;;;; one short hint plus an om snippet after a tool call, on an exact structural match of the call
+;;;; (its shell command, its path, or a line of its output equal to a recorded error line) against a
+;;;; standing record's keys. It abstains by default, cues a record at most once per compaction and at
+;;;; most a cap per compaction, with delivery state the om.cue entries after the latest compaction.
+;;;; Byte for byte what Go's extract.CueFor decides (contracts/cue.jsonl).
+
+(in-package "OM.ENGINE")
+
+(defconstant +cue-cap+ 3)
+(defconstant +cue-text-runes+ 120)
+
+(defun cue-hint (o)
+  (let ((kind (obs-kind o)))
+    (cond ((string= kind "attempt") "this failed before")
+          ((string= kind "preference") "a standing rule names this")
+          ((string= kind "correction") "a correction names this")
+          ((string= kind "decision") "a decision names this")
+          ((string= kind "convention") "a repository convention names this")
+          (t ""))))
+
+(defun cueable-p (o)
+  (and (string/= (cue-hint o) "") (null (held-rule o))
+       (or (string/= (obs-kind o) "attempt") (string= (obs-outcome o) "failed"))))
+
+(defun cue-keys (tool args output cwd)
+  "cueKeys: (kind value) pairs, the command else the path (absolute and relative), then the
+output's distinct non-blank lines."
+  (declare (ignore tool))
+  (let ((out '()) (x (make-xstate :cwd cwd)) (command (shell-command args)))
+    (cond ((and command (string/= (trim-space command) ""))
+           (push-end (list "commands" (trim-space command)) out))
+          (t (let ((p (dolist (arg +path-args+ nil)
+                        (let ((v (arg-string args arg)))
+                          (when (and v (string/= (trim-space v) "")) (return v))))))
+               (when p
+                 (push-end (list "paths" (path-key x p)) out)
+                 (let ((rel (path-display x p)))
+                   (unless (string= rel (path-key x p)) (push-end (list "paths" rel) out)))))))
+    (let ((seen (make-hash-table :test #'equal)))
+      (dolist (line (split output (string #\Newline)))
+        (let ((line (clip (trim-space line) +brief-key-arg-runes+)))
+          (unless (or (string= line "") (gethash line seen))
+            (setf (gethash line seen) t)
+            (push-end (list "errors" line) out)))))
+    out))
+
+(defun cue-key-matches-p (kind recorded value)
+  (or (string= recorded value)
+      (and (string= kind "paths") (> (length recorded) 0) (char= (char recorded (1- (length recorded))) #\/)
+           (> (length value) (length recorded)) (has-prefix value recorded))))
+
+(defun cue-text (o)
+  "CueText."
+  (cat "memory cue (unverified): " (cue-hint o) ": " (clip (redact-secrets (obs-content o)) +cue-text-runes+)
+       " Read it: om.Recall(`" (obs-id o) "`)"))
+
+(defun cue-for (entries tool args output cwd limit)
+  "extract.CueFor: (values record key text) of the cue, or nil when it abstains."
+  (when (<= limit 0) (return-from cue-for nil))
+  (let ((from (1+ (find-last-compaction-index entries))) (given (make-hash-table :test #'equal)) (n 0))
+    (loop for i from from below (length entries)
+          for e = (aref entries i)
+          when (and (string= (entry-type e) "custom") (string= (entry-custom-type e) "om.cue"))
+            do (incf n)
+               (let ((id (and (hash-table-p (entry-data e)) (jget (entry-data e) "record"))))
+                 (when (and (stringp id) (string/= id "")) (setf (gethash id given) t))))
+    (when (>= n limit) (return-from cue-for nil))
+    (let ((keys (cue-keys tool args output cwd)))
+      (when (null keys) (return-from cue-for nil))
+      (dolist (o (reverse (folded-active (fold-ledger entries))) nil)
+        (unless (or (gethash (obs-id o) given) (not (cueable-p o)))
+          (dolist (k keys)
+            (when (some (lambda (r) (cue-key-matches-p (first k) r (second k))) (keys-get (obs-keys o) (first k)))
+              (return-from cue-for (values (obs-id o) (cat (first k) ":" (second k)) (cue-text o))))))))))
+
+(defun cue-compaction (entries)
+  "CueCompaction."
+  (let ((i (find-last-compaction-index entries)))
+    (if (>= i 0) (entry-id (aref entries i)) "")))

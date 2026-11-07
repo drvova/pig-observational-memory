@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/engine"
+	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/filelock"
 	"github.com/drvova/pig-observational-memory/memory/hooks"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
@@ -131,8 +132,54 @@ func (a *app) familyHook(hs Harness, name string, in io.Reader, out io.Writer) e
 		}
 		_, err = io.WriteString(out, c.Summary+"\n")
 		return err
+	case evPostTool:
+		text, err := a.cue(h, p)
+		if err != nil || text == "" {
+			return err
+		}
+		return writeContext(out, hs, name, text)
 	}
 	return nil
+}
+
+// cueCall is the tool call a post-tool hook's payload names (Claude Code's tool_name, tool_input
+// and tool_response): the response's text is its string, or its stdout, stderr, output, content
+// and error fields joined by lines.
+func cueCall(raw map[string]any) extract.CueCall {
+	call := extract.CueCall{}
+	call.Tool, _ = raw["tool_name"].(string)
+	call.Args, _ = raw["tool_input"].(map[string]any)
+	switch r := raw["tool_response"].(type) {
+	case string:
+		call.Output = r
+	case map[string]any:
+		var parts []string
+		for _, k := range []string{"stdout", "stderr", "output", "content", "error"} {
+			if v, ok := r[k].(string); ok && v != "" {
+				parts = append(parts, v)
+			}
+		}
+		call.Output = strings.Join(parts, "\n")
+	}
+	return call
+}
+
+// cue decides the cue after one tool call over the session's branch (extract.CueFor), appends
+// its om.cue entry, and returns its text; "" when it abstains or cues are off (cueCap 0).
+func (a *app) cue(h *neutral.Host, p hookPayload) (string, error) {
+	a.rt.EnsureConfig(h)
+	entries, err := h.GetBranch()
+	if err != nil {
+		return "", err
+	}
+	c, ok := extract.CueFor(entries, cueCall(p.Raw), p.Cwd, a.rt.Config().CueCap)
+	if !ok {
+		return "", nil
+	}
+	if err := h.AppendEntry(ledger.OMCue, extract.CueData{Record: c.Record, Key: c.Key, Compaction: extract.CueCompaction(entries)}); err != nil {
+		return "", err
+	}
+	return c.Text, nil
 }
 
 // writeContext writes context for the model in the shape the harness reads.
@@ -166,6 +213,9 @@ func (a *app) familyViaLisp(hs Harness, name, ev string, p hookPayload, s Sessio
 		extra["run_level0"], extra["summary_on_prompt"] = !turnEnd, hs.Hooks.SummaryOnPrompt
 	case evPreCompact:
 		method, extra["reason"] = "compact", p.Trigger
+	case evPostTool:
+		call := cueCall(p.Raw)
+		extra["tool"], extra["args"], extra["output"] = call.Tool, call.Args, call.Output
 	}
 	res, handled, err := a.viaLisp(method, s, extra)
 	if !handled || err != nil {
@@ -174,7 +224,7 @@ func (a *app) familyViaLisp(hs Harness, name, ev string, p hookPayload, s Sessio
 	switch ev {
 	case evSessionStart:
 		return true, writeContext(out, hs, name, res.Text)
-	case evPrompt:
+	case evPrompt, evPostTool:
 		if res.Text != "" {
 			return true, writeContext(out, hs, name, res.Text)
 		}

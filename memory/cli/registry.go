@@ -146,11 +146,15 @@ const (
 	evPrompt       = "prompt"
 	evTurnEnd      = "turn-end"
 	evPreCompact   = "pre-compact"
+	// evPostTool is after a tool call, on a harness whose hook can hand the model added context
+	// with the tool's result (Claude Code's PostToolUse additionalContext): the cue
+	// (extract.CueFor, docs/memory-v2.md "Cues").
+	evPostTool = "post-tool"
 )
 
 // hookTimeouts are each om event's hook timeout in seconds: a compaction reads the whole
 // transcript.
-var hookTimeouts = map[string]int{evSessionStart: 60, evPrompt: 30, evTurnEnd: 120, evPreCompact: 600}
+var hookTimeouts = map[string]int{evSessionStart: 60, evPrompt: 30, evTurnEnd: 120, evPreCompact: 600, evPostTool: 10}
 
 // registry is every harness om installs into.
 var registry = map[string]Harness{}
@@ -484,7 +488,7 @@ func listHarnesses(out io.Writer) error {
 			parts = append(parts, "memory tool")
 		}
 		if h.Hooks != nil {
-			for _, ev := range []string{evTurnEnd, evPreCompact, evSessionStart} {
+			for _, ev := range []string{evTurnEnd, evPreCompact, evSessionStart, evPostTool} {
 				if _, ok := h.Hooks.Events[ev]; ok {
 					parts = append(parts, ev)
 				}

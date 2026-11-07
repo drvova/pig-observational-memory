@@ -15,6 +15,19 @@
     (check (search value file) nil "no value in the file")
     (check (and (search "AWS_ACCESS_KEY_ID=[redacted:" file) t) t "the variable name kept")))
 
+(deftest delivery-cue-contract-cases
+  (let ((cases (contract-cases "cue.jsonl")))
+    (check (> (length cases) 10) t "cases read")
+    (dolist (c cases)
+      (let* ((call (jget c "call"))
+             (entries (map 'vector #'entry-from-map (jget c "entries")))
+             (want (jget c "cue")))
+        (multiple-value-bind (record key text)
+            (cue-for entries (jget call "tool") (jget call "args") (or (jget call "output") "") (jget c "cwd") (jget c "cap"))
+          (check (list record key text)
+                 (if (hash-table-p want) (list (jget want "record") (jget want "key") (jget want "text")) (list nil nil nil))
+                 (jget c "name")))))))
+
 (deftest delivery-layer-hold-refuses-code-with-secret
   (let ((value (d-test-key)))
     (check (handler-case

@@ -126,8 +126,19 @@ func lispFlow(t *testing.T, image string) string {
 		}
 		c.close()
 	}
+	// Phase 8: a rule on a directory, then cues after tool calls (docs/memory-v2.md, "Cues").
+	appendClaudeRule(t, tr, "Don't touch `migrations/`.")
 	om(t, payload(""), "hook", "claude-code", "Stop")
 	section("store after the second Stop", store("claude-code", "s1"))
+	tool := func(path string) string {
+		b, _ := json.Marshal(map[string]any{"session_id": "s1", "transcript_path": tr, "cwd": proj, "hook_event_name": "PostToolUse",
+			"tool_name": "Edit", "tool_input": map[string]any{"file_path": path}, "tool_response": map[string]any{"stdout": "ok"}})
+		return string(b)
+	}
+	section("PostToolUse on a ruled path", om(t, tool("migrations/0001_users.sql"), "hook", "claude-code", "PostToolUse"))
+	section("PostToolUse again (once per compaction)", om(t, tool("migrations/0002_teams.sql"), "hook", "claude-code", "PostToolUse"))
+	section("PostToolUse on a look-alike", om(t, tool("migrations-old/0001.sql"), "hook", "claude-code", "PostToolUse"))
+	section("store after the cues", store("claude-code", "s1"))
 	section("PreCompact", om(t, payload(""), "hook", "claude-code", "PreCompact"))
 	section("SessionStart after compaction", om(t, payload("compact"), "hook", "claude-code", "SessionStart"))
 	mcp := strings.Join([]string{
@@ -421,6 +432,9 @@ var (
 	// flowStampPattern is an entry's append time: neutral.Host stamps entries with the time in
 	// milliseconds, and the fixtures' own times are in May.
 	flowStampPattern = regexp.MustCompile(`"timestamp":"2026-(0[6-9]|1[0-2])-\d\dT\d\d:\d\d:\d\d\.\d{3}Z"`)
+	// flowCorePattern is a core item's id in the start context: it hashes the item's project
+	// scope, which names the run's own directory.
+	flowCorePattern = regexp.MustCompile(`\(core [0-9a-f]{12}\)`)
 )
 
 // normalizeFlow names the random entry ids by order of first appearance, blanks the append
@@ -435,6 +449,7 @@ func normalizeFlow(s, root, home string) string {
 	s = strings.ReplaceAll(s, root, "<root>")
 	s = strings.ReplaceAll(s, home, "<home>")
 	s = flowStampPattern.ReplaceAllString(s, `"timestamp":"<now>"`)
+	s = flowCorePattern.ReplaceAllString(s, "(core <core id>)")
 	names := map[string]string{}
 	return flowIDPattern.ReplaceAllStringFunc(s, func(id string) string {
 		if n, ok := names[id]; ok {

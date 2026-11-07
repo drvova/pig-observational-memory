@@ -52,7 +52,7 @@
      "description": "om's events to the harness's event names.",
      "type": "object",
      "minProperties": 1,
-     "propertyNames": {"enum": ["session-start", "prompt", "turn-end", "pre-compact"]},
+     "propertyNames": {"enum": ["session-start", "prompt", "turn-end", "pre-compact", "post-tool"]},
      "additionalProperties": {"type": "string", "minLength": 1}
     },
     "transcript": {"description": "A format of memory/transcript (Formats or DBFormats).", "type": "string", "minLength": 1},
