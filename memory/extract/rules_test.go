@@ -311,6 +311,15 @@ func encodingCases() []encodingCase {
 			user("u1", "The vendor API key lives in `config/vendor.env`."),
 			user("u2", "Don't remember the vendor API key in this project."),
 		}, []string{"forget"}},
+		// An erase request (decision 11): a forget record that opens with ledger.ErasurePrefix.
+		{"erase from memory", []session.Entry{
+			user("u1", "My home address is 14 Larkspur Close, Hove BN3 7AQ."),
+			user("u2", "Please erase my home address 14 Larkspur Close from memory."),
+		}, []string{"forget"}},
+		{"purge from memory permanently", []session.Entry{
+			user("u1", "The staging password rotates every Monday at 0900."),
+			user("u2", "Purge the staging password from memory permanently."),
+		}, []string{"forget"}},
 		{"forget naming nothing held", says("Please forget my blood type from memory."), nil},
 		{"forget naming no word", says("Forget that from memory."), nil},
 		{"forget as a question", says("Can you forget my address from memory?"), nil},

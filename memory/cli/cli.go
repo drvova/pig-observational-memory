@@ -31,6 +31,10 @@ const usage = `om: observational memory for coding agents
   om view [--harness h] [--dir d] [args]  print memory content (as /om:view)
   om sleep [--harness h --dir d]     run the sleep pass (code only) over every session store,
                                      or over one session with its repository
+  om erase [--check] [--text words]  purge erased records' text (a user's "erase … from memory")
+                                     from every file the engine owns; --check counts what is left
+  om purge [--check]                 redact secret values written before writes were scanned
+                                     (layer files and blobs included)
   om serve                           run the engine as a long-lived process for one harness
                                      process: JSON-RPC 2.0 on stdin and stdout (docs/engine-rpc.md)
   om version
@@ -175,6 +179,21 @@ func run(root string, args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			return err
 		}
 		return commands.RunView(a.rt, h, strings.Join(fs.Args(), " "), nil)
+	case "erase":
+		fs := flag.NewFlagSet("erase", flag.ContinueOnError)
+		check := fs.Bool("check", false, "count what is left, change nothing")
+		text := fs.String("text", "", "the words to erase, typed by the user")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return runErase(root, append([]string{*text}, fs.Args()...), *check, stdout)
+	case "purge":
+		fs := flag.NewFlagSet("purge", flag.ContinueOnError)
+		check := fs.Bool("check", false, "count what is left, change nothing")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return runPurge(root, *check, stdout)
 	case "sleep":
 		fs := flag.NewFlagSet("sleep", flag.ContinueOnError)
 		harnessName := fs.String("harness", "claude-code", "with --dir: the harness")

@@ -62,12 +62,17 @@ func forgetOf(sentence string) (named namedPhrase, scope string, ok bool) {
 
 // forgetContent is a forget record's fixed text: how many records it forgets and their ids, never
 // their text.
-func forgetContent(ids []string) string {
+func forgetContent(ids []string, erase bool) string {
 	noun := "records"
 	if len(ids) == 1 {
 		noun = "record"
 	}
-	return "The user asked to forget " + strconv.Itoa(len(ids)) + " " + noun + ": " + strings.Join(ids, " ") + "."
+	prefix := ledger.ForgetPrefix
+	if erase {
+		// An erase request (ledger.IsErasureRequest): memory/erase purges the records' text.
+		prefix = ledger.ErasurePrefix
+	}
+	return prefix + strconv.Itoa(len(ids)) + " " + noun + ": " + strings.Join(ids, " ") + "."
 }
 
 // resolveForgets gives each forget request its tombstones: every record it names, among the active
@@ -133,7 +138,7 @@ func (x *extraction) resolveForgets() {
 		for j, s := range stones {
 			ids[j] = s.ID
 		}
-		r.obs.Content, r.obs.Forgets = forgetContent(ids), stones
+		r.obs.Content, r.obs.Forgets = forgetContent(ids, ledger.IsErasureRequest(r.obs.Content)), stones
 		r.obs.ID = recordID(r.obs)
 		r.obs.TokenCount = tokens.ObservationLineTokenCount(tokens.ObservationLine{ID: r.obs.ID, Timestamp: r.obs.Timestamp, Relevance: string(r.obs.Relevance), Content: r.obs.Content})
 		kept = append(kept, r)

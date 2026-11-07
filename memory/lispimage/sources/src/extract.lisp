@@ -467,9 +467,25 @@
               (return-from forget-of (values t (second m) words (forget-scope-of (or (third m) ""))))))))))
   (values nil "" "" ""))
 
-(defun forget-content (ids)
-  "forgetContent."
-  (format nil "The user asked to forget ~D ~A: ~A." (length ids) (if (= (length ids) 1) "record" "records") (join ids " ")))
+(defun erasure-request-p (sentence)
+  "ledger.IsErasureRequest: a word of sentence (a run of ASCII letters, lowercased) is erase, purge or wipe."
+  (let ((lower (ascii-lower sentence)) (start nil))
+    (loop for i from 0 to (length lower)
+          for letter = (and (< i (length lower)) (char<= #\a (char lower i) #\z))
+          do (cond ((and letter (null start)) (setf start i))
+                   ((and (not letter) start)
+                    (when (member (subseq lower start i) '("erase" "purge" "wipe") :test #'string=)
+                      (return-from erasure-request-p t))
+                    (setf start nil))))
+    nil))
+
+(defun erasure-p (o)
+  "ledger.IsErasure."
+  (and (string= (obs-kind o) "forget") (has-prefix (obs-content o) "The user asked to erase ")))
+
+(defun forget-content (ids &optional erase)
+  "forgetContent: an erase request's record opens with ledger.ErasurePrefix."
+  (format nil "The user asked to ~A ~D ~A: ~A." (if erase "erase" "forget") (length ids) (if (= (length ids) 1) "record" "records") (join ids " ")))
 
 (defun resolve-forgets (x)
   "resolveForgets: each forget request's tombstones; the records of this extraction it names are
@@ -502,7 +518,7 @@ not written, and a forget naming nothing is no record."
                   (add (rec-obs e)))))
             (when stones
               (let ((o (rec-obs r)))
-                (setf (obs-content o) (forget-content (mapcar #'first stones))
+                (setf (obs-content o) (forget-content (mapcar #'first stones) (erasure-request-p (obs-content o)))
                       (obs-forgets o) stones)
                 (setf (obs-id o) (record-id o))
                 (setf (obs-token-count o) (observation-line-tokens (obs-id o) (obs-timestamp o) (obs-relevance o) (obs-content o))))

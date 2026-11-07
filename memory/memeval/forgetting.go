@@ -78,9 +78,8 @@ func residueRows(ctx context.Context, s *Suite, cfg SuiteConfig) error {
 	row("curated index", r.index, "")
 	row("layer files", r.layerFiles, "")
 	s.add(part, "secret redaction: level-1 merged records (scripted merge echoing a value)", verdict(r.merged == 0 && r.mergesApplied == r.level1Runs), "", "%d values left; %d of %d merges accepted", r.merged, r.mergesApplied, r.level1Runs)
-	s.add(part, "erasure: purge a record's payload (decision 11)", NotBuilt, "phase 8", "not built")
-	s.add(part, "erasure: purge a forgotten memory's file", NotBuilt, "phase 8", "a forget retires and keeps the file; %d values left in retired files after redaction", r.retiredFiles)
-	return nil
+	s.add(part, "secret redaction: a forgotten memory's file", verdict(r.retiredFiles == 0), "", "a forget retires and keeps the file; %d values left in retired files after redaction", r.retiredFiles)
+	return erasureRows(ctx, s, cfg)
 }
 
 // retractRows runs part (d) and adds its rows.

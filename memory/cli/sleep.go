@@ -126,6 +126,12 @@ func runSleep(root string, session func() (*neutral.Host, string, error), stdout
 			}
 			return err
 		}
+		// The layer's secret purge (decision 10), under this lock and the store's.
+		if line, err := layerSecretLine(root); err != nil {
+			return err
+		} else if line != "" {
+			lines = append(lines, line)
+		}
 		st := readSleepState(root)
 		for _, path := range storeFiles(root) {
 			rel, _ := filepath.Rel(filepath.Join(root, "sessions"), path)
