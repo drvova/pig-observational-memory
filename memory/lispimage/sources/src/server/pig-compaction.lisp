@@ -293,7 +293,8 @@ host/appendEntry (a failed append is logged and dropped, as Go drops its error).
                (error (e) (log-line "compaction: append ~A: ~A" type e)))
              "")
    :cwd (scope-cwd)
-   :skip-tools (conn-skip-tools c)))
+   :skip-tools (conn-skip-tools c)
+   :structure #'host-structure))
 
 (define-method "event/sessionBeforeCompact" (params)
   ;; engine.BeforeCompact: always a compaction on PiG's exact cut, never a decline or a

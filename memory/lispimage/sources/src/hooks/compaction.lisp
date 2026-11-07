@@ -19,7 +19,39 @@ custom entry after the tip from its type and its data's JSON text and returns th
   ;; detect, when set, is the harness's detectV2 (om.layer:harness-detect over the session model
   ;; and store): a function of (entries start end folded batches covers) returning the batches and
   ;; a function that records the run, called once the extraction landed on a fresh branch.
-  (detect nil))
+  (detect nil)
+  ;; structure, when set, is host.StructureReader (host/structure): a function of a decoded
+  ;; host.StructureQuery returning the decoded answer, or nil when the host reads none.
+  (structure nil))
+
+;;; Project knowledge (project.lisp; hooks/project_v2.go)
+
+(defun encoding-repo ()
+  "The session's repository as *encoding* holds it (repoOfV2): a host.Repo object with its id and
+head, nil outside one."
+  (let ((frame (getf *encoding* :frame)))
+    (when (string/= (alist-member frame "repoId") "")
+      (jobject "repoId" (alist-member frame "repoId") "head" (alist-member frame "head")))))
+
+(defun stamp-batches (structure batches)
+  "stampV2: the new project records' body hashes from their paths' blobs at HEAD."
+  (when structure
+    (let ((q (project-stamp-query (loop for b in batches append (batch-observations b)))))
+      (unless (project-query-empty-p q)
+        (let ((answer (funcall structure q)))
+          (when answer
+            (dolist (b batches) (project-stamp (batch-observations b) answer))))))))
+
+(defun compaction-freshness (h entries)
+  "freshnessV2: the active project records of entries judged against HEAD, as (values verdicts
+repo); none without a view, a repository or a record to ask about."
+  (let ((repo (encoding-repo)))
+    (when (and (hhost-structure h) repo)
+      (let* ((records (folded-active (fold-ledger entries)))
+             (q (project-query records repo)))
+        (unless (project-query-empty-p q)
+          (let ((answer (funcall (hhost-structure h) q)))
+            (when answer (values (project-verdicts records repo answer) repo))))))))
 
 (defstruct hconfig
   "The settings the hook reads (config.Config): passive, consolidate, compactionSummaryMaxTokens,
@@ -256,6 +288,7 @@ not back, or nil."
                (let ((record nil))
                  (when (hhost-detect h)
                    (multiple-value-setq (batches record) (funcall (hhost-detect h) entries start cut folded batches covers)))
+                 (stamp-batches (hhost-structure h) batches)
                  (let ((out (append-extraction-entries h batches covers)))
                    ;; Counted only for an extraction that landed on a range measured on the fresh
                    ;; branch, as extractCutV2 records it.
@@ -341,6 +374,8 @@ is skipped with level1-skip-reason's report."
                             budget))
          ;; Level 1: at most one request; its appends are folded through PiG's cut, and when it
          ;; applied, the instructions shaped it and the memory gets their room.
+         ;; The project records' freshness against HEAD (decision 20), before level 1.
+         (verdicts (compaction-freshness h entries))
          (level1-result (and level1 (multiple-value-list (funcall level1 entries cut memory-budget))))
          (entries (if (first level1-result) (concatenate 'simple-vector entries (first level1-result)) entries))
          (iblock (if (second level1-result) "" iblock))
@@ -359,7 +394,8 @@ is skipped with level1-skip-reason's report."
                                 :reflections reflections :request request :intent (v2-intent entries cut request)
                                 :format fmt :codec (profile-codec fmt) :aliases (projection-aliases projection)
                                 :reflection-dates (reflection-date-ranges (folded-reflections folded) (folded-by-id folded))
-                                :slots (subseq (limits-for (hconfig-limits cfg) (hconfig-model-limits cfg) model) 0 3))))
+                                :slots (subseq (limits-for (hconfig-limits cfg) (hconfig-model-limits cfg) model) 0 3)
+                                :freshness (project-texts verdicts))))
         (when (and (string/= (summary-text r) "") (<= (estimate-tokens (summary-text r)) memory-budget))
           (setf summary (summary-text r) kind "records"
                 shown (append (mapcar #'refl-id (summary-reflections r)) (mapcar #'obs-id (summary-observations r))))
