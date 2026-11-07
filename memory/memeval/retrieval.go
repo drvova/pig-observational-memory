@@ -25,6 +25,7 @@ const RetrievalTopK = 5
 // value, and the superseded value (whose target must also rank above the value it replaced).
 const (
 	RetrievalIdentifier = "identifier"
+	RetrievalIdentParts = "identifier parts"
 	RetrievalError      = "error text"
 	RetrievalConstraint = "constraint"
 	RetrievalDecision   = "decision"
@@ -33,7 +34,7 @@ const (
 )
 
 // RetrievalClasses are the classes in report order.
-var RetrievalClasses = []string{RetrievalIdentifier, RetrievalError, RetrievalConstraint, RetrievalDecision, RetrievalValue, RetrievalSuperseded}
+var RetrievalClasses = []string{RetrievalIdentifier, RetrievalIdentParts, RetrievalError, RetrievalConstraint, RetrievalDecision, RetrievalValue, RetrievalSuperseded}
 
 // RetrievalTally is one class's probes: how many have a target record in the ledger, how many
 // of those the search lists in its top rows, and how many it lists first.
@@ -62,6 +63,8 @@ func retrievalProbes(run Run) []retrievalProbe {
 			ident := p.Needles[0]
 			name, _, _ := strings.Cut(ident, "(")
 			out = append(out, retrievalProbe{class: RetrievalIdentifier, key: name, target: holds(ident)})
+			// The same name as a person types it apart: retryWithCache42 as retry_with_cache42.
+			out = append(out, retrievalProbe{class: RetrievalIdentParts, key: snakeCase(name), target: holds(ident)})
 		case ClassError:
 			out = append(out, retrievalProbe{class: RetrievalError, key: p.Needles[0], target: holds(p.Needles[0])})
 			if p.Turn < len(run.Script.Turns) && len(run.Script.Turns[p.Turn].Calls) > 0 {
@@ -170,6 +173,21 @@ func RetrievalTable(tallies map[string]RetrievalTally) string {
 			top, first = fmt.Sprintf("%d (%s)", t.Top, pct(t.Top, t.Present)), fmt.Sprintf("%d (%s)", t.First, pct(t.First, t.Present))
 		}
 		fmt.Fprintf(&b, "| %s | %d | %d | %s | %s |\n", c, t.Probes, t.Present, top, first)
+	}
+	return b.String()
+}
+
+// snakeCase is a camelCase name in snake case: retryWithCache42 is retry_with_cache42.
+func snakeCase(name string) string {
+	var b strings.Builder
+	for i, r := range name {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
 	}
 	return b.String()
 }
