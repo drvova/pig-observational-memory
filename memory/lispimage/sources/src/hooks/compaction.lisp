@@ -42,6 +42,27 @@ head, nil outside one."
           (when answer
             (dolist (b batches) (project-stamp (batch-observations b) answer))))))))
 
+(defvar *freshness* '()
+  "The compaction's freshness verdicts (compaction-freshness), bound around level 1, which offers the
+changed ones as possibly stale (stale-records).")
+
+(defun stale-records (structure verdicts)
+  "staleRecordsV2: the changed verdicts as stale-recs, at most +project-max-diffs+, each with its
+path's diff from the commit it was written at to HEAD, asked in one query."
+  (let ((q (project-diff-query verdicts)) (diffs (make-set)) (out '()))
+    (when (or (project-query-empty-p q) (null structure)) (return-from stale-records '()))
+    (let ((answer (funcall structure q)))
+      (dolist (d (jlist-of (jget answer "diffs")))
+        (setf (gethash (cat (str (jget d "path")) (string #\Nul) (str (jget d "from"))) diffs) d)))
+    (dolist (v verdicts out)
+      (when (and (string= (freshness-kind v) "changed") (< (length out) +project-max-diffs+))
+        (let ((d (gethash (cat (freshness-path v) (string #\Nul) (freshness-sha v)) diffs)))
+          (push-end (make-stale-rec :id (freshness-id v) :path (freshness-path v) :since (freshness-sha v)
+                                    :head (freshness-head v) :blob (freshness-blob v)
+                                    :diff (if d (str (jget d "diff")) "") :diff-known (and d (jtrue-p (jget d "known")))
+                                    :truncated (and d (jtrue-p (jget d "truncated"))))
+                    out))))))
+
 (defun compaction-freshness (h entries)
   "freshnessV2: the active project records of entries judged against HEAD, as (values verdicts
 repo); none without a view, a repository or a record to ask about."
@@ -376,7 +397,8 @@ is skipped with level1-skip-reason's report."
          ;; applied, the instructions shaped it and the memory gets their room.
          ;; The project records' freshness against HEAD (decision 20), before level 1.
          (verdicts (compaction-freshness h entries))
-         (level1-result (and level1 (multiple-value-list (funcall level1 entries cut memory-budget))))
+         (level1-result (and level1 (let ((*freshness* verdicts))
+                                      (multiple-value-list (funcall level1 entries cut memory-budget)))))
          (entries (if (first level1-result) (concatenate 'simple-vector entries (first level1-result)) entries))
          (iblock (if (second level1-result) "" iblock))
          (memory-budget (if (second level1-result) budget memory-budget))
