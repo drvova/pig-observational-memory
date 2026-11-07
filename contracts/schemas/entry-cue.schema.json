@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "om.cue entry",
+  "description": "One cue given after a tool call (docs/brain-memory.md, decision 4; docs/memory-v2.md, \"Cues\"): the record it pointed at, the key that matched (kind:value) and the latest compaction before it (\"\" before the first). The om.cue entries after the latest compaction are the cues' delivery state. Only the neutral store holds it. Source: memory/extract/cue.go (CueData), memory/cli/hook.go (cue), lisp/src/server/hooks.lisp (post-tool).",
+  "$ref": "defs.schema.json#/$defs/customEntry",
+  "properties": {
+    "customType": {
+      "const": "om.cue"
+    },
+    "data": {
+      "type": "object",
+      "required": ["record", "key", "compaction"],
+      "additionalProperties": false,
+      "properties": {
+        "record": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "pattern": "^(paths|commands|errors):."},
+        "compaction": {"type": "string"}
+      }
+    }
+  }
+}

@@ -204,6 +204,9 @@ func appendExtraction(h host.Host, result extract.Result, write bool) ([]ledger.
 			queue = append(queue, pending{ledger.OMObservationsRecorded, data})
 		}
 	}
+	if len(result.Revisions) > 0 {
+		queue = append(queue, pending{ledger.OMRevisionsRecorded, ledger.RevisionsRecordedData{Revisions: result.Revisions}})
+	}
 	if result.CoversUpToID != "" && (len(result.Batches) == 0 || result.Batches[len(result.Batches)-1].CoversUpToID != result.CoversUpToID) {
 		queue = append(queue, pending{ledger.OMExtracted, ledger.ExtractedData{CoversUpToID: result.CoversUpToID}})
 	}

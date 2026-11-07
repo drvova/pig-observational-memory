@@ -83,6 +83,9 @@ type Batch struct {
 type Result struct {
 	Batches      []Batch
 	CoversUpToID string
+	// Revisions are the files' revisions the stretch wrote or edited (revision.go), in branch
+	// order; level 0 appends them in one om.revisions.recorded entry after the batches.
+	Revisions []ledger.Revision
 }
 
 // Observations are every record of the result, in order.
@@ -138,6 +141,9 @@ type record struct {
 // extraction is one Extract call's state.
 type extraction struct {
 	in Input
+	// revisions are the revisions found so far; chain each path's newest revision id.
+	revisions []ledger.Revision
+	chain     map[string]string
 	// records are the records found so far, in branch order.
 	records []*record
 	// superseded are the ids some record already supersedes.
@@ -254,7 +260,7 @@ func Extract(in Input) Result {
 	x.episodes = Episodes(in.Entries, in.End, in.Writer.Session)
 	x.requests = Requests(in.Entries, in.End)
 	x.encode()
-	result := Result{Batches: x.batches(cite)}
+	result := Result{Batches: x.batches(cite), Revisions: x.revisions}
 	if last >= 0 {
 		result.CoversUpToID = in.Entries[last].ID
 	}

@@ -345,6 +345,9 @@ func (x *extraction) call(i int, call toolCall, result toolResult, words string)
 		for _, arg := range pathArgs {
 			if p, ok := call.args[arg].(string); ok && strings.TrimSpace(p) != "" {
 				x.fileEvent(p, state, "", sources)
+				if state == stateWritten || state == stateEdited {
+					x.revision(i, call, p)
+				}
 				break
 			}
 		}

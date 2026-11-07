@@ -251,13 +251,14 @@ messages of consecutive runs since the previous compaction, a run starting at ea
   "ledger.ObservationsRecordedData's encoding (consolidated false, omitted)."
   (format nil "{\"observations\":[~{~A~^,~}],\"coversUpToId\":~A}" (mapcar #'obs-json observations) (json-string covers)))
 
-(defun append-extraction-entries (h batches covers)
+(defun append-extraction-entries (h batches covers &optional revisions)
   "hooks.appendExtraction: appends the batches and the marker, and returns them as branch entries
 with ids of their own (om-v2-extracted-<n>)."
   (let ((queue '()))
     (dolist (b batches)
       (when (and (batch-observations b) (string/= (batch-covers b) ""))
         (push-end (cons "om.observations.recorded" (recorded-json (batch-observations b) (batch-covers b))) queue)))
+    (when revisions (push-end (cons "om.revisions.recorded" (revisions-data-json revisions)) queue))
     (when (and (string/= covers "") (or (null batches) (string/= (batch-covers (car (last batches))) covers)))
       (push-end (cons "om.extracted" (format nil "{\"coversUpToId\":~A}" (json-string covers))) queue))
     (loop for (type . data) in queue for n from 0
@@ -309,14 +310,14 @@ not back, or nil."
            (start (extraction-start-index entries))
            (folded (fold-ledger entries))
            (appended
-             (multiple-value-bind (batches covers)
+             (multiple-value-bind (batches covers revisions)
                  (extract entries start cut folded :skip-tools (hhost-skip-tools h) :cwd (hhost-cwd h)
                                                    :file-ops (cevent-file-ops event) :file-ops-from range-start)
                (let ((record nil))
                  (when (hhost-detect h)
                    (multiple-value-setq (batches record) (funcall (hhost-detect h) entries start cut folded batches covers)))
                  (stamp-batches (hhost-structure h) batches)
-                 (let ((out (append-extraction-entries h batches covers)))
+                 (let ((out (append-extraction-entries h batches covers revisions)))
                    ;; Counted only for an extraction that landed on a range measured on the fresh
                    ;; branch, as extractCutV2 records it.
                    (when (and out fresh record) (funcall record))

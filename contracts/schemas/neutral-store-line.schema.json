@@ -39,6 +39,15 @@
           "$ref": "entry-summary-handed.schema.json"
         },
         {
+          "$ref": "entry-revisions-recorded.schema.json"
+        },
+        {
+          "$ref": "entry-cue.schema.json"
+        },
+        {
+          "$ref": "entry-erased.schema.json"
+        },
+        {
           "$ref": "entry-compaction.schema.json"
         }
       ]
