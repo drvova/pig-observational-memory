@@ -33,6 +33,11 @@ func TestCrashesLeaveTheExtensionRunning(t *testing.T) {
 			s := newSup(t, Config{Units: func() []Component { return units }})
 			ok(t, runCode(t, context.Background(), s, "1", nil))
 			pid := livePID(s)
+			if c.name == "out of memory" {
+				// The kernel's killer, at 2 GiB: the child grows 1 GiB at a time and would
+				// otherwise take a CI runner down before the killer picks it.
+				defer oomWatch(pid, 2<<20)()
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			r := runRaw(ctx, s, c.chunks, false, nil)
