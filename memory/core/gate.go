@@ -6,21 +6,24 @@ import (
 
 // Candidate is a session record offered to the core, with what the gates read.
 type Candidate struct {
-	Kind, Key, Text, Scope string
+	Kind  string `json:"kind"`
+	Key   string `json:"key,omitempty"`
+	Text  string `json:"text"`
+	Scope string `json:"scope"`
 	// Via is the user's evidence the record carries: ViaQuote (the user's own words) or
 	// ViaRequest (a plan made under a request the person typed); "" for none.
-	Via string
+	Via string `json:"via,omitempty"`
 	// Roots are the record's independent evidence roots (EvidenceRoot).
-	Roots []string
+	Roots []string `json:"roots,omitempty"`
 	// ToolOnly marks a record whose only source is tool output, which never promotes.
-	ToolOnly bool
+	ToolOnly bool `json:"toolOnly,omitempty"`
 	// OneTime marks a one-time permission or instruction (decision 23), never a standing rule.
-	OneTime bool
+	OneTime bool `json:"oneTime,omitempty"`
 	// Record is the session record's id.
-	Record string
-	Writer Writer
+	Record string `json:"record,omitempty"`
+	Writer Writer `json:"writer"`
 	// Base is the generation the session had read the core through.
-	Base int
+	Base int `json:"base"`
 }
 
 // The verdicts of Decide.

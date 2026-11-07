@@ -150,6 +150,18 @@ func TestForgetCarriesTombstones(t *testing.T) {
 	}
 }
 
+// A secret in a promoted text never reaches the log's bytes or the block (contracts/secrets.md).
+func TestLinesRedacted(t *testing.T) {
+	l := testLog(t)
+	secret := "AKIA" + "IOSFODNN7" + "EXAMPLE"
+	l.PromoteAll([]Candidate{rule("Deploy with "+secret+" from the vault.", ScopeUser, "s1", 0)})
+	data, _ := os.ReadFile(l.path())
+	st, _ := l.Read()
+	if strings.Contains(string(data), secret) || strings.Contains(Section(&st, View{}), secret) {
+		t.Fatalf("the secret is stored:\n%s", data)
+	}
+}
+
 func TestPullMarkers(t *testing.T) {
 	l := testLog(t)
 	if _, ok := l.Consumed("s1"); ok {

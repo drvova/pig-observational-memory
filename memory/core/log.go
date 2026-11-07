@@ -61,15 +61,22 @@ const (
 
 // Item is one core item as the fold holds it.
 type Item struct {
-	ID, Kind, Key, Text, Scope, Via, Record string
-	Roots                                   []string
-	Writer                                  Writer
+	ID     string   `json:"id"`
+	Kind   string   `json:"kind"`
+	Key    string   `json:"key"`
+	Text   string   `json:"text"`
+	Scope  string   `json:"scope"`
+	Via    string   `json:"via"`
+	Record string   `json:"record"`
+	Roots  []string `json:"roots"`
+	Writer Writer   `json:"writer"`
 	// Born is the generation that wrote the item; Gen the last that touched it.
-	Born, Gen int
-	Status    string
+	Born   int    `json:"born"`
+	Gen    int    `json:"gen"`
+	Status string `json:"status"`
 	// With are the items it is contested with; ReplacedBy the item that superseded it.
-	With       []string
-	ReplacedBy string
+	With       []string `json:"with"`
+	ReplacedBy string   `json:"replacedBy"`
 }
 
 // Live reports an item still shown: believed or contested.
