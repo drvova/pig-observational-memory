@@ -14,6 +14,12 @@ an adapter in any language can drive it.
 * The Lisp image speaks the same protocol over its unix socket (`enginerpc.SocketDialer`,
   `"engine": "lisp"`), with the Go engine answering every event it refuses before acting
   ([lisp-port-peer.md](lisp-port-peer.md)).
+* The om command's methods on the image ([protocol.md](protocol.md): `turn-end`, `prompt`,
+  `compact`, `before-compact`, `call`, `mcp` with `tools/call`) carry the repository om read (the
+  `repo` param, a `host/repo` answer) and `"structure": true`; while it runs one, the image calls
+  `host/structure` (below, with `scope` "") on the same connection and om answers it with
+  `memory/gitrepo` in the session's directory (`cli.withView`), as the PiG adapter does. Every
+  other host method om answers with `-32601`. The image never runs git.
 
 ## Transport
 

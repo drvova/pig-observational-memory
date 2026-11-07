@@ -31,6 +31,9 @@ Functions you define with defun last for the call only.
 (history &key search limit)     User, assistant and tool text, newest first, without the current turn.
 (recall id &key offset)         A record's sources, else an entry, else a saved memory by name, paged.
 (saved &key search)             The curated memories this project and session see, ranked.
+(head prefix &key limit offset) The repository's files at HEAD under prefix, in path order: limit
+                                (50 by default, at most 500) from offset. Read on demand, never
+                                stored; outside a repository it is an error.
 (text name)                     A text from the call's strings argument.
 
 ── Records ──
@@ -38,6 +41,10 @@ note-id note-when note-kind note-subject note-scope note-relevance note-content 
 note-event-date note-origin note-outcome note-tool note-target note-source note-anchor
 note-superseded-by (the ids of the records that replaced it) note-line (the record as one line)
 note-tag note-with (a search result's status tag and the records merged into it)
+note-fresh (a project record's freshness verdict against HEAD, gone or changed since a commit,
+  \"\" when unchanged or not checked; note-line prints it after the content)
+head-view-head head-view-prefix head-view-files head-view-offset head-view-total
+head-view-truncated head-view-next (a head page; show prints it with its next page's call)
 turn-id turn-when turn-role turn-text
 memory-name memory-type memory-description memory-body
 
@@ -60,8 +67,9 @@ memory-name memory-type memory-description memory-body
 ── Output ──
 (show x) prints x as the tool shows a value; format, princ and print print as usual.
 
-A summary's om.Notes(...), om.Recall(...), om.History(...) and om.Saved(...) pointers run as
-they are printed: the tool runs the Lisp call each stands for and names it.
+A summary's om.Notes(...), om.Recall(...), om.History(...) and om.Saved(...) pointers, and a
+head page's om.Head(...), run as they are printed: the tool runs the Lisp call each stands for
+and names it.
 
 ── Go definitions ──
 ")

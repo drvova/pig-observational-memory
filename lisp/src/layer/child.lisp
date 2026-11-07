@@ -13,8 +13,9 @@
 ;;;; request {"code", "model", "strings", "timeout", "steps", "heapLimit"} after ready, then
 ;;;; {"value": v} or {"error": message} per call. Values are tagged (wire-encode): strings and
 ;;;; null/true as themselves, {"i": "123"} an integer, {"k": "name"} a keyword, {"s": "name"} a
-;;;; symbol (read as its lowercase name), {"l": [...]} a list, {"note": [...]}, {"turn": [...]}
-;;;; and {"memory": [...]} the API's records.
+;;;; symbol (read as its lowercase name), {"l": [...]} a list, {"note": [...]}, {"turn": [...]},
+;;;; {"memory": [...]} and {"head": [...]} the API's records (a note's freshness verdict is its
+;;;; own member, after its merged records, as om.Note.Fresh is).
 
 (in-package "OM.LAYER")
 
@@ -46,7 +47,7 @@ once), t or nil. OM_TOOL_CHILD_UNSHARE=0 turns it off.")
 ;;; What crosses the pipe
 
 (defparameter +remote-functions+
-  '(om.tool:notes om.tool:note-by-id om.tool:history om.tool:recall om.tool:saved
+  '(om.tool:notes om.tool:note-by-id om.tool:history om.tool:recall om.tool:saved om.tool:head
     om.tool:save om.tool:edit om.tool:forget-memory om.tool:feedback
     om.tool:layer om.tool:layer-forget om.tool:layer-rollback om.tool:note-line)
   "The OM.TOOL functions a child forwards to the image: every one that reads the branch, the
@@ -67,7 +68,13 @@ accessors, show, text and adaptables run in the child.")
                                                 (note-origin v) (note-outcome v) (note-tool v) (note-target v)
                                                 (note-source v) (note-anchor v)
                                                 (coerce (note-superseded-by v) 'simple-vector)
-                                                (note-tag v) (map 'simple-vector #'wire-encode (note-with v)))))
+                                                (note-tag v) (map 'simple-vector #'wire-encode (note-with v))
+                                                (note-fresh v))))
+        ((head-view-p v) (om::jobject "head" (vector (head-view-repo-id v) (head-view-head v) (head-view-prefix v)
+                                                     (coerce (head-view-files v) 'simple-vector)
+                                                     (princ-to-string (head-view-offset v))
+                                                     (princ-to-string (head-view-total v))
+                                                     (om::jbool (head-view-truncated v)) (head-view-next v))))
         ((turn-p v) (om::jobject "turn" (vector (turn-id v) (turn-when v) (turn-role v) (turn-text v))))
         ((memory-p v) (om::jobject "memory" (vector (mem-name v) (mem-type v) (mem-description v) (mem-body v)
                                                     (mem-project v) (om::jbool (mem-staged v)) (om::jbool (mem-pinned v)))))
@@ -105,7 +112,13 @@ interns a name a child sent), :intern makes them (the child, reading the image's
                                                   :tag (if (> (length f) 16) (aref f 16) "")
                                                   :with (if (> (length f) 17)
                                                             (map 'list (lambda (x) (wire-decode x :keywords keywords)) (aref f 17))
-                                                            '()))))
+                                                            '())
+                                                  :fresh (if (> (length f) 18) (aref f 18) ""))))
+                 ((string= k "head") (let ((f (gethash k v)))
+                                       (make-head-view :repo-id (aref f 0) :head (aref f 1) :prefix (aref f 2)
+                                                       :files (coerce (aref f 3) 'list)
+                                                       :offset (parse-integer (aref f 4)) :total (parse-integer (aref f 5))
+                                                       :truncated (eq (aref f 6) :true) :next (aref f 7))))
                  ((string= k "turn") (let ((f (gethash k v)))
                                        (make-turn :id (aref f 0) :when (aref f 1) :role (aref f 2) :text (aref f 3))))
                  ((string= k "memory") (let ((f (gethash k v)))

@@ -553,8 +553,8 @@ own rules, corrections and facts, framed in the repository) carry their one path
 blob of the path when the record was written. At each compaction (`hooks/project_v2.go`,
 `compaction-freshness`) the active project records are judged against HEAD and the summary prints
 `(gone at <sha>)` or `(changed since <sha>, unverified)` after a record, with one `- fresh:`
-instructions line; the memory tool's notes reads print the same, and `om.Head(prefix)` pages HEAD's
-files (the Go tool). The changed records go to level 1 as a POSSIBLY STALE list with their diffs,
+instructions line; the memory tool's notes reads print the same, and `om.Head(prefix)` (the Lisp
+tool's `(head prefix)`) pages HEAD's files. The changed records go to level 1 as a POSSIBLY STALE list with their diffs,
 inside its one request: `stale` confirms one, a record or merge supersedes one. No verdict deletes
 or supersedes anything by itself.
 

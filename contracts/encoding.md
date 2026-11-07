@@ -124,8 +124,8 @@ call's command (else paths) and the paths, tests, error types and versions its o
 
 The adapter, never the engine, reads the repository by running git in the session's working
 directory (`memory/gitrepo`), and hands it as `host.Repo` (host method `Repo`, engine RPC
-`host/repo`, the `repo` param the om command adds to the image's `turn-end`, `prompt`, `compact` and
-`before-compact`): the canonical real path of the work-tree root, the canonical common git
+`host/repo`, the `repo` param the om command adds to the image's `turn-end`, `prompt`, `compact`,
+`before-compact`, `call` and MCP `tools/call`, with the HEAD view it answers as `host/structure`): the canonical real path of the work-tree root, the canonical common git
 directory, the normalized origin remote (scheme, user and password dropped, host lower-cased,
 `.git` and trailing `/` dropped, `user@host:path` as `host/path`), the oldest root commit of HEAD,
 the branch and HEAD. Its `repoId` is the first 12 hex characters of the SHA-256 of
@@ -163,7 +163,10 @@ recorded one (`bodyHash`, else the path's blob at `frame.head`); nothing when un
 view cannot tell (a truncated tree, a failed search). The verdict is printed, never stored, and
 never deletes or supersedes a record. `contracts/project.jsonl` (`go test ./project -args -write`)
 and `contracts/project-render.jsonl` (`go test ./selection -run FreshnessRender -args
--write-freshness`) pin the verdicts and the summaries both engines give.
+-write-freshness`) pin the verdicts and the summaries both engines give, and
+`contracts/project-tool.jsonl` (`go test ./omhost -run HeadToolCases -args -write`) the memory
+tool's notes with their verdicts (`om.Note.Fresh`, printed after the content) and its HEAD pages
+(`om.Head`, `om.HeadView.String`).
 
 The changed records the level-1 input shows are listed as possibly stale with their diffs
 (`consolidate.StaleLine`; at most 8); a `stale` verdict `confirm` replaces the record by itself

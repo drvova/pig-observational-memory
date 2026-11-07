@@ -85,6 +85,8 @@ func (d *inProcess) tool(h *testfix.FakeHost, params map[string]any) host.ToolRe
 type overRPC struct {
 	t *testing.T
 	c *enginerpc.Client
+	// lisp marks the image, whose memory tool runs Lisp (readsCode).
+	lisp bool
 }
 
 func (d overRPC) sessionStart(h *testfix.FakeHost) { must(d.t, d.c.SessionStart(h)) }
@@ -196,6 +198,13 @@ func newHost(entries []session.Entry) *testfix.FakeHost {
 		for _, b := range q.Blobs {
 			a.Blobs = append(a.Blobs, host.BlobAnswer{Path: b.Path, At: b.At, Known: true, Blob: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
 		}
+		if q.List != nil {
+			files := []string{"loader.go", "printer.go", "saver.go"}
+			a.Total = len(files)
+			if q.List.Offset < len(files) {
+				a.Files = files[q.List.Offset:min(len(files), q.List.Offset+q.List.Limit)]
+			}
+		}
 		return a, true, nil
 	}
 	return h
@@ -230,6 +239,19 @@ type transcript struct {
 	Context       any
 	Tool          any
 	ToolText      string
+	// Reads is what the memory tool printed reading the notes with their freshness verdicts and
+	// a page of HEAD's files (readsCode).
+	Reads string
+}
+
+// readsCode is a memory tool call that prints every note's line (om.Note.Line, its freshness
+// verdict after its content) and the first page of two of HEAD's files: Go code on the Go
+// engine, the same reads in Lisp on the image, printing the same bytes.
+func readsCode(d driver) string {
+	if r, ok := d.(overRPC); ok && r.lisp {
+		return `(dolist (n (notes)) (show n)) (show (head "" :limit 2))`
+	}
+	return "for _, n := range om.Notes().Rows {\n\tfmt.Println(n.Line())\n}\nv, _ := om.Head(\"\", om.Limit(2))\nfmt.Print(v)\n"
 }
 
 // scenario drives turn_end over two turns, a compaction with a cut inside the branch, the
@@ -274,6 +296,11 @@ func scenario(t *testing.T, d driver) transcript {
 	if tool.IsError {
 		t.Fatalf("tool call: %s", tool.Text)
 	}
+	reads := d.tool(h, map[string]any{"code": readsCode(d)})
+	if reads.IsError || !strings.Contains(reads.Text, "(changed since 2222222, unverified)") ||
+		!strings.Contains(reads.Text, "HEAD 3333333: 3 files, showing 2 from 0\nloader.go\nprinter.go\nnext: om.Head(\"\", om.Offset(2), om.Limit(2))\n") {
+		t.Fatalf("the tool's reads:\n%s", reads.Text)
+	}
 	return transcript{
 		Appended:      testfix.ToJSONValue(h.Appended),
 		Notifications: h.Notifications,
@@ -281,6 +308,7 @@ func scenario(t *testing.T, d driver) transcript {
 		Context:       testfix.ToJSONValue(messages),
 		Tool:          testfix.ToJSONValue(tool.Details),
 		ToolText:      tool.Text,
+		Reads:         reads.Text,
 	}
 }
 
@@ -317,6 +345,7 @@ func compareTranscripts(t *testing.T, name string, want, got transcript) {
 		{"context", want.Context, got.Context},
 		{"tool details", want.Tool, got.Tool},
 		{"tool text", want.ToolText, got.ToolText},
+		{"tool reads", want.Reads, got.Reads},
 	} {
 		if !reflect.DeepEqual(asGo(field.want), asGo(field.got)) {
 			a, _ := json.MarshalIndent(field.want, "", " ")

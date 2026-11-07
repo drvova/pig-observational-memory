@@ -400,15 +400,21 @@ records"); the adapter runs git, the engine never does. Part A is above.
   POSSIBLY STALE with their diffs (at most 8, bounded), in the one existing request. Level 1 confirms
   one (`stale`: the record stands framed at HEAD, `rechecked` in the report) or supersedes it with a
   record or merge under the status rule; no new request is made.
-- **`om.Head`: built** in the Go tool (pages HEAD's files under a prefix, `om.Limit`/`om.Offset`);
-  the Lisp tool prints the notes' verdicts but has no HEAD file listing yet.
+- **`om.Head`: built** in both tools: the Go tool's `om.Head(prefix, om.Limit, om.Offset)` and
+  the Lisp tool's `(head prefix :limit :offset)` page HEAD's files under a prefix and print the
+  same page (`om.HeadView.String`, its next page as the `om.Head(...)` pointer the image runs as
+  its Lisp call); a note's verdict is a member of its own in both (`om.Note.Fresh`, `note-fresh`),
+  printed after its content (`contracts/project-tool.jsonl`).
 - **Repo id cached: built** (phase 6's item, scenario 37). `gitrepo.Reader` computes the id once per
   repository, keyed by the common git directory, in `<engine store>/repos/<hash>.json` (the PiG
   adapter's `<config>/observational-memory`, the om command's root); a first root-commit lookup runs
   in the background and is waited on for 2 s, during which records take no frame; a missing or
   unreadable file is computed again.
-- **Not built:** the om command with the image passes no structure view, so it prints no verdicts
-  there (`OM_ENGINE=go` does).
+- **The om command on the image: built.** om hands the image the repository it read (the `repo`
+  param) and answers the image's `host/structure` calls on the connection with `memory/gitrepo`
+  (`cli.withView`), for `turn-end`, `prompt`, `compact`, `before-compact`, `om call` and MCP
+  `tools/call`, so the image stamps body hashes and prints the verdicts and HEAD pages
+  `OM_ENGINE=go` prints (the cli Lisp e2e checks both on a real repository).
 - Scenarios 7, 26 and 37 pass; memeval Tier 0, 0b and 0c are unchanged cell for cell
   ([brain-memory-baseline.md](brain-memory-baseline.md), "Phase 4 part B").
 

@@ -45,7 +45,8 @@ the guidelines, one per line."
            (pin (sb-thread:with-mutex ((conn-mutex c)) (conn-pin c)))
            (call (om.layer:make-call :branch branch :curated-dir store :project project
                                      :session (host-string "host/sessionId") :model (session-model-key)
-                                     :freshness (tool-freshness branch))))
+                                     :freshness (scoped (lambda () (tool-freshness branch)))
+                                     :structure (scoped #'host-structure))))
       (multiple-value-bind (text is-error details)
           (om.layer::memory-tool-run args :call call
                                           :index-shown (and (om.layer::pin-p pin) (om.layer::pin-shown-names pin))
@@ -69,7 +70,9 @@ cwd; a scratch session for an MCP client with no transcript): (values text is-er
            (cwd (param-string params "cwd"))
            (project (om.layer::project-root cwd))
            (call (om.layer:make-call :branch branch :curated-dir (and (curated-on-p) (curated-dir))
-                                     :project project :session id :model "")))
+                                     :project project :session id :model ""
+                                     :freshness (client-freshness params branch)
+                                     :structure (client-structure params))))
       (multiple-value-bind (text is-error)
           (om.layer::memory-tool-run (if (hash-table-p arguments) arguments (om::jobject))
                                      :call call
