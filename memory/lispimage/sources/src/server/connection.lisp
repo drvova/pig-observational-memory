@@ -31,6 +31,8 @@ lowering with who and why, and the project trust they were read under (:trusted,
   (decay "") (decay-horizon 0)
   ;; The sleep pass (config.Config.SleepAfterCompactions, SleepMaxRecords, SleepIdleOff).
   (sleep-after 4) (sleep-max-records 5000) (sleep-idle-off nil)
+  ;; Phase 8: the dream section and level 1's hypotheses (config.Config.Dreams), off by default.
+  (dreams nil)
   (trust :unknown))
 
 (defstruct (conn (:constructor %make-conn))
@@ -189,7 +191,8 @@ curatedMemoryIndexTokens), memoryFormat, and whether the removed `model` setting
         (bool "consolidate" (lambda (b) (setf (rcfg-consolidate-off cfg) (not b))))
         (bool "rawFloor" (lambda (b) (setf (rcfg-raw-floor cfg) b)))
         (bool "qualityTrigger" (lambda (b) (setf (rcfg-quality-trigger cfg) b)))
-        (bool "sleepIdle" (lambda (b) (setf (rcfg-sleep-idle-off cfg) (not b)))))
+        (bool "sleepIdle" (lambda (b) (setf (rcfg-sleep-idle-off cfg) (not b))))
+        (bool "dreams" (lambda (b) (setf (rcfg-dreams cfg) b))))
       (let ((k (gethash "sleepAfterCompactions" nested)))
         (when (and (realp k) (>= k 0) (= k (ftruncate k))) (setf (rcfg-sleep-after cfg) (truncate k))))
       (let ((n (positive-integer (gethash "sleepMaxRecords" nested))))

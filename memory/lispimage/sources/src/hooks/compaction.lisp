@@ -475,6 +475,11 @@ is skipped with level1-skip-reason's report."
       (multiple-value-setq (summary kind) (minimal-brief cut (hhost-skip-tools h) memory-budget removed)))
     (when (and (string/= iblock "") (<= (estimate-tokens (cat summary iblock)) budget))
       (setf summary (cat summary iblock)))
+    ;; The dream section (decision 5), behind the dreams setting, only when it fits whole.
+    (when (and (hconfig-dreams cfg) (string= kind "records"))
+      (let ((section (dream-section entries)))
+        (when (and (string/= section "") (<= (estimate-tokens (cat summary section)) budget))
+          (setf summary (cat summary section)))))
     (values (make-cresult :summary summary :first-kept (cevent-first-kept event) :tokens-before (cevent-tokens-before event)
                           :kind kind
                           :usage (fourth level1-result)

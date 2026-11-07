@@ -8,6 +8,10 @@ import "strings"
 // is a forget record whose text opens with ErasurePrefix; its tombstones hold ids only, as every
 // forget's do, and memory/erase purges the erased records' text from the files the engine owns.
 
+// OMHypothesesRecorded is the entry level 1 appends with its quarantined hypotheses when dreams
+// are on (consolidate.Hypothesis; docs/memory-v2.md, "Dreams"): never records, never a fact.
+const OMHypothesesRecorded = "om.hypotheses.recorded"
+
 // OMCue is the entry a cue's delivery appends (extract.CueFor, docs/memory-v2.md "Cues"): the
 // record it pointed at, the key that matched and the compaction it followed.
 const OMCue = "om.cue"

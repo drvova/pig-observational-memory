@@ -75,7 +75,7 @@ func ToolFor(offer *DefinitionOffer) agents.Tool { return ToolWith(offer, false)
 // arguments from the one response. With an offer (harness evidence that changed since the last
 // one) it also takes definitions and, when the offer names remedies, rules; with stale (the input
 // has possibly stale project records, PromptInput.Stale) it also takes stale verdicts.
-func ToolWith(offer *DefinitionOffer, stale bool) agents.Tool {
+func ToolWith(offer *DefinitionOffer, stale bool, dreams ...bool) agents.Tool {
 	record := labelProperties()
 	record["id"] = map[string]any{"type": "string", "description": "The candidate's id."}
 	record["outcome"] = enumOf([]string{ledger.OutcomeFailed, ledger.OutcomeWorked, ledger.OutcomeOpen}, "An attempt record's outcome.")
@@ -120,6 +120,11 @@ func ToolWith(offer *DefinitionOffer, stale bool) agents.Tool {
 			"verdict": enumOf([]string{VerdictRecheck}, "confirm: its claim still holds at HEAD, read against its diff; it stays, checked at HEAD."),
 		}, "required": []any{"id", "verdict"}}}
 		tool.Description += " With POSSIBLY STALE records shown, also verdicts on them."
+	}
+	if len(dreams) > 0 && dreams[0] {
+		// The dreams setting: quarantined hypotheses (hypotheses.go).
+		tool.Parameters["properties"].(map[string]any)["hypotheses"] = hypothesesSchema()
+		tool.Description += hypothesesDescription
 	}
 	if offer != nil {
 		properties := tool.Parameters["properties"].(map[string]any)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/config"
 	"github.com/drvova/pig-observational-memory/memory/debuglog"
+	"github.com/drvova/pig-observational-memory/memory/dreams"
 	"github.com/drvova/pig-observational-memory/memory/extract"
 	"github.com/drvova/pig-observational-memory/memory/harness"
 	"github.com/drvova/pig-observational-memory/memory/host"
@@ -240,6 +241,13 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	if instructionsBlock != "" && tokens.EstimateStringTokens(summary+instructionsBlock) <= budget {
 		summary += instructionsBlock
 		instructionsKept = true
+	}
+	// The dream section (decision 5), behind the dreams setting: after everything else, only
+	// when it fits the budget whole.
+	if cfg.Dreams && kind == v2SummaryRecords {
+		if section := dreams.Section(entries); section != "" && tokens.EstimateStringTokens(summary+section) <= budget {
+			summary += section
+		}
 	}
 
 	data := map[string]any{

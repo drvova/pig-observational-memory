@@ -112,6 +112,7 @@ var entrySchemas = map[string]string{
 	"om.erased":                   "entry-erased.schema.json",
 	"om.cue":                      "entry-cue.schema.json",
 	ledger.OMRevisionsRecorded:    "entry-revisions-recorded.schema.json",
+	ledger.OMHypothesesRecorded:   "entry-hypotheses-recorded.schema.json",
 }
 
 // entrySchema is the schema of a decoded session entry the engine wrote; false for an entry

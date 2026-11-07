@@ -156,6 +156,8 @@
                 :components ((:file "consolidate/serialize")
                              (:file "consolidate/prompt")
                              (:file "consolidate/validate")
+                             ;; Phase 8: the summary's optional dream section (memory/dreams).
+                             (:file "dreams")
                              (:file "consolidate/layer")
                              (:file "server/level1")))
                ;; /om:status and the remaining harness reads (docs/lisp-port-status.md)

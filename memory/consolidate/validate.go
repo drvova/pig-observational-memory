@@ -40,6 +40,9 @@ type Input struct {
 	// Writer is who writes the new records (the session's harness, session, model and engine);
 	// zero leaves them without one.
 	Writer ledger.Writer
+	// Dreams is the dreams setting: the tool offered hypotheses (hypotheses.go), which are read
+	// only then.
+	Dreams bool
 }
 
 // Link is a possible update (ledger.Observation.PossiblyUpdates) the level-1 input lists: Later
@@ -130,6 +133,8 @@ type Result struct {
 	Definitions []Definition
 	Rules       []RuleProposal
 	Refusals    []Refusal
+	// Hypotheses are the quarantined hypotheses (hypotheses.go), with dreams on only.
+	Hypotheses []Hypothesis
 	// Failure is set when nothing is recorded: the output is a failure and level 0 stands.
 	Failure string
 }
@@ -258,6 +263,9 @@ func Validate(args map[string]any, in Input) Result {
 	v.curated(list(args["curated"]))
 	v.definitions(list(args["definitions"]))
 	v.rules(list(args["rules"]))
+	if in.Dreams {
+		v.hypotheses(list(args["hypotheses"]))
+	}
 	v.result.Replaced = v.replaced
 	if v.result.Accounted() == 0 {
 		v.result.Failure = FailureNothing
@@ -265,7 +273,7 @@ func Validate(args map[string]any, in Input) Result {
 			v.result.Failure = FailureNoneValid
 		}
 		v.result.Records, v.result.Reflections, v.result.Aliases, v.result.Replaced = nil, nil, nil, map[string]string{}
-		v.result.Cited = nil
+		v.result.Cited, v.result.Hypotheses = nil, nil
 	}
 	return v.result
 }

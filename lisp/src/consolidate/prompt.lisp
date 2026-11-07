@@ -91,8 +91,9 @@ no detectors or remedies; evidence is the harness evidence text."
   "The declarative text, in your own words: instructions (added after the seed, which they extend and never replace)."
   "Go's description names a detector and a remedy catalogue too; the image offers instructions only.")
 
-(defun consolidate-tool (&optional offer stale)
-  "consolidate.ToolWith: (values name description parameters); stale adds the stale verdicts."
+(defun consolidate-tool (&optional offer stale dreams)
+  "consolidate.ToolWith: (values name description parameters); stale adds the stale verdicts,
+dreams the quarantined hypotheses."
   (let* ((record (label-properties)) (merge (label-properties))
          (description "Labels, merges, reflections, subject aliases, verdicts on possible updates and citations of curated memories for the memory of the compacted conversation. Every field is optional; cite only ids and names printed in the input."))
     (setf (gethash "id" record) (jobject "type" "string" "description" "The candidate's id.")
@@ -132,6 +133,14 @@ no detectors or remedies; evidence is the harness evidence text."
                                                       "verdict" (schema-enum '("confirm") "confirm: its claim still holds at HEAD, read against its diff; it stays, checked at HEAD."))
                                 "required" (jarray "id" "verdict"))))
         (setf description (cat description " With POSSIBLY STALE records shown, also verdicts on them.")))
+      (when dreams
+        (setf (gethash "hypotheses" properties)
+              (jobject "type" "array" "items"
+                       (jobject "type" "object"
+                                "properties" (jobject "content" (jobject "type" "string" "description" "One guess the records suggest but do not state, worded as a question or a condition; it is kept apart from memory and never read as a fact.")
+                                                      "supportingIds" (schema-string-array "Ids of the shown records it is drawn from."))
+                                "required" (jarray "content" "supportingIds"))))
+        (setf description (cat description " With dreams on, also at most 3 hypotheses, guesses kept apart from memory.")))
       (when offer
         (setf (gethash "definitions" properties)
               (jobject "type" "array" "items"
