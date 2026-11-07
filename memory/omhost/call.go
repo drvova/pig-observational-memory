@@ -489,7 +489,7 @@ func (c *Call) curatedWrite(ctx context.Context, op string, args map[string]stri
 		call.UserEvidence = func(quote string) bool { return QuotedByUser(c.Entries, quote, c.Skip) }
 	}
 	if call.SourceOf == nil {
-		call.SourceOf = func(quote string) string { return QuotedSource(c.Entries, quote, c.Skip) }
+		call.SourceOf = func(quote string) string { return QuotedSource(c.Entries, quote, c.Skip, call.Project) }
 	}
 	if op == curated.OpForget || op == curated.OpFeedback {
 		// The retired defined queries stay stored (an earlier release may share the store), and

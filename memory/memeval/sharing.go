@@ -30,7 +30,7 @@ func sessionCall(store curated.Store, project, sessionID string, branch []sessio
 	return curated.Call{Store: store, Project: project, Source: sessionID,
 		Evidence:     func(q string) bool { return omhost.QuotedInConversation(branch, q, skip) },
 		UserEvidence: func(q string) bool { return omhost.QuotedByUser(branch, q, skip) },
-		SourceOf:     func(q string) string { return omhost.QuotedSource(branch, q, skip) },
+		SourceOf:     func(q string) string { return omhost.QuotedSource(branch, q, skip, project) },
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
@@ -66,6 +67,8 @@ type Settled struct {
 	Promoted []Promotion
 	// Flagged are the memories a correction newly flagged.
 	Flagged []string
+	// Lessons are the core items of the lessons that newly crossed projects (LessonsCrossing).
+	Lessons []string
 }
 
 // Promotion is one staged memory made live and the evidence for it.
@@ -138,7 +141,65 @@ func (s Store) Settle(in SettleInput) (Settled, error) {
 			out.Flagged = append(out.Flagged, m.Name)
 		}
 	}
-	return out, nil
+	lessons, err := s.crossLessons(all)
+	out.Lessons = lessons
+	return out, err
+}
+
+// LessonsCrossing are the lessons that cross projects (docs/brain-memory.md, decision 8): live
+// lesson memories scoped to a project, grouped by their text stripped of its values
+// (core.StripValues), each group saved in at least two projects; in name order of each group's
+// first memory. The stripped text alone crosses: no value of either project goes with it.
+func LessonsCrossing(memories []Memory) []core.Candidate {
+	type group struct {
+		text     string
+		projects []string
+	}
+	var order []string
+	groups := map[string]*group{}
+	for _, m := range memories {
+		if m.Type != TypeLesson || m.Staged || m.Project == "" || !m.Retired.IsZero() || HeldRule(m) != "" {
+			continue
+		}
+		text := core.StripValues(m.Description)
+		key := core.NormKey(text)
+		g := groups[key]
+		if g == nil {
+			g = &group{text: text}
+			groups[key] = g
+			order = append(order, key)
+		}
+		if !slices.Contains(g.projects, m.Project) {
+			g.projects = append(g.projects, m.Project)
+		}
+	}
+	var out []core.Candidate
+	for _, key := range order {
+		g := groups[key]
+		if len(g.projects) < 2 {
+			continue
+		}
+		roots := make([]string, len(g.projects))
+		for i, p := range g.projects {
+			roots[i] = core.ProjectRoot(p)
+		}
+		out = append(out, core.Candidate{Kind: core.KindLesson, Key: key, Text: g.text, Scope: core.ScopeUser, Via: core.ViaProjects, Roots: roots})
+	}
+	return out
+}
+
+// crossLessons promotes LessonsCrossing into the store's core log: the ids of the items written.
+func (s Store) crossLessons(all []Memory) ([]string, error) {
+	cands := LessonsCrossing(all)
+	if len(cands) == 0 {
+		return nil, nil
+	}
+	lines, _, err := s.Core().PromoteAll(cands)
+	var ids []string
+	for _, l := range lines {
+		ids = append(ids, l.ID)
+	}
+	return ids, err
 }
 
 // RecordCited records a level-1 citation of the memory name, resting on records (their ids):

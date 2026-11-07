@@ -27,6 +27,12 @@ func EvidenceRoot(project, path, quote string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ProjectRoot is the evidence root of a project a lesson was seen in.
+func ProjectRoot(project string) string {
+	sum := sha256.Sum256([]byte("project\x00" + project))
+	return hex.EncodeToString(sum[:])
+}
+
 // UserRoot is the evidence root of a user's turn: the entry it was said in and the words.
 func UserRoot(entryID, text string) string {
 	sum := sha256.Sum256([]byte("user\x00" + entryID + "\x00" + NormKey(text)))

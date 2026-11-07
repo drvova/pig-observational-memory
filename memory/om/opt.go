@@ -188,7 +188,7 @@ type SaveOpt struct{ w omwire.SaveOptions }
 // Body sets the memory's body.
 func Body(text string) SaveOpt { return SaveOpt{omwire.SaveOptions{Body: &text}} }
 
-// Scope sets where the memory applies: "global" or "project".
+// Scope sets where the memory applies: "global" or "project". Without it a user or feedback memory is global and any other stays in its project.
 func Scope(scope string) SaveOpt { return SaveOpt{omwire.SaveOptions{Scope: &scope}} }
 
 // Quoting gives the user's words confirming the save, or asking for the forget or rollback.

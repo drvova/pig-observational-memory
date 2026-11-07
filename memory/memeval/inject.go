@@ -128,7 +128,7 @@ func obey(store curated.Store, h *testfix.FakeHost, sessionID string, branch []s
 	call := curated.Call{Store: store, Source: sessionID,
 		Evidence:     func(q string) bool { return omhost.QuotedInConversation(branch, q, skip) },
 		UserEvidence: func(q string) bool { return omhost.QuotedByUser(branch, q, skip) },
-		SourceOf:     func(q string) string { return omhost.QuotedSource(branch, q, skip) },
+		SourceOf:     func(q string) string { return omhost.QuotedSource(branch, q, skip, "") },
 	}
 	args := map[string]string{"name": inj.name}
 	if inj.quote {

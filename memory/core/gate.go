@@ -47,8 +47,8 @@ const (
 //     and nothing else (dedup never raises support), or nothing changes.
 //   - Otherwise the candidate needs the user's words or two distinct evidence roots. With no live
 //     item on its key it is promoted. Against one with another value, it supersedes it when the
-//     user's words back it and the writer had read that item (Base at or above its generation),
-//     and is stored as the other side of a contested pair otherwise: a concurrent writer is
+//     user's words (or a shared edit) back it and the writer had read that item (Base at or
+//     above its generation, or the item its own session's), and is stored as the other side of a contested pair otherwise: a concurrent writer is
 //     re-evaluated against the new generation, never the last writer winning.
 func Decide(st *State, c Candidate) (Line, string) {
 	switch {
@@ -101,7 +101,8 @@ func Decide(st *State, c Candidate) (Line, string) {
 		return line, VerdictPromote
 	}
 	newest := live[len(live)-1]
-	if (via == ViaQuote || via == ViaEdit) && c.Base >= newest.Gen {
+	seen := c.Base >= newest.Gen || (c.Writer.Session != "" && newest.Writer.Session == c.Writer.Session)
+	if (via == ViaQuote || via == ViaEdit) && seen {
 		line.Op, line.Of = OpSupersede, newest.ID
 		return line, VerdictSupersede
 	}

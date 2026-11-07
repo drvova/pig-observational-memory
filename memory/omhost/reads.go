@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/drvova/pig-observational-memory/memory/curated"
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
 	"github.com/drvova/pig-observational-memory/memory/serialize"
@@ -478,13 +478,58 @@ func QuotedByUser(entries []session.Entry, quote string, skip []string) bool {
 	return quotedIn(entries, quote, skip, true, serialize.HistoryUser)
 }
 
-// QuotedSource is the source content a staged save quoting tool output cites
-// (curated.Call.SourceOf): the curated.SourceDigest of the first tool result on the branch
-// holding quote, whitespace collapsed and case ignored; "" when none does. The calls of the
+// QuotedSource is the evidence root a staged save quoting tool output cites (curated.Call.SourceOf;
+// docs/brain-memory.md, decision 7): core.EvidenceRoot of the first tool result on the branch
+// holding quote, whitespace collapsed and case ignored, over the file its call read (ToolPath), so
+// the same file read in other bytes is one root; "" when no result holds it. The calls of the
 // memory tools in skip are left out, so text the model printed through them is no source.
-func QuotedSource(entries []session.Entry, quote string, skip []string) string {
-	if text, ok := quotedText(entries, quote, skip, false, serialize.HistoryTool); ok {
-		return curated.SourceDigest(text)
+func QuotedSource(entries []session.Entry, quote string, skip []string, project string) string {
+	needle := strings.ToLower(strings.Join(strings.Fields(quote), " "))
+	for i, entry := range entries {
+		role, text, ok := HistoryText(entry, false, skip)
+		if !ok || role != serialize.HistoryTool || !strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), needle) {
+			continue
+		}
+		path := ToolPath(entries, i)
+		if path == "" {
+			path = core.GrepPath(text, quote)
+		}
+		return core.EvidenceRoot(project, path, quote)
+	}
+	return ""
+}
+
+// pathArgs are the call arguments naming the file a tool read (extract's pathArgs).
+var pathArgs = []string{"path", "file_path", "filePath", "notebook_path"}
+
+// ToolPath is the file the call answered by the tool result at entries[i] read: its path argument,
+// else the file its shell read command names (core.CommandPath); "" when neither names one.
+func ToolPath(entries []session.Entry, i int) string {
+	msg := entries[i].Message
+	id, _ := msg["toolCallId"].(string)
+	if id == "" {
+		return ""
+	}
+	for j := i - 1; j >= 0; j-- {
+		m := entries[j].Message
+		if entries[j].Type != "message" || m == nil || m["role"] != "assistant" {
+			continue
+		}
+		blocks, _ := m["content"].([]any)
+		for _, raw := range blocks {
+			block, _ := raw.(map[string]any)
+			if block == nil || block["type"] != "toolCall" || block["id"] != id {
+				continue
+			}
+			args, _ := block["arguments"].(map[string]any)
+			for _, arg := range pathArgs {
+				if p, ok := args[arg].(string); ok && strings.TrimSpace(p) != "" {
+					return p
+				}
+			}
+			command, _ := args["command"].(string)
+			return core.CommandPath(command)
+		}
 	}
 	return ""
 }

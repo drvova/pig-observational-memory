@@ -2,12 +2,14 @@ package memeval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/drvova/pig-observational-memory/memory/core"
 	"github.com/drvova/pig-observational-memory/memory/curated"
 	"github.com/drvova/pig-observational-memory/memory/layer"
 	"github.com/drvova/pig-observational-memory/memory/testfix"
@@ -174,28 +176,60 @@ func TestSameEvidenceNotIndependent(t *testing.T) {
 	}
 }
 
-// Scenario 14 on the stores that exist today: two sessions edit one curated memory at once;
-// exactly one commits and the other is re-evaluated, never both told "updated" with one lost.
+// Scenario 14: two sessions that read the core at their start edit one shared curated memory at
+// once; exactly one commits and the other is re-evaluated against the new generation, kept as the
+// other side of a contested pair (curated.ErrConflict), never both told "updated" with one lost.
+// 1,000 runs, each on a fresh store.
 func TestScenario14ConcurrentSupersedeOneCommits(t *testing.T) {
-	later(t, "phase 6: core log operations with generations; 1,000 concurrent supersede runs")
-	dir := t.TempDir()
-	a, b := curated.New(dir), curated.New(dir)
-	if _, err := a.Save(curated.Memory{Name: "target", Type: curated.TypeProject, Description: "The build target is make ci."}, "owner"); err != nil {
-		t.Fatal(err)
+	runs := 1000
+	if testing.Short() {
+		runs = 100
 	}
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i, st := range []curated.Store{a, b} {
-		wg.Add(1)
-		go func(i int, st curated.Store) {
-			defer wg.Done()
-			desc := fmt.Sprintf("The build target is make ci-%d.", i)
-			_, errs[i] = st.Update("target", "", curated.Edit{Description: &desc}, fmt.Sprintf("s%d", i))
-		}(i, st)
-	}
-	wg.Wait()
-	if errs[0] == nil && errs[1] == nil {
-		t.Fatal("both edits committed; one was overwritten unseen")
+	for run := 0; run < runs; run++ {
+		dir := t.TempDir()
+		a, b := curated.New(dir), curated.New(dir)
+		if _, err := a.Save(curated.Memory{Name: "target", Type: curated.TypeProject, Description: "The build target is make ci."}, "owner"); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i, st := range []curated.Store{a, b} {
+			// Each session reads the core at its start.
+			if _, err := st.Core().Pull(fmt.Sprintf("s%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, st := range []curated.Store{a, b} {
+			wg.Add(1)
+			go func(i int, st curated.Store) {
+				defer wg.Done()
+				desc := fmt.Sprintf("The build target is make ci-%d.", i)
+				_, errs[i] = st.Update("target", "", curated.Edit{Description: &desc}, fmt.Sprintf("s%d", i))
+			}(i, st)
+		}
+		wg.Wait()
+		committed, contested := 0, 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				committed++
+			case errors.Is(err, curated.ErrConflict):
+				contested++
+			default:
+				t.Fatal(err)
+			}
+		}
+		if committed != 1 || contested != 1 {
+			t.Fatalf("run %d: %d edits committed, %d re-evaluated (%v)", run, committed, contested, errs)
+		}
+		st, err := a.Core().Read()
+		if err != nil || len(st.Items) != 2 || st.Items[0].Status != core.StatusContested || st.Items[1].Status != core.StatusContested {
+			t.Fatalf("run %d: the core holds no contested pair: %+v (%v)", run, st.Items, err)
+		}
+		m, _ := a.Get("target")
+		if want := st.Items[0].Text; m.Description != want {
+			t.Fatalf("run %d: the memory says %q, the committed edit %q", run, m.Description, want)
+		}
 	}
 }
 
