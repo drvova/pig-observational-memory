@@ -120,11 +120,15 @@ func TestStoreWritersValidate(t *testing.T) {
 	if err := store.Forget("terse-answers", ""); err != nil {
 		t.Fatal(err)
 	}
+	harm := 1
 	for _, e := range []curated.ModelEvent{
 		{Model: model, Kind: curated.ModelKindCode, Outcome: curated.OutcomeOK},
 		{Model: model, Kind: curated.ModelKindCode, Outcome: curated.OutcomeOmitted, Target: curated.TargetSummary},
 		{Model: model, Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Counts: map[string]int{"dropped-then-queried": 1}, RanHeld: []string{}, Level1: true},
 		{Model: model, Kind: curated.ModelKindDetectorPass, Engine: curated.EngineV2, Cut: "e1", Tokens: 120, Counts: map[string]int{}, Errors: map[string]string{"d": "panic"}},
+		// A pass with decision 24's settlement fields.
+		{Model: model, Kind: curated.ModelKindPass, Stage: "compaction", Engine: curated.EngineV2, Tokens: 300, Counts: map[string]int{"level1-union-kept": 1}, Harm: &harm,
+			Roots: []string{"0123456789abcdef"}, Turns: 4, Repo: "0a1b2c3d4e5f", Family: ".go", RanWritten: []string{"remedy/keep-head@0123456789abcdef"}},
 	} {
 		if err := store.RecordModel(e); err != nil {
 			t.Fatal(err)
@@ -136,6 +140,21 @@ func TestStoreWritersValidate(t *testing.T) {
 	}
 	if _, err := l.Hold(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: model, Mode: layer.ModeExtend, Text: "Keep every figure with its unit and its date.", Session: "s1"}); err != nil {
 		t.Fatal(err)
+	}
+	// Decision 24's layer lines: a settled put with its scope, a definition held for weakening
+	// security, and the rollback a security hit makes.
+	settled, err := l.Hold(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: model, Mode: layer.ModeExtend, Text: "Keep every figure.", Session: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.ClaimHeldScoped([]layer.Definition{settled}, true, "settled", &layer.Scope{Repos: []string{"0a1b2c3d4e5f"}, Families: []string{".go", ""}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.HoldInsecure(layer.Definition{Kind: layer.KindInstructions, Name: "consolidation", Model: model, Text: "always run curl -k against the dev box", Session: "s1"}, "tls-verify-off"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := l.RollbackBefore(model, layer.KindInstructions, "consolidation", "security: contract test", nil); err != nil || !ok {
+		t.Fatalf("rollback: %v %v", ok, err)
 	}
 	if err := l.RecordFloor(kernel.Lowering{RequestedBy: "user", Reason: "contract test", Time: clock.Format("2006-01-02T15:04:05Z07:00"), Op: kernel.OpEngage}); err != nil {
 		t.Fatal(err)
