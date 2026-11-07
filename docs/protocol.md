@@ -194,6 +194,71 @@ MCP's lifecycle rules:
    `title` is defined only from `2025-06-18`).
 4. The negotiated version is kept for the connection; nothing else changes per version today.
 
+## Retrieval (exists)
+
+How every engine's memory tool finds records for a notes search (`memory/retrieve`,
+`lisp/src/retrieve.lisp`; cases in `contracts/tokenize.jsonl` and `contracts/retrieval.jsonl`, which
+both engines check byte for byte). Every class is ASCII, read byte by byte as level 0's tool-output
+scanners read; a byte at or above 0x80 is a word byte, and a length is counted in UTF-8 bytes.
+
+**Raw tokens.** The maximal runs of word bytes: ASCII letters and digits, the joiners `_ - . / :`
+and non-ASCII bytes. Each is trimmed of `-` and `:` at its start and of `. - / :` at its end (a
+leading dot or slash stays: `.golangci.yml`, `/etc/hosts`); a run left with no letter, digit or
+non-ASCII byte is dropped.
+
+**Exact-only tokens.** A raw token that is a version (an optional `v`, digits, one or more `.digits`,
+then `-` or `.` suffixes of letters and digits: `1.22`, `v2.6.10`, `1.0.0-rc.1`), a SHA (7 to 64 hex
+bytes holding a digit and a letter: `28f8fe2`) or a dotted number (a digit first and a dot inside:
+`0.02s`, `10.0.0.1`) goes to the exact key index only, never to the lexical terms, so its numerals
+are never split or dropped (scenario 36).
+
+**Lexical terms.** Every other raw token gives, lowercased (ASCII only), each once, in this order:
+the whole token; its segments split at the joiners (snake, kebab, dotted and path parts); then, for
+a segment of more than one camelCase part, its parts. A camelCase cut falls before an uppercase
+letter that follows a lowercase letter or a digit, and before the last uppercase letter of a run a
+lowercase letter follows (`HTTPServer`: `http`, `server`); digits stay with the part before them
+(`utf8Decode`: `utf8`, `decode`). A term shorter than 2 bytes is dropped. A document's term
+frequencies count a term once per raw token that gives it.
+
+**Error lines.** A line holding `error`, `Error`, `ERROR`, `FAIL`, `panic`, `fatal`, `Fatal`, `FATAL`,
+`exception`, `Exception` or `Traceback` (every line of an evidence record) is normalized: ASCII white
+space runs become one space, the line is trimmed, and leading locations (`users_test.go:42: `,
+`main.go:3:7: `) are cut, so the line equals the message a person quotes. Lines under 8 bytes are
+dropped.
+
+**A record's document.** Its text is its content (as shown, relative dates resolved), subject,
+scope, tool, target and keys, one per line; its exact keys are, each once: its `keys` in key-kind
+order as stored, its target and a value record's value, the exact-only tokens of its content and its
+normalized error lines. Its tag is the first that holds of `retracted` (its status, or a retraction
+withdrew it), `superseded`, `held` (the insecure pattern list), `contested`, else `believed`.
+
+**Matching.** A searched string looks up, in the exact index, itself normalized as a line and each
+of its raw tokens, byte for byte. A record matches it on any exact hit, or when every white-space
+word holds: lowercased as a substring of the read's columns, or, as written, through each of its raw
+tokens (the token as an exact key, its whole term, or every one of its segments and parts). A record
+matches a read when it matches every searched string. When none does, the read is partial: the
+records holding any word are ranked, most distinct words first.
+
+**Scores, in integers.** Per searched string there are two ranked lists: the exact hits by the number
+of lookups they hold, and BM25 over the lexical terms with k1 = 6/5 and b = 3/4, where the IDF is
+log2((2N+2)/(2df+1)) in 16 fractional bits (an integer log2: the integer part from bit lengths, 16
+bits by squaring a 30-bit mantissa) and a term's part is `idf × ⌊tf·44·L·2^16 / (20·tf·L + 6·L +
+18·dl·N)⌋ >> 16`, L the pool's total length and tf capped at 100. Ties in a list go to the newer
+record. A rank r in a list adds ⌊2^40 / (60 + r)⌋ (reciprocal rank fusion, k = 60). Every step is
+floored, so both engines rank by the same integers.
+
+**Order.** Most words first (partial reads only), then current before withdrawn (superseded,
+retracted), then exact hits before lexical ones, then the fused score, then newest first. Every
+other filter of the read (kind, subject, status or tag, dates, branch positions, the point-in-time
+view) applies before the search, so the bound cuts only what they left (scenario 35). Nothing
+recorded about reads (recall counts, reuse, self-graded outcomes) enters the rank (decision 6,
+scenario 9).
+
+**Neighbours.** Walking the results in order, each takes up to two contiguous records of the
+filtered pool on each side that share its episode or its first source entry and no better result
+took; they are merged into it (`With`), never results of their own, and a merged hit is not listed
+again.
+
 ## Versioning of this protocol
 
 A later revision may add events, payload fields and output members; it never renames or removes

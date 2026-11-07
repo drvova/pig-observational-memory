@@ -83,6 +83,17 @@ preferences and curated memories (its rules, negation and clause rule, and what 
 releases it); `insecure.jsonl` is its cases, rewritten with `cd memory && go test ./insecure -args
 -write`.
 
+## Retrieval
+
+[docs/protocol.md](../docs/protocol.md), "Retrieval", specifies the tokenizer and the ranked search
+behind the memory tool's notes reads. `tokenize.jsonl` holds the tokenizer's cases (raw tokens,
+lexical terms, exact-only tokens, error lines and lookups of a text) and `retrieval.jsonl` the
+search's (records in ledger order, the searched strings, and the ordered results with their tags,
+exact flag and merged neighbours, plus a table of the fixed-point log2); both engines check them
+byte for byte (`memory/retrieve`, `lisp/tests/retrieval.lisp`). Rewrite them with
+`cd memory && go test ./retrieve -args -write`. The search's caches (fold checkpoints, analyzed
+documents) are engine private and never compared (decision 12).
+
 ## Golden corpus
 
 `golden/<fixture>/` holds, for each real transcript in `memory/transcript/testdata/real` (the SQL

@@ -630,7 +630,7 @@ concrete. Every name below compiles: no type and function share a name.
 ```go
 type Opt struct{ /* unexported */ }
 
-func Search(words string) Opt      // literal words, all must match, case-insensitive, over every column; see Partial
+func Search(words string) Opt      // literal words, all must match, case-insensitive, over every column; notes reads also match exact keys and identifier parts and rank (see "Ranked notes searches"); see Partial
 func From(id string) Opt           // at or after this entry id (anchor or record id); " (off-path)" accepted
 func Through(id string) Opt        // at or before this entry id
 func Since(date string) Opt        // YYYY-MM-DD, entry time
@@ -641,7 +641,7 @@ func Where(field, value string) Opt    // field equals value; an unknown field e
 func Contains(field, value string) Opt // field contains value
 func Kind(k string) Opt            // Where("kind", k)
 func Subject(s string) Opt         // canonical or raw subject equals
-func WithStatus(s string) Opt      // proposed, hypothetical, retracted
+func WithStatus(s string) Opt      // proposed, hypothetical, retracted, or a tag: believed, superseded, contested, held
 func SortBy(field string, desc bool) Opt
 func Limit(n int) Opt              // 1..200, default 20
 func Offset(n int) Opt             // Recall only: character offset of the page
@@ -680,6 +680,8 @@ type Note struct {
     OffPath  bool
     Dropped  bool   // only from NoteByID and Dropped()
     Standing string // the record standing for it (ledger.Standing), when replaced
+    Tag      string // a ranked search's status tag: believed, superseded, retracted, contested, held
+    With     []Note // the contiguous records a ranked search merged into this result
 }
 func (n Note) Line() string                // the summary line, ending in its anchor
 func (n Note) Recall() (Text, error)       // om.Recall(n.ID)
@@ -754,6 +756,27 @@ count means what its search says. The fallback exists because a model's searches
 phrases: in the LongMemEval run of `docs/bench-results.md`, half of all searches matched nothing
 with every word required, while the entry holding the answer contained most of the words. List
 methods run in the child on the rows it holds, so they cost no callback.
+
+#### Ranked notes searches
+
+A memory tool read of `Notes`, `Files`, `Commits`, `Attempts` or `Dropped` with a search and no
+`SortBy` ranks (Phase 4, `memory/retrieve`; the contract is `docs/protocol.md`, "Retrieval"). Every
+other option filters first (`Kind`, `Subject`, `WithStatus`, the dates, `From`/`Through`, `AsOf`),
+so a status or point-in-time filter applies before the bound and a superseded record never takes
+the place of its update (scenario 35). A record matches a searched string when the exact key index
+holds it byte for byte (a key, a value's target, a version, SHA or dotted number, a normalized error
+line) or when it holds every word, as a substring or through the word's identifier parts
+(`parse_config` finds `parseConfig`). The matches are ordered: current records before superseded or
+retracted ones, exact hits before lexical ones, then the fused score (reciprocal rank fusion, k = 60,
+over each string's exact list and integer-BM25 list), then newest first. Each row carries its `Tag`
+and the up to two contiguous records on each side of the same episode or source entry it merged
+(`With`, shown in the table's `with` column); a merged record is never a row of its own, and
+`Matched` counts results. The table adds the `tag` and `with` columns only for such a list. A ranked
+list pages by a bigger `Limit`. A search no record matches is `Partial`, ranked most words first.
+Recall counts, reuse and self-graded outcomes never enter the rank (decision 6, scenario 9), and a
+detector's reads keep the plain filter. The Lisp `notes` read ranks with the same function
+(`lisp/src/retrieve.lisp`). Each call folds a snapshot once (`omhost` fold checkpoints, decision
+12: engine private, rebuilt per call, never compared).
 
 ### Reads
 

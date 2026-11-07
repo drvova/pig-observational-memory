@@ -469,6 +469,59 @@ person's own turns only. Measured on `origin/claude/lisp-core` 118eb45 (before) 
   before tables cell for cell, all four invariants kept on every compaction, no snippet failed and no
   model request.
 
+## Phase 4: retrieval
+
+Phase 4 part A (`claude/phase4-retrieval`; [protocol.md](protocol.md), "Retrieval") ranks the memory
+tool's notes searches: the tokenizer contract, the exact key index, integer BM25, two-level RRF
+(k = 60), neighbour merging, status tags and filters before the bound. Measured on 2026-11-07
+against `5a663ea` (the same tree before retrieval), no model requests.
+
+**Tier 0: no regression.** `go run ./cmd/memeval -seeds 20` (600 compactions, 1,549 snippets run, 0
+failed), `-summary-max 1200` (3,915 snippets, 0 failed) and `-suite all` print tables identical to
+the tree before retrieval, cell for cell; every invariant holds. A printed snippet's search now
+ranks, and every one still lists what it counts.
+
+**Retrieval check** (`go run ./cmd/memeval -suite retrieval -seeds 20`): for each probe whose target
+record is in the session's last ledger, does ``om.Notes(om.Search(`<key>`))`` list it in its top 5,
+and first? (Half the probes' targets are folded out of the last ledger by its later compactions;
+the check counts the rest.) "Identifier parts" searches the planted name in snake case
+(`retryWithCache42` as `retry_with_cache42`); "value" searches a failing test's name for its value
+record; "superseded" needs the update above the value it replaced.
+
+| Class | Targets | Top 5 before | Top 5 after | First before | First after |
+|---|---|---|---|---|---|
+| identifier | 120 | 100% | 100% | 100% | 100% |
+| identifier parts | 120 | 0% | 100% | 0% | 100% |
+| error text | 120 | 100% | 100% | 100% | 100% |
+| constraint | 200 | 100% | 100% | 100% | 100% |
+| decision | 120 | 100% | 100% | 77% | 77% |
+| value | 184 | 92% | 100% | 0% | 100% |
+| superseded | 120 | 100% | 100% | 100% | 100% |
+
+A decision's target is first in 77% both ways: the user's statement of the decision and the
+assistant's reply carrying the same library are two records, and the search cannot tell which one the
+probe wants.
+
+**Latency.** Best of three per search, five searches (an identifier, a path, a version, two words,
+three words), on synthetic ledgers (`TestSearchLatency` in `memory/omhost` and `memory/retrieve`
+behind `OM_SEARCH_LATENCY`, `lisp/search-latency.lisp` over the same records file; the ledgers lived
+in a temp dir, deleted after). The search alone builds and analyzes every document per search, as a
+read does:
+
+| Records | Go search alone | Lisp search alone | Go `om.Notes` read, before | Go `om.Notes` read, after |
+|---|---|---|---|---|
+| 10^4 | 26–34 ms | 156–188 ms | 0.22–0.25 s | 0.18–0.20 s |
+| 10^5 | 0.38–0.39 s | 1.6–1.9 s | 2.5–2.7 s | 2.2–2.5 s |
+| 10^6 | 2.9–4.2 s | 15–18 s | not run | not run |
+
+Both engines return the same results and the same first record at every size. The whole read is
+dominated by the read path that predates retrieval (folding, relative dates, rows), which the
+per-call fold checkpoint halves for a second read in one call; at 10^6 records a whole Go read
+would need about 14 GB here, so only the search was timed. The Lisp search is about 4 to 5 times the
+Go one.
+
+**Tier 1: ready, not run.** It needs an answering model.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
@@ -677,7 +730,8 @@ finding starts to pass, or when any request is logged besides the scripted ones.
   - `-window`, `-turns` and `-compactions` change the session;
   - `-no-snippets` skips the child;
   - `-suite constraintrot` and `-suite arcbench -arcbench-cases <file>` print the phase 3 rule
-    benches (data only for ARCBench).
+    benches (data only for ARCBench);
+  - `-suite retrieval` prints the phase 4 retrieval check.
 
   It exits non-zero on a broken invariant, a failed snippet or any request.
 - `-suite forgetting` and `-suite sharing` print the Tier 0b and 0c tables below the retention

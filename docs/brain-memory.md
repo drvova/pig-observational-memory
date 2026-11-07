@@ -341,6 +341,39 @@ replacements"). Measured in [brain-memory-baseline.md](brain-memory-baseline.md)
   model and are ready, not run.
 - Scenarios 3 (rendering), 4, 21, 22 and 23 pass.
 
+### Phase 4 status: retrieval (part A)
+
+Built in Go and Lisp with byte-identical rankings (`memory/retrieve`, `lisp/src/retrieve.lisp`;
+the contract is [protocol.md](protocol.md), "Retrieval", with cases in `contracts/tokenize.jsonl`
+and `contracts/retrieval.jsonl`). Measured in [brain-memory-baseline.md](brain-memory-baseline.md),
+"Phase 4: retrieval".
+
+- **Tokenizer and exact key index: built.** The whole token always, plus its joiner segments and
+  camelCase parts, lowercased; versions, SHAs and dotted numbers go to the exact index only, with
+  the records' keys, value targets and normalized error lines, matched byte for byte (scenario 36).
+- **Lexical search and fusion: built.** Integer BM25 (fixed-point log2 IDF, floored saturation) and
+  two-level reciprocal rank fusion (k = 60): exact hits before lexical ones. Every score is an
+  integer, so the engines cannot drift by a rounding.
+- **Neighbours: built.** A result merges up to two contiguous records on each side of its episode or
+  first source entry (`Note.With`, the table's `with` column), never as extra rows.
+- **Status filters and tags: built.** Every other filter (status or tag, kind, subject, dates,
+  branch positions, `AsOf`) applies before the bound; current records rank above superseded and
+  retracted ones; each result carries its tag (`believed`, `superseded`, `retracted`, `contested`,
+  `held`), and `WithStatus` takes the tags (scenario 35). Reads never feed the rank (scenario 9's
+  rank half).
+- **Wiring: built.** The memory tool's notes reads with a search and no sort (`om.Notes`, `Files`,
+  `Commits`, `Attempts`, `Dropped`; the Lisp `notes`); `Partial` and every printed snippet keep
+  working, and a ranked list pages by a bigger `Limit`. Detector reads keep the plain filter.
+- **Fold checkpoints: built, per call.** A memory tool call folds each snapshot once; engine private,
+  rebuilt, never compared (decision 12). A checkpoint across calls (incremental folding) is not built.
+- **Not built (part B):** links that only expand lexical hits, revocation on read beyond the tags, the
+  HEAD structure view and per-repo project records with freshness verdicts (decision 20, scenario 26).
+- **Tier 1: ready, not run** (it needs an answering model).
+- Also in this part: `isPreference` applies the rule grammar's reported-speech and hypothetical
+  exclusions ("My manager said never deploy on Fridays" and "If we never deploy on Fridays…" are no
+  preference of the user's), with cases in `contracts/conversation.jsonl`.
+- Scenarios 35 and 36 pass.
+
 ## Scenarios
 
 Each failure has a test that a harness can check (37 in all). The full catalogue, with its evidence,
@@ -385,6 +418,6 @@ in a majority of runs.
 | 32 | Two definitions on one target are each safe but harmful together | Settling one returns the other to a hold window; the check reads their joint evidence |
 | 33 | A security-weakening definition enters the layer | Held; on detection the layer rolls back to the generation before it; listed in `/om:status` |
 | 34 | A definition settled in one scope is applied in another | Not applied outside its model, repository and task family; not retired on "no difference" alone |
-| 35 | A superseded or revoked record crowds out its update in search | Status and as-of filters apply before top-k; the current record is returned with its label |
-| 36 | A version, SHA or error line is split by the tokenizer | Found through the exact index byte for byte; never indexed for BM25 |
+| 35 | A superseded or revoked record crowds out its update in search | Status and as-of filters apply before top-k; the current record is returned with its label (passes: phase 4 part A) |
+| 36 | A version, SHA or error line is split by the tokenizer | Found through the exact index byte for byte; never indexed for BM25 (passes: phase 4 part A) |
 | 37 | The repo id lookup times out on a large repository | The id is computed once and cached per repository; a compaction never waits on the root-commit lookup |

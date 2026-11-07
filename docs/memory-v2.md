@@ -696,8 +696,14 @@ work step 8): none is registered or run, and `om.Retired()` lists each with its 
 - Matching and display run on the same filtered text extraction uses, so thinking is never matched,
   counted or returned, by ``om.Recall(`<record id>`)``'s source entries either. Search tokens are literal
   (no wildcards). A tool the agent defined runs its query the same way.
-- Matching stays literal and ranked newest first; pi-vcc's BM25 floor, caps and page size are tuned on
-  its benchmark and are not adopted.
+- Matching stays literal for `history`, `reflections` and `saved`. A notes search (Phase 4,
+  [protocol.md](protocol.md), "Retrieval"; [code-tool.md](code-tool.md), "Ranked notes searches")
+  also matches an exact key byte for byte (a key, a value, a version, a SHA, a normalized error line)
+  and identifier parts, and ranks after every other filter: current records before superseded or
+  retracted ones, exact hits first, then integer BM25 fused with the exact list by reciprocal rank
+  (k = 60), newest first; each result carries its status tag and merges up to two contiguous records
+  of its episode or source entry. pi-vcc's BM25 floor, caps and page size are tuned on its benchmark
+  and are not adopted; a detector's reads keep the plain filter.
 - **Point-in-time view** (after past.dev's `queryTimestamp`). With `until DATE asof` or
   `through ID asof`, `notes` and `reflections` read the memory as it stood at the bound: drops and
   reflections recorded after it are not applied, and a record that supersedes after it (one that
