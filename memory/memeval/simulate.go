@@ -26,6 +26,12 @@ type Window struct {
 	// Decay and DecayHorizon set the decay setting (config.Config.Decay); "" is off.
 	Decay        string
 	DecayHorizon int
+	// SleepOff turns the sleep pass's compaction fallback off (sleepAfterCompactions: 0);
+	// SleepAfter is its K, 0 for the default (config.DefaultSleepAfterCompactions), and
+	// SleepMaxRecords its bound, 0 for the default.
+	SleepOff        bool
+	SleepAfter      int
+	SleepMaxRecords int
 }
 
 // SmallWindow is the default: small enough that the ledger outgrows the summary budget within a
@@ -118,6 +124,15 @@ func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions i
 		cfg.CompactionSummaryMaxTokens = w.SummaryMaxTokens
 	}
 	cfg.Decay, cfg.DecayHorizon = w.Decay, w.DecayHorizon
+	if w.SleepAfter > 0 {
+		cfg.SleepAfterCompactions = w.SleepAfter
+	}
+	if w.SleepOff {
+		cfg.SleepAfterCompactions = 0
+	}
+	if w.SleepMaxRecords > 0 {
+		cfg.SleepMaxRecords = w.SleepMaxRecords
+	}
 	rt := runtime.New()
 	rt.SetConfig(cfg)
 	h := sim.Host

@@ -106,6 +106,7 @@ var entrySchemas = map[string]string{
 	ledger.OMObservationsDropped:  "entry-observations-dropped.schema.json",
 	ledger.OMSubjectsAliased:      "entry-subjects-aliased.schema.json",
 	ledger.OMExtracted:            "entry-extracted.schema.json",
+	ledger.OMSleep:                "entry-sleep.schema.json",
 	"om.cut":                      "entry-cut.schema.json",
 	"om.summary.handed":           "entry-summary-handed.schema.json",
 }

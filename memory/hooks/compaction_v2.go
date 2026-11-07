@@ -116,6 +116,8 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	// The records of the cut range, appended before rendering so the protection of unextracted
 	// entries holds by construction (docs/memory-v2.md, "PiG's cut, exactly").
 	entries := extractCutV2(ctx, rt, h, event)
+	// The sleep pass's compaction fallback (sleep_v2.go), before level 1 and the render.
+	entries = sleepFallbackV2(ctx, request, rt, h, entries)
 	previousSummary := v2PreviousSummary(entries, event)
 	removed := v2SourceTokens(cut) + tokens.EstimateStringTokens(previousSummary)
 	model := h.SessionModel()
@@ -214,6 +216,8 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 			Slots:           V2Slots(cfg, model),
 			Freshness:       fresh.texts(),
 			Decayed:         v2Decayed(cfg, entries, projection.Observations),
+			// A record a sleep record found duplicated is never shown: its first copy stands for it.
+			Hidden: SleepHidden(entries),
 		})
 		if rendered.Text != "" && tokens.EstimateStringTokens(rendered.Text) <= memoryBudget {
 			summary, kind = rendered.Text, v2SummaryRecords

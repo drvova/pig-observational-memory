@@ -78,6 +78,15 @@ type Config struct {
 	// ledger.DefaultDecayHorizon (docs/brain-memory.md, decision 6).
 	Decay        string
 	DecayHorizon int
+	// SleepAfterCompactions is K of the sleep pass's compaction fallback (sleepAfterCompactions,
+	// docs/brain-memory.md, decision 13): a compaction runs the pass once K compactions passed
+	// with no sleep record on the branch; 0 never runs it in a compaction. SleepMaxRecords bounds
+	// the fallback (sleepMaxRecords): a ledger with more active records skips it, so the pass
+	// stays within the compaction's budget. SleepIdleOff (sleepIdle: false) turns the image's idle
+	// pass off.
+	SleepAfterCompactions int
+	SleepMaxRecords       int
+	SleepIdleOff          bool
 	// RemovedSet are the RemovedSettings a settings file that was read sets to
 	// a valid value, in RemovedSettings order: nothing reads them and /om:status
 	// lists them while they are set (docs/memory-v2.md, "Migration > Settings").
@@ -168,7 +177,16 @@ var Defaults = Config{
 	CuratedMemory:            true,
 	CuratedMemoryIndexTokens: 2_000,
 	MemoryFormat:             MemoryFormatTables,
+	SleepAfterCompactions:    DefaultSleepAfterCompactions,
+	SleepMaxRecords:          DefaultSleepMaxRecords,
 }
+
+// The sleep pass's defaults: the compaction fallback after 4 compactions without a sleep run,
+// skipped over more than 5,000 active records.
+const (
+	DefaultSleepAfterCompactions = 4
+	DefaultSleepMaxRecords       = 5_000
+)
 
 // CompactionSummaryFallbackMaxTokens is the summary size the harness profile never halves
 // below (harness.Profile.ApplySummary): memory v1's summary budget for an unknown window.
@@ -337,6 +355,7 @@ var numberKeys = []string{
 	"compactionSummaryMaxTokens",
 	"curatedMemoryIndexTokens",
 	"decayHorizon",
+	"sleepMaxRecords",
 }
 
 func normalizeSettings(value map[string]any) partial {
@@ -355,6 +374,9 @@ func normalizeSettings(value map[string]any) partial {
 		}
 		p.decay = &clock
 	}
+	if f, ok := value["sleepAfterCompactions"].(float64); ok && f >= 0 && f == math.Trunc(f) && !math.IsInf(f, 0) {
+		p.ints["sleepAfterCompactions"] = int(f)
+	}
 	p.limits, _ = readLimits(value)
 	if models, ok := value["modelLimits"].(map[string]any); ok {
 		for key, raw := range models {
@@ -368,7 +390,7 @@ func normalizeSettings(value map[string]any) partial {
 			}
 		}
 	}
-	for _, key := range []string{"passive", "debugLog", "curatedMemory", "consolidate", "rawFloor", "qualityTrigger"} {
+	for _, key := range []string{"passive", "debugLog", "curatedMemory", "consolidate", "rawFloor", "qualityTrigger", "sleepIdle"} {
 		if b, ok := value[key].(bool); ok {
 			p.bools[key] = b
 		}
@@ -418,6 +440,10 @@ func (p partial) apply(cfg *Config) {
 			cfg.CuratedMemoryIndexTokens = n
 		case "decayHorizon":
 			cfg.DecayHorizon = n
+		case "sleepAfterCompactions":
+			cfg.SleepAfterCompactions = n
+		case "sleepMaxRecords":
+			cfg.SleepMaxRecords = n
 		}
 	}
 	if p.decay != nil {
@@ -440,6 +466,8 @@ func (p partial) apply(cfg *Config) {
 			cfg.RawFloor = b
 		case "qualityTrigger":
 			cfg.QualityTrigger = b
+		case "sleepIdle":
+			cfg.SleepIdleOff = !b
 		}
 	}
 	cfg.Limits = cfg.Limits.over(p.limits)
