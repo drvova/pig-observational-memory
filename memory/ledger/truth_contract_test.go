@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -113,6 +114,12 @@ func truthInputs() []TruthCase {
 	stone := func(o ledger.Observation) ledger.Tombstone {
 		return ledger.Tombstone{ID: o.ID, Kind: string(o.Kind), Sources: o.SourceEntryIDs}
 	}
+	// The user restating the forgotten value in a later message is a new record from new source
+	// entries: no tombstone names it, so it stands (the core's lift rule, contracts/core.jsonl).
+	restated := obs("0000000000e1", "My home address is 12 Elm Street.", func(o *ledger.Observation) {
+		fact(o)
+		o.Source, o.SourceEntryIDs = ledger.SourceUserSaid, []string{"ug"}
+	})
 	fa := obs("00000000001a", "The staging host is stage-7.", fact)
 	fb := obs("00000000001b", "The canary host is canary-3.", fact)
 	fm := obs("00000000001c", "The staging host is stage-7 and the canary host is canary-3.", func(o *ledger.Observation) {
@@ -169,6 +176,8 @@ func truthInputs() []TruthCase {
 			Entries: entries(merged(tf.RawMessage("ud", "message ud"), recorded("r3", "ud", false, retractM)))},
 		{Name: "a tombstone forgets its record and a re-extraction of the same source",
 			Entries: entries(append(users("ue", "u0f"), recorded("r1", "ue", false, address), recorded("r2", "u0f", false, forget("00000000000f", stone(address))), recorded("r3", "u0f", false, reextracted)))},
+		{Name: "a restatement in a later user message stands after a forget",
+			Entries: entries(append(users("ue", "u0f", "ug"), recorded("r1", "ue", false, address), recorded("r2", "u0f", false, forget("00000000000f", stone(address))), recorded("r3", "ug", false, restated)))},
 		{Name: "a forgotten source takes its merge out of the fold, and the other source reappears",
 			Entries: entries(append(users("u1a", "u1b", "uc", "u1d"), recorded("r1", "u1b", false, fa, fb), recorded("r2", "uc", true, fm), droppedEntry("d2", "uc", true, fa.ID, fb.ID), recorded("r3", "u1d", false, forget("00000000001d", stone(fa)))))},
 		{Name: "a forgotten relabel takes the record it stands for",
@@ -299,6 +308,8 @@ func TestTruthContractCases(t *testing.T) {
 	check(c.Name, c.Out["00000000000c"] == "00000000000d" && c.Labels["00000000000b"] == ledger.LabelBelieved && c.Labels["00000000000a"] == ledger.LabelRetracted, "%+v", c)
 	c = byName["a tombstone forgets its record and a re-extraction of the same source"]
 	check(c.Name, len(c.Forgotten) == 2 && len(c.Active) == 1, "%+v", c)
+	c = byName["a restatement in a later user message stands after a forget"]
+	check(c.Name, len(c.Forgotten) == 1 && c.Forgotten["00000000000e"] != "" && slices.Contains(c.Active, "0000000000e1") && !slices.Contains(c.Active, "00000000000e"), "%+v", c)
 	c = byName["a forgotten source takes its merge out of the fold, and the other source reappears"]
 	check(c.Name, c.Labels["00000000001b"] == ledger.LabelBelieved && c.Labels["00000000001c"] == "" && c.Out["00000000001c"] != "", "%+v", c)
 	c = byName["a forgotten relabel takes the record it stands for"]

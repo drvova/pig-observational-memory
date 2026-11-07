@@ -37,7 +37,7 @@ What you may do, all optional, in that one call:
 - reflections: write a durable conclusion supported by record ids, or replace earlier reflections by their ids (supersedes).
 - aliases: declare that one existing subject is about the same topic as another (from, to).
 - links: settle a listed POSSIBLE UPDATE by its two ids (id, updates): confirm when the later value replaces the earlier one (the later record then supersedes it), reject when both hold. Leave it when unsure; it stays a link and both records stay shown.
-- curated: cite a listed CURATED MEMORY by name with the ids of shown records of the user's own words that bear it out (name, supportingIds). A citation is the evidence a staged memory needs to enter the memory index; it never changes a memory's text.
+- curated: cite a listed CURATED MEMORY by name with the ids of shown records of the user's own words that bear it out (name, supportingIds). A citation is recorded as the memory's use; it never promotes a staged memory into the memory index and never changes a memory's text.
 - definitions and rules: only when the input shows HARNESS EVIDENCE. Define part of your own memory harness (definitions: kind, name, text) or propose a rule (rules: a detector and a code remedy). Each is held: it applies from the next compaction and is written only once a later compaction's evidence shows it did no harm, never on this response; otherwise it is reverted and what stood before stands.
 
 Rules code enforces (a proposal that breaks one is refused and the records it names stay as they are):

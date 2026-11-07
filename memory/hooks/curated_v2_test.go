@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,16 +24,16 @@ func citeReply(name string, ids ...string) map[string]any {
 }
 
 // Level 1 sees the curated memories and may cite one with records of the user's own words: the
-// citation is recorded, a staged memory it bears out goes live, and the compaction still makes
-// exactly one request. A citation resting on the assistant's words alone is refused. A memory
-// another session staged is visible only there (curated.SeenBy), so it is not listed, and a
-// citation of it is refused.
-func TestV2Level1CitationPromotesStagedMemory(t *testing.T) {
+// citation is recorded, but a citation alone never promotes a staged memory (decision 7: a user
+// quote or two independent evidence roots), and the compaction still makes exactly one request.
+// A citation resting on the assistant's words alone is refused. A memory another session staged
+// is visible only there (curated.SeenBy), so it is not listed, and a citation of it is refused.
+func TestV2Level1CitationNeverPromotesStagedMemory(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		ids      []string
 		stagedBy string
-		promoted bool
+		cited    bool
 	}{
 		{"user support", []string{l1PortID}, "", true},
 		{"assistant support only", []string{l1MakefileID}, "", false},
@@ -68,12 +69,15 @@ func TestV2Level1CitationPromotesStagedMemory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.promoted {
-				if !report.Applied || report.Cited != 1 || report.Promoted != 1 || m.Staged {
-					t.Fatalf("report %+v, memory %+v", report, m)
+			if c.cited {
+				if !report.Applied || report.Cited != 1 || report.Promoted != 0 || !m.Staged {
+					t.Fatalf("a citation alone promoted it: report %+v, memory %+v", report, m)
 				}
-				if text, _ := curated.IndexFor(store, harness.ProjectRoot(h.Cwd()), 0); !strings.Contains(text, "deploy-port") {
-					t.Fatalf("the promoted memory is not in the next index:\n%s", text)
+				if events, err := store.UsageEventsByName(); err != nil || !slices.ContainsFunc(events["deploy-port"], func(e curated.UsageEvent) bool { return e.Event == curated.EventCited }) {
+					t.Fatalf("the citation is not recorded: %+v, %v", events["deploy-port"], err)
+				}
+				if text, _ := curated.IndexFor(store, harness.ProjectRoot(h.Cwd()), 0); strings.Contains(text, "deploy-port") {
+					t.Fatalf("a staged memory a citation alone bears is in the next index:\n%s", text)
 				}
 				return
 			}

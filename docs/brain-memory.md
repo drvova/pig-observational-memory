@@ -40,7 +40,9 @@ These are the owner's, accepted as the report recommended:
    its sources per claim (one `Replaces` set per record, never one list per pass), so the cascade
    is set arithmetic with no model call. Re-asking the model is never an erasure path. A level-1
    merge never rewords status-bearing text. Retractions, forget records and erasure tombstones are
-   permanent.
+   permanent: only the user restating a forgotten item in their own fresh words brings it back, as
+   a new record or core item made from the restatement (the tombstone holds ids only, so nothing
+   is restored from it; phase 6, "Forgets and restatements").
 2. **A change that reaches shared memory needs a user quote or code evidence** (a scanner rule, a
    path gone). The gate covers a forget and an edit of a curated memory other sessions see, and a
    forget and a rollback of a model's layer. A quote-less change, or one quoting words no user
@@ -65,7 +67,9 @@ These are the owner's, accepted as the report recommended:
    never runs on wall time or on retrieval, has floors for the protected classes, and never deletes.
    A record's own retrieval, recall, reuse or self-graded outcome is never an evidence event.
    "Used" stays a view in `/om:view` and `/om:status` and never becomes a rank input.
-7. **Promotion into the core needs a user quote, or two independent evidence roots.**
+7. **Promotion into the core needs a user quote, or two independent evidence roots.** This holds
+   for curated memory too: a level-1 citation is recorded but promotes nothing, since it is the
+   session model's reading of evidence it was shown, not a root of its own.
    Independence is keyed on the digests of the underlying evidence (the user turn, the tool output,
    the file at a SHA), never on session ids or record text. Sessions that read the same evidence or
    the same earlier summary, or ran a model over the same evidence, count once. A reworded copy is a
@@ -515,7 +519,8 @@ docs/memory-v2.md, "The core log"; docs/protocol.md, "The core log"; cases in
   in `<store>/core/consumed.jsonl`; between pulls it reads through that marker.
 - **Promotion gates: built** (decision 7 as amended). The user's words, a plan under a request the
   person typed, or two distinct evidence roots; the fast path for the same item adds only new
-  roots. Evidence roots digest the file a quote was read from (path argument, shell read command,
+  roots. A level-1 citation of a curated memory is recorded and never promotes it (nor anything
+  into the core). Evidence roots digest the file a quote was read from (path argument, shell read command,
   grep match), else the quoted words, so a re-read in `cat -n`, `head`, grep or header bytes counts
   once; curated staging cites them too. Tool-output-only records and one-time permissions never
   promote (decision 23, scenario 29).
@@ -528,13 +533,25 @@ docs/memory-v2.md, "The core log"; docs/protocol.md, "The core log"; cases in
   the lock; a shared curated edit is a `memory` generation, so of two sessions editing one memory
   at once exactly one commits and the other is refused (`curated.ErrConflict`) and kept as a
   contested pair.
+- **Forgets and restatements: built** (decision 1 as amended). A core tombstone holds against
+  everything but the user's own fresh words: a level-0 record of a user entry the person typed
+  (never a custom message, tool output or another session's text), said after the forget, on the
+  tombstoned item's id (so the same kind, scope, key and text), restating as the pushback contest
+  reads a restatement (keys or specifics, no negation conflict, not a concession). Its line is a
+  promote (or supersede or contest) via `restated` that names the tombstone by its id and makes
+  the item again from its own text; generations are kept and nothing is rewritten. A forget line
+  carries the forget request's time; a forget the log already holds, written again at a later
+  compaction, never re-tombstones a lifted id, while a new forget does. Level 1, tool output,
+  another session's earlier words and a model's write never lift one. The ledger fold's
+  tombstones name records and their source entries only, so a restatement in a later user message
+  was already a new record there (`contracts/truth.jsonl`).
 - **Delivery: built** (decision 16, phase 5's tombstones). The start context opens with the user's
   constraints, the open intentions and the lessons from other projects; project and user forgets
   are carried as core tombstones; an item another model family wrote is shown with `written by a
   <family> model`. `/om:status` and `om status` list the core read-only.
 - **Not built:** closing a core intention from a session other than its own (its receipt is in the
-  other session's ledger), widening a non-lesson scope, a level-1 citation as a core gate, and the
-  repo-id alias table for renamed remotes.
+  other session's ledger), widening a non-lesson scope, and the repo-id alias table for renamed
+  remotes. A level-1 citation is no gate at all, curated or core (decision 7).
 - Scenarios 9 (core), 12, 14, 19 and 29 pass; Tier 0c's phase-6 rows pass.
 
 ## Scenarios

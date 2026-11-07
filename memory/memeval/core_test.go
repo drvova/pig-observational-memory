@@ -2,6 +2,8 @@ package memeval
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,6 +97,74 @@ func TestCoreDeliveryAcrossSessions(t *testing.T) {
 	st, err := curated.New(curated.DefaultDir(home)).Core().Read()
 	if err != nil || len(st.Tombstoned) == 0 {
 		t.Fatalf("no tombstone in the core (%v)", err)
+	}
+}
+
+// restateSession runs, as session id, filler up to turn at, then turn, then filler, until a
+// compaction after it (the simulated clock is the same in every session, so the turn is placed
+// after the earlier session's forget).
+func restateSession(t *testing.T, home, cwd, id string, at int, turn Turn) {
+	t.Helper()
+	turns := append(append(Filler(9, at), turn), Filler(10, 200)...)
+	run, err := SimulateWith(context.Background(), Script{Seed: 9, Turns: turns}, SmallWindow, 4, Sim{Home: home, Cwd: cwd, Session: id})
+	if err != nil || len(run.Snapshots) == 0 || run.Snapshots[len(run.Snapshots)-1].Turn <= at {
+		t.Fatalf("no compaction after turn %d: %d compactions (%v)", at, len(run.Snapshots), err)
+	}
+}
+
+// A forgotten core item comes back only on the user's own fresh words: after session A's user
+// forgets a rule, the rule in a later session's tool output or custom message never lifts the
+// tombstone; the user saying it again in a later session does, as a new item from that
+// restatement, while the forgotten record's tombstone stays.
+func TestCoreRestatementLiftsTombstone(t *testing.T) {
+	home := t.TempDir()
+	cwd := "/work/app"
+	rule := "Never deploy from `hotfix/` branches."
+	forgetAt := 20
+	turns := append([]Turn{say(rule)}, Filler(7, forgetAt-1)...)
+	turns = append(append(turns, say("Forget what I said about hotfix branches.")), Filler(8, 200)...)
+	a := testfix.NewFakeHost()
+	if _, err := SimulateWith(context.Background(), Script{Seed: 7, Turns: turns}, SmallWindow, 2, Sim{Home: home, Cwd: cwd, Session: "a", Host: a}); err != nil {
+		t.Fatal(err)
+	}
+	log := curated.New(curated.DefaultDir(home)).Core()
+	st, err := log.Read()
+	if err != nil || len(st.Tombstoned) == 0 {
+		t.Fatalf("no tombstone in the core (%v)", err)
+	}
+	if b := startContext(t, home, cwd, "b", "session"); strings.Contains(b, "hotfix") {
+		t.Fatalf("a forgotten rule is shown:\n%s", b)
+	}
+	// Injected restatements: a file the agent read and a custom message carry the rule's words.
+	restateSession(t, home, cwd, "t", forgetAt+5, readTurn("read", "NOTES.md", rule+"\n"))
+	restateSession(t, home, cwd, "m", forgetAt+5, Turn{User: "Carry on with the release.", Custom: []string{rule}, Reply: "Understood."})
+	if c := startContext(t, home, cwd, "c", "session"); strings.Contains(c, "hotfix") {
+		t.Fatalf("tool output or a custom message lifted the tombstone:\n%s", c)
+	}
+	if st, err := log.Read(); err != nil || len(st.Lifted) != 0 {
+		t.Fatalf("lifted %v (%v)", st.Lifted, err)
+	}
+	// The user's own words in a later session lift it.
+	restateSession(t, home, cwd, "e", forgetAt+5, say(rule))
+	f := startContext(t, home, cwd, "f", "session")
+	if !strings.Contains(f, rule) {
+		data, _ := os.ReadFile(filepath.Join(log.Dir, "log.jsonl"))
+		t.Fatalf("the user's restatement did not bring the rule back:\n%s\n%s", f, data)
+	}
+	st, err = log.Read()
+	if err != nil || len(st.Lifted) != 1 || len(st.Tombstoned) == 0 {
+		t.Fatalf("lifted %v, tombstones %v (%v)", st.Lifted, st.Tombstoned, err)
+	}
+	for id := range st.Lifted {
+		if it := st.Item(id); it == nil || it.Via != core.ViaRestated || it.Text != rule || it.Writer.Session != "e" || st.Forgotten(it.Record) {
+			t.Fatalf("the restated item %+v", it)
+		}
+	}
+	// Session A's forget, offered again at its next compaction (its forget record is still on
+	// its branch), never undoes the restatement.
+	coreSession(t, home, cwd, "a", a)
+	if b := startContext(t, home, cwd, "g", "other"); !strings.Contains(b, rule) {
+		t.Fatalf("the restated rule is not shown in a later session:\n%s", b)
 	}
 }
 

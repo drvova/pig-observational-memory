@@ -79,16 +79,16 @@ type Promotion struct {
 // The evidence a staged memory is promoted on (Promotion.Evidence).
 const (
 	EvidenceUserQuote = "a user's words quoted in feedback"
-	EvidenceCitation  = "a compaction's citation"
 	EvidenceSessions  = "the same save staged in another session"
 )
 
 // Settle is memory v2's evidence check (docs/memory-v2.md, "Curated memory"), made by code at
 // agent_settled, session_start and after level 1, with no request. A staged memory is promoted
-// on evidence recorded since it was saved: a helped feedback whose quote is a user's words
-// (Call.UserEvidence), a level-1 citation (EventCited), or the same name and description staged
-// in another session (Memory.StagedBy) from independent source content (independentStagings).
-// A staged memory is never deleted. A correction whose
+// on evidence recorded since it was saved (decision 7): a helped feedback whose quote is a user's
+// words (Call.UserEvidence), or the same name and description staged in another session
+// (Memory.StagedBy) from independent source content (independentStagings). A level-1 citation
+// (EventCited) is recorded and never promotes: it is the session model's reading of the same
+// evidence, not a root of its own. A staged memory is never deleted. A correction whose
 // subject matches a memory (SubjectMatches) and that was made after the memory was last saved
 // or edited records one corrected event per correction, which ranks the memory after the
 // others and flags it until it is edited; a pinned memory is never flagged, and nothing cools
@@ -202,15 +202,16 @@ func (s Store) crossLessons(all []Memory) ([]string, error) {
 	return ids, err
 }
 
-// RecordCited records a level-1 citation of the memory name, resting on records (their ids):
-// evidence for a staged memory that the next Settle reads.
+// RecordCited records a level-1 citation of the memory name, resting on records (their ids), in
+// the usage ledger; it is never promotion evidence (Settle, decision 7).
 func (s Store) RecordCited(name, records string) error {
 	return s.appendUsage(usageLine{Name: name, Event: EventCited, Record: records})
 }
 
 // promotionEvidence is the evidence for promoting staged memory m, read from its usage events
 // (in ledger order) since its content last changed: since it was saved, and after its last
-// save or edit, so evidence given for one text never promotes another; "" when there is none.
+// save or edit, so evidence given for one text never promotes another; "" when there is none. A
+// level-1 citation is none.
 func promotionEvidence(m Memory, events []UsageEvent) string {
 	evidence := ""
 	for _, e := range events {
@@ -223,8 +224,6 @@ func promotionEvidence(m Memory, events []UsageEvent) string {
 		case evidence != "":
 		case e.Event == EventHelped && e.User:
 			evidence = EvidenceUserQuote
-		case e.Event == EventCited:
-			evidence = EvidenceCitation
 		}
 	}
 	if evidence == "" && independentStagings(m, events) {

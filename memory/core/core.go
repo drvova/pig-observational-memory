@@ -24,7 +24,8 @@ const (
 	// OpContest adds the item ID as the other side of a contested pair with Of.
 	OpContest = "contest"
 	// OpForget tombstones items (Tombstones: core item ids and the session record ids they came
-	// from), never carrying their text.
+	// from), never carrying their text. Only a promote, supersede or contest line with
+	// ViaRestated lifts one, for its own id.
 	OpForget = "forget"
 	// OpScope changes the scope of the item Of to Scope.
 	OpScope = "scope"
@@ -67,6 +68,9 @@ const (
 	ViaProjects = "projects"
 	// ViaEdit is a shared edit or forget of a curated memory.
 	ViaEdit = "edit"
+	// ViaRestated is the user's own fresh words restating a forgotten item: the line lifts the
+	// tombstone its id names (Decide, Restates) and the item comes back from the restatement.
+	ViaRestated = "restated"
 )
 
 // The scopes of an item (Line.Scope; docs/brain-memory.md, decision 8). A project scope is

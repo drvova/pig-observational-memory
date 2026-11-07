@@ -237,7 +237,8 @@ func offerStore(t *testing.T) string {
 		line += fmt.Sprintf(`{"time":"2026-11-01T09:1%d:00Z","model":"test-provider/session","kind":"pass","outcome":"ok","stage":"compaction","tokens":500,"counts":{"level1-refused":2},"engine":"v2","level1":true,"roots":["c0ffee000000000%d"],"harm":0}`+"\n", i, i)
 	}
 	must(t, os.WriteFile(path, []byte(line), 0o600))
-	// A memory this session staged, which a citation of the user's own words promotes.
+	// A memory this session staged, which a citation of the user's own words cites but never
+	// promotes (decision 7).
 	if _, err := curated.New(curated.DefaultDir(home)).Save(curated.Memory{Name: "billing-first", Type: curated.TypeProject,
 		Description: "Billing moves first in the migration.", Body: "Billing moves first.", Staged: true, StagedBy: []string{"session-1"}}, "session-1"); err != nil {
 		t.Fatal(err)
@@ -305,7 +306,7 @@ func TestLispLevel1OfferMatchesInProcess(t *testing.T) {
 	sameRun(t, "offer", want, got)
 	report := consolidationOf(got)
 	t.Logf("offer: %v", report)
-	if report["harnessOffered"] != true || report["defined"] != float64(1) || report["cited"] != float64(1) || report["promoted"] != float64(1) {
+	if report["harnessOffered"] != true || report["defined"] != float64(1) || report["cited"] != float64(1) || report["promoted"] != nil {
 		t.Fatalf("offer: %v", report)
 	}
 	held := map[string]string{}

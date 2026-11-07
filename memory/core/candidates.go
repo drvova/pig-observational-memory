@@ -2,8 +2,10 @@ package core
 
 import (
 	"strings"
+	"time"
 
 	"github.com/drvova/pig-observational-memory/memory/ledger"
+	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
 // Session is what a session's records are offered to the core with: its project scope, its
@@ -90,6 +92,9 @@ func Candidates(records []ledger.Observation, labels map[string]string, closed m
 		if c.Via == ViaQuote && len(o.SourceEntryIDs) > 0 {
 			c.Roots = []string{UserRoot(o.SourceEntryIDs[0], o.Content)}
 		}
+		if c.Via == ViaQuote && Restating(o) {
+			c.Said = o.Timestamp
+		}
 		c.Scope = recordScope(o, byID, s.Scope)
 		if s.OneTime != nil && s.OneTime(o.Content) {
 			c.OneTime = true
@@ -99,9 +104,30 @@ func Candidates(records []ledger.Observation, labels map[string]string, closed m
 	return out
 }
 
+// Restating reports a record that may restate a forgotten core item (Decide, Restates): one
+// level 0 wrote from the words the person typed (a user entry, never a custom message, tool
+// output or another session's text), restating as the pushback contest reads a restatement
+// (ledger.Restater: the user's own, not a retraction nor a concession; ledger.RestatesClaim of
+// itself: it names keys or carries specifics). A level-1 record never does.
+func Restating(o ledger.Observation) bool {
+	return o.Origin == ledger.OriginCode && o.Source == ledger.SourceUserSaid && len(o.SourceEntryIDs) > 0 &&
+		ledger.Restater(o) && ledger.RestatesClaim(o, o)
+}
+
+// forgetTime is a forget record's time (serialize.ParseTimestamp) as a core line carries it
+// (RFC 3339, UTC, whole seconds), "" when unreadable (the commit's time is then used).
+func forgetTime(stamp string) string {
+	t, ok := serialize.ParseTimestamp(stamp)
+	if !ok {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 // ForgetLine is the core line a forget record carries across sessions (Phase 5's tombstones):
 // for a forget of the project or the user, the forgotten records' ids and the ids of the items
-// they would be in the core as (each kind, in the forget's scopes), never their text; ok is false
+// they would be in the core as (each kind, in the forget's scopes), never their text, at the time
+// of the forget record (forgetTime), which a restatement must come after; ok is false
 // for a forget of the session alone or one naming nothing.
 func ForgetLine(forget ledger.Observation, forgotten []ledger.Observation, s Session) (Line, bool) {
 	var scopes []string
@@ -146,7 +172,7 @@ func ForgetLine(forget ledger.Observation, forgotten []ledger.Observation, s Ses
 		w := s.Writer
 		writer = &w
 	}
-	return Line{Op: OpForget, ID: forget.ID, Scope: scopes[len(scopes)-1], Tombstones: ids, Base: s.Base, Writer: writer}, true
+	return Line{Op: OpForget, ID: forget.ID, Scope: scopes[len(scopes)-1], Tombstones: ids, Base: s.Base, Writer: writer, Time: forgetTime(forget.Timestamp)}, true
 }
 
 func keyOr(key, text string) string {

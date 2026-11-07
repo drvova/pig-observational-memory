@@ -2,6 +2,8 @@ package core
 
 import (
 	"slices"
+
+	"github.com/drvova/pig-observational-memory/memory/serialize"
 )
 
 // Candidate is a session record offered to the core, with what the gates read.
@@ -21,6 +23,12 @@ type Candidate struct {
 	OneTime bool `json:"oneTime,omitempty"`
 	// Record is the session record's id.
 	Record string `json:"record,omitempty"`
+	// Said is when the user said the record, set only for one that may restate a forgotten
+	// item: a level-0 record of the words the person typed (ledger.SourceUserSaid, origin code),
+	// restating as the pushback contest reads a restatement (ledger.Restater, RestatesClaim:
+	// keys or specifics, no negation conflict, not a concession). Level 1, tool output, another
+	// session's message and a model's write never carry it.
+	Said   string `json:"said,omitempty"`
 	Writer Writer `json:"writer"`
 	// Base is the generation the session had read the core through.
 	Base int `json:"base"`
@@ -29,6 +37,7 @@ type Candidate struct {
 // The verdicts of Decide.
 const (
 	VerdictPromote   = "promote"
+	VerdictLift      = "lift"
 	VerdictFast      = "fast"
 	VerdictSame      = "same"
 	VerdictSupersede = "supersede"
@@ -45,7 +54,11 @@ const (
 //
 //   - Tool output alone never promotes, nor does a one-time permission, nor a record with no
 //     shared scope (a session's, or the empty intersection of two projects).
-//   - A tombstoned item, or one from a tombstoned record, is never promoted again.
+//   - A tombstoned item, or one from a tombstoned record, is never promoted again, except by the
+//     user's own fresh words (Restates): a record of the words the person typed, said after the
+//     forget, on the tombstoned item's id (so carrying its kind, scope, key and text exactly, the
+//     id being their digest). Its line, via ViaRestated, lifts the tombstone and the item is
+//     born again from the restatement; the forgotten item's text is never read back.
 //   - The same item (kind, scope, key and text) is the fast path: it gains the roots it lacked
 //     and nothing else (dedup never raises support), or nothing changes.
 //   - Otherwise the candidate needs the user's words or two distinct evidence roots. With no live
@@ -67,8 +80,15 @@ func Decide(st *State, c Candidate) (Line, string) {
 		key = NormKey(c.Text)
 	}
 	id := ItemID(c.Kind, c.Scope, key, c.Text)
-	if st.Forgotten(id) || (c.Record != "" && st.Forgotten(c.Record)) {
+	lifts := false
+	switch {
+	case c.Record != "" && st.Forgotten(c.Record):
 		return Line{}, VerdictForgotten
+	case st.Forgotten(id):
+		if !Restates(st, id, c) {
+			return Line{}, VerdictForgotten
+		}
+		lifts = true
 	}
 	roots := uniqueRoots(c.Roots)
 	var writer *Writer
@@ -91,6 +111,9 @@ func Decide(st *State, c Candidate) (Line, string) {
 		return line, VerdictFast
 	}
 	via := c.Via
+	if lifts {
+		via = ViaRestated
+	}
 	if via == "" && len(roots) >= 2 {
 		via = ViaRoots
 	}
@@ -101,16 +124,36 @@ func Decide(st *State, c Candidate) (Line, string) {
 	live := st.LiveByKey(c.Kind, c.Scope, key)
 	if len(live) == 0 {
 		line.Op = OpPromote
+		if lifts {
+			return line, VerdictLift
+		}
 		return line, VerdictPromote
 	}
 	newest := live[len(live)-1]
 	seen := c.Base >= newest.Gen || (c.Writer.Session != "" && newest.Writer.Session == c.Writer.Session)
-	if (via == ViaQuote || via == ViaEdit) && seen {
+	if (via == ViaQuote || via == ViaEdit || via == ViaRestated) && seen {
 		line.Op, line.Of = OpSupersede, newest.ID
 		return line, VerdictSupersede
 	}
 	line.Op, line.Of = OpContest, newest.ID
 	return line, VerdictContest
+}
+
+// Restates reports whether candidate c lifts the tombstone on id: the user's words (ViaQuote)
+// from a fresh record of the words the person typed (Said, Record), said after the forget that
+// set the tombstone (ForgotAt), both read as serialize.ParseTimestamp reads a record's time and
+// compared to the millisecond: records are dated to the minute, so a restatement in the forget's
+// own minute does not lift it. Anything else, or an unreadable time, never lifts.
+func Restates(st *State, id string, c Candidate) bool {
+	if c.Via != ViaQuote || c.Said == "" || c.Record == "" || c.ToolOnly || c.OneTime || st.Forgotten(c.Record) {
+		return false
+	}
+	said, ok := serialize.ParseTimestamp(c.Said)
+	if !ok {
+		return false
+	}
+	forgot, ok := serialize.ParseTimestamp(st.ForgotAt[id])
+	return ok && said.UnixMilli() > forgot.UnixMilli()
 }
 
 // uniqueRoots is roots without blanks and repeats, in order.

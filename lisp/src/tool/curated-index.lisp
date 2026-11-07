@@ -290,15 +290,15 @@ code, not retracted), each timed by its first source entry."
 
 (defun promotion-evidence (m events)
   "curated.promotionEvidence: the evidence a staged memory is promoted on, from its usage events
-since it was saved and after its last save or edit; \"\" for none."
+since it was saved and after its last save or edit; \"\" for none. A level-1 citation is recorded
+but is never evidence (decision 7)."
   (let ((evidence ""))
     (dolist (e events)
       (unless (time-before-p (usage-event-time e) (mem-created m))
         (let ((event (ul-event e)))
           (cond ((or (string= event "save") (string= event "edit")) (setf evidence ""))
                 ((string/= evidence ""))
-                ((and (string= event "helped") (ul-user e)) (setf evidence "a user's words quoted in feedback"))
-                ((string= event "cited") (setf evidence "a compaction's citation"))))))
+                ((and (string= event "helped") (ul-user e)) (setf evidence "a user's words quoted in feedback"))))))
     (if (and (string= evidence "") (independent-stagings-p m events))
         "the same save staged in another session"
         evidence)))
@@ -411,8 +411,7 @@ line for each project or user forget record it does not hold yet. Code only."
       (core-commit core
                    (lambda (st emit)
                      (dolist (fl forgets)
-                       (when (or (not (core-forgotten-p st (cline-id fl)))
-                                 (some (lambda (id) (not (core-forgotten-p st id))) (cline-tombstones fl)))
+                       (when (core-forget-due-p st fl)
                          (funcall emit fl)))
                      (dolist (c cands)
                        (let ((line (core-decide st c))) (when line (funcall emit line)))))))))

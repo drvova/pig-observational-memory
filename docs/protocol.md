@@ -282,6 +282,11 @@ in `contracts/core.jsonl`, docs/memory-v2.md "The core log"):
   An evidence root is SHA-256 hex of `file\0<project>\0<path>` (the path trimmed of `./` and the
   project prefix) when the read names a file, else of `text\0<key of the quote>`; a user turn's root
   is of `user\0<entry id>\0<key of its text>`, a project's of `project\0<root>`.
+- **Forgets and lifts.** A `forget` line's ids are tombstones from its generation on, timed by its
+  `time` (a forget record's line carries the request's). A promote, supersede or contest line with
+  `via: restated` lifts the tombstone on its own `id` (its `record` must be no tombstone): the
+  forgotten item leaves the fold and the line's own text makes it again. A `forget` line whose `id`
+  is already a tombstone never re-tombstones a lifted id.
 
 ## Versioning of this protocol
 

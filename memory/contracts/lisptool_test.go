@@ -429,8 +429,8 @@ func indexScript(at *time.Time, user, conversation []string) []curatedStep {
 	for _, budget := range []string{"0", "1", "20", "60", "90", "150", "300"} {
 		add("index", "s1", "/work", map[string]string{"budget": budget})
 	}
-	// Staged memories: promoted on a user's quote, on a citation, on a second session; one
-	// whose evidence came before an edit is not.
+	// Staged memories: promoted on a user's quote or on a second session; a level-1 citation is
+	// recorded and promotes none (decision 7), nor does evidence that came before an edit.
 	add("save", "s1", "/work", map[string]string{"name": "staged-quote", "type": "user", "description": "Staged then confirmed"})
 	add("save", "s1", "/work", map[string]string{"name": "staged-cite", "type": "project", "description": "Staged then cited"})
 	add("save", "s1", "/work", map[string]string{"name": "staged-twice", "type": "reference", "description": "Staged in two sessions"})
@@ -812,6 +812,15 @@ func TestLispCuratedParity(t *testing.T) {
 		if !strings.Contains(joined, reach) {
 			t.Errorf("the script no longer reaches %q", reach)
 		}
+	}
+	// A level-1 citation alone never promotes (decision 7): the cited memories stay staged.
+	for _, cited := range []string{"staged-cite=", "staged-edited="} {
+		if strings.Contains(joined, cited) {
+			t.Errorf("a citation alone promoted a memory (%s)", cited)
+		}
+	}
+	if !strings.Contains(joined, "staged-quote="+curated.EvidenceUserQuote) {
+		t.Error("the script no longer promotes on a user's quote")
 	}
 	// The quoted layer forget and rollback take theirs out of the staged changes.
 	confirmed := false
