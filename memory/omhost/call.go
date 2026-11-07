@@ -117,7 +117,6 @@ const (
 // CorrectQuoted is a correction's Write.Type when the user's quoted words confirmed it.
 const CorrectQuoted = "quoted"
 
-
 // Record is the hit recorder (docs/code-tool.md, "Result"): what the om calls of one memory tool
 // call read and wrote, kept in the extension and safe to read while the call runs, so a result
 // built after a cancel or a crash still lists every write that landed.

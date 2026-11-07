@@ -38,6 +38,9 @@ func main() {
 	noSnippets := flag.Bool("no-snippets", false, "do not run the printed snippets (every unshown probe counts as lost)")
 	suite := flag.String("suite", "tier0", "what to run: tier0 (retention), forgetting (Tier 0b), sharing (Tier 0c), settle (the no-op definition replay), all, constraintrot, arcbench or retrieval")
 	arcCases := flag.String("arcbench-cases", "", "ARCBench's data/rule-loss/cases.jsonl (data only; its code is never run)")
+	sleepArm := flag.String("sleep", "on", "the sleep pass's compaction fallback: on (sleepAfterCompactions 4, the default) or off")
+	sumsum := flag.Bool("sumsum", false, "also print the summary-of-summary arm's erosion curve over the same runs")
+	abOut := flag.String("ab-out", "", "write the Tier 1/2 A/B items (tables and natural-language renderings of the same summaries, with their questions and reference answers) to this JSONL file; ready, not run: it needs a model")
 	flag.Parse()
 	serialize.Location = time.UTC
 
@@ -52,6 +55,14 @@ func main() {
 		cfg.Window.Context = *window
 	}
 	cfg.Window.SummaryMaxTokens = *summaryMax
+	switch *sleepArm {
+	case "on":
+	case "off":
+		cfg.Window.SleepOff = true
+	default:
+		fmt.Fprintln(os.Stderr, "memeval: -sleep is on or off")
+		os.Exit(2)
+	}
 	var lister memeval.Lister
 	child := &memeval.ChildLister{}
 	defer child.Close()
@@ -202,6 +213,26 @@ func main() {
 	fmt.Print(memeval.Table(m.Results, memeval.Counts))
 	fmt.Println()
 	fmt.Print(memeval.InvariantTable(m.Results))
+	sleeps, hidden := memeval.SleepFigures(m.Runs)
+	fmt.Printf("\nSleep (-sleep %s): %d sleep records, %d duplicates hidden, 0 requests\n", *sleepArm, sleeps, hidden)
+	if *sumsum {
+		var eroded []memeval.Result
+		for i, run := range m.Runs {
+			eroded = append(eroded, memeval.SummaryOfSummary(run, m.Runs[i].Script.Probes))
+		}
+		fmt.Println()
+		fmt.Println("Summary-of-summary arm (the erosion curve; shown / reachable / lost, nothing reachable):")
+		fmt.Println()
+		fmt.Print(memeval.Table(eroded, memeval.Counts))
+	}
+	if *abOut != "" {
+		n, err := memeval.WriteABItems(*abOut, m.Runs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memeval:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("\nTier 1/2 A/B: %d items written to %s (ready, not run: answering and judging need models)\n", n, *abOut)
+	}
 	broken := false
 	for _, t := range memeval.InvariantTallies(m.Results) {
 		broken = broken || t.Broken > 0
