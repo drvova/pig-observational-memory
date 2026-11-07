@@ -2,6 +2,8 @@ package enginerpc_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/rules"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -229,6 +231,11 @@ func offerStore(t *testing.T) string {
 	path := filepath.Join(curated.DefaultDir(home), "models", layer.ModelDir("test-provider/session")+".jsonl")
 	must(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	line := `{"time":"2026-11-01T09:00:00Z","model":"test-provider/session","kind":"pass","outcome":"ok","stage":"compaction","tokens":500,"counts":{"level1-union-kept":1},"engine":"v2","level1":true}` + "\n"
+	// The null arm's control windows (rules.SettleV2): 2·MinEvidence compactions without a
+	// definition, each refusing two proposals over its own evidence root.
+	for i := range 2 * rules.MinEvidence {
+		line += fmt.Sprintf(`{"time":"2026-11-01T09:1%d:00Z","model":"test-provider/session","kind":"pass","outcome":"ok","stage":"compaction","tokens":500,"counts":{"level1-refused":2},"engine":"v2","level1":true,"roots":["c0ffee000000000%d"],"harm":0}`+"\n", i, i)
+	}
 	must(t, os.WriteFile(path, []byte(line), 0o600))
 	// A memory this session staged, which a citation of the user's own words promotes.
 	if _, err := curated.New(curated.DefaultDir(home)).Save(curated.Memory{Name: "billing-first", Type: curated.TypeProject,
@@ -312,6 +319,17 @@ func TestLispLevel1OfferMatchesInProcess(t *testing.T) {
 	}
 	if held["lisp"] != held["in-process"] {
 		t.Fatalf("held text: in-process %q, lisp %q", held["in-process"], held["lisp"])
+	}
+	// Other sessions' compactions ran under it over other text and refused nothing: its null arm.
+	for _, home := range homes {
+		store := curated.New(curated.DefaultDir(home))
+		held, err := store.Layer().Held("test-provider/session")
+		must(t, err)
+		for i := range rules.MinEvidence {
+			harm := 0
+			must(t, store.RecordModel(curated.ModelEvent{Model: "test-provider/session", Kind: curated.ModelKindPass, Stage: rules.StageCompaction, Engine: curated.EngineV2,
+				Outcome: curated.OutcomeOK, Tokens: 500, Level1: true, Harm: &harm, RanHeld: []string{held[0].HeldID()}, Roots: []string{fmt.Sprintf("beef00000000000%d", i)}}))
+		}
 	}
 	// The next compaction runs with the held text (no offer while it waits), credits it in its
 	// pass, and SettleV2 writes it: the same prompt, entries, notices and pass on both paths.
