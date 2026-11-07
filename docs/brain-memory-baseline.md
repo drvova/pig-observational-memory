@@ -700,6 +700,156 @@ in a later session and never on a file the agent read or a custom message, and t
 forget, offered again, leaves it; `TestV2Level1CitationNeverPromotesStagedMemory` that a citation
 alone leaves a staged memory staged.
 
+## Phase 7: transparency and sleep
+
+The sleep pass, `/om:view` per record, `/om:status` aggregates and the quote-gated correction
+(docs/brain-memory.md, "Phase 7 status: transparency and sleep"). Measured on 2026-11-07 on branch
+`claude/phase7-sleep` (e7b6f68 plus the floor-check fix below), 20 seeds, 600 compactions a run.
+`-sleep off` turns the compaction fallback off; `-sleep on` is the default
+(`sleepAfterCompactions` 4). **Every run made 0 model requests** (each Tier 0 line prints `0 model
+requests`; the sleep line prints `0 requests`); the suites' only requests are their scripted
+level-1 replies, as before (Tier 0b 140, Tier 0c 2, none to a model).
+
+Commands, from `memory/`:
+
+```sh
+go build -o "$TMP/memeval" ./cmd/memeval
+"$TMP/memeval" -seeds 20 -sleep off -sumsum
+"$TMP/memeval" -seeds 20 -sleep on -sumsum
+"$TMP/memeval" -seeds 20 -summary-max 1200 -sleep off -sumsum
+"$TMP/memeval" -seeds 20 -summary-max 1200 -sleep on -sumsum
+"$TMP/memeval" -suite all -seeds 20 -sleep off
+"$TMP/memeval" -suite all -seeds 20 -sleep on
+```
+
+| run | snippets run (failed) | sleep records | duplicates named | model requests |
+|---|---|---|---|---|
+| default, sleep off | 1,549 (0) | 0 | 0 | 0 |
+| default, sleep on | 1,615 (0) | 140 | 1,282 | 0 |
+| capped at 1,200, sleep off | 3,915 (0) | 0 | 0 | 0 |
+| capped at 1,200, sleep on | 3,915 (0) | 140 | 2,655 | 0 |
+
+All four invariants hold on all 600 compactions of every run. The old value of a superseded fact is
+never shown as current.
+
+### Tier 0 with sleep off: the phase-6 tables
+
+Sleep off prints the "Phase 3" default and capped tables (the ones phases 4 to 6 left unchanged)
+cell for cell, probe counts included.
+
+### Tier 0 with sleep on: no cell loses
+
+Default window, sleep on, with the change against sleep off (the phase-6 table) in points of
+shown. Every other cell is equal, and lost stays 0 in every cell.
+
+| class | 1 | 2 | 4 | 5 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| identifier | 98 / 2 / 0 | 97 / 3 / 0 (+1) | 89 / 11 / 0 | 84 / 16 / 0 (+3) | 61 / 39 / 0 | 59 / 41 / 0 | 45 / 55 / 0 | 35 / 65 / 0 |
+| error text | 98 / 2 / 0 | 94 / 6 / 0 (+1) | 92 / 8 / 0 | 75 / 25 / 0 (+5) | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| constraint | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| scope exclusion | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| decision | 90 / 10 / 0 (+2) | 84 / 16 / 0 | 62 / 38 / 0 (+4) | 36 / 64 / 0 (+12) | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 | 0 / 100 / 0 |
+| intention | 98 / 3 / 0 (+1) | 94 / 6 / 0 | 85 / 15 / 0 (+3) | 72 / 28 / 0 (+7) | 46 / 54 / 0 | 38 / 63 / 0 | 25 / 75 / 0 | 23 / 77 / 0 |
+| superseded | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 | 100 / 0 / 0 |
+| probes per class | 120 | 115 (+1) | 100 | 100 | 98 | 80 | 60 | 60 |
+
+- Seven sleep records a seed name 1,282 duplicates on the 20 final branches (sleep and duplicate
+  counts are read from each run's last branch, `memeval.SleepFigures`). Hiding them frees summary
+  room, and the records behind them in line are shown one or two compactions longer, most at
+  N = 5 (decisions +12 points). Past N = 8 the budget is spent on newer
+  records either way, so nothing changes there.
+- What sleep hides is still reachable: the summary's omitted spans list it, so snippets run rises
+  from 1,549 to 1,615 and none fails. The protected classes are never hidden (e7b6f68).
+- Capped at 1,200 tokens, sleep on prints the capped table cell for cell: the cap leaves room
+  for few rows beyond the rules, so hiding 2,655 duplicates moves no probe across the shown line.
+
+### The erosion curve: summary-of-summary against re-rendering from the ledger
+
+The arm no paper has measured (`-sumsum`, `memeval.SummaryOfSummary`): at compaction n the
+summary is summary n-1 carried verbatim behind the new rows engine summary n picked from the
+turns since compaction n-1, cut to the room summary n's own rows take. It is code only and
+generous (a model re-summarizing keeps at most that much, word for word), so it is an upper bound on
+what summary-of-summary keeps. It prints no snippet, so a probe is shown or lost. The engine
+re-renders every summary from the ledger, so its lost column is 0 throughout.
+
+Default window, sleep off. Each cell is ledger shown / reachable / lost, then summary-of-summary
+shown / lost, in percent (N = 10 added: it is where the curve falls).
+
+| class | 1 | 2 | 4 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|
+| identifier | 98/2/0 · 98/2 | 96/4/0 · 99/1 | 89/11/0 · 99/1 | 61/39/0 · **76/24** | 59/41/0 · **1/99** | 45/55/0 · **0/100** | 35/65/0 · **0/100** |
+| error text | 98/2/0 · 98/2 | 93/7/0 · 99/1 | 92/8/0 · 100/0 | 0/100/0 · **49/51** | 0/100/0 · **0/100** | 0/100/0 · **0/100** | 0/100/0 · **0/100** |
+| constraint | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **18/82** | 100/0/0 · **0/100** | 100/0/0 · **0/100** | 100/0/0 · **0/100** |
+| scope exclusion | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **14/86** | 100/0/0 · **0/100** | 100/0/0 · **0/100** | 100/0/0 · **0/100** |
+| decision | 88/12/0 · 90/10 | 84/16/0 · 94/6 | 58/42/0 · 98/2 | 0/100/0 · **41/59** | 0/100/0 · **0/100** | 0/100/0 · **0/100** | 0/100/0 · **0/100** |
+| intention | 97/3/0 · 97/3 | 94/6/0 · 98/2 | 82/18/0 · 100/0 | 46/54/0 · **44/56** | 38/63/0 · **0/100** | 25/75/0 · **0/100** | 23/77/0 · **0/100** |
+| superseded | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **36/64** | 100/0/0 · **0/100** | 100/0/0 · **0/100** | 100/0/0 · **0/100** |
+| probes per class | 120 | 114 | 100 | 98 | 80 | 60 | 60 |
+
+Capped at 1,200 tokens, sleep off, the same layout:
+
+| class | 1 | 2 | 4 | 8 | 10 | 16 | 20 |
+|---|---|---|---|---|---|---|---|
+| identifier | 8/92/0 · 9/91 | 0/100/0 · 9/91 | 0/100/0 · 5/95 | 0/100/0 · 1/99 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 |
+| error text | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 |
+| constraint | 100/0/0 · 100/0 | 100/0/0 · 100/0 | 100/0/0 · **74/26** | 100/0/0 · **59/41** | 100/0/0 · **43/58** | 100/0/0 · **2/98** | 98/2/0 · **0/100** |
+| scope exclusion | 100/0/0 · 100/0 | 100/0/0 · **88/13** | 100/0/0 · **74/26** | 100/0/0 · **59/41** | 100/0/0 · **38/62** | 100/0/0 · **2/98** | 100/0/0 · **0/100** |
+| decision | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 | 0/100/0 · 0/100 |
+| intention | 14/86/0 · 15/85 | 0/100/0 · 16/84 | 0/100/0 · 6/94 | 0/100/0 · 5/95 | 0/100/0 · 5/95 | 0/100/0 · 1/99 | 0/100/0 · 0/100 |
+| superseded | 73/27/0 · 73/27 | 75/25/0 · 73/28 | 68/32/0 · **54/46** | 49/51/0 · 50/50 | 50/50/0 · 51/49 | 26/74/0 · **1/99** | 0/100/0 · 0/100 |
+| probes per class | 168 | 160 | 160 | 140 | 120 | 89 | 61 |
+
+- **Summary-of-summary erodes to nothing; the ledger loses nothing.** In the default window it
+  keeps every class through N = 4, often showing more than the ledger render (it carries old rows
+  word for word where the render gives newer records the room), then falls off a cliff: 14–76%
+  shown at N = 8, at most 1% at N = 10 and 0% at 16 and 20, for every class. The ledger render
+  loses 0% at every N; what leaves its summary stays reachable through a printed snippet.
+- **The cliff is the room, not the age.** Each compaction's new rows go first, so a carried row
+  survives only while the rows newer than it still fit, about nine compactions' worth here. A
+  real re-summarizer would also paraphrase, and lose exact identifiers sooner; this arm cannot.
+- **It loses the rules first under a cap.** Under 1,200 tokens it drops the user's constraints and
+  scope exclusions from N = 2–4 (74% at 4, 2% at 16, 0 at 20), where the ledger render keeps them
+  shown at 98–100% at every N (class 1a). Corrections fall from 73% to 0% by N = 16 with nothing
+  left to reach.
+- With sleep on the arm keeps more at N = 8 (identifier 81%, error text 71%, constraint 32%,
+  decision 66%, superseded 51%) because the rows it carries hold fewer duplicates, and is still at
+  0–4% by N = 10. Capped, sleep on prints the same arm cell for cell.
+
+### Tier 0b, 0c and the settle replay: no regression
+
+`-suite all -seeds 20 -sleep off` prints the phase-6 output (the core fixes' run at 17375d1) line
+for line, timings aside. With `-sleep on` every row keeps its status, the two layer-secret findings
+(phase 8) included, and Tier 0c and the no-op definition replay are unchanged line for line. The
+only Tier 0b differences:
+
+| part | check | sleep off | sleep on |
+|---|---|---|---|
+| b. residue | secret redaction: snippets' answers | 0 values left in 1,760 answers | 0 values left in 1,759 answers: **pass** |
+| c. protected | correction never lost after 1-20 compactions | 537 cells, 0 lost | 538 cells, 0 lost: **pass** |
+| c. protected | failed attempt never lost after 1-20 compactions | 551 cells, 0 lost | 552 cells, 0 lost: **pass** |
+| c. protected | decay on (compactions clock): no protected class below its floor, none lost | 2,556 cells, 0 shown less, 0 lost | 2,558 cells, 0 shown less, 0 lost: **pass** |
+| c. protected | decay on (turns clock): no protected class below its floor, none lost | 2,556 cells, 0 shown less, 0 lost | 2,557 cells, 0 shown less, 0 lost: **pass** |
+
+The decay table's decision and intention rows move as the Tier 0 table above does (decision at N = 1
+and 4 from 88 and 58% to 90 and 62% shown in every decay arm; at N = 8 decay's 1% becomes 2%).
+
+**The floor check's fix.** The first sleep-on run reported the turn-clock row as **fail**, "1 shown
+less than without decay": the turn-clock arm scored 90 corrections at N = 8 against the run
+without decay's 91, all of them shown. Sleep changes the summaries, so a seed's compactions fall at
+other turns and one late correction reached N = 8 in one arm only; the check compared raw shown
+counts. It now compares the shown share (`memeval.shownBelow`, `TestShownBelowComparesShares`),
+which still fails a shown probe that became reachable or lost. The sleep-on run above is after the
+fix; the Tier 0 and sleep-off runs were made before it, which it cannot change (it touches only this
+row, which they passed).
+
+### Tier 1/2 A/B: ready, not run
+
+`memeval -ab-out <file>` writes each compaction's tables summary beside a natural-language rendering
+of the same rows (`memeval.NaturalLanguage`), with the probes' questions and reference answers
+(`memeval.WriteABItems`). Answering them with models of several families and judging them with the
+fixed judge of decision 21 needs models, so the items are **ready, not run**; so are the format
+A/B's A-versus-A rerun, filler and NullMemory arms.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
@@ -911,7 +1061,10 @@ finding starts to pass, or when any request is logged besides the scripted ones.
   - `-suite constraintrot` and `-suite arcbench -arcbench-cases <file>` print the phase 3 rule
     benches (data only for ARCBench);
   - `-suite retrieval` prints the phase 4 retrieval check.
-  - `-suite settle` prints the phase 5 no-op definition replay.
+  - `-suite settle` prints the phase 5 no-op definition replay;
+  - `-sleep off` turns the sleep pass's compaction fallback off (on by default), `-sumsum` adds
+    the summary-of-summary erosion arm and `-ab-out <file>` writes the Tier 1/2 A/B items
+    (phase 7).
 
   It exits non-zero on a broken invariant, a failed snippet or any request.
 - `-suite forgetting` and `-suite sharing` print the Tier 0b and 0c tables below the retention
