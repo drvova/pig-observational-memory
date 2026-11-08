@@ -92,6 +92,16 @@
   (cat "- updated by: a record ending with (updated by <id>) gives a value that newer record on its subject gives differently; it is kept as history, not current. (conflicts <id>) marks both ends of a pair neither replaces: both stand contested until the user settles them." (string #\Newline)))
 (defparameter +also-line+
   (cat "- also (after ---): constraints and finished plans left out, with the om snippet that lists them." (string #\Newline)))
+(defparameter +also-all-line+
+  (cat "- also (after ---): constraints, finished plans, contested pairs and older values left out, with the om snippet that lists them." (string #\Newline)))
+;; Contested blocks (docs/memory-v2.md, "Contested pairs").
+(defparameter +max-contested-blocks+ 3 "selection.MaxContestedBlocks.")
+(defparameter +extra-pair+ "line:pair")
+(defparameter +pair-line+
+  (cat "- contested: rows tagged (<label> from <authority>) before (conflicts <id>) are one contest, shown together at the start of their table, the higher authority first (user, repo-file, tool, model), then by id, never by time; neither replaces the other until the user settles it. At most "
+       (itoa +max-contested-blocks+) " contests are shown; the also: line names the rest." (string #\Newline)))
+(defparameter +noun-contested+ "contested pairs")
+(defparameter +noun-older+ "older values")
 (defparameter +constraints-line+
   (cat "- constraints (after the notes): the user's rules and scope exclusions in force, verbatim with their source; not repeated in the notes." (string #\Newline)))
 (defparameter +constraint-fields+ '("content" "source"))
@@ -217,7 +227,11 @@
   contested (contested-by '())
   ;; slot: a working-memory member's slot (:constraint, :scope, :done), nil for none;
   ;; receipt-at a finished plan's receipt anchor.
-  (slot nil) (receipt-at -1))
+  (slot nil) (receipt-at -1)
+  ;; conflicts: the ids its conflicts pointer names; rivals the notes among them; pair its
+  ;; contested block (1 and up, 0 for none). subject: a note's subject table; prior an older
+  ;; value an updated-by pointer names; older-prior one of its subject's priors but the newest.
+  (conflicts '()) (rivals '()) (pair 0) (subject "") prior older-prior)
 
 (defun item-source (it) (if (item-anchored it) (item-anchor-id it) ""))
 
@@ -242,7 +256,12 @@
   ;; Input.Decayed: the ids decay lowers (decayed-records), or nil.
   (decayed nil)
   ;; Input.Hidden: the ids a sleep record hid as duplicates (sleep-hidden), never shown, or nil.
-  (hidden nil))
+  (hidden nil)
+  ;; fold-labels: every record's label (labels-of); pairs the contested blocks (a vector of member
+  ;; lists in contest-before-p order); the supersession decisions between notes; no-also for
+  ;; OmittedSpans.
+  (fold-labels (make-set)) (pairs (make-array 0 :adjustable t :fill-pointer 0))
+  (updated-by (make-set)) (conflicts-with (make-set)) (contested-update (make-set)) (no-also nil))
 
 (defun record-date (timestamp)
   (if (and (>= (length timestamp) 10) (iso-date-p (subseq timestamp 0 10))) (subseq timestamp 0 10) ""))
@@ -278,6 +297,7 @@
         ((string= extra +extra-stale+) +stale-line+)
         ((string= extra +extra-fresh+) +fresh-line+)
         ((string= extra +extra-history+) +history-line+)
+        ((string= extra +extra-pair+) +pair-line+)
         (t "")))
 
 (defun extra-cost (extra) (estimate-tokens (extra-line extra)))
@@ -429,13 +449,15 @@ codec's tables instructions without a state)."
                  (multiple-value-bind (id at ok) (observation-anchor o (sstate-positions s))
                    (setf (item-anchor-id it) id (item-anchor it) at (item-anchored it) ok))
                  (setf (item-from it) (record-date (obs-timestamp o)) (item-to it) (item-from it))
+                 (when (eq (item-role it) :note) (setf (item-subject it) (item-group it)))
                  (push it items)
                  (setf (gethash (obs-id o) (sstate-by-id s)) it)))
       (setf (sstate-items s) (nreverse items))
       ;; The status a note shows reads the fold's labels (labels-of): retracted for a record a
       ;; retraction withdrew.
       (let ((retracted (make-set)))
-        (maphash (lambda (id l) (when (string= l "retracted") (setf (gethash id retracted) t))) (labels-of all))
+        (setf (sstate-fold-labels s) (labels-of all))
+        (maphash (lambda (id l) (when (string= l "retracted") (setf (gethash id retracted) t))) (sstate-fold-labels s))
         (setf (sstate-closed s) (closed-by all))
         (dolist (it (sstate-items s))
           (when (eq (item-role it) :note)
@@ -443,10 +465,13 @@ codec's tables instructions without a state)."
             (when (and (gethash (obs-id (item-obs it)) (sstate-closed s)) (string= (item-status it) +status-proposed+))
               (setf (item-status it) +status-done+)))))
       (contest-items s all)
+      (contests s)
       (mark-stale s)
       (mark-next s)
       (mark-constraints s)
+      (join-pairs s)
       (link-items s)
+      (mark-priors s)
       (dolist (o all)
         (dolist (id (obs-supersedes o))
           (when (and (string/= id (obs-id o)) (not (member-str (obs-id o) (gethash id (sstate-superseded-by s)))))
@@ -502,7 +527,8 @@ codec's tables instructions without a state)."
       (when (eq (item-role it) :note)
         (let ((o (item-obs it)))
           (unless (or (not (item-anchored it)) (< (item-anchor it) start)
-                      (gethash (obs-id o) (sstate-superseded s)) (string= (item-status it) +status-retracted+))
+                      (gethash (obs-id o) (sstate-superseded s)) (string= (item-status it) +status-retracted+)
+                      (item-rivals it))
             (let* ((attempt (string= (obs-kind o) "attempt"))
                    (open (and attempt (member (obs-outcome o) '("open" "failed") :test #'string=))))
               (when (or open (and (not attempt) (string= (item-status it) +status-proposed+)))
@@ -514,7 +540,7 @@ receipts moved into next."
   (let ((done '()))
     (dolist (it (sstate-items s))
       (when (and (eq (item-role it) :note) (string= (item-status it) +status-done+)
-                 (not (gethash (obs-id (item-obs it)) (sstate-superseded s))))
+                 (not (gethash (obs-id (item-obs it)) (sstate-superseded s))) (null (item-rivals it)))
         (setf (item-receipt-at it) -1)
         (let ((receipt (gethash (second (gethash (obs-id (item-obs it)) (sstate-closed s))) (sstate-records s))))
           (when receipt
@@ -553,19 +579,18 @@ receipts moved into next."
   (dolist (it (sstate-items s))
     (let ((o (item-obs it)))
       (when (and (eq (item-role it) :note) (string/= (item-group it) "next") (string= (obs-kind o) "preference")
-                 (user-priority-p o) (not (item-contested it)) (not (gethash (obs-id o) (sstate-superseded s)))
+                 (user-priority-p o) (not (item-contested it)) (null (item-rivals it)) (not (gethash (obs-id o) (sstate-superseded s)))
                  (string/= (item-status it) +status-retracted+) (string/= (item-status it) +status-hypothetical+))
         (setf (item-slot it) (if (scope-exclusion-p (obs-content o)) :scope :constraint))
         (setf (item-note-group it) (item-group it) (item-group it) "constraints")
         (push-end it (sstate-members s)))))
   (setf (sstate-members s) (stable-sort (sstate-members s) #'< :key #'item-index)))
 
-(defun link-items (s)
-  (flet ((join-partner (a b)
-           (unless (member b (gethash (item-id a) (sstate-partners s)) :test #'eq)
-             (push-end b (gethash (item-id a) (sstate-partners s))))))
-    ;; The supersession decisions between shown records (Supersession, labels.lisp).
-    (let ((updated-by (make-set)) (conflicts-with (make-set)) (contested-update (make-set)))
+(defun contests (s)
+  "state.contests: the supersession decisions between notes, each note's conflicts and rivals,
+and the contested blocks (members in contest-before-p order, numbered from 1)."
+  (let ((updated-by (sstate-updated-by s)) (conflicts-with (sstate-conflicts-with s))
+        (contested-update (sstate-contested-update s)))
     (dolist (it (sstate-items s))
       (when (eq (item-role it) :note)
         (let ((o (item-obs it)))
@@ -581,6 +606,66 @@ receipts moved into next."
             (push-end (obs-id o) (gethash id conflicts-with))))))
     (dolist (it (sstate-items s))
       (when (eq (item-role it) :note)
+        (let* ((o (item-obs it)) (conflicts '()))
+          (dolist (id (obs-possibly-updates o))
+            (when (member-str id (gethash (obs-id o) contested-update)) (push-end id conflicts)))
+          (dolist (id (append (obs-conflicts o) (gethash (obs-id o) conflicts-with)))
+            (unless (member-str id conflicts) (push-end id conflicts)))
+          (setf (item-conflicts it) conflicts)
+          (dolist (id conflicts)
+            (let ((other (gethash id (sstate-by-id s))))
+              (when (and other (not (eq other it)) (eq (item-role other) :note) (not (member other (item-rivals it) :test #'eq)))
+                (push-end other (item-rivals it))))))))
+    (dolist (it (sstate-items s))
+      (when (and (item-rivals it) (= (item-pair it) 0))
+        (let* ((n (1+ (length (sstate-pairs s)))) (members (list it)))
+          (setf (item-pair it) n)
+          (loop for i from 0
+                while (< i (length members))
+                do (dolist (other (item-rivals (nth i members)))
+                     (when (= (item-pair other) 0)
+                       (setf (item-pair other) n)
+                       (setf members (append members (list other))))))
+          (vector-push-extend (stable-sort members (lambda (a b) (contest-before-p (item-obs a) (item-obs b))))
+                              (sstate-pairs s)))))))
+
+(defun join-pairs (s)
+  "state.joinPairs: every member of a block in its first member's table."
+  (loop for members across (sstate-pairs s)
+        do (dolist (it (rest members)) (setf (item-group it) (item-group (first members))))))
+
+(defun mark-priors (s)
+  "state.markPriors: each subject's priors but its newest are older-prior, never shown."
+  (let ((newest (make-set)))
+    (dolist (it (sstate-items s))
+      (when (item-prior it) (setf (gethash (item-subject it) newest) it)))
+    (dolist (it (sstate-items s))
+      (when (and (item-prior it) (not (eq (gethash (item-subject it) newest) it)))
+        (setf (item-older-prior it) t)))))
+
+(defun pairs-first (s items)
+  "pairsFirst: a table's items with its contested blocks first, each block's shown members in
+contest-before-p order, the blocks by their first member, then the rest in ledger order."
+  (let ((blocks '()) (seen (make-hash-table)) (rest '()))
+    (dolist (it items)
+      (cond ((= (item-pair it) 0) (push-end it rest))
+            ((gethash (item-pair it) seen))
+            (t (setf (gethash (item-pair it) seen) t)
+               (push-end (remove-if-not (lambda (m) (member m items :test #'eq)) (aref (sstate-pairs s) (1- (item-pair it))))
+                         blocks))))
+    (if (null blocks)
+        items
+        (append (apply #'append (stable-sort blocks (lambda (a b) (contest-before-p (item-obs (first a)) (item-obs (first b))))))
+                rest))))
+
+(defun link-items (s)
+  (flet ((join-partner (a b)
+           (unless (member b (gethash (item-id a) (sstate-partners s)) :test #'eq)
+             (push-end b (gethash (item-id a) (sstate-partners s))))))
+    ;; The supersession decisions between shown records (contests).
+    (let ((updated-by (sstate-updated-by s)) (contested-update (sstate-contested-update s)))
+    (dolist (it (sstate-items s))
+      (when (eq (item-role it) :note)
         (let ((o (item-obs it)) (parts '()) (was '()))
           (dolist (id (obs-supersedes o))
             (when (and (string/= id (obs-id o)) (not (member-str id was))) (push-end id was)))
@@ -594,21 +679,23 @@ receipts moved into next."
                            (join-partner other it)
                            (push-end id shown))))
                      (when shown (push-end (cat "(" label " " (join shown " ") ")") parts)))))
-            (let ((may-update '()) (conflicts '()))
+            (let ((may-update '()))
               (dolist (id (obs-possibly-updates o))
-                (if (member-str id (gethash (obs-id o) contested-update))
-                    (push-end id conflicts)
-                    (push-end id may-update)))
-              (dolist (id (append (obs-conflicts o) (gethash (obs-id o) conflicts-with)))
-                (unless (member-str id conflicts) (push-end id conflicts)))
+                (unless (member-str id (gethash (obs-id o) contested-update))
+                  (push-end id may-update)))
               (pointer "may update" may-update
                        (lambda (other) (not (gethash (obs-id (item-obs other)) (sstate-superseded s)))))
-              (pointer "conflicts" conflicts (lambda (other) (declare (ignore other)) t))
+              ;; A contested block's member carries its label and authority before its conflicts.
+              (when (> (item-pair it) 0)
+                (push-end (contest-tag (gethash (obs-id o) (sstate-fold-labels s) "") (obs-authority o)) parts)
+                (when (string= (item-extra it) "") (setf (item-extra it) +extra-pair+)))
+              (pointer "conflicts" (item-conflicts it) (lambda (other) (declare (ignore other)) t))
               (let ((n (length parts)))
                 (pointer "updated by" (gethash (obs-id o) updated-by)
                          (lambda (other) (not (gethash (obs-id (item-obs other)) (sstate-superseded s)))))
-                (when (and (> (length parts) n) (string= (item-extra it) ""))
-                  (setf (item-extra it) +extra-history+))))
+                (when (> (length parts) n)
+                  (setf (item-prior it) t)
+                  (when (string= (item-extra it) "") (setf (item-extra it) +extra-history+)))))
             (when (item-contested it)
               (let ((n (length parts)))
                 (pointer "contested by" (item-contested-by it) (lambda (other) (declare (ignore other)) t))
@@ -642,7 +729,9 @@ receipts moved into next."
   (used 0)
   (carried (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
   (request-text "")
-  (intent-text (make-set)))
+  (intent-text (make-set))
+  ;; pairs-on: each contested block's members shown, by item-pair; blocks the blocks shown.
+  (pairs-on (make-hash-table)) (blocks 0))
 
 (defun on-p (p it) (gethash it (sel-on p)))
 
@@ -654,6 +743,9 @@ receipts moved into next."
   (setf (gethash it (sel-on p)) nil)
   (when (eq (item-role it) :request) (setf (sel-request-text p) ""))
   (when (eq (item-role it) :intent) (remhash (item-which it) (sel-intent-text p)))
+  (when (> (item-pair it) 0)
+    (decf (gethash (item-pair it) (sel-pairs-on p)))
+    (when (= (gethash (item-pair it) (sel-pairs-on p)) 0) (decf (sel-blocks p))))
   (decf (sel-used p) (item-cost it))
   (decf (gethash (item-group it) (sel-opened p)))
   (when (= (gethash (item-group it) (sel-opened p)) 0)
@@ -679,12 +771,21 @@ receipts moved into next."
   (when (or (on-p p it) (gethash (item-id it) (sel-dropped p))
             (and (sstate-hidden s) (gethash (item-id it) (sstate-hidden s))))
     (return-from try-item nil))
+  ;; An older value but its subject's newest is never shown, and a contested block opens only
+  ;; while fewer than +max-contested-blocks+ are shown.
+  (when (or (item-older-prior it)
+            (and (> (item-pair it) 0) (= (gethash (item-pair it) (sel-pairs-on p) 0) 0)
+                 (>= (sel-blocks p) +max-contested-blocks+)))
+    (return-from try-item nil))
   (let ((cost (+ (item-cost it) (if (= (opened p (item-group it)) 0) (header-cost s (item-group it)) 0)
                  (if (and (string/= (item-extra it) "") (= (opened p (item-extra it)) 0)) (extra-cost (item-extra it)) 0))))
     (when (> (+ (sel-used p) cost) budget) (return-from try-item nil))
     (setf (gethash it (sel-on p)) t)
     (push it (sel-order p))
     (incf (sel-used p) cost)
+    (when (> (item-pair it) 0)
+      (when (= (gethash (item-pair it) (sel-pairs-on p) 0) 0) (incf (sel-blocks p)))
+      (incf (gethash (item-pair it) (sel-pairs-on p) 0)))
     (setf (gethash (item-group it) (sel-opened p)) (1+ (opened p (item-group it))))
     (when (string/= (item-extra it) "")
       (setf (gethash (item-extra it) (sel-opened p)) (1+ (opened p (item-extra it)))))
@@ -833,8 +934,14 @@ receipts moved into next."
   "alsoText: the also: line."
   (cat "also: " (join (mapcar (lambda (a) (cat "+" (itoa (first a)) " more " (second a) ": " (third a))) parts) "; ")))
 
+(defun also-line (parts)
+  "alsoLine: +also-all-line+ for an also: line naming contested pairs or older values."
+  (if (some (lambda (a) (member (second a) (list +noun-contested+ +noun-older+) :test #'string=)) parts)
+      +also-all-line+
+      +also-line+))
+
 (defun also-cost (parts)
-  (if parts (+ (estimate-tokens (cat +trailer-separator+ (also-text parts))) 1 (estimate-tokens +also-line+)) 0))
+  (if parts (+ (estimate-tokens (cat +trailer-separator+ (also-text parts))) 1 (estimate-tokens (also-line parts))) 0))
 
 
 
@@ -1007,6 +1114,21 @@ receipts moved into next."
         (if (eq (item-slot it) :done) (incf done) (incf rules))))
     (when (> rules 0) (push-end (list rules "constraints" (snippet +read-preferences+ preferences)) out))
     (when (> done 0) (push-end (list done "done" (snippet +read-notes+ plans :status +status-proposed+)) out))
+    (unless (sstate-no-also s)
+      ;; The contested blocks with no member shown, then the older values left out.
+      (let ((pairs 0) (older 0) (contested 0) (superseded 0))
+        (loop for members across (sstate-pairs s)
+              do (when (and (notany (lambda (it) (on-p p it)) members)
+                            (some (lambda (it) (not (gethash (item-id it) (sel-dropped p)))) members))
+                   (incf pairs)))
+        (dolist (it (sstate-items s))
+          (when (and (eq (item-role it) :note) (not (gethash (item-id it) (sel-dropped p))))
+            (when (item-older-prior it) (incf older))
+            (let ((label (gethash (obs-id (item-obs it)) (sstate-fold-labels s))))
+              (cond ((equal label "contested") (incf contested))
+                    ((equal label "superseded") (incf superseded))))))
+        (when (> pairs 0) (push-end (list pairs +noun-contested+ (snippet +read-notes+ contested :status "contested")) out))
+        (when (> older 0) (push-end (list older +noun-older+ (snippet +read-notes+ superseded :status "superseded")) out))))
     out))
 
 (defun fewest (n fits)
@@ -1105,6 +1227,7 @@ receipts moved into next."
         (unless (gethash (item-group it) by-group) (push-end (item-group it) groups))
         (push-end it (gethash (item-group it) by-group))
         (setf (gethash (item-group it) newest) (item-index it))))
+    (maphash (lambda (group items) (setf (gethash group by-group) (pairs-first s items))) by-group)
     (when (gethash "next" by-group) (push-end (cons "next" (gethash "next" by-group)) blocks))
     (when (gethash "reflections" by-group) (push-end (cons "reflections" (gethash "reflections" by-group)) blocks))
     (let ((subjects (sort (remove-if (lambda (g) (or (member g '("reflections" "notes" "next" "constraints") :test #'string=) (list-group-p g)))
@@ -1125,10 +1248,10 @@ receipts moved into next."
           (when parts (push-end (cat group ": " (join parts ", ")) lists))))
       (let ((text (layout-intro l))
             (lines (apply #'cat (mapcar (lambda (b) (section-line l (car b))) blocks))))
-        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-closed+ +extra-stale+ +extra-fresh+ +extra-history+ +extra-values+))
+        (dolist (extra (list +extra-evidence+ +extra-contest+ +extra-pair+ +extra-closed+ +extra-stale+ +extra-fresh+ +extra-history+ +extra-values+))
           (when (> (opened p extra) 0)
             (setf lines (cat lines (extra-line extra)))))
-        (when (omission-also o) (setf lines (cat lines +also-line+)))
+        (when (omission-also o) (setf lines (cat lines (also-line (omission-also o)))))
         (when (string/= lines "")
           (let ((at (search +request-line+ text)))
             (when at
@@ -1214,7 +1337,7 @@ reflection-dates a table of ReflectionDateRanges; freshness a table of verdict t
          (p (make-sel)))
     (setf (layout-notice (sstate-layout s)) nil)
     ;; The level-1 input lists its working memory with the records; it prints no also: line.
-    (setf (sstate-members s) '())
+    (setf (sstate-members s) (quote ()) (sstate-no-also s) t)
     (dolist (it (sstate-items s))
       (when (gethash (item-id it) listed) (setf (gethash it (sel-on p)) t)))
     (multiple-value-bind (o need ok) (omissions s p room)

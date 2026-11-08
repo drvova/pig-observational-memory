@@ -93,9 +93,9 @@ func TestRenderStatusesAndPointers(t *testing.T) {
 	check(5, "", "actually the pool size is 10 (was "+recordID(4)+")")
 	check(7, "", "the cache holds 64 keys (may update "+recordID(8)+")")
 	check(8, "", "plain line about the cache size")
-	check(9, "", "the cache does not run on Redis (conflicts "+recordID(6)+")")
+	check(9, "", "the cache does not run on Redis (contested from unknown) (conflicts "+recordID(6)+")")
 	// Both ends of a contested pair are marked (contracts/truth.md, "Supersession").
-	check(6, "", "the cache runs on Redis (conflicts "+recordID(9)+")")
+	check(6, "", "the cache runs on Redis (contested from unknown) (conflicts "+recordID(9)+")")
 	if _, shown := rows[recordID(2)]; shown {
 		t.Fatal("the retracted plan is shown beside its retraction")
 	}
@@ -107,7 +107,7 @@ func TestRenderStatusesAndPointers(t *testing.T) {
 		"[" + recordID(0) + "] " + day(0) + " fact proposed we will migrate the orders table to Postgres (m00)",
 		"[" + recordID(3) + "] " + day(3) + " correction retracted scrap that (was " + recordID(2) + ") (m03)",
 		"the cache holds 64 keys (may update " + recordID(8) + ") (m07)",
-		"the cache does not run on Redis (conflicts " + recordID(6) + ") (m09)",
+		"the cache does not run on Redis (contested from unknown) (conflicts " + recordID(6) + ") (m09)",
 	} {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("lines lack %q:\n%s", want, lines)
@@ -179,8 +179,8 @@ func TestRenderSupersessionDecisions(t *testing.T) {
 	want := map[int]string{
 		0: "the api listens on port 8080 (updated by " + recordID(1) + ")",
 		1: "the api listens on port 9090 (may update " + recordID(0) + ")",
-		2: "the api timeout is 30s (conflicts " + recordID(3) + ")",
-		3: "the api timeout is 45s (conflicts " + recordID(2) + ")",
+		2: "the api timeout is 30s (contested from user) (conflicts " + recordID(3) + ")",
+		3: "the api timeout is 45s (contested from tool) (conflicts " + recordID(2) + ")",
 	}
 	for n, content := range want {
 		if got := rows[recordID(n)]["content"]; got != content {

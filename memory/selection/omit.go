@@ -135,8 +135,51 @@ func (s *state) alsoParts(p *selected) []alsoPart {
 	if done > 0 {
 		out = append(out, alsoPart{n: done, noun: "done", query: snippet(read{fn: readNotes}, omwire.Options{Status: ledger.StatusProposed}, plans)})
 	}
+	if s.noAlso {
+		return out
+	}
+	// The contested blocks with no member shown (MaxContestedBlocks, or no room), listed by every
+	// record labelled contested; then the older values markPriors leaves out, listed by every
+	// record labelled superseded.
+	pairs, older, contested, superseded := 0, 0, 0, 0
+	for _, members := range s.pairs {
+		shown, live := false, false
+		for _, it := range members {
+			shown = shown || p.on[it]
+			live = live || !p.dropped[it.id()]
+		}
+		if !shown && live {
+			pairs++
+		}
+	}
+	for _, it := range s.items {
+		if it.role != roleNote || p.dropped[it.id()] {
+			continue
+		}
+		if it.olderPrior {
+			older++
+		}
+		switch s.labels[it.obs.ID] {
+		case ledger.LabelContested:
+			contested++
+		case ledger.LabelSuperseded:
+			superseded++
+		}
+	}
+	if pairs > 0 {
+		out = append(out, alsoPart{n: pairs, noun: nounContested, query: snippet(read{fn: readNotes}, omwire.Options{Status: ledger.LabelContested}, contested)})
+	}
+	if older > 0 {
+		out = append(out, alsoPart{n: older, noun: nounOlder, query: snippet(read{fn: readNotes}, omwire.Options{Status: ledger.LabelSuperseded}, superseded)})
+	}
 	return out
 }
+
+// The nouns of the also: line's contested blocks and older values.
+const (
+	nounContested = "contested pairs"
+	nounOlder     = "older values"
+)
 
 // omissions lays out what p leaves out within room tokens: the span rows, folding the oldest
 // when they do not fit, and the capped lists' tails. ok is false when even the smallest layout
@@ -510,6 +553,7 @@ func OmittedSpans(in SpansInput) (spans Spans, need int, ok bool) {
 	s.l.notice = false
 	// The level-1 input lists its working memory with the records; it prints no also: line.
 	s.members = nil
+	s.noAlso = true
 	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}}
 	for _, it := range s.items {
 		if in.Listed[it.id()] {

@@ -71,6 +71,9 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
 			parityCase{"synthetic-safety", "generic", safety, "/srv/app", mode, budgets},
 			parityCase{"synthetic-tooloutput", "generic", synthetic("tooloutput.jsonl"), "/srv/app", mode, budgets},
+			// Contested pairs past the cap and a value with three older values
+			// (docs/memory-v2.md, "Contested pairs"), on subjects a level-1 batch named.
+			parityCase{"synthetic-contested", "pi", synthetic("contested.jsonl"), "/srv/app", mode, budgets},
 		)
 	}
 	// OM_LISP_PARITY_EXTRA lists more generic transcripts (comma-separated paths) to diff, at
@@ -91,6 +94,7 @@ func parityCases(t *testing.T) []parityCase {
 			parityCase{"synthetic-working", "generic", synthetic("working.jsonl"), "/srv/app", mode, budgets},
 			parityCase{"synthetic-stress", "generic", stress, "/srv/app", mode, budgets},
 			parityCase{"synthetic-tooloutput", "generic", synthetic("tooloutput.jsonl"), "/srv/app", mode, budgets},
+			parityCase{"synthetic-contested", "pi", synthetic("contested.jsonl"), "/srv/app", mode, budgets},
 		)
 	}
 	return cases
