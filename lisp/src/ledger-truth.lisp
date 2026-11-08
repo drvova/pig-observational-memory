@@ -152,31 +152,90 @@
       (and (string= (obs-kind o) "attempt") (string= (obs-outcome o) "failed") (not (gethash (obs-id o) superseded)))
       (search "[redacted:" (obs-content o)) (search "[redacted:" (obs-target o))))
 
-(defun decay-evidence (entries records)
-  "DecayEvidence: id -> the branch index of each record's newest evidence event."
-  (let ((positions (entry-index-by-id entries)) (out (make-set)) (latest (make-set)))
-    (flet ((at (o) (let ((n -1))
-                     (dolist (id (obs-source-ids o) n)
-                       (let ((i (gethash id positions))) (when (and i (> i n)) (setf n i))))))
-           (raise (id n) (multiple-value-bind (v ok) (gethash id out) (when (and ok (> n v)) (setf (gethash id out) n)))))
-      (dolist (o records) (setf (gethash (obs-id o) out) (at o)))
-      (dolist (r records)
-        (when (string= (obs-origin r) "code")
-          (let ((n (at r)))
-            (dolist (id (append (obs-supersedes r) (obs-possibly-updates r) (obs-conflicts r) (obs-responds-to r)
-                                (mapcar #'first (obs-closes r))))
-              (unless (string= id (obs-id r)) (raise id n)))
-            (when (member (obs-source r) '("user-said" "tool-observed") :test #'string=)
-              (dolist (kind +key-kinds+)
-                (dolist (k (keys-get (obs-keys r) kind))
-                  (let ((key (cat kind (string (code-char 0)) k)))
-                    (multiple-value-bind (v ok) (gethash key latest)
-                      (when (or (not ok) (> n v)) (setf (gethash key latest) n))))))))))
+;; Decay is a fold over the branch (ledger.DecayFold): every part of its state is a position or a
+;; maximum of positions, so advancing a checkpoint over the entries after it gives what one fold over
+;; the whole branch gives (the semigroup property; tests/truth.lisp, decay-composes). An event is
+;; what the branch recorded: a later drop, merge or forget of the record that carried it does not
+;; undo it.
+(defstruct (decay-fold (:copier nil))
+  (through 0) (positions (make-set)) (sources (make-set)) (linked (make-set)) (latest (make-set))
+  ;; The ticks of each clock, newest first.
+  (compactions '()) (turns '()))
+
+(defun copy-hash-set (h) (let ((out (make-set))) (maphash (lambda (k v) (setf (gethash k out) v)) h) out))
+
+(defun decay-fold-clone (f)
+  "DecayFold.Clone."
+  (make-decay-fold :through (decay-fold-through f) :positions (copy-hash-set (decay-fold-positions f))
+                   :sources (copy-hash-set (decay-fold-sources f)) :linked (copy-hash-set (decay-fold-linked f))
+                   :latest (copy-hash-set (decay-fold-latest f))
+                   :compactions (copy-list (decay-fold-compactions f)) :turns (copy-list (decay-fold-turns f))))
+
+(defun decay-fold-at (f o)
+  (let ((n -1))
+    (dolist (id (obs-source-ids o) n)
+      (let ((i (gethash id (decay-fold-positions f)))) (when (and i (> i n)) (setf n i))))))
+
+(defun decay-fold-advance (f entries)
+  "DecayFold.Advance: f after entries (a vector), the entries that follow what it read."
+  (flet ((raise (table key n)
+           (multiple-value-bind (v ok) (gethash key table) (when (or (not ok) (> n v)) (setf (gethash key table) n)))))
+    (loop for e across entries
+          do (let ((i (decay-fold-through f)))
+               (incf (decay-fold-through f))
+               (setf (gethash (entry-id e) (decay-fold-positions f)) i)
+               (cond ((string= (entry-type e) "compaction") (push i (decay-fold-compactions f)))
+                     ((and (string= (entry-type e) "message") (entry-message e) (equal (jget (entry-message e) "role") "user"))
+                      (push i (decay-fold-turns f)))
+                     (t (multiple-value-bind (list covers) (recorded-data e)
+                          (when covers
+                            (dolist (r list)
+                              (unless (nth-value 1 (gethash (obs-id r) (decay-fold-sources f)))
+                                (setf (gethash (obs-id r) (decay-fold-sources f)) t)
+                                (when (string= (obs-origin r) "code")
+                                  (let ((n (decay-fold-at f r)))
+                                    (dolist (id (append (obs-supersedes r) (obs-possibly-updates r) (obs-conflicts r) (obs-responds-to r)
+                                                        (mapcar #'first (obs-closes r))))
+                                      (unless (string= id (obs-id r)) (raise (decay-fold-linked f) id n)))
+                                    (when (member (obs-source r) '("user-said" "tool-observed") :test #'string=)
+                                      (dolist (kind +key-kinds+)
+                                        (dolist (k (keys-get (obs-keys r) kind))
+                                          (raise (decay-fold-latest f) (cat kind (string (code-char 0)) k) n)))))))))))))))
+  f)
+
+(defun decay-fold-evidence (f records replaced-by)
+  "DecayFold.Evidence: id -> the branch index of each record's newest evidence event, a link read
+through replaced-by to the record standing for its target."
+  (let ((out (make-set)) (targets '()))
+    (flet ((raise (id n) (multiple-value-bind (v ok) (gethash id out) (when (and ok (> n v)) (setf (gethash id out) n)))))
+      (dolist (o records) (setf (gethash (obs-id o) out) (decay-fold-at f o)))
+      (maphash (lambda (k v) (declare (ignore v)) (push k targets)) (decay-fold-linked f))
+      (dolist (id (sort targets #'string<))
+        (raise (standing id replaced-by) (gethash id (decay-fold-linked f))))
       (dolist (o records out)
         (dolist (kind +key-kinds+)
           (dolist (k (keys-get (obs-keys o) kind))
-            (multiple-value-bind (n ok) (gethash (cat kind (string (code-char 0)) k) latest)
+            (multiple-value-bind (n ok) (gethash (cat kind (string (code-char 0)) k) (decay-fold-latest f))
               (when ok (raise (obs-id o) n)))))))))
+
+(defun decay-fold-decayed (f records replaced-by clock horizon)
+  "DecayFold.Decayed: a set of the ids of records that decay on clock with horizon."
+  (let ((out (make-set)) (superseded (make-set)))
+    (when (or (not (member clock '("compactions" "turns") :test #'equal)) (<= horizon 0))
+      (return-from decay-fold-decayed out))
+    (dolist (o records)
+      (dolist (id (obs-supersedes o)) (unless (string= id (obs-id o)) (setf (gethash id superseded) t))))
+    (let ((ticks (if (string= clock "compactions") (decay-fold-compactions f) (decay-fold-turns f)))
+          (evidence (decay-fold-evidence f records replaced-by)))
+      (dolist (o records out)
+        (unless (decay-protected-p o superseded)
+          (let ((n (gethash (obs-id o) evidence)))
+            (when (>= (count-if (lambda (tk) (> tk n)) ticks) horizon)
+              (setf (gethash (obs-id o) out) t))))))))
+
+(defun decay-evidence (entries records)
+  "DecayEvidence."
+  (decay-fold-evidence (decay-fold-advance (make-decay-fold) entries) records (folded-replaced-by (fold-ledger entries))))
 
 (defun decay-ticks (entries clock)
   "DecayTicks."
@@ -188,14 +247,8 @@
 
 (defun decayed-records (entries records clock horizon)
   "Decayed: a set of the ids of records that decay on clock with horizon."
-  (let ((out (make-set)) (superseded (make-set)))
-    (when (or (not (member clock '("compactions" "turns") :test #'equal)) (<= horizon 0))
-      (return-from decayed-records out))
-    (dolist (o records)
-      (dolist (id (obs-supersedes o)) (unless (string= id (obs-id o)) (setf (gethash id superseded) t))))
-    (let ((ticks (decay-ticks entries clock)) (evidence (decay-evidence entries records)))
-      (dolist (o records out)
-        (unless (decay-protected-p o superseded)
-          (let ((n (gethash (obs-id o) evidence)))
-            (when (>= (count-if (lambda (tk) (> tk n)) ticks) horizon)
-              (setf (gethash (obs-id o) out) t))))))))
+  (if (or (not (member clock '("compactions" "turns") :test #'equal)) (<= horizon 0))
+      (make-set)
+      (decay-fold-decayed (decay-fold-advance (make-decay-fold) entries) records
+                          (folded-replaced-by (fold-ledger entries)) clock horizon)))
+
