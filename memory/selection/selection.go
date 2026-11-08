@@ -182,6 +182,17 @@ type item struct {
 	// pushback records answering it: it is shown as a claim, never as a rule.
 	contested   bool
 	contestedBy []string
+	// conflicts are the ids its (conflicts <id>) pointer names, rivals the notes among them, and
+	// pair its contested block (1 and up, 0 for none): the notes the rivals join, either way,
+	// shown together (contests).
+	conflicts []string
+	rivals    []*item
+	pair      int
+	// subject is a note's subject table; prior marks a note an (updated by <id>) pointer names
+	// as an older value, and olderPrior one of its subject's priors but the newest, never shown
+	// (markPriors).
+	subject           string
+	prior, olderPrior bool
 	// extra is the instructions line the item's kind adds once to the summary that shows one
 	// (extraLine), "" for none.
 	extra string
@@ -306,7 +317,19 @@ type state struct {
 	// (slotConstraint, slotScope) and the finished plans (slotDone); slots their caps.
 	members []*item
 	slots   Slots
+	// labels are every record's fold label (ledger.LabelsOf); pairs the contested blocks, each
+	// in ledger.ContestBefore order, pairs[n-1] for item.pair n; updatedBy, conflictsWith and
+	// contestedUpdate the supersession decisions between notes (contests).
+	labels                                    map[string]string
+	pairs                                     [][]*item
+	updatedBy, conflictsWith, contestedUpdate map[string][]string
+	// noAlso says the choice prints no also: line (OmittedSpans).
+	noAlso bool
 }
+
+// MaxContestedBlocks is how many contested blocks a summary shows at most (docs/memory-v2.md,
+// "Contested pairs"); the also: line names the rest.
+const MaxContestedBlocks = 3
 
 // The working-memory slots of an item (item.slot).
 const (
@@ -384,6 +407,9 @@ func newState(in Input) *state {
 				it.extra = extraEvidence
 			}
 		}
+		if it.role == roleNote {
+			it.subject = it.group
+		}
 		it.anchorID, it.anchor, it.anchored = ledger.ObservationAnchor(o, s.positions)
 		it.from = recordDate(o.Timestamp)
 		it.to = it.from
@@ -393,7 +419,8 @@ func newState(in Input) *state {
 	// The status a note shows reads the fold's labels (ledger.LabelsOf): retracted for a record
 	// a retraction withdrew.
 	retracted := map[string]bool{}
-	for id, l := range ledger.LabelsOf(all) {
+	s.labels = ledger.LabelsOf(all)
+	for id, l := range s.labels {
 		retracted[id] = l == ledger.LabelRetracted
 	}
 	s.closed = ledger.ClosedBy(all)
@@ -406,10 +433,13 @@ func newState(in Input) *state {
 		}
 	}
 	s.contest(all)
+	s.contests()
 	s.markStale()
 	s.markNext()
 	s.markConstraints()
+	s.joinPairs()
 	s.link()
+	s.markPriors()
 	supersededBy := map[string][]string{}
 	for _, o := range all {
 		for _, id := range o.Supersedes {
@@ -498,7 +528,7 @@ func (s *state) markNext() {
 		return
 	}
 	for _, it := range s.items {
-		if it.role != roleNote || !it.anchored || it.anchor < start || s.superseded[it.obs.ID] || it.status == ledger.StatusRetracted {
+		if it.role != roleNote || !it.anchored || it.anchor < start || s.superseded[it.obs.ID] || it.status == ledger.StatusRetracted || len(it.rivals) > 0 {
 			continue
 		}
 		attempt := it.obs.Kind == ledger.KindAttempt
@@ -516,7 +546,7 @@ func (s *state) markNext() {
 func (s *state) markDone() {
 	var done []*item
 	for _, it := range s.items {
-		if it.role != roleNote || it.status != StatusDone || s.superseded[it.obs.ID] {
+		if it.role != roleNote || it.status != StatusDone || s.superseded[it.obs.ID] || len(it.rivals) > 0 {
 			continue
 		}
 		it.receiptAt = -1
@@ -577,7 +607,7 @@ func (s *state) markStale() {
 // hypothetical or contested.
 func (s *state) markConstraints() {
 	for _, it := range s.items {
-		if it.role != roleNote || it.group == groupNext || it.obs.Kind != "preference" || !ledger.UserPriority(it.obs) || it.contested ||
+		if it.role != roleNote || it.group == groupNext || it.obs.Kind != "preference" || !ledger.UserPriority(it.obs) || it.contested || len(it.rivals) > 0 ||
 			s.superseded[it.obs.ID] || it.status == ledger.StatusRetracted || it.status == ledger.StatusHypothetical {
 			continue
 		}
@@ -601,23 +631,15 @@ func statusOf(o ledger.Observation, retracted map[string]bool) string {
 	return o.Status
 }
 
-// link fills each note's pointers (the recall pointers to what it supersedes, "was"; its
-// unsettled possible updates of active unsuperseded records, "may update"; its conflicts with
-// active records, "conflicts") and the partners each link joins. The pointers depend only on the
-// input, so an item's cost does not change with the choice.
-func (s *state) link() {
-	join := func(a, b *item) {
-		if !slices.Contains(s.partners[a.id()], b) {
-			s.partners[a.id()] = append(s.partners[a.id()], b)
-		}
-	}
-	// The supersession decisions of the possible updates and conflicts between shown records
-	// (ledger.Supersession; contracts/truth.md): an older value a keep-both update leaves is
-	// marked (updated by <id>), and both ends of a contested pair (conflicts <id>), so a value
-	// another replaced is never shown as current and a contest never settles by order.
-	updatedBy := map[string][]string{}
-	conflictsWith := map[string][]string{}
-	contestedUpdate := map[string][]string{}
+// contests works out the supersession decisions of the possible updates and conflicts between
+// notes (ledger.Supersession; contracts/truth.md): an older value a keep-both update leaves is
+// marked (updated by <id>), and every end of a contest (conflicts <id>), so a value another
+// replaced is never shown as current and a contest never settles by order. The notes a contest
+// joins, either way, are one contested block (docs/memory-v2.md, "Contested pairs"): its
+// members in ledger.ContestBefore order, the blocks numbered in ledger order of their first
+// member.
+func (s *state) contests() {
+	s.updatedBy, s.conflictsWith, s.contestedUpdate = map[string][]string{}, map[string][]string{}, map[string][]string{}
 	for _, it := range s.items {
 		if it.role != roleNote {
 			continue
@@ -629,14 +651,96 @@ func (s *state) link() {
 			}
 			switch ledger.Supersession(it.obs, other.obs) {
 			case ledger.DecisionKeepBoth:
-				updatedBy[id] = append(updatedBy[id], it.obs.ID)
+				s.updatedBy[id] = append(s.updatedBy[id], it.obs.ID)
 			case ledger.DecisionContested:
-				contestedUpdate[it.obs.ID] = append(contestedUpdate[it.obs.ID], id)
-				conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+				s.contestedUpdate[it.obs.ID] = append(s.contestedUpdate[it.obs.ID], id)
+				s.conflictsWith[id] = append(s.conflictsWith[id], it.obs.ID)
 			}
 		}
 		for _, id := range it.obs.Conflicts {
-			conflictsWith[id] = append(conflictsWith[id], it.obs.ID)
+			s.conflictsWith[id] = append(s.conflictsWith[id], it.obs.ID)
+		}
+	}
+	for _, it := range s.items {
+		if it.role != roleNote {
+			continue
+		}
+		var conflicts []string
+		for _, id := range it.obs.PossiblyUpdates {
+			if slices.Contains(s.contestedUpdate[it.obs.ID], id) {
+				conflicts = append(conflicts, id)
+			}
+		}
+		for _, id := range append(slices.Clone(it.obs.Conflicts), s.conflictsWith[it.obs.ID]...) {
+			if !slices.Contains(conflicts, id) {
+				conflicts = append(conflicts, id)
+			}
+		}
+		it.conflicts = conflicts
+		for _, id := range conflicts {
+			if other := s.byID[id]; other != nil && other != it && other.role == roleNote && !slices.Contains(it.rivals, other) {
+				it.rivals = append(it.rivals, other)
+			}
+		}
+	}
+	for _, it := range s.items {
+		if len(it.rivals) == 0 || it.pair > 0 {
+			continue
+		}
+		n := len(s.pairs) + 1
+		members := []*item{it}
+		it.pair = n
+		for i := 0; i < len(members); i++ {
+			for _, other := range members[i].rivals {
+				if other.pair == 0 {
+					other.pair = n
+					members = append(members, other)
+				}
+			}
+		}
+		sort.SliceStable(members, func(a, b int) bool { return ledger.ContestBefore(members[a].obs, members[b].obs) })
+		s.pairs = append(s.pairs, members)
+	}
+}
+
+// joinPairs puts every member of a contested block in the table of its first member, so the
+// block is shown in one place (a level-1 link may join records of two subjects). A member of
+// one is never in the constraints registry or the next section (markConstraints, markNext): a
+// contest is neither a rule in force nor a settled step.
+func (s *state) joinPairs() {
+	for _, members := range s.pairs {
+		for _, it := range members[1:] {
+			it.group = members[0].group
+		}
+	}
+}
+
+// markPriors leaves out all but one older value of each subject (docs/memory-v2.md,
+// "Selection"): of the notes an (updated by <id>) pointer marks as a value's history (link),
+// only its subject's newest is shown beside the current value; the others are never shown,
+// stay in the ledger, and are listed by the omitted spans and the also: line.
+func (s *state) markPriors() {
+	newest := map[string]*item{}
+	for _, it := range s.items {
+		if it.prior {
+			newest[it.subject] = it
+		}
+	}
+	for _, it := range s.items {
+		if it.prior && newest[it.subject] != it {
+			it.olderPrior = true
+		}
+	}
+}
+
+// link fills each note's pointers (the recall pointers to what it supersedes, "was"; its
+// unsettled possible updates of active unsuperseded records, "may update"; its conflicts with
+// active records, "conflicts", after its contest tag) and the partners each link joins. The
+// pointers depend only on the input, so an item's cost does not change with the choice.
+func (s *state) link() {
+	join := func(a, b *item) {
+		if !slices.Contains(s.partners[a.id()], b) {
+			s.partners[a.id()] = append(s.partners[a.id()], b)
 		}
 	}
 	for _, it := range s.items {
@@ -668,25 +772,29 @@ func (s *state) link() {
 				parts = append(parts, "("+label+" "+strings.Join(shown, " ")+")")
 			}
 		}
-		var mayUpdate, conflicts []string
+		var mayUpdate []string
 		for _, id := range it.obs.PossiblyUpdates {
-			if slices.Contains(contestedUpdate[it.obs.ID], id) {
-				conflicts = append(conflicts, id)
-			} else {
+			if !slices.Contains(s.contestedUpdate[it.obs.ID], id) {
 				mayUpdate = append(mayUpdate, id)
 			}
 		}
-		for _, id := range append(slices.Clone(it.obs.Conflicts), conflictsWith[it.obs.ID]...) {
-			if !slices.Contains(conflicts, id) {
-				conflicts = append(conflicts, id)
+		pointer("may update", mayUpdate, func(other *item) bool { return !s.superseded[other.obs.ID] })
+		// A contested block's member carries its label and authority inline, before the
+		// conflicts pointer (ledger.ContestTag).
+		if it.pair > 0 {
+			parts = append(parts, ledger.ContestTag(s.labels[it.obs.ID], it.obs.Authority))
+			if it.extra == "" {
+				it.extra = extraPair
 			}
 		}
-		pointer("may update", mayUpdate, func(other *item) bool { return !s.superseded[other.obs.ID] })
-		pointer("conflicts", conflicts, func(*item) bool { return true })
+		pointer("conflicts", it.conflicts, func(*item) bool { return true })
 		n := len(parts)
-		pointer("updated by", updatedBy[it.obs.ID], func(other *item) bool { return !s.superseded[other.obs.ID] })
-		if len(parts) > n && it.extra == "" {
-			it.extra = extraHistory
+		pointer("updated by", s.updatedBy[it.obs.ID], func(other *item) bool { return !s.superseded[other.obs.ID] })
+		if len(parts) > n {
+			it.prior = true
+			if it.extra == "" {
+				it.extra = extraHistory
+			}
 		}
 		// A contested claim names the pushback answering it, and the pushback the claims it
 		// answers (ledger.Contested, Observation.RespondsTo).
@@ -740,6 +848,10 @@ type selected struct {
 	requestText string
 	// intentText is each intent row as shown, by which (clipped when it did not fit whole).
 	intentText map[string]string
+	// pairsOn counts each contested block's members shown, by item.pair; blocks the blocks
+	// with one shown, at most MaxContestedBlocks.
+	pairsOn map[int]int
+	blocks  int
 }
 
 // shown counts the records p shows (the request is none).
@@ -786,6 +898,12 @@ func (p *selected) unselect(s *state, it *item) {
 		delete(p.intentText, it.which)
 	}
 	p.used -= it.cost
+	if it.pair > 0 {
+		p.pairsOn[it.pair]--
+		if p.pairsOn[it.pair] == 0 {
+			p.blocks--
+		}
+	}
 	p.opened[it.group]--
 	if p.opened[it.group] == 0 {
 		p.used -= s.l.headerCost(it.group)
@@ -802,9 +920,14 @@ func (p *selected) unselect(s *state, it *item) {
 
 // choose selects items under budget in the ordered classes.
 func (s *state) choose(budget int) *selected {
-	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}, intentText: map[string]string{}}
+	p := &selected{on: map[*item]bool{}, opened: map[string]int{}, dropped: map[string]bool{}, intentText: map[string]string{}, pairsOn: map[int]int{}}
 	try := func(it *item) bool {
 		if p.on[it] || p.dropped[it.id()] || s.in.Hidden[it.id()] {
+			return false
+		}
+		// An older value but its subject's newest is never shown (markPriors), and a contested
+		// block opens only while fewer than MaxContestedBlocks are shown.
+		if it.olderPrior || it.pair > 0 && p.pairsOn[it.pair] == 0 && p.blocks >= MaxContestedBlocks {
 			return false
 		}
 		cost := it.cost
@@ -820,6 +943,12 @@ func (s *state) choose(budget int) *selected {
 		p.on[it] = true
 		p.order = append(p.order, it)
 		p.used += cost
+		if it.pair > 0 {
+			if p.pairsOn[it.pair] == 0 {
+				p.blocks++
+			}
+			p.pairsOn[it.pair]++
+		}
 		p.opened[it.group]++
 		if it.extra != "" {
 			p.opened[it.extra]++

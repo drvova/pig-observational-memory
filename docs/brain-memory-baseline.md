@@ -922,10 +922,10 @@ Cues: 20 seeds, 600 turns each, 0 model requests:
 - **False-cue rate 0**: no look-alike got a cue, over 30,960 calls and 759 repeats (scenario 28;
   `contracts/cue.jsonl` holds the case-level look-alikes both engines decide).
 
-## Quantum report follow-ups
+## Quantum report follow-ups: promise syndrome, joint consistency and decay
 
 The promise syndrome, the sleep pass's joint-consistency check, decay as a composing fold and the
-Zeno arm (docs/brain-memory.md, "Quantum report follow-ups"). Measured on 2026-11-08 on branch
+Zeno arm (docs/brain-memory.md, "Quantum report follow-ups (phases 5 and 7)"). Measured on 2026-11-08 on branch
 `claude/syndrome-consistency`, 20 seeds, 600 compactions a run, sleep on (the default). **Every run
 made 0 model requests**; the suites' only requests are their scripted level-1 replies (Tier 0b 140,
 Tier 0c 2).
@@ -1000,6 +1000,38 @@ calls take context, so its sessions compact sooner and cover fewer records):
   wording stands and the arm stays as a regression check.
 - The sleep pass's records never move the decay clock: 192,839 record-compactions decay the same
   with every `om.sleep` entry made inert.
+
+## Quantum report follow-ups: contested delivery and value history
+
+Three changes from the quantum-ideas report (docs/brain-memory.md, "Quantum report follow-ups"
+under phases 5 and 8): a cue names every side of a contest or abstains; a contested pair renders
+as one block in authority then id order, at most 3 blocks, the rest on the `also:` line; a subject
+shows at most one older value. Measured on 2026-11-08 on branch `claude/contested-delivery`
+against its base 578fc81, 20 seeds, sleep on, the same commands as phase 8 plus
+`-summary-max 1200`. **Every run made 0 model requests** (the suites' scripted level-1 replies
+aside, 140 and 2 as before).
+
+| run | before | after |
+|---|---|---|
+| Tier 0 (`-seeds 20`) | 1,615 snippets run, 0 failed; every cell as in phase 8 | the same cells, cell for cell; 0 lost |
+| Tier 0 capped (`-summary-max 1200`) | 3,915 snippets run, 0 failed | the same cells, cell for cell; 0 lost |
+| `-suite all -seeds 20` (Tier 0, 0b, 0c, settle) | every row as in phase 8 | the same rows, line for line |
+| `-suite cues -seeds 20` | 109 cues, 0 false cues, 759 of 759 repeats | the same; 0 cues for a contested record, 0 one-sided |
+| new invariant: contested blocks first, by authority; one older value a subject | not checked | 600 of 600 compactions kept (default and capped) |
+
+- **No cell moves, by construction of the generator.** The Tier 0 generator writes no level-1
+  subjects, so level 0 links no `conflicts` pair or keep-both history (links need a subject), and
+  its superseded probe is a correction (replace), which the older-value rule does not touch: "old
+  as current" stays 0 and the superseded probe stays shown. The changes are measured where pairs
+  and histories exist: `selection/contested_test.go` (adjacency, the same order when the write
+  order is swapped, authority before id, the cap and its `also:` snippet run in a namespace child,
+  three older values of which one is shown and two listed and reachable), the Pi-format parity
+  transcript `selection/testdata/lispparity/contested.jsonl` (five contested pairs on subjects a
+  level-1 batch named, three shown, `+2 more contested pairs`; a port with three older values,
+  one shown, `+2 more older values`), the generated ledger parity cases (now with authorities),
+  and nine new `contracts/cue.jsonl` cases, all byte for byte in both engines.
+- The Tier 0 invariant (`memeval.checkContested`, `TestCheckContested`) holds on every compaction
+  and breaks on a pair after another row, a pair against authority order and a second older value.
 
 ## Tier 0b: forgetting
 

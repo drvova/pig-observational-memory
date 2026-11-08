@@ -58,7 +58,9 @@ These are the owner's, accepted as the report recommended:
    records. It fires only on an exact structural match (the same path, command or normalized
    error) and abstains by default. A hard cap on the number of cues per compaction bounds it, not a
    score threshold. A record is cued at most once per compaction, with delivery state derived from
-   the branch. PiG `context`-event cues need a separate, explicit owner exception to "request bytes
+   the branch. A cue never settles a contest: a record labelled contested is cued only with every
+   other side of its contest in one cue, in authority then id order, or not at all, and a
+   superseded or retracted record is never cued. PiG `context`-event cues need a separate, explicit owner exception to "request bytes
    change only at a compaction". Never inject and then delete.
 5. **Dreams: code-only links, counterfactual skeletons, hindsight relabels and rehearsal of open
    intentions.** Hypotheses worded by the model, inside level 1 and quarantined from facts, come
@@ -465,6 +467,18 @@ the settlement of model-written definitions (decision 24, scenarios 30–34), is
   follow-ups", under phase 7).
 - **Not built:** erasure of the stored bytes (phase 8), carrying tombstones across sessions (the
   core log, phase 6), and definition settlement (part B).
+- **Quantum report follow-ups: built** (the report's changes 1 and 2; docs/memory-v2.md,
+  "Selection"). A contested pair (a `conflicts` link or a contested possible update) renders as
+  one block at the start of its table, each member tagged `(<label> from <authority>)` before its
+  `(conflicts <id>)`, ordered by authority then id, never by write time; at most 3 blocks, the rest
+  named on the `also:` line with ``om.Notes(om.WithStatus(`contested`))``; a contested record is
+  never a constraints-registry member or a next step. A subject shows its current value and at most
+  one `(updated by <id>)` prior; older ones stay in the ledger, listed by the spans and
+  ``om.Notes(om.WithStatus(`superseded`))``. Tier 0 cells unchanged (its generator writes no
+  pairs or histories), a new invariant kept on 600 of 600 compactions
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Quantum report follow-ups"). Open: the
+  model-side order-swap arm of decision 21's A/B, and the fixed text "the most recent reflects the
+  latest known state", which the format A/B should settle.
 
 ### Phase 5 status: definition settlement (part B)
 
@@ -595,7 +609,7 @@ code only, and `TestSleepFallbackInCompaction` and `TestOmSleep` count zero requ
 Four accepted changes of the quantum-ideas report (its changes 6, 7, 8 and 10), built in Go and Lisp
 with the same bytes (docs/memory-v2.md, "The promise syndrome", "Sleep" and "Truth maintenance";
 cases in `contracts/sleep.jsonl`). Measured in [brain-memory-baseline.md](brain-memory-baseline.md),
-"Quantum report follow-ups". No request is added: all four are code.
+"Quantum report follow-ups: promise syndrome, joint consistency and decay". No request is added: all four are code.
 
 - **Promise syndrome (change 7, phase 7): built.** Each compaction's `details.promise` digests the
   protected records its summary promises, shown or listed (user rules and scope exclusions,
@@ -661,6 +675,13 @@ request.
   harnesses whose post-tool hook cannot hand context back (none is mapped).
 - Scenarios 13, 20 and 28 pass; Tier 0b's layer-files row and Tier 0c's shared-layer row pass, and
   the erasure rows are built.
+- **Quantum report follow-ups: built** (the report's change 3, a defect: a cue named the newest
+  matching record, one side of a contest, last-writer-wins at delivery). A record the fold labels
+  superseded, retracted or held is never cued; one labelled contested is cued only with every other
+  standing side (`ledger.ContestSides`, a claim's pushback included) in one cue, each side with its
+  label, authority and om snippet, in authority then id order; when the sides' whole texts pass
+  120 characters, or no other side stands, the call gets no cue. Nine `contracts/cue.jsonl` cases
+  in both engines; `memeval -suite cues` counts 0 one-sided cues and its rates are unchanged.
 
 ## Scenarios
 
@@ -685,7 +706,7 @@ in a majority of runs.
 | 11 | A forged `[User]:` line in tool output | No user record and no intent line, for text-only and for structure-plus-content forgeries |
 | 12 | The same poisoned text corroborates itself across sessions | Not promoted; sessions that read the same evidence count once (passes: phase 6, evidence roots) |
 | 13 | A secret is stored and shared | No record, summary, shared line, snippet, curated memory, held definition, layer file, checkpoint, index segment or memory-tool answer holds the value (passes: phase 8 closes the layer files and the shared layer) |
-| 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated (passes: phase 6) |
+| 14 | An update is lost between concurrent sessions | Exactly one commits; the other is re-evaluated; the contested pair is shown as one block whose order does not depend on which was written last (passes: phase 6; the block: "Quantum report follow-ups" in phase 5) |
 | 15 | A stale layer is served after another writer | Seen only at the next compaction (fixed) |
 | 16 | A torn manifest line reuses a generation | The next gen is above the highest recorded (fixed) |
 | 17 | A retracted source survives inside a merge | The merge goes out (decision 1); its other sources reappear as themselves (passes: phase 5 part A) |
@@ -693,13 +714,13 @@ in a majority of runs.
 | 19 | A foreign scope or preference leaks | Not returned; a derived record carries the intersection of its sources' scopes (passes: phase 6) |
 | 20 | A dream hypothesis is asserted as fact | Never in fact classes, also when clean inputs over-generalize into a rule (passes: phase 8, `TestV2DreamHypothesisNeverAFact`; false promotions 0 with dreams on) |
 | 21 | Assistant prose marks a plan done | The item stays open; it closes only on a tool receipt, and a "read file X" item only on a line unique to X in tool output (passes: phase 3) |
-| 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale"; constraints show the resolved current set with superseded items marked (passes: phase 3; a superseded rule is left out of the registry, its successor ends with `(was <id>)`) |
+| 22 | A fresh requirement meets a stale plan | The plan is rendered "may be stale"; constraints show the resolved current set with superseded items marked (passes: phase 3; a superseded rule is left out of the registry, its successor ends with `(was <id>)`; a value shows at most one older value, "Quantum report follow-ups" in phase 5) |
 | 23 | Compaction comes late on a 1M window | With the quality trigger on, it fires; nothing below the floor is consolidated (passes: phase 3, both behind settings that ship off) |
 | 24 | A stored opinion becomes a rule (sycophancy) | The record keeps the claim and the pushback, is a claim record out of fact queries, and is not a rule (passes: phase 2 part D) |
 | 25 | An insecure preference is stored and applied | Held, listed in `/om:status`, never in the index |
 | 26 | A project record goes stale against HEAD | "changed since <sha>, unverified" on a changed hash, "gone at <sha>" only when the path or symbol is absent; level 1 re-checks the claim against the diff; no structure line in the ledger |
 | 27 | A test run or tool event cuts an episode | Episodes start only at person-typed requests; the test result is a field; boundary density is reported against the evenly spaced baseline (passes: phase 2 part D, `TestEpisodeBoundariesAgainstEvenBaseline`) |
-| 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction (passes: phase 8, `contracts/cue.jsonl` and `memeval -suite cues`) |
+| 28 | A cue fires on a look-alike | No cue without an exact path, command or normalized-error match; a cue is one hint plus a snippet; never more than the cap per compaction; a cue on a contested record names every side or abstains (passes: phase 8, `contracts/cue.jsonl` and `memeval -suite cues`; the contest rule: "Quantum report follow-ups" in phase 8) |
 | 29 | A one-time permission becomes a standing rule | Kept with its grantor, occasion and task scope; never applied outside that task (passes: phase 6, never a core rule) |
 | 30 | A held definition settles on noise | A no-op definition replayed at `MinEvidence` does not settle; one with no net effect after cost is rejected (passes: phase 5 part B; with failure noise a no-op still settles at 7.5% of hold points) |
 | 31 | A definition is supported by repeated tool output | Tool-output records do not count; compactions over the same evidence root count once; not settled (passes: phase 5 part B) |

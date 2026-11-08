@@ -162,7 +162,8 @@
     (when current (push current out))
     (nreverse out)))
 
-(defstruct ptext (ids (make-set)) (constraints '()) (spans '()) (also-rules nil) (also-plans nil))
+(defstruct ptext (ids (make-set)) (constraints '()) (spans '()) (also-rules nil) (also-plans nil)
+  (also-contested nil) (also-older nil))
 
 (defun read-promises (summary codec format)
   "readPromises: a ptext, or nil for a summary the check does not read."
@@ -187,10 +188,12 @@
               (when (has-prefix line "also: ")
                 (let ((rest (subseq line 6)))
                   (when (search " more constraints: " rest) (setf (ptext-also-rules tx) t))
-                  (when (search " more done: " rest) (setf (ptext-also-plans tx) t)))))
+                  (when (search " more done: " rest) (setf (ptext-also-plans tx) t))
+                  (when (search " more contested pairs: " rest) (setf (ptext-also-contested tx) t))
+                  (when (search " more older values: " rest) (setf (ptext-also-older tx) t)))))
             tx))))))
 
-(defun ptext-state (tx o positions)
+(defun ptext-state (tx o positions labels)
   "promiseText.state: shown, listed or \"\"."
   (when (gethash (obs-id o) (ptext-ids tx)) (return-from ptext-state "shown"))
   (multiple-value-bind (anchor at anchored) (observation-anchor o positions)
@@ -206,7 +209,9 @@
                     (and (not anchored) (or (has-suffix (first span) " (off-path)") (has-suffix (second span) " (off-path)"))))
             (return-from ptext-state "listed"))))
       (if (or (and (ptext-also-rules tx) (string= (obs-kind o) "preference"))
-              (and (ptext-also-plans tx) (string= (obs-status o) +status-proposed+)))
+              (and (ptext-also-plans tx) (string= (obs-status o) +status-proposed+))
+              (and (ptext-also-contested tx) (equal (gethash (obs-id o) labels) "contested"))
+              (and (ptext-also-older tx) (equal (gethash (obs-id o) labels) "superseded")))
           "listed"
           ""))))
 
@@ -223,9 +228,11 @@
                  (tx (read-promises (entry-summary e) (details-summary-codec details) (details-summary-format details))))
             (if (null tx)
                 (list (entry-id e) '() '() mismatch t)
-                (let ((positions (entry-index-by-id (subseq branch 0 at))) (lost '()) (leaked '()))
+                (let ((positions (entry-index-by-id (subseq branch 0 at)))
+                      (labels (folded-labels (fold-ledger (subseq branch 0 at))))
+                      (lost '()) (leaked '()))
                   (dolist (p promised)
-                    (let ((want (promise-state p shown)) (got (ptext-state tx (car p) positions)))
+                    (let ((want (promise-state p shown)) (got (ptext-state tx (car p) positions labels)))
                       (cond ((string= want "held") (when (string= got "shown") (push-end (obs-id (car p)) leaked)))
                             ((or (and (string= want "shown") (string/= got "shown"))
                                  (and (string= want "listed") (string= got "")))

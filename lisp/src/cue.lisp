@@ -68,11 +68,46 @@ output's distinct non-blank lines."
     (when (>= n limit) (return-from cue-for nil))
     (let ((keys (cue-keys tool args output cwd)))
       (when (null keys) (return-from cue-for nil))
-      (dolist (o (reverse (folded-active (fold-ledger entries))) nil)
-        (unless (or (gethash (obs-id o) given) (not (cueable-p o)))
-          (dolist (k keys)
-            (when (some (lambda (r) (cue-key-matches-p (first k) r (second k))) (keys-get (obs-keys o) (first k)))
-              (return-from cue-for (values (obs-id o) (cat (first k) ":" (second k)) (cue-text o))))))))))
+      (let* ((folded (fold-ledger entries)) (active (folded-active folded)) (lbls nil))
+        (dolist (o (reverse active) nil)
+          (unless (or (gethash (obs-id o) given) (not (cueable-p o)))
+            (let ((key (cue-matched-key o keys)))
+              (when key
+                (unless lbls (setf lbls (folded-labels folded)))
+                (let ((label (gethash (obs-id o) lbls)))
+                  (cond ((member label '("superseded" "retracted" "held") :test #'equal))
+                        ((equal label "contested")
+                         (let ((sides (cons o (remove-if-not (lambda (side) (cue-standing-p (gethash (obs-id side) lbls)))
+                                                             (contest-sides active (obs-id o))))))
+                           ;; A side cued with another one this compaction was cued with it.
+                           (unless (some (lambda (side) (gethash (obs-id side) given)) (rest sides))
+                             (let ((text (cue-contest-text sides lbls)))
+                               (return-from cue-for (if text (values (obs-id o) key text) nil))))))
+                        (t (return-from cue-for (values (obs-id o) key (cue-text o))))))))))))))
+
+(defun cue-standing-p (label)
+  "standing: a label a contest's side in a cue may carry."
+  (not (member label '("superseded" "retracted" "held") :test #'equal)))
+
+(defun cue-matched-key (o keys)
+  "matchedKey: the first of keys one of o's keys holds, as kind:value, or nil."
+  (dolist (k keys nil)
+    (when (some (lambda (r) (cue-key-matches-p (first k) r (second k))) (keys-get (obs-keys o) (first k)))
+      (return (cat (first k) ":" (second k))))))
+
+(defun cue-contest-text (sides lbls)
+  "CueContestText: every side in contest-before-p order, each with its tag, its whole redacted
+text and its snippet; nil when fewer than two or their texts pass +cue-text-runes+."
+  (when (< (length sides) 2) (return-from cue-contest-text nil))
+  (let ((runes 0) (parts '()))
+    (dolist (o (stable-sort (copy-list sides) #'contest-before-p))
+      (let ((content (redact-secrets (obs-content o))))
+        (incf runes (length content))
+        (push-end (cat (contest-tag (gethash (obs-id o) lbls "") (obs-authority o)) " " content
+                       " Read it: om.Recall(`" (obs-id o) "`)")
+                  parts)))
+    (when (<= runes +cue-text-runes+)
+      (cat "memory cue (unverified): a contested record names this, neither side settled: " (join parts "; ")))))
 
 (defun cue-compaction (entries)
   "CueCompaction."

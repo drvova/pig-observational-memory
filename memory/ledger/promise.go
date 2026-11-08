@@ -256,9 +256,10 @@ func CheckPromise(branch []Entry, at int) (PromiseCheck, bool) {
 		return c, true
 	}
 	positions := EntryIndexByID(branch[:at])
+	labels := FoldLedger(branch[:at], "").Labels()
 	for _, p := range promised {
 		want := promiseState(p, shown)
-		got := text.state(p.Observation, positions)
+		got := text.state(p.Observation, positions, labels)
 		switch {
 		case want == PromiseHeldBack:
 			if got == PromiseShown {
@@ -279,6 +280,9 @@ type promiseText struct {
 	constraints          [][2]string
 	spans                [][2]string
 	alsoRules, alsoPlans bool
+	// alsoContested and alsoOlder are the also: line's contested pairs and older values, listed
+	// by every record labelled contested or superseded.
+	alsoContested, alsoOlder bool
 }
 
 // The summary's frozen names the check reads (selection's layout).
@@ -288,6 +292,8 @@ const (
 	promiseAlsoPrefix       = "also: "
 	promiseAlsoRules        = " more constraints: "
 	promiseAlsoPlans        = " more done: "
+	promiseAlsoContested    = " more contested pairs: "
+	promiseAlsoOlder        = " more older values: "
 	promiseOffPath          = " (off-path)"
 )
 
@@ -342,6 +348,8 @@ func readPromises(summary, codecName, format string) (promiseText, bool) {
 		if rest, ok := strings.CutPrefix(line, promiseAlsoPrefix); ok {
 			out.alsoRules = out.alsoRules || strings.Contains(rest, promiseAlsoRules)
 			out.alsoPlans = out.alsoPlans || strings.Contains(rest, promiseAlsoPlans)
+			out.alsoContested = out.alsoContested || strings.Contains(rest, promiseAlsoContested)
+			out.alsoOlder = out.alsoOlder || strings.Contains(rest, promiseAlsoOlder)
 		}
 	}
 	return out, true
@@ -349,8 +357,9 @@ func readPromises(summary, codecName, format string) (promiseText, bool) {
 
 // state is how the text promises o: shown in a record table by its id or in the constraints
 // registry by its text and source; listed by an omitted row whose span holds its anchor (an
-// off-path row for a record off the branch) or by the also: line's slot; else absent.
-func (t promiseText) state(o Observation, positions map[string]int) string {
+// off-path row for a record off the branch) or by the also: line's slot or label (labels, the
+// fold's); else absent.
+func (t promiseText) state(o Observation, positions map[string]int, labels map[string]string) string {
 	if t.ids[o.ID] {
 		return PromiseShown
 	}
@@ -375,7 +384,8 @@ func (t promiseText) state(o Observation, positions map[string]int) string {
 			return PromiseListed
 		}
 	}
-	if t.alsoRules && o.Kind == "preference" || t.alsoPlans && o.Status == StatusProposed {
+	if t.alsoRules && o.Kind == "preference" || t.alsoPlans && o.Status == StatusProposed ||
+		t.alsoContested && labels[o.ID] == LabelContested || t.alsoOlder && labels[o.ID] == LabelSuperseded {
 		return PromiseListed
 	}
 	return promiseAbsent
