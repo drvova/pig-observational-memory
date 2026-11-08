@@ -128,15 +128,22 @@ const (
 	extraFresh    = "line:fresh"
 	extraAlso     = "line:also"
 	extraHistory  = "line:history"
+	extraPair     = "line:pair"
 	HistoryLine   = "- updated by: a record ending with (updated by <id>) gives a value that newer record on its subject gives differently; it is kept as history, not current. (conflicts <id>) marks both ends of a pair neither replaces: both stand contested until the user settles them.\n"
 	ClosedLine    = "- done: a plan with status done was closed by a tool receipt, (closed by <id>: <receipt>) naming the receipt's record and its kind (exit 0, write, commit or read); it is finished, never pending. Assistant prose closes nothing.\n"
 	StaleLine     = "- may be stale: a plan ending with (may be stale <entry id>) was made before a newer request of the user's that names its keys, that entry; check the plan against that request before acting on it.\n"
 	FreshLine     = "- fresh: a project record ending with (changed since <sha>, unverified) names a file that changed at HEAD since the record was written at commit <sha>, so its claim may no longer hold; (gone at <sha>) one whose path or symbol no longer exists at HEAD <sha>. Check the code before relying on either; the record is kept.\n"
 	AlsoLine      = "- also (after ---): constraints and finished plans left out, with the om snippet that lists them.\n"
+	// AlsoAllLine is AlsoLine for an also: line that names contested pairs or older values.
+	AlsoAllLine   = "- also (after ---): constraints, finished plans, contested pairs and older values left out, with the om snippet that lists them.\n"
 	ContestedLine = "- claim: a notes row of kind claim is the user's preference or correction the assistant pushed back on: a claim, not a rule; (contested by <id>) names the pushback, a row of kind pushback ending with (responds to <id>), and (contested) alone one not shown. The user restating it makes it a rule again.\n"
 	EvidenceLine  = "- evidence: a notes row of kind evidence holds lines a tool printed when its call failed or reported an error, verbatim and joined by ⏎; its content names the call.\n"
 	ValuesLine    = "- values.<kind> (after ---): exact values tool output printed (path, error type, sha, url, kv for KEY=value, ip, issue, failing test, branch, searched symbol, version), the most often printed first; ×N counts the results that printed it, and its entry id is the first that did; +N more, all M ends with the om snippets that list every value.\n"
 )
+
+// PairLine describes the contested blocks (docs/memory-v2.md, "Contested pairs").
+var PairLine = "- contested: rows tagged (<label> from <authority>) before (conflicts <id>) are one contest, shown together at the start of their table, the higher authority first (user, repo-file, tool, model), then by id, never by time; neither replaces the other until the user settles it. At most " +
+	strconv.Itoa(MaxContestedBlocks) + " contests are shown; the also: line names the rest.\n"
 
 // extraLine is the instructions line of an item's extra.
 func extraLine(extra string) string {
@@ -157,6 +164,8 @@ func extraLine(extra string) string {
 		return AlsoLine
 	case extraHistory:
 		return HistoryLine
+	case extraPair:
+		return PairLine
 	}
 	return ""
 }
@@ -452,7 +461,18 @@ func (l *layout) alsoCost(parts []alsoPart) int {
 	if len(parts) == 0 {
 		return 0
 	}
-	return estimate(trailerSeparator+alsoText(parts)) + 1 + estimate(AlsoLine)
+	return estimate(trailerSeparator+alsoText(parts)) + 1 + estimate(alsoLine(parts))
+}
+
+// alsoLine is the instructions line of an also: line: AlsoAllLine when it names contested pairs
+// or older values, else AlsoLine.
+func alsoLine(parts []alsoPart) string {
+	for _, a := range parts {
+		if a.noun == nounContested || a.noun == nounOlder {
+			return AlsoAllLine
+		}
+	}
+	return AlsoLine
 }
 
 // tailText is a capped list's end: how many it leaves out, and the queries that list the
@@ -503,6 +523,9 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		}
 		byGroup[it.group] = append(byGroup[it.group], it)
 		newest[it.group] = it.index
+	}
+	for group, items := range byGroup {
+		byGroup[group] = pairsFirst(s, items)
 	}
 	if items := byGroup[groupNext]; len(items) > 0 {
 		blocks = append(blocks, block{group: groupNext, items: items})
@@ -562,13 +585,13 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 	for _, b := range blocks {
 		lines += l.sectionLine(b.group)
 	}
-	for _, extra := range []string{extraEvidence, extraContest, extraClosed, extraStale, extraFresh, extraHistory, extraValues} {
+	for _, extra := range []string{extraEvidence, extraContest, extraPair, extraClosed, extraStale, extraFresh, extraHistory, extraValues} {
 		if p.opened[extra] > 0 {
 			lines += extraLine(extra)
 		}
 	}
 	if len(o.also) > 0 {
-		lines += AlsoLine
+		lines += alsoLine(o.also)
 	}
 	if lines != "" {
 		text = strings.Replace(text, requestLine, requestLine+lines, 1)
@@ -619,6 +642,46 @@ func (l *layout) render(s *state, p *selected, o omission) string {
 		text += trailerSeparator + strings.Join(lists, "\n")
 	}
 	return text
+}
+
+// pairsFirst is a table's shown items with its contested blocks first (docs/memory-v2.md,
+// "Contested pairs"): each block's members adjacent in ledger.ContestBefore order, the blocks in
+// the order of their first members, then the other items in ledger order. No time decides where
+// a block or a member goes.
+func pairsFirst(s *state, items []*item) []*item {
+	on := map[*item]bool{}
+	for _, it := range items {
+		on[it] = true
+	}
+	var blocks [][]*item
+	seen := map[int]bool{}
+	var rest []*item
+	for _, it := range items {
+		if it.pair == 0 {
+			rest = append(rest, it)
+			continue
+		}
+		if seen[it.pair] {
+			continue
+		}
+		seen[it.pair] = true
+		var block []*item
+		for _, member := range s.pairs[it.pair-1] {
+			if on[member] {
+				block = append(block, member)
+			}
+		}
+		blocks = append(blocks, block)
+	}
+	if len(blocks) == 0 {
+		return items
+	}
+	sort.SliceStable(blocks, func(a, b int) bool { return ledger.ContestBefore(blocks[a][0].obs, blocks[b][0].obs) })
+	out := make([]*item, 0, len(items))
+	for _, block := range blocks {
+		out = append(out, block...)
+	}
+	return append(out, rest...)
 }
 
 // anchorTime is the date a timestamp starts with, the anchor its relative dates resolve

@@ -149,3 +149,73 @@ func (folded FoldedLedger) Labels() map[string]string {
 	}
 	return out
 }
+
+// ContestBefore is the order a contest's sides are shown in, in the summary's contested blocks
+// and in a cue (docs/memory-v2.md, "Contested pairs"): the higher authority first
+// (AuthorityRank: the user's words, a repository file, tool output, the model), then the lower
+// id, a digest of the record's content. It never reads time, so the order says nothing about
+// which side was written last.
+func ContestBefore(a, b Observation) bool {
+	if ra, rb := AuthorityRank(a.Authority), AuthorityRank(b.Authority); ra != rb {
+		return ra > rb
+	}
+	return a.ID < b.ID
+}
+
+// ContestTag is a contest side's inline tag, its label and its authority: "(<label> from
+// <authority>)", "unknown" for a record written before authority existed.
+func ContestTag(label, authority string) string {
+	if authority == "" {
+		authority = "unknown"
+	}
+	return "(" + label + " from " + authority + ")"
+}
+
+// ContestSides are the other sides of the contest the record id stands in among records (the
+// active records, in ledger order), in ContestBefore order: the records a conflicts link, or a
+// possible update decided contested (Supersession), joins to it either way, and for a claim
+// standing contested the pushback records answering it (Contested). None when id stands in no
+// contest, or only in one a sleep check raised (FoldedLedger.Challenged), which names no side.
+func ContestSides(records []Observation, id string) []Observation {
+	byID := make(map[string]Observation, len(records))
+	for _, o := range records {
+		byID[o.ID] = o
+	}
+	self, ok := byID[id]
+	if !ok {
+		return nil
+	}
+	sides := map[string]bool{}
+	for _, other := range self.Conflicts {
+		sides[other] = true
+	}
+	for _, other := range self.PossiblyUpdates {
+		if earlier, ok := byID[other]; ok && Supersession(self, earlier) == DecisionContested {
+			sides[other] = true
+		}
+	}
+	for _, o := range records {
+		if o.ID != id && (slices.Contains(o.Conflicts, id) || slices.Contains(o.PossiblyUpdates, id) && Supersession(o, self) == DecisionContested) {
+			sides[o.ID] = true
+		}
+	}
+	for _, pushback := range Contested(records)[id] {
+		sides[pushback] = true
+	}
+	var out []Observation
+	for _, o := range records {
+		if sides[o.ID] && o.ID != id {
+			out = append(out, o)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Observation) int {
+		switch {
+		case ContestBefore(a, b):
+			return -1
+		case ContestBefore(b, a):
+			return 1
+		}
+		return 0
+	})
+	return out
+}

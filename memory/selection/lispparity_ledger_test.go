@@ -156,6 +156,11 @@ func writeLedger(t *testing.T, dir, name string, seed uint64, turns int) string 
 			if kind != "" {
 				r["kind"] = kind
 			}
+			// Authorities from the id counter, not the rng, so the seeds' streams are kept: the
+			// contested blocks order their members by them (docs/memory-v2.md, "Contested pairs").
+			if a := []string{"", "user", "tool", "model", "repo-file"}[nextID%5]; a != "" {
+				r["authority"] = a
+			}
 			switch kind {
 			case "attempt":
 				r["outcome"], r["tool"], r["target"] = pick([]string{"failed", "worked", "open"}), "bash", fmt.Sprintf("go test ./mod%d", n%4)

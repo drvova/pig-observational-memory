@@ -249,4 +249,6 @@ boundaries, with the preserved segments spliced in."
   (let ((lines (read-transcript-lines path)))
     (cond ((string= format "claude-code") (read-claude-code lines))
           ((string= format "generic") (read-generic lines))
+          ;; A Pi session file keeps the engine's own entries (memory/transcript/pi.go).
+          ((string= format "pi") (om::read-pi lines))
           (t (error "transcript format ~A is not ported" format)))))
