@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/secrets"
@@ -134,14 +135,18 @@ func keysOf(o ledger.Observation, kind string) []string {
 
 // CueFor decides the cue for call over the branch's entries: the newest standing cueable record
 // one of the call's keys matches that no om.cue entry after the latest compaction names, while
-// fewer than limit cues were given since that compaction; false when it abstains.
+// fewer than limit cues were given since that compaction; false when it abstains. A record the
+// fold labels superseded, retracted or held is never cued (FoldedLedger.Labels), and one
+// labelled contested only together with every other side of its contest, in one cue
+// (CueContestText), never alone: a cue never settles a contest by which side was written last.
+// When that cue does not fit, the call gets none.
 func CueFor(entries []ledger.Entry, call CueCall, cwd string, limit int) (Cue, bool) {
 	return CueOver(entries, nil, call, cwd, limit)
 }
 
-// CueOver is CueFor with the standing records given (active, the fold of entries' records, in
-// fold order), for a caller that already folded them; nil folds entries.
-func CueOver(entries []ledger.Entry, active []ledger.Observation, call CueCall, cwd string, limit int) (Cue, bool) {
+// CueOver is CueFor with the fold of entries given, for a caller that already folded them; nil
+// folds entries.
+func CueOver(entries []ledger.Entry, folded *ledger.FoldedLedger, call CueCall, cwd string, limit int) (Cue, bool) {
 	if limit <= 0 {
 		return Cue{}, false
 	}
@@ -166,27 +171,101 @@ func CueOver(entries []ledger.Entry, active []ledger.Observation, call CueCall, 
 	if len(keys) == 0 {
 		return Cue{}, false
 	}
-	if active == nil {
-		active = ledger.FoldLedger(entries, "").ActiveObservations
+	if folded == nil {
+		f := ledger.FoldLedger(entries, "")
+		folded = &f
 	}
+	active := folded.ActiveObservations
+	var labels map[string]string
 	for i := len(active) - 1; i >= 0; i-- {
 		o := active[i]
 		if given[o.ID] || !cueable(o) {
 			continue
 		}
-		for _, k := range keys {
-			if slices.ContainsFunc(keysOf(o, k.kind), func(r string) bool { return keyMatches(k.kind, r, k.value) }) {
-				return Cue{Record: o.ID, Key: k.kind + ":" + k.value, Text: CueText(o)}, true
-			}
+		key, ok := matchedKey(o, keys)
+		if !ok {
+			continue
 		}
+		if labels == nil {
+			labels = folded.Labels()
+		}
+		switch labels[o.ID] {
+		case ledger.LabelSuperseded, ledger.LabelRetracted, ledger.LabelHeld:
+			continue
+		case ledger.LabelContested:
+			sides := []ledger.Observation{o}
+			for _, side := range ledger.ContestSides(active, o.ID) {
+				if standing(labels[side.ID]) {
+					sides = append(sides, side)
+				}
+			}
+			// A side cued with another one this compaction was cued with it.
+			if slices.ContainsFunc(sides[1:], func(side ledger.Observation) bool { return given[side.ID] }) {
+				continue
+			}
+			text, ok := CueContestText(sides, labels)
+			if !ok {
+				return Cue{}, false
+			}
+			return Cue{Record: o.ID, Key: key, Text: text}, true
+		}
+		return Cue{Record: o.ID, Key: key, Text: CueText(o)}, true
 	}
 	return Cue{}, false
+}
+
+// standing reports whether a record of this label may be a contest's side in a cue: not
+// superseded, retracted or held.
+func standing(label string) bool {
+	return label != ledger.LabelSuperseded && label != ledger.LabelRetracted && label != ledger.LabelHeld
+}
+
+// matchedKey is the first of keys one of o's keys holds, as kind:value.
+func matchedKey(o ledger.Observation, keys []cueKey) (string, bool) {
+	for _, k := range keys {
+		if slices.ContainsFunc(keysOf(o, k.kind), func(r string) bool { return keyMatches(k.kind, r, k.value) }) {
+			return k.kind + ":" + k.value, true
+		}
+	}
+	return "", false
 }
 
 // CueText is a cue's text: framed unverified (decision 18), the hint, the record's text clipped
 // and redacted, and the om snippet that reads the whole record.
 func CueText(o ledger.Observation) string {
 	return "memory cue (unverified): " + cueHint(o) + ": " + clip(secrets.Redact(o.Content), CueTextRunes) + " Read it: om.Recall(`" + o.ID + "`)"
+}
+
+// CueContestText is the cue of a record the fold labels contested (docs/memory-v2.md, "Cues"):
+// every side of the contest (sides, the cued record and the others), in ledger.ContestBefore
+// order, each with its label and authority (ledger.ContestTag), its text redacted and whole,
+// and the om snippet that reads it. False, so the cue abstains, when no other side stands or
+// the sides' texts together pass CueTextRunes: no side is clipped, so none reads shorter.
+func CueContestText(sides []ledger.Observation, labels map[string]string) (string, bool) {
+	if len(sides) < 2 {
+		return "", false
+	}
+	sides = slices.Clone(sides)
+	slices.SortStableFunc(sides, func(a, b ledger.Observation) int {
+		switch {
+		case ledger.ContestBefore(a, b):
+			return -1
+		case ledger.ContestBefore(b, a):
+			return 1
+		}
+		return 0
+	})
+	runes := 0
+	parts := make([]string, 0, len(sides))
+	for _, o := range sides {
+		content := secrets.Redact(o.Content)
+		runes += utf8.RuneCountInString(content)
+		parts = append(parts, ledger.ContestTag(labels[o.ID], o.Authority)+" "+content+" Read it: om.Recall(`"+o.ID+"`)")
+	}
+	if runes > CueTextRunes {
+		return "", false
+	}
+	return "memory cue (unverified): a contested record names this, neither side settled: " + strings.Join(parts, "; "), true
 }
 
 // CueCompaction is the id of the latest compaction on entries, "" before the first: an om.cue

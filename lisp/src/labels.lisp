@@ -65,3 +65,33 @@
                (when (and challenged (equal (gethash id out) "believed")) (setf (gethash id out) "contested")))
              (folded-challenged f))
     out))
+
+;;; Contests (labels.go ContestBefore, ContestTag, ContestSides)
+
+(defun contest-before-p (a b)
+  "ContestBefore: the higher authority first, then the lower id; never time."
+  (let ((ra (authority-rank (obs-authority a))) (rb (authority-rank (obs-authority b))))
+    (if (/= ra rb) (> ra rb) (and (string< (obs-id a) (obs-id b)) t))))
+
+(defun contest-tag (label authority)
+  "ContestTag: \"(<label> from <authority>)\"."
+  (cat "(" label " from " (if (string= authority "") "unknown" authority) ")"))
+
+(defun contest-sides (records id)
+  "ContestSides: the other sides of id's contest among records, in contest-before-p order."
+  (let ((by-id (make-set)) (sides (make-set)))
+    (dolist (o records) (setf (gethash (obs-id o) by-id) o))
+    (let ((self (gethash id by-id)))
+      (unless self (return-from contest-sides '()))
+      (dolist (other (obs-conflicts self)) (setf (gethash other sides) t))
+      (dolist (other (obs-possibly-updates self))
+        (let ((earlier (gethash other by-id)))
+          (when (and earlier (string= (supersession self earlier) "contested")) (setf (gethash other sides) t))))
+      (dolist (o records)
+        (when (and (string/= (obs-id o) id)
+                   (or (member-str id (obs-conflicts o))
+                       (and (member-str id (obs-possibly-updates o)) (string= (supersession o self) "contested"))))
+          (setf (gethash (obs-id o) sides) t)))
+      (dolist (pushback (gethash id (contested records))) (setf (gethash pushback sides) t))
+      (stable-sort (copy-list (remove-if-not (lambda (o) (and (gethash (obs-id o) sides) (string/= (obs-id o) id))) records))
+                   #'contest-before-p))))

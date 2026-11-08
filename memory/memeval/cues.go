@@ -99,7 +99,7 @@ func CueRates(cfg Config) CueTally {
 		opt.Turns = cfg.Turns
 		script := Generate(seed, opt)
 		var branch []session.Entry
-		active := []ledger.Observation{}
+		fold := ledger.FoldedLedger{}
 		for i, turn := range script.Turns {
 			if i > 0 && i%CueCompactionEvery == 0 {
 				branch = append(branch, session.Entry{Type: "compaction", ID: fmt.Sprintf("k%d", i), Summary: "s", FirstKeptEntryID: UserID(i)})
@@ -109,16 +109,16 @@ func CueRates(cfg Config) CueTally {
 			for _, c := range turn.Calls {
 				call := extract.CueCall{Tool: c.Name, Args: c.Args, Output: c.Result}
 				t.Calls++
-				if _, ok := extract.CueOver(branch[:start], active, call, cueCwd, 1<<30); ok {
+				if _, ok := extract.CueOver(branch[:start], &fold, call, cueCwd, 1<<30); ok {
 					t.Eligible++
 				}
-				if cue, ok := extract.CueOver(branch, active, call, cueCwd, extract.CueCap); ok {
+				if cue, ok := extract.CueOver(branch, &fold, call, cueCwd, extract.CueCap); ok {
 					t.Cued++
 					branch = append(branch, session.Entry{Type: "custom", ID: fmt.Sprintf("q%d-%d", i, t.Cued), CustomType: ledger.OMCue,
 						Data: map[string]any{"record": cue.Record, "key": cue.Key, "compaction": ""}})
 				}
 				t.LookAlikes++
-				if _, ok := extract.CueOver(branch[:start], active, lookAlike(c), cueCwd, 1<<30); ok {
+				if _, ok := extract.CueOver(branch[:start], &fold, lookAlike(c), cueCwd, 1<<30); ok {
 					t.FalseCues++
 				}
 			}
@@ -132,20 +132,20 @@ func CueRates(cfg Config) CueTally {
 			if r.CoversUpToID != "" {
 				branch = append(branch, session.Entry{Type: "custom", ID: fmt.Sprintf("e%d", i), CustomType: ledger.OMExtracted, Data: map[string]any{"coversUpToId": r.CoversUpToID}})
 			}
-			active = ledger.FoldLedger(branch, "").ActiveObservations
+			fold = ledger.FoldLedger(branch, "")
 		}
-		for _, o := range active {
+		for _, o := range fold.ActiveObservations {
 			c, ok := repeatCall(o)
 			if !ok || !extract.Cueable(o) {
 				continue
 			}
 			call := extract.CueCall{Tool: c.Name, Args: c.Args, Output: c.Result}
 			t.Repeats++
-			if _, ok := extract.CueOver(branch, active, call, cueCwd, 1<<30); ok {
+			if _, ok := extract.CueOver(branch, &fold, call, cueCwd, 1<<30); ok {
 				t.RepeatCued++
 			}
 			t.RepeatLookAlikes++
-			if _, ok := extract.CueOver(branch, active, lookAlike(c), cueCwd, 1<<30); ok {
+			if _, ok := extract.CueOver(branch, &fold, lookAlike(c), cueCwd, 1<<30); ok {
 				t.RepeatFalse++
 			}
 		}
