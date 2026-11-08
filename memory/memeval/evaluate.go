@@ -9,6 +9,7 @@ import (
 
 	"github.com/drvova/pig-observational-memory/memory/ledger"
 	"github.com/drvova/pig-observational-memory/memory/om"
+	"github.com/drvova/pig-observational-memory/memory/selection"
 	"github.com/drvova/pig-observational-memory/memory/session"
 	"github.com/drvova/pig-observational-memory/memory/tables"
 )
@@ -63,10 +64,11 @@ const (
 	InvStatusRule   = "status rule (MaySupersede)"
 	InvAnchors      = "anchors resolve to entries holding the specifics"
 	InvExtraction   = "nothing removed without extraction"
+	InvContested    = "contested blocks first, by authority; one older value a subject"
 )
 
 // Invariants is every invariant, in report order.
-var Invariants = []string{InvSupersession, InvStatusRule, InvAnchors, InvExtraction}
+var Invariants = []string{InvSupersession, InvStatusRule, InvAnchors, InvExtraction, InvContested}
 
 // Evaluate classifies every gold probe after every compaction of run and checks the
 // invariants. gold is normally run.Script.Probes; the shuffled-gold control passes another
@@ -121,7 +123,7 @@ func Evaluate(run Run, gold []Probe, lister Lister) Result {
 			}
 			res.Cells = append(res.Cells, cell)
 		}
-		res.Checks = append(res.Checks, checkSupersession(snap, folded, gold), checkStatusRule(snap, folded), checkAnchors(snap, folded, rows), checkExtraction(snap))
+		res.Checks = append(res.Checks, checkSupersession(snap, folded, gold), checkStatusRule(snap, folded), checkAnchors(snap, folded, rows), checkExtraction(snap), checkContested(snap, folded, rows))
 	}
 	return res
 }
@@ -345,6 +347,66 @@ func checkStatusRule(snap Snapshot, folded ledger.FoldedLedger) Check {
 				return Check{Name: InvStatusRule, N: snap.N, Detail: fmt.Sprintf("%s (%q) supersedes %s (%q)", o.ID, o.Status, id, earlier.Status)}
 			}
 		}
+	}
+	return c
+}
+
+// contestTag is a contested block member's tag before its conflicts pointer (ledger.ContestTag).
+var contestTag = regexp.MustCompile(`\((?:believed|superseded|retracted|contested|held) from \S+\) \(conflicts ([0-9a-f ]+)\)`)
+
+// checkContested (docs/memory-v2.md, "Contested pairs"): in every notes table the contested
+// blocks' rows come first, each block's members in authority then id order
+// (ledger.ContestBefore), never more than selection.MaxContestedBlocks blocks in the summary, and
+// no table shows more than one older value (updated by <id>).
+func checkContested(snap Snapshot, folded ledger.FoldedLedger, rows []Row) Check {
+	c := Check{Name: InvContested, N: snap.N, OK: true}
+	fail := func(format string, args ...any) Check {
+		return Check{Name: InvContested, N: snap.N, Detail: fmt.Sprintf(format, args...)}
+	}
+	blocks := 0
+	for i := 0; i < len(rows); {
+		table := rows[i].Table
+		j := i
+		for j < len(rows) && rows[j].Table == table {
+			j++
+		}
+		if strings.HasPrefix(table, "notes") {
+			tagged, untagged, older := 0, false, 0
+			var prev ledger.Observation
+			var prevConflicts []string
+			for _, r := range rows[i:j] {
+				content := r.Cells["content"]
+				if strings.Contains(content, "(updated by ") {
+					older++
+				}
+				m := contestTag.FindStringSubmatch(content)
+				if m == nil {
+					untagged = true
+					continue
+				}
+				if untagged {
+					return fail("%s: contested row %q after an uncontested one", table, clip(content))
+				}
+				o := folded.ObservationsByID[r.Cells["id"]]
+				conflicts := strings.Fields(m[1])
+				joined := tagged > 0 && (slices.Contains(prevConflicts, o.ID) || slices.Contains(conflicts, prev.ID))
+				if joined && !ledger.ContestBefore(prev, o) {
+					return fail("%s: %s before %s against authority then id", table, prev.ID, o.ID)
+				}
+				if !joined {
+					blocks++
+				}
+				tagged++
+				prev, prevConflicts = o, conflicts
+			}
+			if older > 1 {
+				return fail("%s: %d older values", table, older)
+			}
+		}
+		i = j
+	}
+	if blocks > selection.MaxContestedBlocks {
+		return fail("%d contested blocks", blocks)
 	}
 	return c
 }

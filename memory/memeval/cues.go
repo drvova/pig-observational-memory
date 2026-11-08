@@ -35,6 +35,9 @@ type CueTally struct {
 	// no cue given yet; RepeatCued the cues they got (the cue's recall on exact repeats), and
 	// RepeatLookAlikes and RepeatFalse the same for their look-alikes.
 	Repeats, RepeatCued, RepeatLookAlikes, RepeatFalse int
+	// Contested are the cues given for a record the fold labels contested, OneSided those that
+	// leave out a standing side of its contest (docs/memory-v2.md, "Cues"): always 0.
+	Contested, OneSided int
 }
 
 // repeatCall is a call repeating o's first command or path key, false when it has neither.
@@ -114,6 +117,7 @@ func CueRates(cfg Config) CueTally {
 				}
 				if cue, ok := extract.CueOver(branch, &fold, call, cueCwd, extract.CueCap); ok {
 					t.Cued++
+					t.countContested(fold, cue)
 					branch = append(branch, session.Entry{Type: "custom", ID: fmt.Sprintf("q%d-%d", i, t.Cued), CustomType: ledger.OMCue,
 						Data: map[string]any{"record": cue.Record, "key": cue.Key, "compaction": ""}})
 				}
@@ -157,6 +161,23 @@ func CueRates(cfg Config) CueTally {
 	return t
 }
 
+// countContested counts a cue given for a record the fold labels contested, and whether it
+// leaves out a standing side of the contest.
+func (t *CueTally) countContested(fold ledger.FoldedLedger, cue extract.Cue) {
+	labels := fold.Labels()
+	if labels[cue.Record] != ledger.LabelContested {
+		return
+	}
+	t.Contested++
+	for _, side := range ledger.ContestSides(fold.ActiveObservations, cue.Record) {
+		if l := labels[side.ID]; l != ledger.LabelSuperseded && l != ledger.LabelRetracted && l != ledger.LabelHeld &&
+			!strings.Contains(cue.Text, "om.Recall(`"+side.ID+"`)") {
+			t.OneSided++
+			return
+		}
+	}
+}
+
 // jsonData is v as decoded JSON, the shape an entry read back from a session holds.
 func jsonData(v any) any {
 	raw, _ := json.Marshal(v)
@@ -186,5 +207,7 @@ func (t CueTally) Table() string {
 	fmt.Fprintf(&b, "| calls repeating a standing cueable record's key at the session's end | %d | |\n", t.Repeats)
 	fmt.Fprintf(&b, "| cues they got | %d | %s |\n", t.RepeatCued, pct(t.RepeatCued, t.Repeats))
 	fmt.Fprintf(&b, "| cues their look-alikes got | %d | %s (false-cue rate) |\n", t.RepeatFalse, pct(t.RepeatFalse, t.RepeatLookAlikes))
+	fmt.Fprintf(&b, "| cues for a contested record | %d | |\n", t.Contested)
+	fmt.Fprintf(&b, "| of them naming one side only | %d | %s |\n", t.OneSided, pct(t.OneSided, t.Contested))
 	return b.String()
 }
