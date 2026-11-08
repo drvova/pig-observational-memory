@@ -1,10 +1,15 @@
 package sleep_test
 
 import (
+	"slices"
+	"strings"
+
 	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/drvova/pig-observational-memory/memory/selection"
+	"github.com/drvova/pig-observational-memory/memory/tables"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,6 +114,46 @@ func wideCluster() []session.Entry {
 		rules = append(rules, rule(fmt.Sprintf("0000000012%02x", i), fmt.Sprintf("Use `tool-%d` instead of `tool-%d`.", i+1, i), keys(ledger.KeyPaths, "Makefile")))
 	}
 	return []session.Entry{user("u0w01"), recorded("r1", "u0w01", false, rules...)}
+}
+
+// promiseBranch is a branch with one compaction whose summary (selection.Render) promises a user
+// rule, a decision and an open plan, its syndrome in its details; lossy drops the decision's
+// row from the summary's text (the table's count fixed, so it still decodes).
+func promiseBranch(lossy bool, digest ...string) []session.Entry {
+	p := rule("0000000013a1", "Never run `make deploy` from a laptop.")
+	d := obs("0000000013a2", "We decided to keep chi because the team already reviews its output.", func(o *ledger.Observation) { o.Kind = ledger.KindDecision })
+	n := obs("0000000013a3", "Next we will add a retry budget to the client.", func(o *ledger.Observation) { o.Status = ledger.StatusProposed })
+	f := obs("0000000013a4", "The staging port is 8080.", nil)
+	before := []session.Entry{user("u3a1"), user("u3a2"), user("u3a3"), user("u3a4"), recorded("r1", "u3a4", false, p, d, n, f), user("u0k05")}
+	folded := ledger.FoldLedger(before, "")
+	projection := ledger.FullProjection(before, "u0k05").Observations
+	rendered := selection.Render(selection.Input{Observations: projection, Folded: folded, Branch: before, Budget: 4000})
+	var shown []string
+	for _, o := range rendered.Observations {
+		shown = append(shown, o.ID)
+	}
+	summary := rendered.Text
+	if lossy {
+		body, _ := ledger.TablesSummaryBody(summary)
+		decoded, err := tables.Rows.Decode(body)
+		if err != nil {
+			panic(err)
+		}
+		for ti := range decoded {
+			t := &decoded[ti]
+			if col := slices.Index(t.Fields, "id"); col >= 0 {
+				t.Rows = slices.DeleteFunc(t.Rows, func(row []string) bool { return row[col] == d.ID })
+				t.Absent = nil
+			}
+		}
+		summary = strings.Replace(summary, body, tables.Rows.Encode(decoded...), 1)
+	}
+	details := ledger.MemoryDetails{Type: ledger.OMFolded, Version: 1, FullFold: true, Observations: projection, Reflections: []ledger.Reflection{}, FoldThroughEntryID: "u0k05", Engine: "v2",
+		Shown: shown, Promise: ledger.NewPromiseSyndrome(ledger.Promised(projection, folded.Observations), shown)}
+	if len(digest) > 0 {
+		details.Promise.Digest = digest[0]
+	}
+	return append(before, tf.CompactionEntry("c1", tf.CompactionArgs{Summary: summary, FirstKeptEntryID: "u0k05", Details: tf.ToJSONValue(details)}, nil), user("u0k06"))
 }
 
 type input struct {
@@ -222,6 +267,9 @@ func inputs() []input {
 		{name: "an earlier contradiction is not repeated", entries: append(cycleBranch(nil), sleepEntry("s1", ledger.SleepData{Version: ledger.SleepVersion, Trigger: ledger.SleepAtIdle, ThroughEntryID: "r1", Records: 3,
 			Contradictions: []ledger.SleepContradiction{{IDs: []string{"0000000011a1", "0000000011a2", "0000000011a3"}, Cycle: []string{"go test", "make ci", "make test"}, Steps: 5}}})), trigger: ledger.SleepAtIdle},
 		{name: "a cluster over the bound is unchecked", entries: wideCluster(), trigger: ledger.SleepManual},
+		{name: "a summary that keeps its promise", entries: promiseBranch(false), trigger: ledger.SleepAtIdle},
+		{name: "a summary that lost a promised decision", entries: promiseBranch(true), trigger: ledger.SleepAtIdle},
+		{name: "a syndrome the ledger no longer gives", entries: promiseBranch(false, "000000000000"), trigger: ledger.SleepAtIdle},
 	}
 }
 

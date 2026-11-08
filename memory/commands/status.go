@@ -146,7 +146,7 @@ func recordsLines(entries []ledger.Entry) []string {
 // phase 7), then what the sleep records on the branch say together (sleepStatusLine).
 func aggregateLines(folded ledger.FoldedLedger, entries []ledger.Entry) []string {
 	if len(folded.Observations) == 0 {
-		return []string{sleepStatusLine(entries)}
+		return append([]string{sleepStatusLine(entries)}, promiseStatusLines(entries)...)
 	}
 	kinds := map[string]int{}
 	for _, o := range folded.Observations {
@@ -173,7 +173,51 @@ func aggregateLines(folded ledger.FoldedLedger, entries []ledger.Entry) []string
 	for _, l := range ledger.LabelValues {
 		byLabel = append(byLabel, fmt.Sprintf("%s %d", l, labels[l]))
 	}
-	return []string{"Records by kind: " + strings.Join(byKind, ", "), "Records by label: " + strings.Join(byLabel, ", "), sleepStatusLine(entries)}
+	return append([]string{"Records by kind: " + strings.Join(byKind, ", "), "Records by label: " + strings.Join(byLabel, ", "), sleepStatusLine(entries)}, promiseStatusLines(entries)...)
+}
+
+// maxLostShown bounds the lost records the promise line names.
+const maxLostShown = 8
+
+// promiseStatusLines are what the promise checks on the branch found (ledger.PromiseChecks; docs/
+// memory-v2.md, "The promise syndrome"): none before the first check, else one line counting the
+// compactions checked, the protected records lost (each named, with its compaction, up to
+// maxLostShown), the held records shown, the digest mismatches and the summaries not read.
+func promiseStatusLines(entries []ledger.Entry) []string {
+	checks := ledger.PromiseChecks(entries)
+	if len(checks) == 0 {
+		return nil
+	}
+	lost, leaked, mismatched, unread := 0, 0, 0, 0
+	var named []string
+	for _, c := range checks {
+		lost += len(c.Lost)
+		leaked += len(c.Leaked)
+		if c.Mismatch {
+			mismatched++
+		}
+		if c.Unread {
+			unread++
+		}
+		for _, id := range c.Lost {
+			if len(named) < maxLostShown {
+				named = append(named, id+" at "+c.Compaction)
+			}
+		}
+	}
+	line := fmt.Sprintf("Promise syndrome: %d compaction%s checked: %d lost, %d held shown, %d digest mismatch%s, %d unread",
+		len(checks), pluralS(len(checks)), lost, leaked, mismatched, pluralES(mismatched), unread)
+	if len(named) > 0 {
+		line += "; lost: " + strings.Join(named, ", ")
+	}
+	return []string{line}
+}
+
+func pluralES(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "es"
 }
 
 // sleepStatusLine is what the sleep records on the branch say together: the runs, the latest

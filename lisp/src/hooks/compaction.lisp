@@ -354,9 +354,9 @@ own-trigger is runtime.CompactInFlight: the extension's own compaction."
           (json-string (subject-alias-to a))
           (and (string/= (subject-alias-reason a) "") (json-string (subject-alias-reason a)))))
 
-(defun details-json (observations reflections aliases first-kept consolidation shown &optional summary-codec)
+(defun details-json (observations reflections aliases first-kept consolidation shown &optional summary-codec promise)
   "v2Details' om.folded details with the report and the shown ids, in MemoryDetails' order;
-summary-codec the summary's codec when it is not rows."
+summary-codec the summary's codec when it is not rows, promise the promise syndrome's JSON."
   (with-output-to-string (out)
     (format out "{\"type\":\"om.folded\",\"version\":1,\"fullFold\":true,\"observations\":[~{~A~^,~}],\"reflections\":[~{~A~^,~}]"
             (mapcar #'obs-json observations) (mapcar #'refl-json reflections))
@@ -366,6 +366,7 @@ summary-codec the summary's codec when it is not rows."
     (write-string ",\"engine\":\"v2\"" out)
     (when consolidation (format out ",\"consolidation\":~A" consolidation))
     (when shown (format out ",\"shown\":~A" (json-string (coerce shown 'simple-vector))))
+    (when promise (format out ",\"promise\":~A" promise))
     (write-string "}" out)))
 
 ;;; The hook
@@ -450,6 +451,9 @@ is skipped with level1-skip-reason's report."
          (projection (full-projection* entries (cevent-first-kept event)))
          (observations (projection-observations projection))
          (reflections (active-reflections (projection-reflections projection)))
+         ;; Every record of the ledger, which the promise syndrome reads its contests, receipts
+         ;; and supersedes from.
+         (all (folded-observations (fold-ledger entries)))
          (summary "") (kind "") (shown '()))
     (when (and (> memory-budget 0) (or observations reflections))
       (let* ((folded (fold-ledger entries))
@@ -485,7 +489,8 @@ is skipped with level1-skip-reason's report."
                           :usage (fourth level1-result)
                           :details-json (details-json observations reflections (projection-aliases projection)
                                                       (cevent-first-kept event) consolidation shown
-                                                      (and (string= kind "records") (profile-summary-codec fmt))))
+                                                      (and (string= kind "records") (profile-summary-codec fmt))
+                                                      (compaction-promise-json entries observations all shown)))
             entries cut)))
 
 (defun cresult-map-json (c)

@@ -70,17 +70,35 @@
 (defun aggregate-lines (folded entries)
   "commands.aggregateLines: the records by kind and by label, then the sleep line."
   (if (null (om::folded-observations folded))
-      (list (sleep-status-line entries))
+      (append (list (sleep-status-line entries)) (promise-status-lines entries))
       (let ((kinds (make-hash-table :test 'equal)) (labels (make-hash-table :test 'equal)) (names '()))
         (dolist (o (om::folded-observations folded))
           (incf (gethash (if (string= (om::obs-kind o) "") "untyped" (om::obs-kind o)) kinds 0)))
         (maphash (lambda (k v) (declare (ignore v)) (push k names)) kinds)
         (maphash (lambda (k l) (declare (ignore k)) (incf (gethash l labels 0))) (om::folded-labels folded))
-        (list (cat* "Records by kind: " (om::join (loop for k in (sort names #'string<) collect (format nil "~A ~D" k (gethash k kinds))) ", "))
+        (append
+         (list (cat* "Records by kind: " (om::join (loop for k in (sort names #'string<) collect (format nil "~A ~D" k (gethash k kinds))) ", "))
               (cat* "Records by label: " (om::join (loop for l in '("believed" "superseded" "retracted" "contested" "held")
                                                        collect (format nil "~A ~D" l (gethash l labels 0)))
                                                  ", "))
-              (sleep-status-line entries)))))
+              (sleep-status-line entries))
+         (promise-status-lines entries)))))
+
+(defun promise-status-lines (entries)
+  "commands.promiseStatusLines: the promise checks' findings in one line, none before the first."
+  (let ((checks (om::promise-checks (coerce entries 'simple-vector))))
+    (when checks
+      (let ((lost 0) (leaked 0) (mismatched 0) (unread 0) (named '()))
+        (dolist (c checks)
+          (incf lost (length (second c)))
+          (incf leaked (length (third c)))
+          (when (fourth c) (incf mismatched))
+          (when (fifth c) (incf unread))
+          (dolist (id (second c))
+            (when (< (length named) 8) (setf named (append named (list (cat* id " at " (first c))))))))
+        (list (cat* (format nil "Promise syndrome: ~D compaction~A checked: ~D lost, ~D held shown, ~D digest mismatch~A, ~D unread"
+                            (length checks) (plural-s (length checks)) lost leaked mismatched (if (= mismatched 1) "" "es") unread)
+                    (if named (cat* "; lost: " (om::join named ", ")) "")))))))
 
 (defun sleep-status-line (entries)
   "commands.sleepStatusLine."

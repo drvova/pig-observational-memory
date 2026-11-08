@@ -309,6 +309,10 @@ type MemoryDetails struct {
 	// (pointers such as (conflicts <id>)), so the harness reads what the summary showed from
 	// here, not from the text (harness.VisibilityOf).
 	Shown []string `json:"shown,omitempty"`
+	// Promise is the promise syndrome of a memory v2 summary (promise.go): a digest over the
+	// protected records it promises, with the previous compaction's syndrome rechecked; nil for
+	// v1 and for a compaction written before it.
+	Promise *PromiseSyndrome `json:"promise,omitempty"`
 }
 
 // ConsolidationReport is what memory v2's level-1 consolidation request did at one compaction
@@ -790,6 +794,7 @@ func MemoryDetailsFrom(v any) (MemoryDetails, bool) {
 			}
 		}
 	}
+	details.Promise = PromiseSyndromeOf(m)
 	return details, true
 }
 

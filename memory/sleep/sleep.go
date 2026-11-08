@@ -80,6 +80,7 @@ func Pass(in Input) (data ledger.SleepData, ok bool) {
 	}
 	data.Checks = checks(in.Entries, folded, st)
 	data.Contradictions, data.Unchecked = contradictions(records, labels, hidden, st)
+	data.Promises = ledger.SleepPromiseChecks(in.Entries, st)
 	return data, true
 }
 

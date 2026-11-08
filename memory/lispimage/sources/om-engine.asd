@@ -55,6 +55,8 @@
                              (:file "selection")
                              (:file "pipeline")
                              (:file "pipeline-ledger")
+                             ;; The promise syndrome (memory/ledger/promise.go).
+                             (:file "promise")
                              ;; Phase 7: the sleep pass (memory/sleep).
                              (:file "sleep")
                              (:file "end-engine")

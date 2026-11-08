@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "om.sleep entry",
-  "description": "One sleep pass's record (docs/memory-v2.md, \"Sleep\"; docs/brain-memory.md, decision 13): the duplicates it hid, the links of shared keys, the records decay lowers, the project records verified or retired against HEAD, and the checks of level-1 supersedes and lessons, and the contradictions the joint-consistency check found, each only what no earlier sleep record on the branch said. It never deletes a record. Source: memory/ledger/sleep.go (SleepData), written by memory/hooks/sleep_v2.go (RunSleep) and lisp/src/sleep.lisp.",
+  "description": "One sleep pass's record (docs/memory-v2.md, \"Sleep\"; docs/brain-memory.md, decision 13): the duplicates it hid, the links of shared keys, the records decay lowers, the project records verified or retired against HEAD, and the checks of level-1 supersedes and lessons, the contradictions the joint-consistency check found and the promise syndromes it rechecked, each only what no earlier sleep record on the branch said. It never deletes a record. Source: memory/ledger/sleep.go (SleepData), written by memory/hooks/sleep_v2.go (RunSleep) and lisp/src/sleep.lisp.",
   "$ref": "defs.schema.json#/$defs/customEntry",
   "properties": {
     "customType": {
@@ -97,7 +97,8 @@
             }
           }
         },
-        "unchecked": {"description": "Clusters the joint-consistency check left over its bounds (sleep.MaxClusterRecords, MaxCheckSteps).", "type": "integer", "minimum": 1}
+        "unchecked": {"description": "Clusters the joint-consistency check left over its bounds (sleep.MaxClusterRecords, MaxCheckSteps).", "type": "integer", "minimum": 1},
+        "promises": {"description": "The compactions' promise syndromes the pass checked against the ledger and their summaries' text (ledger.SleepPromiseChecks), each compaction once: a protected record lost is named by id.", "type": "array", "items": {"$ref": "defs.schema.json#/$defs/promiseCheck"}}
       }
     }
   }

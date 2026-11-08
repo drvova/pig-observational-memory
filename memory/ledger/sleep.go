@@ -117,6 +117,9 @@ type SleepData struct {
 	// it left over its bounds.
 	Contradictions []SleepContradiction `json:"contradictions,omitempty"`
 	Unchecked      int                  `json:"unchecked,omitempty"`
+	// Promises are the compactions' promise syndromes the pass checked (CheckPromise), each
+	// compaction once, a loss named by id.
+	Promises []PromiseCheck `json:"promises,omitempty"`
 }
 
 // SleepEntry reads a valid om.sleep entry: version 1, a trigger and a through id.
@@ -164,6 +167,9 @@ type SleepState struct {
 	Contradictions map[string]bool
 	Contradicted   map[string]SleepContradiction
 	Unchecked      int
+	// Promises are the promise checks recorded, in order; PromiseChecked their compactions.
+	Promises       []PromiseCheck
+	PromiseChecked map[string]bool
 }
 
 // LinkKey is a link's identity: its key and ids.
@@ -179,7 +185,7 @@ func LinkKey(l SleepLink) string {
 func SleepStateOf(entries []Entry) SleepState {
 	st := SleepState{Duplicates: map[string]SleepDuplicate{}, Checks: map[string]SleepCheck{}, Verified: map[string]SleepVerification{},
 		Retired: map[string]SleepRetirement{}, Decayed: map[string]bool{}, Links: map[string][]SleepLink{}, Seen: map[string]bool{},
-		Contradictions: map[string]bool{}, Contradicted: map[string]SleepContradiction{}}
+		Contradictions: map[string]bool{}, Contradicted: map[string]SleepContradiction{}, PromiseChecked: map[string]bool{}}
 	data, _ := Sleeps(entries)
 	for _, d := range data {
 		st.Runs++
@@ -212,6 +218,12 @@ func SleepStateOf(entries []Entry) SleepState {
 			}
 		}
 		st.Unchecked += d.Unchecked
+		for _, c := range d.Promises {
+			if !st.PromiseChecked[c.Compaction] {
+				st.PromiseChecked[c.Compaction] = true
+				st.Promises = append(st.Promises, c)
+			}
+		}
 		for _, l := range d.Links {
 			if st.Seen[LinkKey(l)] {
 				continue

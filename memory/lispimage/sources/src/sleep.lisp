@@ -19,7 +19,8 @@
 
 (defstruct sstate* (runs 0) (duplicates (make-set)) (checks (make-set)) (verified (make-set))
   (retired (make-set)) (decayed (make-set)) (links (make-set)) (seen (make-set)) (last nil)
-  (contradictions (make-set)) (contradicted (make-set)) (unchecked 0))
+  (contradictions (make-set)) (contradicted (make-set)) (unchecked 0)
+  (promise-checked (make-set)) (promises '()))
 
 (defun sleep-link-key (key ids)
   (apply #'cat key (loop for id in ids collect (cat (string #\Nul) id))))
@@ -52,6 +53,11 @@
                      (unless (nth-value 1 (gethash id (sstate*-contradicted st)))
                        (setf (gethash id (sstate*-contradicted st)) c)))))
                (let ((u (jget d "unchecked"))) (when (integerp u) (incf (sstate*-unchecked st) u)))
+               (dolist (m (sleep-items d "promises"))
+                 (let ((c (promise-check-from m)))
+                   (when (and c (not (gethash (first c) (sstate*-promise-checked st))))
+                     (setf (gethash (first c) (sstate*-promise-checked st)) t)
+                     (push-end c (sstate*-promises st)))))
                (dolist (l (sleep-items d "links"))
                  (let ((k (sleep-link-key (str (jget l "key")) (jstrs (jget l "ids")))))
                    (unless (gethash k (sstate*-seen st))
@@ -370,7 +376,7 @@
     (values out unchecked)))
 
 (defun sleep-data-json (trigger through records duplicates links decayed verified retired checks
-                        &optional contradictions (unchecked 0))
+                        &optional contradictions (unchecked 0) promises)
   "ledger.SleepData as json.Marshal writes it: its fields in order, empty lists left out."
   (with-output-to-string (s)
     (format s "{\"version\":1,\"trigger\":~A,\"throughEntryId\":~A,\"records\":~D"
@@ -399,6 +405,7 @@
                                       (json-string (coerce (first c) 'simple-vector)) (json-string (coerce (second c) 'simple-vector))
                                       (and (string/= (third c) "") (json-string (third c))) (fourth c)))))
     (when (plusp unchecked) (format s ",\"unchecked\":~D" unchecked))
+    (when promises (format s ",\"promises\":[~{~A~^,~}]" (mapcar #'promise-check-json promises)))
     (write-char #\} s)))
 
 (defun sleep-pass (entries trigger &key (decay "") (decay-horizon 0) repo structure)
@@ -423,4 +430,5 @@ empty. repo and structure are the decoded host.Repo and the view's answer, or ni
         (multiple-value-bind (contradictions unchecked) (sleep-contradictions records labels hidden st)
           (sleep-data-json trigger (entry-id (aref entries (1- (length entries)))) (length records)
                            duplicates links decayed verified retired (sleep-checks entries f st)
-                           contradictions unchecked))))))
+                           contradictions unchecked
+                           (sleep-promise-checks entries (sstate*-promise-checked st))))))))

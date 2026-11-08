@@ -249,7 +249,34 @@
         "aliases": { "type": "array", "items": { "$ref": "#/$defs/subjectAlias" } },
         "engine": { "enum": ["v2"] },
         "consolidation": { "$ref": "#/$defs/consolidationReport" },
-        "shown": { "type": "array", "items": { "$ref": "#/$defs/recordId" } }
+        "shown": { "type": "array", "items": { "$ref": "#/$defs/recordId" } },
+        "promise": {
+          "description": "The promise syndrome (memory/ledger/promise.go, PromiseSyndrome; docs/memory-v2.md, \"The promise syndrome\"): how many protected records (user rules, decisions, open plans, contested claims and their pushbacks, held records) the summary promises, how many it shows and holds back, a digest over their sorted ids, classes, states and keys (ledger.PromiseDigest), and the previous compaction's syndrome rechecked against the ledger and its summary's text.",
+          "type": "object",
+          "required": ["version", "records", "shown", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "version": { "const": 1 },
+            "records": { "type": "integer", "minimum": 0 },
+            "shown": { "type": "integer", "minimum": 0 },
+            "held": { "type": "integer", "minimum": 1 },
+            "digest": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+            "check": { "$ref": "#/$defs/promiseCheck" }
+          }
+        }
+      }
+    },
+    "promiseCheck": {
+      "description": "One compaction's promise syndrome checked against the ledger before it and its summary's text (ledger.PromiseCheck): the protected records it lost (neither shown nor listed, or listed where it promised them shown), the held records it showed, whether the digest moved, and whether the text could be read.",
+      "type": "object",
+      "required": ["compaction"],
+      "additionalProperties": false,
+      "properties": {
+        "compaction": { "$ref": "#/$defs/entryId" },
+        "lost": { "type": "array", "items": { "$ref": "#/$defs/recordId" } },
+        "leaked": { "type": "array", "items": { "$ref": "#/$defs/recordId" } },
+        "mismatch": { "const": true },
+        "unread": { "const": true }
       }
     },
     "customEntry": {

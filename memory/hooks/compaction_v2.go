@@ -195,6 +195,9 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	projection.Reflections = ledger.ActiveReflections(projection.Reflections)
 	summary, kind := "", ""
 	var rendered selection.Result
+	// Every record of the ledger, which the promise syndrome reads the contests, receipts and
+	// supersedes from.
+	all := ledger.FoldLedger(entries, "").Observations
 	if memoryBudget > 0 && len(projection.Reflections)+len(projection.Observations) > 0 {
 		// Selection's ordered classes are the kernel's: a summary definition (a model's summary
 		// query, which v1 lays out through declare) does not select under v2, since only
@@ -290,6 +293,9 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 	details.Consolidation = &report
 	if kind == v2SummaryRecords {
 		details.Shown = shownIDs(rendered)
+	}
+	details.Promise = promiseSyndromeV2(entries, projection.Observations, all, details.Shown)
+	if kind == v2SummaryRecords {
 		// The summary decodes later in the codec that wrote it, with its declaration when the
 		// model declared it; the native rows codec is the default and is not recorded.
 		if codec != nil && (codec.Name() != tables.Rows.Name() || isDeclared(codec)) {
@@ -318,6 +324,20 @@ func buildCompactionV2(ctx, request context.Context, rt *runtime.Runtime, h host
 		// what the compaction cost; nil at level 0, which made no request.
 		Usage: level1.usage,
 	}
+}
+
+// promiseSyndromeV2 is the compaction's promise syndrome (ledger.PromiseSyndrome): the protected
+// records among the summary's records, all being every record of the ledger, digested with the
+// ids it shows; and the previous compaction's syndrome rechecked against the ledger and its
+// summary's text, a located loss named by id (docs/memory-v2.md, "The promise syndrome").
+func promiseSyndromeV2(entries []ledger.Entry, records, all []ledger.Observation, shown []string) *ledger.PromiseSyndrome {
+	s := ledger.NewPromiseSyndrome(ledger.Promised(records, all), shown)
+	if prev := ledger.PreviousPromiseIndex(entries); prev >= 0 {
+		if c, ok := ledger.CheckPromise(entries, prev); ok {
+			s.Check = &c
+		}
+	}
+	return s
 }
 
 // shownIDs are the ids of the records a rendered summary shows, reflections first.
