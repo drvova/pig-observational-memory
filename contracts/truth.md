@@ -128,7 +128,14 @@ Decay lowers rank only, behind the `decay` setting, which ships off (`docs/confi
   (`supersedes`, `possiblyUpdates`, `conflicts`, `respondsTo`, a `closes` link); a later record
   level 0 wrote from the user's words or a tool's output (source `user-said` or `tool-observed`)
   sharing one of its keys (kind and value). A record's own retrieval, recall, reuse or
-  self-graded outcome is never one, nor a level-1 record: none is written as one.
+  self-graded outcome is never one, nor a level-1 record: none is written as one. An event is what
+  the branch recorded: a later drop, merge or forget of the record that carried it does not undo
+  it, and a link reaches the record standing for its target through level 1's replacements.
+- **Composition.** Decay is a fold over the branch whose state is positions and maxima of
+  positions (`ledger.DecayFold`, the image's `decay-fold`), so a checkpoint over the first entries
+  advanced over the rest gives what the whole branch gives; both engines check it on random
+  ledgers at every checkpoint position. Decay stays integer-valued: a rate, a wall-clock half-life
+  or a weight would break this and byte parity.
 - **Decayed.** A record not protected with at least `decayHorizon` (default 4) ticks after its
   newest evidence event.
 - **Floors.** Never decayed: the user's rules, prohibitions, constraints and corrections (a user

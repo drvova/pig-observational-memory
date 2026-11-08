@@ -590,6 +590,12 @@ Phase 5 of the brain-like memory ([brain-memory.md](brain-memory.md), decisions 
   whose newest evidence event (its own sources, a later level-0 link to it, a later user or tool
   record sharing a key) lies `decayHorizon` ticks back is taken after the others of the summary's
   classes 4 and 6. Never on wall time or retrieval, never the protected classes, never a deletion.
+  Decay is a fold over the branch (`ledger.DecayFold`, the image's `decay-fold`): its state is
+  positions and maxima of positions, and an event stays one after the record that carried it is
+  dropped, merged or forgotten, so a fold checkpoint advanced over the entries after it gives what
+  the whole branch gives (the semigroup property, `TestDecayComposes` and the image's
+  `decay-composes`; decisions 6 and 12). Before this, evidence was read from the final active
+  records only, which no checkpoint could reproduce (20 of 60 random ledgers differed).
 
 ### The core log (no request)
 
@@ -677,13 +683,28 @@ request (`TestSleepFallbackInCompaction` counts them with `testfix.CountRequests
     standing reflection (a lesson), against the code records recorded after it: a supersede is
     challenged by a later record restating a replaced record's text or a later failed attempt on
     one of its keys, a lesson by a later failed attempt or evidence record on a key of what it
-    cites; with no later record there is no verdict yet.
+    cites; with no later record there is no verdict yet;
+  - *contradictions* (the joint-consistency check, `memory/sleep/consistency.go`, the image's
+    `sleep-contradictions`): each believed record states substitutions read from adjacent
+    backtick-quoted values (`sleep.Substitutions`: "use `a`, not `b`", "`a` instead of `b`",
+    "rather than", "over", or a clause opening with never, don't, avoid or stop whose gap says
+    use or instead), and the records sharing a value or key within one scope (its `scope` and
+    repository; decision 8) form a cluster. A strict order of the values exists exactly when the
+    cluster's preference graph is acyclic, so the check is a breadth-first search for its shortest
+    cycle; a cycle, odd ones of three or more included, which no contested pair shows, is written
+    with its records (a minimal conflicting set, in ledger order), its values in cycle order and
+    the steps spent. A cluster over 16 records (`sleep.MaxClusterRecords`) or 4,096 steps
+    (`MaxCheckSteps`) is counted `unchecked`; at most 16 contradictions a pass;
+  - *promises*: the promise syndromes of the compactions no earlier sleep record checked, the
+    newest 32 (`ledger.SleepPromiseChecks`; "The promise syndrome", below).
 - **What it writes.** One `om.sleep` entry (`ledger.SleepData`), through the append path every
   om.* entry takes (`hooks.appendEntry`, the image's `redact-json-text`). It never deletes or
   rewrites a record. The summary never shows a duplicate (`selection.Input.Hidden`): the first
   copy stands for it and the omitted spans still list it. The fold labels a believed record whose
-  latest check challenged it `contested` (`FoldedLedger.Challenged`). Links, decay, verification and
-  retirement are read by `/om:view record` and `/om:status`.
+  latest check challenged it `contested` (`FoldedLedger.Challenged`), and every believed member of a
+  contradiction `contested` (`FoldedLedger.Contradicted`); nothing is resolved, and a later
+  supersede of a member takes it out of the cycle. Links, decay, verification, retirement,
+  contradictions and promise checks are read by `/om:view record` and `/om:status`.
 - **When it runs.** In a compaction once `sleepAfterCompactions` (K, default 4) compactions passed
   with no sleep record on the branch (`ledger.CompactionsSinceSleep`), before level 1 and the render,
   skipped over `sleepMaxRecords` active records (default 5,000) or a cancelled request. At the
@@ -696,6 +717,38 @@ request (`TestSleepFallbackInCompaction` counts them with `testfix.CountRequests
   --harness h --dir d` sleeps one session with its transcript and repository. PiG's sessions live in
   PiG's files, so the image's idle child never writes them: their sleep runs in the compaction
   fallback, on either engine.
+
+### The promise syndrome (no request)
+
+The quantum report's change 7 (supports "never summary-of-summary" and decision 13; `memory/ledger/
+promise.go`, `lisp/src/promise.lisp`; cases in `contracts/sleep.jsonl`; schema `defs#promiseCheck`).
+Each records summary promises a set of protected facts: the user's rules, prohibitions,
+constraints, scope exclusions and corrections (`ledger.UserPriority`), decisions, open plans (status
+proposed, closed by no receipt, superseded by none), contested claims and the pushbacks answering
+them (`ledger.Contested`), and held records (`ledger.HeldRule`), which it promises never to show.
+
+- **The syndrome.** The compaction's `details.promise` (`ledger.PromiseSyndrome`) holds how many
+  protected records the summary promises, how many it shows and holds back, and a digest: the first
+  twelve hex characters of the SHA-256 of the sorted lines `<id> <class> <state> <keys>`
+  (`ledger.PromiseDigest`; state `shown`, `listed` or `held`). It is a digest over the promised
+  facts, not a checksum of the summary's bytes, and the same in both engines.
+- **The check** (`ledger.CheckPromise`, the image's `check-promise`). The set is worked out again
+  from the ledger before the compaction (its full projection through `firstKeptEntryId`) and read
+  back from the summary's text in its codec (rows or jsonl; a lines summary or a declared codec is
+  `unread`, never a loss): shown in a record table by its id or in the constraints registry by its
+  text and source; listed by an omitted row whose span holds its anchor (an off-path row for a
+  record off the branch) or by the `also:` line's slot. A record promised shown that the text only
+  lists or does not hold, or promised listed that it does not hold, is **lost**, named by id; a
+  held record shown is **leaked**; a digest that no longer matches is a **mismatch** (the promised
+  set moved). The next render repairs a loss, since it reads the ledger, never the summary.
+- **Where it runs.** Every compaction rechecks the previous one into its own `details.promise.check`;
+  the sleep pass checks the compactions no earlier sleep record checked (`promises`); `/om:status`
+  prints one line over both (`Promise syndrome: N compactions checked: L lost, …`, the lost named
+  with their compaction).
+- **Measured** in memeval: every compaction as written (a finding is a false alarm) and with one
+  row showing a protected record dropped at random, its table's count fixed so it still decodes
+  ([brain-memory-baseline.md](brain-memory-baseline.md), "Quantum report follow-ups"). A key-set
+  syndrome cannot see a corrupted specific inside a row; the specifics invariant covers that.
 
 ### Cues (no request)
 
@@ -1300,8 +1353,11 @@ Phase 7 adds, in both engines with the same text:
 
 - **Aggregates.** After the reflections line: the records by kind, by label (contracts/truth.md's
   five), and the sleep runs on the branch with the latest one's trigger and through id and the
-  totals of duplicates hidden, links, decayed, verified, retired and checks (challenged). Held
-  items, staged changes, the core and settlement keep their own lines.
+  totals of duplicates hidden, links, decayed, verified, retired and checks (challenged), then,
+  once the joint-consistency check found any, the contradictions, the records they contest and the
+  clusters left unchecked; then the promise syndrome's line once a compaction was checked. Held
+  items, staged changes, the core and settlement keep their own lines. `/om:view record <id>`
+  names a contradiction a record is in (`in a contradiction, contested: a over b over a`).
 - **Viewing a record.** `/om:view records [page]` lists the fold's records (dropped ones included,
   forgotten ones never) twenty a page with kind, label, source and authority and the head of the
   content; `/om:view record <id>` shows one record's provenance (source, authority, hedge, writer,

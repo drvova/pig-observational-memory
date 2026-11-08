@@ -460,7 +460,9 @@ the settlement of model-written definitions (decision 24, scenarios 30–34), is
   classes 4 and 6, on a clock of compactions (or turns) over evidence events; a record's own
   retrieval, recall, reuse or self-graded outcome is never one, and nothing is deleted. Floors:
   the user's rules, prohibitions, constraints and corrections, unsuperseded failed attempts, secret
-  locations; pinned memories and user definitions are outside the ledger.
+  locations; pinned memories and user definitions are outside the ledger. Decay is a fold whose
+  checkpoint composes, and the Zeno arm measures the summary's own reads ("Quantum report
+  follow-ups", under phase 7).
 - **Not built:** erasure of the stored bytes (phase 8), carrying tombstones across sessions (the
   core log, phase 6), and definition settlement (part B).
 
@@ -587,6 +589,38 @@ code only, and `TestSleepFallbackInCompaction` and `TestOmSleep` count zero requ
   table cell for cell, and with sleep on no cell loses (deltas in the baseline); Tier 0b and 0c rows
   as before. The Tier 1/2 A/B, with a natural-language rendering of the same records, is wired
   (`memeval -ab-out`) and **ready, not run**: it needs models.
+
+### Quantum report follow-ups (phases 5 and 7)
+
+Four accepted changes of the quantum-ideas report (its changes 6, 7, 8 and 10), built in Go and Lisp
+with the same bytes (docs/memory-v2.md, "The promise syndrome", "Sleep" and "Truth maintenance";
+cases in `contracts/sleep.jsonl`). Measured in [brain-memory-baseline.md](brain-memory-baseline.md),
+"Quantum report follow-ups". No request is added: all four are code.
+
+- **Promise syndrome (change 7, phase 7): built.** Each compaction's `details.promise` digests the
+  protected records its summary promises, shown or listed (user rules and scope exclusions,
+  decisions, open plans, contested claims with their pushbacks, held records), never the summary's
+  bytes. The next compaction and the sleep pass recheck it against the ledger and the summary's
+  text; a lost record is named by id in the next compaction's details, in `om.sleep` and in
+  `/om:status`. Fault injection over the 20 Tier 0 seeds: 600 of 600 dropped protected rows located,
+  0 false alarms on 600 unmodified compactions (and the same under the 1,200-token cap).
+- **Joint consistency in sleep (change 8, phase 7): built.** Per cluster of believed records sharing a
+  value or key within one scope, the substitutions they state must admit a strict order; the
+  shortest cycle (odd ones of three or more included) is written as a contradiction, its records
+  labelled contested, nothing resolved, bounded at 16 records and 4,096 steps a cluster. Planted
+  cycles in `contracts/sleep.jsonl` are found by both engines; the Tier 0 generator gives 0.
+- **Decay composition (change 10, phase 5): built, and a fix.** The property test (random ledgers,
+  every checkpoint position, both clocks, both engines) failed for the old definition, which read
+  evidence from the final active records only (20 of 60 ledgers differed); decay is now a fold
+  whose state composes, and an event survives a drop, merge or forget of its record.
+- **Zeno arm (change 6, phase 5): measured, no fix.** With decay on, an agent that reads every path
+  and runs every command the summary showed keeps 84 of 109,614 record-compactions that are stale on
+  the script's own evidence fresh (0.08%); 91% of non-protected records ever decay for the plain agent
+  and 92% for it. Decayed records rank after the rest, so the summary rarely shows one to read, and
+  the loop has little to feed on. Under 1%, so decision 6's rule (a read of a key the summary showed
+  is no evidence for the records it showed) is not added; sleep records never move the clock.
+- **Not built:** a syndrome for a lines summary or a declared codec (unread, never a loss) and for the
+  minimal brief; contradictions over values that are not stated as substitutions.
 
 ### Phase 8 status: delivery, dreams and erasure
 

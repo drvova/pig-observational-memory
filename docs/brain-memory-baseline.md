@@ -922,6 +922,85 @@ Cues: 20 seeds, 600 turns each, 0 model requests:
 - **False-cue rate 0**: no look-alike got a cue, over 30,960 calls and 759 repeats (scenario 28;
   `contracts/cue.jsonl` holds the case-level look-alikes both engines decide).
 
+## Quantum report follow-ups
+
+The promise syndrome, the sleep pass's joint-consistency check, decay as a composing fold and the
+Zeno arm (docs/brain-memory.md, "Quantum report follow-ups"). Measured on 2026-11-08 on branch
+`claude/syndrome-consistency`, 20 seeds, 600 compactions a run, sleep on (the default). **Every run
+made 0 model requests**; the suites' only requests are their scripted level-1 replies (Tier 0b 140,
+Tier 0c 2).
+
+```sh
+go build -o "$TMP/memeval" ./cmd/memeval
+"$TMP/memeval" -suite all -seeds 20
+"$TMP/memeval" -seeds 20 -summary-max 1200
+```
+
+**No regression.** Tier 0 prints the phase-7 sleep-on table cell for cell at the default window
+(1,615 snippets, none failed) and the "Phase 3" capped table under the 1,200-token cap (3,915, none
+failed); all four invariants hold on all 600 compactions of each; 140 sleep records name 1,282 and
+2,655 duplicates. Every Tier 0b and 0c row passes, and the no-op definition replay is unchanged
+(the noise arm settles 42 of 560, 7.5%). The decay table is cell for cell as before; the turn-clock
+floor row scores 2,558 cells (2,557 before: decay's fold moved one compaction by a turn), 0 shown
+less, 0 lost.
+
+### The promise syndrome: every drop located, no false alarm
+
+Every compaction is checked as written (a finding is a false alarm), then again with one row showing
+a protected record dropped from its summary at random, the table's count fixed so the text still
+decodes (`memeval.PromiseFigures`); the drop is detected only when the check names that record.
+
+| window | compactions checked (unread) | protected promised / shown | false alarms | next-compaction rechecks (findings) | drops injected | detected and located |
+|---|---|---|---|---|---|---|
+| default | 600 (0) | 9,972 / 7,301 | **0** | 580 (0) | 600 | **600 (100%)** |
+| capped at 1,200 | 600 (0) | 13,880 / 6,445 | **0** | 580 (0) | 600 | **600 (100%)** |
+
+- Under the cap most promised records are listed, not shown (6,445 of 13,880): the check reads the
+  omitted rows' spans and the `also:` line for them, and none was found missing.
+- A moved digest (the ledger promising another set) is reported as a mismatch
+  (`TestPromiseFaultInjection`); `contracts/sleep.jsonl` holds a kept promise, a lost decision and a
+  moved digest, which both engines check alike.
+
+### Joint consistency: planted cycles found, none on the generator
+
+`contracts/sleep.jsonl` plants a three-way cycle (`make ci` over `make test` over `go test` over
+`make ci`, no pair a negation), a two-way cycle from a negated rule and its reverse, a chain, a cycle
+split across two scopes, a cycle broken by a supersede, a repeat of an earlier contradiction and a
+cluster of 17 records; both engines write the same records: the two cycles found and contested, the
+rest none, the wide cluster `unchecked`. On the Tier 0 generator, whose probes hold no cycle, the
+check found **0 contradictions** in 140 sleep records (default and capped).
+
+### Decay composition: the property test found a bug
+
+`TestDecayComposes` (Go, 60 random ledgers of 30 to 69 entries, every checkpoint position, both
+clocks, horizons 1, 2 and 4, a checkpoint advanced in one batch and in two: over 10,000 cases) and
+the image's `decay-composes` (30 ledgers) assert that decay from a fold checkpoint plus the remaining
+entries equals decay over the whole branch. The old definition read evidence only from the final
+active records, so a later drop, level-1 merge or forget of the record that carried an event changed
+an earlier record's decay; its evidence differed from the stream fold in 20 of 60 ledgers, and no
+checkpoint could reproduce it. Decay is now that fold (an event survives its record's removal); the
+Tier 0b decay cells are unchanged on the generator, which drops no evidence record.
+
+### The Zeno arm: the summary's reads keep almost nothing alive
+
+Decay on (compactions, horizon 4), the Tier 0 scripts, against an agent that in the first turn after
+each compaction reads every path and runs every command the summary showed (24,993 extra calls; its
+calls take context, so its sessions compact sooner and cover fewer records):
+
+| agent | non-protected records | ever decayed | record-compactions stale on the script's own evidence | kept fresh by the reads |
+|---|---|---|---|---|
+| plain | 9,518 | 8,703 (91%) | | |
+| Zeno | 7,095 | 6,510 (92%) | 109,614 | 84 (0.08%) |
+
+- "Stale on the script's own evidence" is decay over the same branch with the Zeno agent's records
+  taken out of their batches; "kept fresh" are those the agent's reads reset. Decay takes a decayed
+  record after the rest of its class, so the summary rarely shows one, and a shown record is
+  usually fresh on the script's own evidence anyway: the loop the report feared has little to feed
+  on here. 0.08% is under the 1% bar (`memeval.MaterialZeno`), so no rule was added; decision 6's
+  wording stands and the arm stays as a regression check.
+- The sleep pass's records never move the decay clock: 192,839 record-compactions decay the same
+  with every `om.sleep` entry made inert.
+
 ## Tier 0b: forgetting
 
 The forgetting suite (`memory/memeval`, `Forgetting`) was first recorded at
