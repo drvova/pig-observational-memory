@@ -37,3 +37,24 @@ func TestStatusAggregates(t *testing.T) {
 		t.Errorf("empty status:\n%s", empty)
 	}
 }
+
+// /om:status and /om:view record name the joint-consistency check's contradictions.
+func TestStatusContradictions(t *testing.T) {
+	a := tf.Observation("aaaaaaaaaa11", func(o *ledger.Observation) { o.Kind, o.Content = "preference", "Use `a`, not `b`." })
+	b := tf.Observation("aaaaaaaaaa12", func(o *ledger.Observation) { o.Kind, o.Content = "preference", "Use `b`, not `a`." })
+	sleep := ledger.SleepData{Version: 1, Trigger: ledger.SleepAtIdle, ThroughEntryID: "e1", Records: 2, Unchecked: 1,
+		Contradictions: []ledger.SleepContradiction{{IDs: []string{a.ID, b.ID}, Cycle: []string{"a", "b"}, Steps: 3}}}
+	entries := []session.Entry{
+		tf.ObservationsRecordedEntry("e1", []ledger.Observation{a, b}, "u1"),
+		tf.Entry(map[string]any{"type": "custom", "id": "s1", "parentId": nil, "timestamp": tf.DefaultTimestamp, "customType": ledger.OMSleep, "data": tf.ToJSONValue(sleep)}),
+	}
+	got := strings.Join(recordsLines(entries), "\n")
+	for _, want := range []string{"contested 2", "0 checks (0 challenged), 1 contradiction (2 records contested), 1 cluster unchecked"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status lacks %q:\n%s", want, got)
+		}
+	}
+	if view := RecordView(entries, a.ID); !strings.Contains(view, "in a contradiction, contested: a over b over a") {
+		t.Errorf("record view:\n%s", view)
+	}
+}

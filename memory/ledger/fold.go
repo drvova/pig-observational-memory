@@ -30,6 +30,9 @@ type FoldedLedger struct {
 	// Challenged are the records whose latest sleep check (om.sleep, decision 13) challenged
 	// them through the fold boundary; Labels labels a believed one contested. nil when none.
 	Challenged map[string]bool
+	// Contradicted are the records a sleep record's joint-consistency check found in a
+	// contradiction; Labels labels a believed one contested. nil when none.
+	Contradicted map[string]bool
 }
 
 func foldEndIndex(entries []Entry, upToEntryID string) int {
@@ -124,6 +127,14 @@ func FoldLedgerUnresolved(entries []Entry, upToEntryID string) FoldedLedger {
 						folded.Challenged = map[string]bool{}
 					}
 					folded.Challenged[c.ID] = c.Verdict == VerdictChallenged
+				}
+				for _, c := range data.Contradictions {
+					for _, id := range c.IDs {
+						if folded.Contradicted == nil {
+							folded.Contradicted = map[string]bool{}
+						}
+						folded.Contradicted[id] = true
+					}
 				}
 			}
 		}

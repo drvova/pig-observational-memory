@@ -93,8 +93,10 @@ func WriteABItems(path string, runs []Run) (int, error) {
 	return n, w.Flush()
 }
 
-// SleepFigures are the sleep records the runs' last branches hold and the duplicates they hid.
-func SleepFigures(runs []Run) (sleeps, hidden int) {
+// SleepFigures are the sleep records the runs' last branches hold, the duplicates they hid and
+// the contradictions the joint-consistency check found (the Tier 0 generator plants none, so
+// any is a false positive).
+func SleepFigures(runs []Run) (sleeps, hidden, contradictions int) {
 	for _, run := range runs {
 		if len(run.Snapshots) == 0 {
 			continue
@@ -102,7 +104,9 @@ func SleepFigures(runs []Run) (sleeps, hidden int) {
 		branch := run.Snapshots[len(run.Snapshots)-1].Branch
 		data, _ := ledger.Sleeps(branch)
 		sleeps += len(data)
-		hidden += len(ledger.SleepStateOf(branch).Duplicates)
+		st := ledger.SleepStateOf(branch)
+		hidden += len(st.Duplicates)
+		contradictions += len(st.Contradictions)
 	}
-	return sleeps, hidden
+	return sleeps, hidden, contradictions
 }

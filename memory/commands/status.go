@@ -191,8 +191,14 @@ func sleepStatusLine(entries []ledger.Entry) string {
 	}
 	challenged := len(st.Challenged())
 	last := data[len(data)-1]
-	return fmt.Sprintf("Sleep: %d run%s (latest %s, through %s): %d duplicates hidden, %d links, %d decayed, %d verified, %d retired, %d checks (%d challenged)",
+	line := fmt.Sprintf("Sleep: %d run%s (latest %s, through %s): %d duplicates hidden, %d links, %d decayed, %d verified, %d retired, %d checks (%d challenged)",
 		len(data), pluralS(len(data)), last.Trigger, last.ThroughEntryID, len(st.Duplicates), links, decayed, len(st.Verified), len(st.Retired), len(st.Checks), challenged)
+	// The joint-consistency check's findings, only once it found any.
+	if len(st.Contradictions) > 0 || st.Unchecked > 0 {
+		line += fmt.Sprintf(", %d contradiction%s (%d records contested), %d cluster%s unchecked",
+			len(st.Contradictions), pluralS(len(st.Contradictions)), len(st.Contradicted), st.Unchecked, pluralS(st.Unchecked))
+	}
+	return line
 }
 
 func pluralS(n int) string {

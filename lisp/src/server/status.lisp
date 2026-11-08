@@ -93,11 +93,17 @@
                (challenged (let ((n 0)) (maphash (lambda (k c) (declare (ignore k)) (when (equal (om::jget c "verdict") "challenged") (incf n)))
                                                  (om::sstate*-checks st))
                              n)))
-          (format nil "Sleep: ~D run~A (latest ~A, through ~A): ~D duplicates hidden, ~D links, ~D decayed, ~D verified, ~D retired, ~D checks (~D challenged)"
-                  (length runs) (plural-s (length runs)) (om::jget last "trigger") (om::jget last "throughEntryId")
-                  (hash-table-count (om::sstate*-duplicates st)) links decayed
-                  (hash-table-count (om::sstate*-verified st)) (hash-table-count (om::sstate*-retired st))
-                  (hash-table-count (om::sstate*-checks st)) challenged)))))
+          (cat* (format nil "Sleep: ~D run~A (latest ~A, through ~A): ~D duplicates hidden, ~D links, ~D decayed, ~D verified, ~D retired, ~D checks (~D challenged)"
+                       (length runs) (plural-s (length runs)) (om::jget last "trigger") (om::jget last "throughEntryId")
+                       (hash-table-count (om::sstate*-duplicates st)) links decayed
+                       (hash-table-count (om::sstate*-verified st)) (hash-table-count (om::sstate*-retired st))
+                       (hash-table-count (om::sstate*-checks st)) challenged)
+               ;; The joint-consistency check's findings, only once it found any.
+               (let ((n (hash-table-count (om::sstate*-contradictions st))) (u (om::sstate*-unchecked st)))
+                 (if (or (plusp n) (plusp u))
+                     (format nil ", ~D contradiction~A (~D records contested), ~D cluster~A unchecked"
+                             n (plural-s n) (hash-table-count (om::sstate*-contradicted st)) u (plural-s u))
+                     "")))))))
 
 (defun held-lines (folded entries)
   "commands.heldLines: the active records and standing reflections held because they weaken

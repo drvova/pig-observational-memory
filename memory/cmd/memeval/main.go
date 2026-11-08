@@ -237,8 +237,8 @@ func main() {
 	fmt.Print(memeval.Table(m.Results, memeval.Counts))
 	fmt.Println()
 	fmt.Print(memeval.InvariantTable(m.Results))
-	sleeps, hidden := memeval.SleepFigures(m.Runs)
-	fmt.Printf("\nSleep (-sleep %s): %d sleep records, %d duplicates hidden, 0 requests\n", *sleepArm, sleeps, hidden)
+	sleeps, hidden, contradictions := memeval.SleepFigures(m.Runs)
+	fmt.Printf("\nSleep (-sleep %s): %d sleep records, %d duplicates hidden, %d contradictions (the generator plants none), 0 requests\n", *sleepArm, sleeps, hidden, contradictions)
 	if *sumsum {
 		var eroded []memeval.Result
 		for i, run := range m.Runs {

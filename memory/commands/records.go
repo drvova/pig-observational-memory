@@ -223,6 +223,9 @@ func sleepLines(st ledger.SleepState, id string) []string {
 	if st.Decayed[id] {
 		out = append(out, "decay lowers its rank")
 	}
+	if c, ok := st.Contradicted[id]; ok {
+		out = append(out, "in a contradiction, contested: "+strings.Join(append(append([]string{}, c.Cycle...), c.Cycle[0]), " over "))
+	}
 	return out
 }
 

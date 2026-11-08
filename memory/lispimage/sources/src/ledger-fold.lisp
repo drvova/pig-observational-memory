@@ -70,7 +70,10 @@
   (truth (make-truth))
   ;; challenged: each record a sleep check read, to t when its latest verdict challenged it
   ;; (FoldedLedger.Challenged; sleep.lisp).
-  (challenged (make-set)))
+  (challenged (make-set))
+  ;; contradicted: the records a sleep record's joint-consistency check found in a contradiction
+  ;; (FoldedLedger.Contradicted).
+  (contradicted (make-set)))
 
 ;;; om.sleep (ledger/sleep.go SleepEntry): version 1, a trigger and a through id.
 
@@ -143,7 +146,12 @@
                           (when d
                             (dolist (c (sleep-items d "checks"))
                               (when (stringp (jget c "id"))
-                                (setf (gethash (jget c "id") (folded-challenged f)) (equal (jget c "verdict") "challenged"))))))))))))
+                                (setf (gethash (jget c "id") (folded-challenged f)) (equal (jget c "verdict") "challenged"))))
+                            (dolist (c (sleep-items d "contradictions"))
+                              (let ((ids (jget c "ids")))
+                                (when (and (vectorp ids) (not (stringp ids)))
+                                  (loop for id across ids
+                                        when (stringp id) do (setf (gethash id (folded-contradicted f)) t)))))))))))))
     (multiple-value-bind (kept kept-refl truth)
         (maintain-truth (nreverse observations) (folded-dropped f) (tracker-by tracker) (nreverse reflections))
       (setf (folded-observations f) kept

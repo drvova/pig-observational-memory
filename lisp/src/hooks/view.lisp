@@ -144,6 +144,10 @@ although records exist; \"\" otherwise."
                        (let ((by (view-strings (jget c "by")))) (if by (cat " by " (join by ", ")) "")))
                   out)))
     (when (gethash id (sstate*-decayed st)) (push-end "decay lowers its rank" out))
+    (let ((c (gethash id (sstate*-contradicted st))))
+      (when c
+        (let ((cycle (view-strings (jget c "cycle"))))
+          (push-end (cat "in a contradiction, contested: " (join (append cycle (list (first cycle))) " over ")) out))))
     out))
 
 (defun record-view (entries id)

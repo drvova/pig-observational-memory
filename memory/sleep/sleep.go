@@ -79,6 +79,7 @@ func Pass(in Input) (data ledger.SleepData, ok bool) {
 		data.Verified, data.Retired = verify(records, in.Repo, *in.Structure, st)
 	}
 	data.Checks = checks(in.Entries, folded, st)
+	data.Contradictions, data.Unchecked = contradictions(records, labels, hidden, st)
 	return data, true
 }
 

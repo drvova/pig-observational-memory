@@ -1,6 +1,9 @@
 package ledger
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // OMSleep is the custom type of a sleep record (docs/memory-v2.md, "Sleep"; memory/sleep): what
 // one code-only pass over the ledger found, appended like any om.* entry. It never deletes and
@@ -78,6 +81,24 @@ type SleepCheck struct {
 	By      []string `json:"by,omitempty"`
 }
 
+// SleepContradiction is a set of records whose preferences no strict order satisfies (the
+// sleep pass's joint-consistency check, memory/sleep): Cycle are the values in order, each to be
+// used over the next and the last over the first, and IDs the records asserting its edges, in
+// ledger order, a minimal conflicting set. The fold labels a believed member contested; nothing
+// is resolved. Steps are what the check spent on the records' cluster (its bound is
+// sleep.MaxCheckSteps).
+type SleepContradiction struct {
+	IDs   []string `json:"ids"`
+	Cycle []string `json:"cycle"`
+	Scope string   `json:"scope,omitempty"`
+	Steps int      `json:"steps"`
+}
+
+// ContradictionKey is a contradiction's identity: its records.
+func ContradictionKey(c SleepContradiction) string {
+	return strings.Join(c.IDs, "\x00")
+}
+
 // SleepData is an om.sleep entry's data. Each list holds only what earlier sleep records on the
 // branch did not already say.
 type SleepData struct {
@@ -92,6 +113,10 @@ type SleepData struct {
 	Verified       []SleepVerification `json:"verified,omitempty"`
 	Retired        []SleepRetirement   `json:"retired,omitempty"`
 	Checks         []SleepCheck        `json:"checks,omitempty"`
+	// Contradictions are the joint-consistency check's findings; Unchecked counts the clusters
+	// it left over its bounds.
+	Contradictions []SleepContradiction `json:"contradictions,omitempty"`
+	Unchecked      int                  `json:"unchecked,omitempty"`
 }
 
 // SleepEntry reads a valid om.sleep entry: version 1, a trigger and a through id.
@@ -134,6 +159,11 @@ type SleepState struct {
 	Links      map[string][]SleepLink
 	// Seen are the links already recorded, by key and ids.
 	Seen map[string]bool
+	// Contradictions are the contradictions recorded, by ContradictionKey; Contradicted the
+	// first each record is in, by record id; Unchecked the clusters left over the bounds.
+	Contradictions map[string]bool
+	Contradicted   map[string]SleepContradiction
+	Unchecked      int
 }
 
 // LinkKey is a link's identity: its key and ids.
@@ -148,7 +178,8 @@ func LinkKey(l SleepLink) string {
 // SleepStateOf folds every sleep record of entries.
 func SleepStateOf(entries []Entry) SleepState {
 	st := SleepState{Duplicates: map[string]SleepDuplicate{}, Checks: map[string]SleepCheck{}, Verified: map[string]SleepVerification{},
-		Retired: map[string]SleepRetirement{}, Decayed: map[string]bool{}, Links: map[string][]SleepLink{}, Seen: map[string]bool{}}
+		Retired: map[string]SleepRetirement{}, Decayed: map[string]bool{}, Links: map[string][]SleepLink{}, Seen: map[string]bool{},
+		Contradictions: map[string]bool{}, Contradicted: map[string]SleepContradiction{}}
 	data, _ := Sleeps(entries)
 	for _, d := range data {
 		st.Runs++
@@ -172,6 +203,15 @@ func SleepStateOf(entries []Entry) SleepState {
 		for _, id := range d.Decayed {
 			st.Decayed[id] = true
 		}
+		for _, c := range d.Contradictions {
+			st.Contradictions[ContradictionKey(c)] = true
+			for _, id := range c.IDs {
+				if _, ok := st.Contradicted[id]; !ok {
+					st.Contradicted[id] = c
+				}
+			}
+		}
+		st.Unchecked += d.Unchecked
 		for _, l := range d.Links {
 			if st.Seen[LinkKey(l)] {
 				continue

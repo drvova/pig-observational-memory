@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,6 +79,36 @@ func both(fs ...func(*ledger.Observation)) func(*ledger.Observation) {
 			f(o)
 		}
 	}
+}
+
+// rule is a user's preference record.
+func rule(id, content string, fs ...func(*ledger.Observation)) ledger.Observation {
+	return obs(id, content, func(o *ledger.Observation) {
+		o.Kind, o.Source, o.Authority = "preference", ledger.SourceUserSaid, ledger.AuthorityUser
+		for _, f := range fs {
+			f(o)
+		}
+	})
+}
+
+// cycleBranch holds three preferences no order satisfies (`make ci` over `make test` over
+// `go test` over `make ci`), no two of them a negation of each other; third changes the third.
+func cycleBranch(third func(*ledger.Observation)) []session.Entry {
+	c3 := rule("0000000011a3", "Use `go test`, not `make ci`.")
+	if third != nil {
+		third(&c3)
+	}
+	return []session.Entry{user("u0g01"), recorded("r1", "u0g01", false, rule("0000000011a1", "Use `make ci`, not `make test`."),
+		rule("0000000011a2", "Use `make test`, not `go test`."), c3, rule("0000000011a4", "Use `make lint` instead of `golint`."))}
+}
+
+// wideCluster is one cluster of seventeen preferences sharing a path, over MaxClusterRecords.
+func wideCluster() []session.Entry {
+	var rules []ledger.Observation
+	for i := range sleep.MaxClusterRecords + 1 {
+		rules = append(rules, rule(fmt.Sprintf("0000000012%02x", i), fmt.Sprintf("Use `tool-%d` instead of `tool-%d`.", i+1, i), keys(ledger.KeyPaths, "Makefile")))
+	}
+	return []session.Entry{user("u0w01"), recorded("r1", "u0w01", false, rules...)}
 }
 
 type input struct {
@@ -180,6 +211,17 @@ func inputs() []input {
 		{name: "verification and retirement against HEAD", entries: verifyBranch, trigger: ledger.SleepManual, repo: repo, structure: answer},
 		{name: "checks of level-1 supersedes and lessons", entries: checkBranch, trigger: ledger.SleepAtIdle},
 		{name: "an empty ledger", entries: []session.Entry{user("u0z01")}, trigger: ledger.SleepManual},
+		{name: "a three-way cycle of preferences is a contested set", entries: cycleBranch(nil), trigger: ledger.SleepAtIdle},
+		{name: "a chain of preferences is consistent", entries: []session.Entry{user("u0g01"), recorded("r1", "u0g01", false, rule("0000000011a1", "Use `make ci`, not `make test`."), rule("0000000011a2", "Use `make test`, not `go test`."))}, trigger: ledger.SleepAtIdle},
+		{name: "a cycle across two scopes is no contradiction", entries: cycleBranch(func(o *ledger.Observation) { o.Scope = "tools/" }), trigger: ledger.SleepAtIdle},
+		{name: "a superseded member breaks the cycle", entries: append(cycleBranch(nil), user("u0g09"),
+			recorded("r9", "u0g09", false, rule("0000000011a9", "Use `make ci`, not `go test`.", func(o *ledger.Observation) { o.Kind, o.Supersedes = "correction", []string{"0000000011a3"} }))), trigger: ledger.SleepAtIdle},
+		{name: "a negated rule and its reverse are a two-way cycle", entries: []session.Entry{user("u0h01"), recorded("r1", "u0h01", false,
+			rule("0000000011b1", "Never run `pytest` directly here; always use `make ci-local` instead."), rule("0000000011b2", "Prefer `pytest` over `make ci-local` for quick checks."),
+			rule("0000000011b3", "Don't use `gin` and `echo` together."))}, trigger: ledger.SleepAtIdle},
+		{name: "an earlier contradiction is not repeated", entries: append(cycleBranch(nil), sleepEntry("s1", ledger.SleepData{Version: ledger.SleepVersion, Trigger: ledger.SleepAtIdle, ThroughEntryID: "r1", Records: 3,
+			Contradictions: []ledger.SleepContradiction{{IDs: []string{"0000000011a1", "0000000011a2", "0000000011a3"}, Cycle: []string{"go test", "make ci", "make test"}, Steps: 5}}})), trigger: ledger.SleepAtIdle},
+		{name: "a cluster over the bound is unchecked", entries: wideCluster(), trigger: ledger.SleepManual},
 	}
 }
 
