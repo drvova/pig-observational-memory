@@ -457,7 +457,33 @@ would be as a rule, is not in class 2, and ends with `(contested by <id>)` namin
 `(contested)` when no pushback record is in the input); the pushback is put in the claim's table,
 ends with `(responds to <id>)`, and each is tried next when the other is taken. Their
 instructions line is printed only in a summary showing one. They depend only on the
-ledger, so a line's cost does not change with the choice. Every rendered line ends with its first
+ledger, so a line's cost does not change with the choice.
+
+**Contested pairs.** The notes a `conflicts` link or a possible update decided contested
+(`ledger.Supersession`) joins, either way, are one contested block (a pair, or a larger set when
+links chain). A block is shown together at the start of its notes table, never in the middle and
+never in write order: its members in `ledger.ContestBefore` order (the higher authority first,
+`user`, `repo-file`, `tool`, `model`, then the lower id, a digest of the content), the blocks in the
+order of their first members, then the table's other rows in ledger order. Each member carries its
+fold label and authority inline before its pointer, `(contested from user) (conflicts <id>)`
+(`ledger.ContestTag`; `unknown` for a record written before authority), under one instructions line
+printed only in a summary showing a block. A block whose members level 1 put on two subjects is
+shown in its first member's table, and a member of one is never in the constraints registry or the
+next section, since a contest is neither a rule in force nor a settled step (class 2 still takes a
+user's contested preference). A summary shows at most `selection.MaxContestedBlocks` (3) blocks; the
+`also:` line names the blocks it leaves out, ``+N more contested pairs: om.Notes(om.WithStatus(`contested`))``,
+and their records stay in the omitted spans. When both members carry one authority the id decides,
+which says nothing about which was written last; the dates in the `when` column still do, and the
+fixed text's "the most recent reflects the latest known state" is left for the format A/B to
+settle (decision 18).
+
+**One older value a subject.** A note an `(updated by <id>)` pointer marks (the keep-both history
+of a value) is shown only when it is its subject's newest such note: a subject shows its current
+value and at most one prior. The older priors are never shown; they stay in the ledger, are listed
+by the omitted spans and by ``+N more older values: om.Notes(om.WithStatus(`superseded`))`` on the
+`also:` line, and nothing is deleted.
+
+Every rendered line ends with its first
 source entry id when that id is on the current branch. What does not fit becomes `omitted` spans with date range,
 count and first id.
 
@@ -570,8 +596,9 @@ Phase 5 of the brain-like memory ([brain-memory.md](brain-memory.md), decisions 
 - **Supersession.** A newer record level 0 linked to an older one on the same subject and scope is
   decided three ways (`ledger.Supersession`, under `MaySupersede`): replace (it supersedes it),
   contested (a negation, or a different value on less authority: neither wins, both shown with
-  `(conflicts <id>)`), or keep-both (the history of a value: the older is labelled superseded and
-  shown with `(updated by <id>)`, so a stale value is never shown as current).
+  `(conflicts <id>)` as one block in authority order, "Contested pairs" in "Selection"), or
+  keep-both (the history of a value: the older is labelled superseded and shown with
+  `(updated by <id>)`, so a stale value is never shown as current; a subject shows at most one).
 - **Decision 1's cascade.** A level-1 merge whose source a retraction withdraws as written, or a
   tombstone forgets, goes out; its other sources' replacements and drops are undone, so they
   reappear as themselves until a later level 1 merges them again. Level 0 withdraws a merge's
@@ -714,14 +741,24 @@ exception.
   it), or a line of its output (trimmed, clipped as level 0 clips an error line) equal to a recorded
   error line. The records it may point at are failed attempts, the user's rules and corrections,
   decisions and repository conventions, never a held one (`ledger.HeldRule`). A look-alike (one
-  character off) never fires (scenario 28). The newest matching record wins.
+  character off) never fires (scenario 28). The newest matching record wins, unless the fold labels
+  it superseded, retracted or held (`FoldedLedger.Labels`), which is never cued.
+- **A cue never settles a contest.** A matching record labelled contested is cued only with every
+  other standing side of its contest (`ledger.ContestSides`: the records a conflicts link or a
+  contested possible update joins to it, and a contested claim's pushback) in one cue; a side
+  labelled superseded, retracted or held is no side. When no other side stands, or the sides'
+  texts together pass 120 characters (no side is clipped, so none reads shorter), the call gets no
+  cue. A side cued with another this compaction counts as cued.
 - **Bounds.** It abstains by default; a record is cued at most once per compaction, and at most
   `cueCap` (default 3, `0` off) cues per compaction. Delivery state is derived from the branch: the
   `om.cue` entries (`{record, key, compaction}`) after the latest compaction. A cue is appended to
   the conversation by the harness and never removed; nothing is injected and then deleted.
 - **Its text.** `memory cue (unverified): <hint>: <the record's text, redacted, at most 120
   characters> Read it: om.Recall(`<id>`)`, the hint saying what the record is (`this failed
-  before`, `a standing rule names this`, ...).
+  before`, `a standing rule names this`, ...). A contest's cue is `memory cue (unverified): a
+  contested record names this, neither side settled: ` and then, for each side in
+  `ledger.ContestBefore` order (authority, then id; never time), `(<label> from <authority>)
+  <its text, redacted, whole> Read it: om.Recall(`<id>`)`, joined by `; `.
 - **Measured.** `memeval -suite cues` replays the Tier 0 generator's sessions and reports the cue
   rate and the false-cue rate over one-character look-alikes ([brain-memory-baseline.md](brain-memory-baseline.md),
   "Phase 8").
