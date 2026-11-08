@@ -64,6 +64,10 @@ type Turn struct {
 	// Custom are custom messages (an extension's or another harness's text, never the user's)
 	// placed after the user's message; the Tier 0 generator writes none.
 	Custom []string
+	// Zeno are the calls the Zeno arm's agent adds after Calls (zeno.go): every path and command
+	// the previous summary showed, read or run again. Their entries are "z"-prefixed, so the
+	// script's own entries keep their ids.
+	Zeno []Call
 }
 
 // Script is a generated session: the turns and the probes planted in them.

@@ -22,9 +22,11 @@ type decayArm struct {
 	clock            string
 	horizon          int
 	protected, tier0 map[Class]map[int]Tally
+	runs             []Run
 }
 
-// decayRows runs the decay arms beside off (the Tier 0 runs without decay) and adds their rows.
+// decayRows runs the decay arms beside off (the Tier 0 runs without decay) and adds their rows,
+// then the Zeno arm's beside the compaction clock's runs (zenoRows).
 func decayRows(ctx context.Context, s *Suite, cfg SuiteConfig, off []Run, lister Lister) error {
 	turns, compactions := 0, 0
 	for _, run := range off {
@@ -62,6 +64,7 @@ func decayRows(ctx context.Context, s *Suite, cfg SuiteConfig, off []Run, lister
 				runs = append(runs, r)
 			}
 		}
+		arm.runs = runs
 		var err error
 		if arm.protected, err = protectedTallies(runs, lister); err != nil {
 			return err
@@ -99,7 +102,7 @@ func decayRows(ctx context.Context, s *Suite, cfg SuiteConfig, off []Run, lister
 		s.add(part, "decay on ("+arm.clock+" clock) lowers rank only: nothing lost that is kept without it", verdict(more == 0), "", "%d more cells lost than without decay", more)
 	}
 	s.Extra = append(s.Extra, DecayTable(arms))
-	return nil
+	return zenoRows(ctx, s, arms[1].runs, arms[1].horizon)
 }
 
 // shownBelow is a cell shown less with decay than without it: a smaller shown share. The arms can

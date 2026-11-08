@@ -239,6 +239,11 @@ func main() {
 	fmt.Print(memeval.InvariantTable(m.Results))
 	sleeps, hidden, contradictions := memeval.SleepFigures(m.Runs)
 	fmt.Printf("\nSleep (-sleep %s): %d sleep records, %d duplicates hidden, %d contradictions (the generator plants none), 0 requests\n", *sleepArm, sleeps, hidden, contradictions)
+	promises := memeval.PromiseFigures(m.Runs, 1)
+	fmt.Println()
+	fmt.Println("Promise syndrome: every compaction checked as written, then with one row showing a protected record dropped at random:")
+	fmt.Println()
+	fmt.Print(promises.Table())
 	if *sumsum {
 		var eroded []memeval.Result
 		for i, run := range m.Runs {
@@ -288,7 +293,7 @@ func main() {
 	for _, t := range memeval.InvariantTallies(m.Results) {
 		broken = broken || t.Broken > 0
 	}
-	if broken || failed > 0 || m.Requests > 0 {
+	if broken || failed > 0 || m.Requests > 0 || promises.FalseAlarms > 0 || promises.Detected < promises.Injected {
 		os.Exit(1)
 	}
 	if *suite == "all" {

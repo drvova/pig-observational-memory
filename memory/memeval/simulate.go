@@ -35,6 +35,9 @@ type Window struct {
 	// Dreams turns the dream section on (config.Config.Dreams); each compaction is then checked
 	// for a false promotion (checkDreams).
 	Dreams bool
+	// Zeno makes the agent read every path and run every command the latest summary showed, in
+	// the first turn after each compaction (zeno.go).
+	Zeno bool
 }
 
 // SmallWindow is the default: small enough that the ledger outgrows the summary budget within a
@@ -60,6 +63,8 @@ type Run struct {
 	Script    Script
 	Window    Window
 	Snapshots []Snapshot
+	// ZenoCalls counts the calls the Zeno agent added (Window.Zeno).
+	ZenoCalls int
 }
 
 // TurnEntries are turn i's branch entries: the user message, an assistant message and a tool
@@ -82,6 +87,12 @@ func TurnEntries(t Turn, i int) []session.Entry {
 		out = append(out,
 			testfix.MessageEntry(fmt.Sprintf("a%03d-%d", i, j), map[string]any{"role": "assistant", "content": content, "stopReason": "toolUse"}, at(1+2*j)),
 			testfix.MessageEntry(fmt.Sprintf("r%03d-%d", i, j), map[string]any{"role": "toolResult", "toolCallId": callID, "toolName": c.Name, "content": []any{map[string]any{"type": "text", "text": c.Result}}, "isError": c.IsError}, at(2+2*j)))
+	}
+	for j, c := range t.Zeno {
+		callID := fmt.Sprintf("zcall-%03d-%d", i, j)
+		out = append(out,
+			testfix.MessageEntry(fmt.Sprintf("za%03d-%d", i, j), map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "toolCall", "id": callID, "name": c.Name, "arguments": c.Args}}, "stopReason": "toolUse"}, at(2+2*len(t.Calls))),
+			testfix.MessageEntry(fmt.Sprintf("zr%03d-%d", i, j), map[string]any{"role": "toolResult", "toolCallId": callID, "toolName": c.Name, "content": []any{map[string]any{"type": "text", "text": c.Result}}, "isError": c.IsError}, at(2+2*len(t.Calls))))
 	}
 	out = append(out, testfix.MessageEntry(fmt.Sprintf("a%03d-end", i), map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": t.Reply}}, "stopReason": "end_turn"}, at(2+2*len(t.Calls))))
 	return out
@@ -153,9 +164,14 @@ func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions i
 	defer func() { scriptedServed.Add(int64(h.ModelsFake.Streams.Calls())) }()
 	run = Run{Script: script, Window: w}
 	summary := ""
+	var zeno []Call
 	for i, t := range script.Turns {
 		if ctx.Err() != nil {
 			return run, ctx.Err()
+		}
+		if len(zeno) > 0 {
+			t.Zeno, zeno = zeno, nil
+			run.ZenoCalls += len(t.Zeno)
 		}
 		h.Entries = append(h.Entries, TurnEntries(t, i)...)
 		if sim.Between != nil {
@@ -188,6 +204,9 @@ func SimulateWith(ctx context.Context, script Script, w Window, maxCompactions i
 		n := len(run.Snapshots) + 1
 		h.Entries = append(h.Entries, testfix.CompactionEntry(fmt.Sprintf("cmp%02d", n), testfix.CompactionArgs{Summary: c.Summary, FirstKeptEntryID: c.FirstKeptEntryID, Details: testfix.ToJSONValue(c.Details)}, map[string]any{"tokensBefore": c.TokensBefore, "timestamp": TurnTime(i).Add(time.Minute).Format("2006-01-02T15:04:05.000Z")}))
 		summary = c.Summary
+		if w.Zeno {
+			zeno = zenoCalls(c.Details)
+		}
 		run.Snapshots = append(run.Snapshots, Snapshot{N: n, Turn: i, FirstKept: c.FirstKeptEntryID, Summary: c.Summary, Result: c, Before: before, Branch: append([]session.Entry{}, h.Entries...)})
 		if w.Dreams {
 			checkDreams(c.Summary, h.Entries, sim.Home)
